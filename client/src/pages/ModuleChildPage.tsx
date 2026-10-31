@@ -129,6 +129,7 @@ import { buildOrderOccupiedMap, syncOrderReserved } from '../utils/orderOccupied
 import { isAccountingMode, writeAutoEntries, removeAutoEntries, loadSubjectOptions, subjectFilterOption } from '../utils/accountingBridge';
 import { isInstallmentOrder, depositAmountOf, sumPayRecords, mergePayRecords, payProgressText, postInstallmentEffects, postShipRevenueEntry, installmentStatusOf } from '../utils/receiptWrite';
 import type { PayRecord } from '../utils/receiptWrite';
+import { compressImageFile } from '../utils/imageCompress';
 
 const { Title, Text, Paragraph } = Typography;
 const { RangePicker } = DatePicker;
@@ -537,26 +538,9 @@ const PayScreenshotUpload: React.FC<{
       if (item.type.startsWith('image/')) {
         const file = item.getAsFile();
         if (!file) continue;
-        const reader = new FileReader();
-        reader.onload = () => {
-          // 压缩到合理大小
-          const img = new window.Image();
-          img.onload = () => {
-            const canvas = document.createElement('canvas');
-            const maxDim = 480;
-            let w = img.width, h = img.height;
-            if (w > maxDim || h > maxDim) {
-              if (w > h) { h = Math.round(h * maxDim / w); w = maxDim; }
-              else { w = Math.round(w * maxDim / h); h = maxDim; }
-            }
-            canvas.width = w; canvas.height = h;
-            canvas.getContext('2d')?.drawImage(img, 0, 0, w, h);
-            const compressed = canvas.toDataURL('image/jpeg', 0.7);
-            onChange?.(compressed);
-          };
-          img.src = reader.result as string;
-        };
-        reader.readAsDataURL(file);
+        compressImageFile(file).then(compressed => {
+          onChange?.(compressed);
+        }).catch(() => message.error('图片压缩失败'));
         break;
       }
     }
@@ -579,24 +563,9 @@ const PayScreenshotUpload: React.FC<{
             input.type = 'file'; input.accept = 'image/*';
             input.onchange = () => {
               const file = input.files?.[0]; if (!file) return;
-              const reader = new FileReader();
-              reader.onload = () => {
-                const img = new window.Image();
-                img.onload = () => {
-                  const canvas = document.createElement('canvas');
-                  const maxDim = 480;
-                  let w = img.width, h = img.height;
-                  if (w > maxDim || h > maxDim) {
-                    if (w > h) { h = Math.round(h * maxDim / w); w = maxDim; }
-                    else { w = Math.round(w * maxDim / h); h = maxDim; }
-                  }
-                  canvas.width = w; canvas.height = h;
-                  canvas.getContext('2d')?.drawImage(img, 0, 0, w, h);
-                  onChange?.(canvas.toDataURL('image/jpeg', 0.7));
-                };
-                img.src = reader.result as string;
-              };
-              reader.readAsDataURL(file);
+              compressImageFile(file).then(compressed => {
+                onChange?.(compressed);
+              }).catch(() => message.error('图片处理失败'));
             };
             input.click();
           }}
@@ -2181,12 +2150,9 @@ const ModuleChildPage: React.FC = () => {
         const slot = [...sellerImages]; while (slot.length < 5) slot.push('');
         const target = slot.findIndex(s => !s);
         if (target === -1) { message.warning('备注图片已满（最多5张），请先删除后再上传'); return; }
-        const reader = new FileReader();
-        reader.onload = (ev) => {
-          const dataUrl = ev.target?.result as string;
+        compressImageFile(blob).then(dataUrl => {
           setSellerImages(prev => { const n = [...prev]; while (n.length < 5) n.push(''); n[target] = dataUrl; return n; });
-        };
-        reader.readAsDataURL(blob);
+        }).catch(() => message.error('图片处理失败'));
         break;
       }
     }
@@ -2202,12 +2168,9 @@ const ModuleChildPage: React.FC = () => {
     input.onchange = (e) => {
       const file = (e.target as HTMLInputElement).files?.[0];
       if (!file) return;
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        const dataUrl = ev.target?.result as string;
+      compressImageFile(file).then(dataUrl => {
         setSellerImages(prev => { const n = [...prev]; while (n.length < 5) n.push(''); n[target] = dataUrl; return n; });
-      };
-      reader.readAsDataURL(file);
+      }).catch(() => message.error('图片处理失败'));
     };
     input.click();
   }, [sellerImages]);
@@ -3194,9 +3157,7 @@ const ModuleChildPage: React.FC = () => {
   const handleBillAddImageFile = useCallback((file: File) => {
     if (!file.type.startsWith('image/')) { message.error('请选择图片文件'); return; }
     if (file.size > 2 * 1024 * 1024) { message.error('图片不能超过 2MB'); return; }
-    const reader = new FileReader();
-    reader.onload = () => setBillAddImage(reader.result as string);
-    reader.readAsDataURL(file);
+    compressImageFile(file).then(dataUrl => setBillAddImage(dataUrl)).catch(() => message.error('图片处理失败'));
   }, []);
 
   useEffect(() => {
@@ -14858,9 +14819,7 @@ const handleBatchAttrsConfirm = () => {
                       <input type="file" accept="image/*" style={{ display: 'none' }} onChange={e => {
                         const file = e.target.files?.[0];
                         if (!file) return;
-                        const reader = new FileReader();
-                        reader.onload = () => { if (reader.result) setPoEditImages(prev => [...prev, reader.result as string]); };
-                        reader.readAsDataURL(file);
+                        compressImageFile(file).then(dataUrl => { if (dataUrl) setPoEditImages(prev => [...prev, dataUrl]); }).catch(() => message.error('图片处理失败'));
                         e.target.value = '';
                       }} />
                     </label>
@@ -15467,9 +15426,7 @@ const handleBatchAttrsConfirm = () => {
                                   input.onchange = (ev: any) => {
                                     const file = ev.target.files?.[0];
                                     if (!file) return;
-                                    const reader = new FileReader();
-                                    reader.onload = (re) => { addForm.setFieldsValue({ payScreenshot: re.target?.result as string }); };
-                                    reader.readAsDataURL(file);
+                                    compressImageFile(file).then(dataUrl => { addForm.setFieldsValue({ payScreenshot: dataUrl }); }).catch(() => message.error('图片处理失败'));
                                   };
                                   input.click();
                                 }}
@@ -15686,9 +15643,7 @@ const handleBatchAttrsConfirm = () => {
                       <input type="file" accept="image/*" style={{ display: 'none' }} onChange={e => {
                         const file = e.target.files?.[0];
                         if (!file) return;
-                        const reader = new FileReader();
-                        reader.onload = () => { if (reader.result) setPoAddImages(prev => [...prev, reader.result as string]); };
-                        reader.readAsDataURL(file);
+                        compressImageFile(file).then(dataUrl => { if (dataUrl) setPoAddImages(prev => [...prev, dataUrl]); }).catch(() => message.error('图片处理失败'));
                         e.target.value = '';
                       }} />
                     </label>
@@ -16170,12 +16125,10 @@ const handleBatchAttrsConfirm = () => {
                         onClick={() => {
                           const input = document.createElement('input');
                           input.type = 'file'; input.accept = 'image/*';
-                          input.onchange = (ev) => {
+                          input.onchange = async (ev) => {
                             const file = (ev.target as HTMLInputElement).files?.[0];
                             if (!file) return;
-                            const reader = new FileReader();
-                            reader.onload = (e2) => setPoDetailImages(prev => [...prev, String(e2.target?.result || '')]);
-                            reader.readAsDataURL(file);
+                            compressImageFile(file).then(dataUrl => setPoDetailImages(prev => [...prev, dataUrl])).catch(() => message.error('图片处理失败'));
                           };
                           input.click();
                         }}
@@ -16186,9 +16139,7 @@ const handleBatchAttrsConfirm = () => {
                             if (it.type.startsWith('image/')) {
                               const blob = it.getAsFile();
                               if (!blob) continue;
-                              const reader = new FileReader();
-                              reader.onload = (e2) => setPoDetailImages(prev => [...prev, String(e2.target?.result || '')]);
-                              reader.readAsDataURL(blob);
+                              compressImageFile(blob).then(dataUrl => setPoDetailImages(prev => [...prev, dataUrl])).catch(() => message.error('图片处理失败'));
                               break;
                             }
                           }
@@ -17636,12 +17587,10 @@ const handleBatchAttrsConfirm = () => {
                         onClick={() => {
                           const input = document.createElement('input');
                           input.type = 'file'; input.accept = 'image/*';
-                          input.onchange = (ev) => {
+                          input.onchange = async (ev) => {
                             const file = (ev.target as HTMLInputElement).files?.[0];
                             if (!file) return;
-                            const reader = new FileReader();
-                            reader.onload = e => setSemiImage(String(e.target?.result || ''));
-                            reader.readAsDataURL(file);
+                            compressImageFile(file).then(dataUrl => setSemiImage(dataUrl)).catch(() => message.error('图片处理失败'));
                           };
                           input.click();
                         }}
@@ -17652,9 +17601,7 @@ const handleBatchAttrsConfirm = () => {
                             if (it.type.startsWith('image/')) {
                               const blob = it.getAsFile();
                               if (!blob) continue;
-                              const reader = new FileReader();
-                              reader.onload = ev => setSemiImage(String(ev.target?.result || ''));
-                              reader.readAsDataURL(blob);
+                              compressImageFile(blob).then(dataUrl => setSemiImage(dataUrl)).catch(() => message.error('图片处理失败'));
                               break;
                             }
                           }
@@ -17673,9 +17620,7 @@ const handleBatchAttrsConfirm = () => {
                               const type = item.types.find(t => t.startsWith('image/'));
                               if (type) {
                                 const blob = await item.getType(type);
-                                const reader = new FileReader();
-                                reader.onload = e => setSemiImage(String(e.target?.result || ''));
-                                reader.readAsDataURL(blob);
+                                compressImageFile(blob).then(dataUrl => setSemiImage(dataUrl)).catch(() => message.error('图片处理失败'));
                                 message.success('已粘贴剪切板图片');
                                 return;
                               }
@@ -22799,25 +22744,15 @@ function PrintTemplateEditor() {
           </div>
           <input id="img-upload-input" type="file" accept="image/*" style={{ display: 'none' }} onChange={async (e) => {
             const file = e.target.files?.[0]; if (!file) return;
-            const reader = new FileReader();
-            reader.onload = (ev) => {
-              const base64 = ev.target?.result as string;
+            compressImageFile(file).then(compressed => {
               const img = document.createElement('img');
               img.onload = () => {
-                const canvas = document.createElement('canvas');
-                let w = img.width, h = img.height;
-                const maxDim = 400;
-                if (w > maxDim || h > maxDim) { if (w > h) { h = Math.round(h * maxDim / w); w = maxDim; } else { w = Math.round(w * maxDim / h); h = maxDim; } }
-                canvas.width = w; canvas.height = h;
-                canvas.getContext('2d')?.drawImage(img, 0, 0, w, h);
-                const compressed = canvas.toDataURL('image/jpeg', 0.7);
-                const newEl: PlacedElement = { id: nextId(), type: 'image', x: 5, y: 10 + (elements.length % 6) * 6, content: compressed, width: w * 0.264583, height: h * 0.264583 };
+                const newEl: PlacedElement = { id: nextId(), type: 'image', x: 5, y: 10 + (elements.length % 6) * 6, content: compressed, width: img.width * 0.264583, height: img.height * 0.264583 };
                 setElements(prev => [...prev, newEl]); setSelectedId(newEl.id);
                 pushHistory([...elements, newEl]);
               };
-              img.src = base64;
-            };
-            reader.readAsDataURL(file);
+              img.src = compressed;
+            }).catch(() => message.error('图片处理失败'));
             e.target.value = '';
           }} />
         </div>

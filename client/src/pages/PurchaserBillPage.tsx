@@ -18,6 +18,7 @@ import { refreshSupplierPurchase } from '../utils/paySummary';
 import { isAccountingMode, writeAutoEntries, removeAutoEntries, loadSubjectOptions } from '../utils/accountingBridge';
 import { downloadBillExportCsv, BillItemExportRow, loadExportFieldCfg, loadProductMasterMap, resolveItemColorSpec } from '../utils/billItemsExport';
 import BillExportFieldModal from '../components/BillExportFieldModal';
+import { compressImageFile } from '../utils/imageCompress';
 
 const { Text } = Typography;
 const PRIMARY = '#1890ff';
@@ -666,9 +667,7 @@ const PurchaserBillPage: React.FC = () => {
   const handleImageFile = (file: File) => {
     if (!file.type.startsWith('image/')) { message.error('请选择图片文件'); return; }
     if (file.size > 2 * 1024 * 1024) { message.error('图片不能超过 2MB'); return; }
-    const reader = new FileReader();
-    reader.onload = () => setCurrentImage(reader.result as string);
-    reader.readAsDataURL(file);
+    compressImageFile(file).then(dataUrl => setCurrentImage(dataUrl)).catch(() => message.error('图片处理失败'));
   };
 
   // 弹窗打开时监听粘贴图片

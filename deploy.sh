@@ -47,15 +47,15 @@ detect_os() {
     log_info "检测到操作系统: $OS $VER"
 }
 
-# 安装 Node.js 18.x
+# 安装 Node.js 20.x
 install_nodejs() {
-    log_info "安装 Node.js 18.x..."
+    log_info "安装 Node.js 20.x..."
     
     if [[ "$OS" == *"Ubuntu"* ]] || [[ "$OS" == *"Debian"* ]]; then
-        curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
+        curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
         apt-get install -y nodejs
     elif [[ "$OS" == *"CentOS"* ]] || [[ "$OS" == *"Red Hat"* ]]; then
-        curl -fsSL https://rpm.nodesource.com/setup_18.x | bash -
+        curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
         yum install -y nodejs
     else
         log_error "不支持的操作系统: $OS"

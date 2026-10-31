@@ -44,6 +44,7 @@ import {
 import type { CustomerSummaryEntry } from '../utils/paySummary';
 import { buildOrderOccupiedAmountMap, getOrderOccupiedList } from '../utils/orderOccupied';
 import { canFn, usePermTick } from '../utils/perm';
+import { compressImageFile } from '../utils/imageCompress';
 
 const { Text } = Typography;
 const { Option } = Select;
@@ -212,24 +213,9 @@ const getDataOwner = () => {
 const ReceiptVoucherUpload: React.FC<{ value?: string; onChange?: (v: string) => void }> = ({ value, onChange }) => {
   const [previewVisible, setPreviewVisible] = useState(false);
   const readFile = (file: File) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const img = new window.Image();
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        const maxDim = 480;
-        let w = img.width, h = img.height;
-        if (w > maxDim || h > maxDim) {
-          if (w > h) { h = Math.round(h * maxDim / w); w = maxDim; }
-          else { w = Math.round(w * maxDim / h); h = maxDim; }
-        }
-        canvas.width = w; canvas.height = h;
-        canvas.getContext('2d')?.drawImage(img, 0, 0, w, h);
-        onChange?.(canvas.toDataURL('image/jpeg', 0.7));
-      };
-      img.src = reader.result as string;
-    };
-    reader.readAsDataURL(file);
+    compressImageFile(file).then(compressed => {
+      onChange?.(compressed);
+    }).catch(() => message.error('图片处理失败'));
   };
   const handlePaste = (e: React.ClipboardEvent) => {
     const items = e.clipboardData?.items;

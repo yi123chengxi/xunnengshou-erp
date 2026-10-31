@@ -41,6 +41,7 @@ import type { SupplierSummaryEntry } from '../utils/paySummary';
 import { writeProductList, loadProductListLatest } from '../utils/dataStore';
 import { isAccountingMode, writeAutoEntries, loadSubjectOptions, subjectFilterOption } from '../utils/accountingBridge';
 import { getCurrentUserDisplayName } from '../utils/billLog';
+import { compressImageFile } from '../utils/imageCompress';
 
 const { Text, Title } = Typography;
 const { Option } = Select;
@@ -486,9 +487,7 @@ const PurchaserSupplierList: React.FC = () => {
   const handlePayShotFile = (file: File) => {
     if (!file.type.startsWith('image/')) { message.error('请选择图片文件'); return; }
     if (file.size > 2 * 1024 * 1024) { message.error('图片不能超过 2MB'); return; }
-    const reader = new FileReader();
-    reader.onload = () => setPayShot(reader.result as string);
-    reader.readAsDataURL(file);
+    compressImageFile(file).then(dataUrl => setPayShot(dataUrl)).catch(() => message.error('图片处理失败'));
   };
   useEffect(() => {
     if (!payModalVisible) return;

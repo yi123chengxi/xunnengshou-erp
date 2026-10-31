@@ -52,6 +52,7 @@ import { getMergedPermissions } from '../config/permissions';
 import { isPermAllowed, ECOM_KEY_MIGRATION } from '../utils/devPerms';
 import { getProvinceOptions, getCityOptions, getDistrictOptions } from '../utils/regions';
 import { fetchUnreadCount, onNewMessage as onChatNewMessage, onMarkRead } from '../utils/chatSocket';
+import { compressImageFile } from '../utils/imageCompress';
 
 const { Header, Sider, Content } = Layout;
 const { Text } = Typography;
@@ -2074,13 +2075,10 @@ const MainLayout: React.FC = () => {
                     if (it.type.startsWith('image/')) {
                       const file = it.getAsFile();
                       if (file) {
-                        const reader = new FileReader();
-                        reader.onload = () => {
-                          const dataUrl = reader.result as string;
+                        compressImageFile(file).then(dataUrl => {
                           editProfileForm.setFieldsValue({ wechatQr: dataUrl });
                           setWechatQrPreview(dataUrl);
-                        };
-                        reader.readAsDataURL(file);
+                        }).catch(() => message.error('图片处理失败'));
                       }
                       break;
                     }
@@ -2101,13 +2099,10 @@ const MainLayout: React.FC = () => {
                 onChange={(e) => {
                   const file = e.target.files?.[0];
                   if (!file) return;
-                  const reader = new FileReader();
-                  reader.onload = () => {
-                    const dataUrl = reader.result as string;
+                  compressImageFile(file).then(dataUrl => {
                     editProfileForm.setFieldsValue({ wechatQr: dataUrl });
                     setWechatQrPreview(dataUrl);
-                  };
-                  reader.readAsDataURL(file);
+                  }).catch(() => message.error('图片处理失败'));
                 }}
               />
               <div style={{ fontSize: 11, color: '#999', marginTop: 4 }}>点击上传或 Ctrl+V 粘贴</div>
@@ -2154,13 +2149,10 @@ const MainLayout: React.FC = () => {
                     if (it.type.startsWith('image/')) {
                       const file = it.getAsFile();
                       if (file) {
-                        const reader = new FileReader();
-                        reader.onload = () => {
-                          const dataUrl = reader.result as string;
+                        compressImageFile(file).then(dataUrl => {
                           editProfileForm.setFieldsValue({ payQrImage: dataUrl });
                           setPayQrPreview(dataUrl);
-                        };
-                        reader.readAsDataURL(file);
+                        }).catch(() => message.error('图片处理失败'));
                       }
                       break;
                     }
@@ -2181,13 +2173,10 @@ const MainLayout: React.FC = () => {
                 onChange={(e) => {
                   const file = e.target.files?.[0];
                   if (!file) return;
-                  const reader = new FileReader();
-                  reader.onload = () => {
-                    const dataUrl = reader.result as string;
+                  compressImageFile(file).then(dataUrl => {
                     editProfileForm.setFieldsValue({ payQrImage: dataUrl });
                     setPayQrPreview(dataUrl);
-                  };
-                  reader.readAsDataURL(file);
+                  }).catch(() => message.error('图片处理失败'));
                 }}
               />
               <div style={{ fontSize: 11, color: '#999', marginTop: 4 }}>点击上传或 Ctrl+V 粘贴</div>

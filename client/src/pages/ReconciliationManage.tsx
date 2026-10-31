@@ -37,6 +37,7 @@ import {
 import { useParams, useLocation } from 'react-router-dom';
 import type { ColumnsType } from 'antd/es/table';
 import { appendBillLogEntry } from '../utils/billLog';
+import { compressImageFile } from '../utils/imageCompress';
 
 const { Title, Text, Paragraph } = Typography;
 const { Option } = Select;
@@ -720,9 +721,7 @@ const ReconciliationManage: React.FC = () => {
 
   // ==================== 对方反馈 ====================
   const readImageFile = useCallback((file: File, setter: (v: string) => void) => {
-    const reader = new FileReader();
-    reader.onload = () => setter(String(reader.result || ''));
-    reader.readAsDataURL(file);
+    compressImageFile(file).then(dataUrl => setter(dataUrl)).catch(() => message.error('图片处理失败'));
   }, []);
 
   // 剪切板粘贴图片：对方反馈/账目不符弹窗打开时 Ctrl+V 直接粘贴截图

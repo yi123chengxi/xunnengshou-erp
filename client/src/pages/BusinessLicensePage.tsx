@@ -16,6 +16,7 @@ import { safeSetItem } from '../utils/storageQuota';
 import { saveDataset } from '../utils/dataStore';
 import InvoiceRecordPage from './InvoiceRecordPage';
 import { sendPushNotification, showNativeNotification, isNotificationTypeEnabled } from '../utils/pushNotification';
+import { compressImageFile } from '../utils/imageCompress';
 
 // ===================== 销售额统计类型 =====================
 interface SalesRecord {
@@ -551,9 +552,7 @@ const BusinessLicensePage: React.FC = () => {
         e.preventDefault();
         const blob = items[i].getAsFile();
         if (!blob) return;
-        const reader = new FileReader();
-        reader.onload = (ev) => { setFormImage(ev.target?.result as string); };
-        reader.readAsDataURL(blob);
+        compressImageFile(blob).then(dataUrl => setFormImage(dataUrl)).catch(() => message.error('图片处理失败'));
         break;
       }
     }
@@ -868,12 +867,10 @@ const BusinessLicensePage: React.FC = () => {
               onClick={() => {
                 const input = document.createElement('input');
                 input.type = 'file'; input.accept = 'image/*';
-                input.onchange = (ev: any) => {
+                input.onchange = async (ev: any) => {
                   const file = ev.target?.files?.[0];
                   if (!file) return;
-                  const reader = new FileReader();
-                  reader.onload = (e) => { setFormImage(e.target?.result as string); };
-                  reader.readAsDataURL(file);
+                  compressImageFile(file).then(dataUrl => { setFormImage(dataUrl); }).catch(() => message.error('图片处理失败'));
                 };
                 input.click();
               }}>

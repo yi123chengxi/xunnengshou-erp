@@ -39,6 +39,7 @@ import { saveDataset } from '../utils/dataStore';
 import { showNativeNotification, showTimedNotification, isNotificationBlocked } from '../utils/pushNotification';
 import { useDevPermSet, isPermAllowed } from '../utils/devPerms';
 import { menuVisible, menuKeyFromPath, usePermTick } from '../utils/perm';
+import { compressImageFile } from '../utils/imageCompress';
 import { Result as AntResult } from 'antd';
 
 const { Header, Sider, Content } = Layout;
@@ -1328,13 +1329,10 @@ const PurchaserLayout: React.FC = () => {
                     if (it.type.startsWith('image/')) {
                       const file = it.getAsFile();
                       if (file) {
-                        const reader = new FileReader();
-                        reader.onload = () => {
-                          const dataUrl = reader.result as string;
+                        compressImageFile(file).then(dataUrl => {
                           editProfileForm.setFieldsValue({ wechatQr: dataUrl });
                           setWechatQrPreview(dataUrl);
-                        };
-                        reader.readAsDataURL(file);
+                        }).catch(() => message.error('图片处理失败'));
                       }
                       break;
                     }
@@ -1355,13 +1353,10 @@ const PurchaserLayout: React.FC = () => {
                 onChange={(e) => {
                   const file = e.target.files?.[0];
                   if (!file) return;
-                  const reader = new FileReader();
-                  reader.onload = () => {
-                    const dataUrl = reader.result as string;
+                  compressImageFile(file).then(dataUrl => {
                     editProfileForm.setFieldsValue({ wechatQr: dataUrl });
                     setWechatQrPreview(dataUrl);
-                  };
-                  reader.readAsDataURL(file);
+                  }).catch(() => message.error('图片处理失败'));
                 }}
               />
               <div style={{ fontSize: 11, color: '#999', marginTop: 4 }}>点击上传或 Ctrl+V 粘贴</div>

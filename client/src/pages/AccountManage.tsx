@@ -1,4 +1,4 @@
-﻿import React, { useState, useMemo, useRef, useCallback, useEffect } from 'react';
+import React, { useState, useMemo, useRef, useCallback, useEffect } from 'react';
 import {
   Card, Row, Col, Typography, Statistic, Table, Input, Select, Button,
   Space, Tag, message, Modal, Form, Drawer, Descriptions, Dropdown,
@@ -43,7 +43,7 @@ const { Option } = Select;
 
 const PRIMARY = '#1e4a7e';
 
-// 瑙ｆ瀽鐪熸鐨勬暟鎹綊灞炶处鍙凤紙娌?parentAccount 閾捐拷婧埌涓昏处鍙凤級
+// 解析真正的数据归属账号（如 parentAccount 链追溯到主账号）
 const resolveDataOwner = (): string => {
   const isSub = localStorage.getItem('isSubAccount') === 'true';
   if (!isSub) return localStorage.getItem('username') || '';
@@ -61,10 +61,10 @@ const resolveDataOwner = (): string => {
   return parent;
 };
 
-// 璐﹀彿鏁版嵁 localStorage 鎸佷箙鍖?key锛堟寜涓昏处鍙烽殧绂伙紝瀛愯处鍙峰叡浜富璐﹀彿鏁版嵁锛?
+// 账号数据 localStorage 持久化 key（按主账号隔离，子账号共享主账号数据）
 const getAccountsStorageKey = () => 'accounts_' + resolveDataOwner();
 
-// 浠?localStorage 鍔犺浇璐﹀彿鏁版嵁锛屾棤鏁版嵁鏃剁敤鍒濆妯℃嫙鏁版嵁
+// 从 localStorage 加载账号数据，无数据时用初始模拟数据
 const loadAccountsFromStorage = (): AccountRecord[] => {
   try {
     const data = localStorage.getItem(getAccountsStorageKey());
@@ -82,26 +82,26 @@ interface AccountRecord {
   username: string;
   displayName: string;
   role: string;
-  roles: string[]; // 澶氳鑹叉暟缁?
-  customPermissions?: string[]; // 鐙珛鍒嗛厤鐨勬潈闄?
+  roles: string[]; // 多角色数组
+  customPermissions?: string[]; // 独立分配的权限
   accountType: string;
   status: string;
   date: string;
   lastLogin: string;
   remark: string;
   person: string;
-  notificationBlocked?: boolean; // 灞忚斀寮圭獥閫氱煡
-  group?: string; // 鎵€灞為儴闂紙鍘熲€滃垎缁勨€濓級
-  phone?: string; // 鎵嬫満鍙风爜锛堝彲鐢ㄤ簬鐧诲綍锛涘悓鍙峰璐﹀彿鏃剁鐢ㄦ墜鏈哄彿鐧诲綍锛?
+  notificationBlocked?: boolean; // 屏蔽弹窗通知
+  group?: string; // 所属部门（原“分组”）
+  phone?: string; // 手机号码（可用于登录；同号多账号时禁用手机号登录）
 }
 
-// 鍒嗙粍鏁版嵁鎸佷箙鍖?
+// 分组数据持久化
 export interface GroupRecord {
   name: string;
-  permissions: string[]; // 缁勬潈闄愬垪琛紙涓庝釜浜烘潈闄愬彔鍔狅級
+  permissions: string[]; // 组权限列表（与个人权限叠加）
 }
 
-// 璐﹀彿瀵煎叆琛岋紙棰勮鏍￠獙缁撴灉锛?
+// 账号导入行（预览校验结果）
 interface ImportAccountRow {
   rowNo: number;
   group: string;
@@ -117,7 +117,7 @@ const loadGroups = (): GroupRecord[] => {
     const data = localStorage.getItem(getGroupsStorageKey());
     if (data) {
       const parsed = JSON.parse(data);
-      // 鍚戝悗鍏煎锛氭棫鏁版嵁涓?string[]锛岃縼绉讳负 GroupRecord[]
+      // 向后兼容：旧数据为 string[]，迁移为 GroupRecord[]
       if (Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0] === 'string') {
         return (parsed as string[]).map(name => ({ name, permissions: [] }));
       }
@@ -131,16 +131,16 @@ const saveGroups = (groups: GroupRecord[]) => {
 };
 
 
-// 鍒濆璐﹀彿鏁版嵁锛堜粎淇濈暀涓昏处鍙凤紝瀛愯处鍙风敱绠＄悊鍛樻墜鍔ㄥ垱寤猴級
+// 初始账号数据（仅保留主账号，子账号由管理员手动创建）
 const initialAccounts: AccountRecord[] = [
-  { key: '1', id: 'ACC-001', username: 'admin', displayName: '绯荤粺绠＄悊鍛?, role: 'super_admin', roles: [], accountType: '涓昏处鍙?, status: 'normal', date: '2024-01-01', lastLogin: '2024-06-26', remark: '绯荤粺瓒呯骇绠＄悊鍛?, person: '绠＄悊鍛? },
+  { key: '1', id: 'ACC-001', username: 'admin', displayName: '系统管理员', role: 'super_admin', roles: [], accountType: '主账号', status: 'normal', date: '2024-01-01', lastLogin: '2024-06-26', remark: '系统超级管理员', person: '管理员' },
 ];
 
 const roleOptions = [
-  { label: '瓒呯骇绠＄悊鍛?, value: 'super_admin' },
-  { label: '绠＄悊鍛?, value: 'admin' },
-  { label: '鏅€氱敤鎴?, value: 'user' },
-  { label: '鍙鐢ㄦ埛', value: 'viewer' },
+  { label: '超级管理员', value: 'super_admin' },
+  { label: '管理员', value: 'admin' },
+  { label: '普通用户', value: 'user' },
+  { label: '只读用户', value: 'viewer' },
 ];
 
 
@@ -152,13 +152,13 @@ const roleColorMap: Record<string, string> = {
 };
 
 const roleLabelMap: Record<string, string> = {
-  super_admin: '瓒呯骇绠＄悊鍛?,
-  admin: '绠＄悊鍛?,
-  user: '鏅€氱敤鎴?,
-  viewer: '鍙鐢ㄦ埛',
+  super_admin: '超级管理员',
+  admin: '管理员',
+  user: '普通用户',
+  viewer: '只读用户',
 };
 
-// 鐙珛鏉冮檺閫夋嫨鍣ㄧ粍浠讹紙鏈€楂樻潈闄愮紪杈戯紝鍙帶鍒舵墍鏈夋潈闄愰」鍖呮嫭瑙掕壊棰勮锛?
+// 独立权限选择器组件（最高权限编辑，可控制所有权限项包括角色预设）
 const CustomPermSelector: React.FC<{
   value: string[];
   onChange: (perms: string[]) => void;
@@ -166,7 +166,7 @@ const CustomPermSelector: React.FC<{
 }> = ({ value, onChange, roles }) => {
 
 
-  // 鐢?ref 璺熻釜鏈€鏂?value锛岄伩鍏嶉棴鍖呴棶棰?
+  // 用 ref 跟踪最新 value，避免闭包问题
   const valueRef = React.useRef(value);
   valueRef.current = value;
   const onChangeRef = React.useRef(onChange);
@@ -196,10 +196,10 @@ const CustomPermSelector: React.FC<{
 
   return (
     <div>
-      <Form.Item label="鐙珛鏉冮檺閰嶇疆" style={{ marginBottom: 0 }}>
+      <Form.Item label="独立权限配置" style={{ marginBottom: 0 }}>
         <Text type="secondary" style={{ fontSize: 12 }}>
           <SafetyCertificateOutlined style={{ marginRight: 4, color: '#1677ff' }} />
-          姝ゅ閰嶇疆鍏锋湁鏈€楂樹紭鍏堢骇锛屽彲瑕嗙洊瑙掕壊棰勮鏉冮檺
+          此处配置具有最高优先级，可覆盖角色预设权限
         </Text>
       </Form.Item>
       {permissionModules.map(mod => {
@@ -217,7 +217,7 @@ const CustomPermSelector: React.FC<{
               >
                 <Text strong style={{ fontSize: 13 }}>{mod.label}</Text>
               </Checkbox>
-              <Tag color="blue" style={{ marginLeft: 6 }}>{modPerms.length}椤?/Tag>
+              <Tag color="blue" style={{ marginLeft: 6 }}>{modPerms.length}</Tag>
             </div>
             <Row gutter={[8, 4]} style={{ marginLeft: 24 }}>
               {mod.children.map(child => {
@@ -231,7 +231,7 @@ const CustomPermSelector: React.FC<{
                       onChange={(e) => togglePerm(permKey, e.target.checked)}
                     >
                       {child.label}
-                      {isFromRole && <Tag color="processing" style={{ fontSize: 10, marginLeft: 4, lineHeight: '16px', padding: '0 4px' }}>棰勮</Tag>}
+                      {isFromRole && <Tag color="processing" style={{ fontSize: 10, marginLeft: 4, lineHeight: '16px', padding: '0 4px' }}>预设</Tag>}
                     </Checkbox>
                   </Col>
                 );
@@ -255,15 +255,15 @@ const AccountManage: React.FC = () => {
   const [roleFilter, setRoleFilter] = useState<string>('');
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
 
-  // 鍒嗙粍绠＄悊
+  // 分组管理
   const [groups, setGroups] = useState<GroupRecord[]>(loadGroups);
-  const [selectedGroup, setSelectedGroup] = useState<string>(''); // '' = 鍏ㄩ儴
+  const [selectedGroup, setSelectedGroup] = useState<string>(''); // '' = 全部
   const [groupModalVisible, setGroupModalVisible] = useState(false);
   const [groupForm] = Form.useForm();
-  const [editingGroup, setEditingGroup] = useState<string>(''); // 缂栬緫涓殑鏃у垎缁勫悕
-  const [groupPerms, setGroupPerms] = useState<string[]>([]); // 褰撳墠缂栬緫鍒嗙粍鐨勬潈闄?
+  const [editingGroup, setEditingGroup] = useState<string>(''); // 编辑中的旧分组名
+  const [groupPerms, setGroupPerms] = useState<string[]>([]); // 当前编辑分组的权限
 
-  // 鐧诲綍鏃ュ織寮圭獥
+  // 登录日志弹窗
   const [logVisible, setLogVisible] = useState(false);
   const [loginLogs, setLoginLogs] = useState<any[]>([]);
 
@@ -277,54 +277,54 @@ const AccountManage: React.FC = () => {
 
   const handleClearLogs = useCallback(() => {
     Modal.confirm({
-      title: '纭娓呴櫎',
-      content: '纭畾瑕佹竻闄ゆ墍鏈夌櫥褰曟棩蹇楀悧锛?,
-      okText: '纭畾',
-      cancelText: '鍙栨秷',
+      title: '确认清除',
+      content: '确定要清除所有登录日志吗',
+      okText: '确定',
+      cancelText: '取消',
       onOk: () => {
         localStorage.removeItem('login_audit_log');
         setLoginLogs([]);
-        message.success('鐧诲綍鏃ュ織宸叉竻闄?);
+        message.success('登录日志已清除');
       },
     });
   }, []);
 
-  // 璇︽儏鎶藉眽
+  // 详情抽屉
   const [detailVisible, setDetailVisible] = useState(false);
   const [selectedRecord, setSelectedRecord] = useState<AccountRecord | null>(null);
 
-  // 缂栬緫妯℃€佹
+  // 编辑模态框
   const [editVisible, setEditVisible] = useState(false);
   const [editForm] = Form.useForm();
 
-  // 鏂板瀛愯处鍙锋ā鎬佹
+  // 新增子账号模态框
   const [addVisible, setAddVisible] = useState(false);
   const [addForm] = Form.useForm();
 
-  // 閲嶇疆瀵嗙爜妯℃€佹
+  // 重置密码模态框
   const [pwdVisible, setPwdVisible] = useState(false);
   const [pwdForm] = Form.useForm();
   const [pwdAccount, setPwdAccount] = useState<AccountRecord | null>(null);
 
-  // 鏉冮檺灞曞紑鐘舵€?
+  // 权限展开状态
   const [editPermExpanded, setEditPermExpanded] = useState(false);
   const [addPermExpanded, setAddPermExpanded] = useState(false);
-  // PERM_V2 涓汉涓夋€佽鍐欒崏绋?
+  // PERM_V2 个人三态覆写草稿
   const [overrideDraft, setOverrideDraft] = useState<Record<string, PermTri>>({});
   const [overrideExpanded, setOverrideExpanded] = useState(false);
 
-  // 鏉冮檺鏁版嵁锛堝畬鍏ㄧ敱缁勪欢鐘舵€佺鐞嗭紝涓嶄緷璧?Form锛?
+  // 权限数据（完全由组件状态管理，不依赖 Form
   const [editPerms, setEditPerms] = useState<string[]>([]);
   const editPermsRef = React.useRef<string[]>([]);
   const [addPerms, setAddPerms] = useState<string[]>([]);
   const addPermsRef = React.useRef<string[]>([]);
-  const addGroupPermsRef = React.useRef<string[]>([]); // 鏂板缓绐楄嚜鍔ㄧ户鎵跨殑閮ㄩ棬鏉冮檺蹇収锛堝垏鎹㈤儴闂ㄦ椂鏇挎崲锛?
+  const addGroupPermsRef = React.useRef<string[]>([]); // 新建窗自动继承的部门权限快照（切换部门时替换赋
 
-  // 浣跨敤 Form.useWatch 鑾峰彇褰撳墠瑙掕壊锛堢敤浜庝紶閫掔粰鏉冮檺閫夋嫨鍣級
+  // 使用 Form.useWatch 获取当前角色（用于传递给权限选择器）
   const editWatchedRoles: string[] = Form.useWatch('roles', editForm) || [];
   const addWatchedRoles: string[] = Form.useWatch('roles', addForm) || [];
 
-  // 鍚屾 ref 鍜?state
+  // 同步 ref 到 state
   const updateEditPerms = (perms: string[]) => {
 
     editPermsRef.current = perms;
@@ -335,7 +335,7 @@ const AccountManage: React.FC = () => {
     setAddPerms(perms);
   };
 
-  // 鏁版嵁缁熻
+  // 数据统计
   const stats = useMemo(() => {
     let todayLogs = 0;
     try {
@@ -346,17 +346,17 @@ const AccountManage: React.FC = () => {
     return {
       totalAccounts: dataSource.length,
       activeAccounts: dataSource.filter(a => a.status === 'normal').length,
-      subAccounts: dataSource.filter(a => a.accountType === '瀛愯处鍙?).length,
+      subAccounts: dataSource.filter(a => a.accountType === '子账号').length,
       todayLogs,
     };
   }, [dataSource]);
 
-  // 鏁版嵁鍙樺寲鏃惰嚜鍔ㄦ寔涔呭寲鍒?localStorage
+  // 数据变化时自动持久化到 localStorage
   useEffect(() => {
     localStorage.setItem(getAccountsStorageKey(), JSON.stringify(dataSource));
   }, [dataSource]);
 
-  // 鑷姩淇锛氭壂鎻?registeredUsers锛屼慨姝ｆ墍鏈夊瓙璐﹀彿鐨?parentAccount 鎸囧悜鐪熸鐨勪富璐﹀彿
+  // 自动修复：扫描 registeredUsers，修正所有子账号的 parentAccount 指向真正的主账号
   useEffect(() => {
     try {
       const regUsers: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
@@ -383,7 +383,7 @@ const AccountManage: React.FC = () => {
   // eslint-disable-line
   }, []);
 
-  // 绛涢€夊悗鐨勬暟鎹?
+  // 筛选后的数据
   const filteredData = useMemo(() => {
     return dataSource.filter(item => {
       const matchSearch = !searchText ||
@@ -392,7 +392,7 @@ const AccountManage: React.FC = () => {
         item.id.toLowerCase().includes(searchText.toLowerCase());
       const matchStatus = !statusFilter || item.status === statusFilter;
       const matchRole = !roleFilter || item.role === roleFilter;
-      // 鍒嗙粍绛涢€夛細'' = 鍏ㄩ儴锛?__ungrouped__' = 鏈寚瀹氬垎缁勶紝鍏朵粬 = 鍖归厤鍒嗙粍鍚?
+      // 分组筛选：'' = 全部，__ungrouped__' = 未指定分组，其他 = 匹配分组名
       const matchGroup = !selectedGroup
         ? true
         : selectedGroup === '__ungrouped__'
@@ -402,16 +402,16 @@ const AccountManage: React.FC = () => {
     });
   }, [dataSource, searchText, statusFilter, roleFilter, selectedGroup]);
 
-  // 鏌ョ湅璇︽儏
+  // 查看详情
   const handleView = useCallback((record: AccountRecord) => {
     setSelectedRecord(record);
     setDetailVisible(true);
   }, []);
 
-  // 缂栬緫璐﹀彿
+  // 编辑账号
   const handleEdit = useCallback((record: AccountRecord) => {
     setSelectedRecord(record);
-    // 濡傛灉 customPermissions 涓虹┖浣嗘湁瑙掕壊锛屽悎骞惰鑹叉潈闄愪綔涓哄垵濮嬪€?
+    // 如果 customPermissions 为空但有角色，合并角色权限作为初始值
     let initPerms = record.customPermissions || [];
 
     if (initPerms.length === 0 && record.roles && record.roles.length > 0) {
@@ -426,7 +426,7 @@ const AccountManage: React.FC = () => {
     updateEditPerms(initPerms);
     setOverrideDraft(loadUserPermOverrides(record.username));
 
-    // 濡傛灉璐﹀彿鏈夋潈闄愶紝鑷姩灞曞紑鏉冮檺閰嶇疆
+    // 如果账号有权限，自动展开权限配置
     if (initPerms.length > 0) {
       setEditPermExpanded(true);
     }
@@ -450,7 +450,7 @@ const AccountManage: React.FC = () => {
               }
             : item
         );
-        // 鍚屾鏇存柊 registeredUsers 涓殑瑙掕壊鍜屾潈闄?
+        // 同步更新 registeredUsers 中的角色和权限
         try {
           const regUsers: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
           const idx = regUsers.findIndex((u: any) => u.username === selectedRecord?.username);
@@ -463,45 +463,45 @@ const AccountManage: React.FC = () => {
         return updated;
       });
       if (selectedRecord) saveUserPermOverrides(selectedRecord.username, overrideDraft);
-      message.success('璐﹀彿淇℃伅鏇存柊鎴愬姛');
+      message.success('账号信息更新成功');
       setEditVisible(false);
       setEditPermExpanded(false);
       setOverrideExpanded(false);
       updateEditPerms([]);
       editForm.resetFields();
-    }).catch(() => { /* 鏍￠獙澶辫触锛氳〃鍗曡鍐呮彁绀哄苟婊氬姩鍒伴涓敊璇」锛屼笉鎶涙湭澶勭悊寮傚父 */ });
+    }).catch(() => { /* 校验失败：表单行内提示并滚动到首个错误项，不抛未处理异常 */ });
   }, [editForm, selectedRecord, overrideDraft]);
 
-  // 鍒犻櫎璐﹀彿
+  // 删除账号
   const handleDelete = useCallback((record: AccountRecord) => {
-    if (record.accountType === '涓昏处鍙?) {
-      message.warning('涓昏处鍙蜂笉鍙垹闄?);
+    if (record.accountType === '主账号') {
+      message.warning('主账号不可删除');
       return;
     }
     const currentUser = localStorage.getItem('username') || '';
     if (record.username === currentUser) {
-      message.warning('涓嶈兘鍒犻櫎褰撳墠鐧诲綍鐨勮处鍙?);
+      message.warning('不能删除当前登录的账号');
       return;
     }
     setDataSource(prev => prev.filter(item => item.key !== record.key));
-    // 鍚屾浠?registeredUsers 涓Щ闄よ瀛愯处鍙凤紝浣垮叾鏃犳硶鍐嶇櫥褰?
+    // 同步到 registeredUsers 中移除该子账号，使其无法再登录
     try {
       const regUsers: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
       const updated = regUsers.filter((u: any) => u.username !== record.username);
       localStorage.setItem('registeredUsers', JSON.stringify(updated));
     } catch { /* ignore */ }
-    message.success(`璐﹀彿 ${record.displayName} 宸插垹闄);
+    message.success(`账号 ${record.displayName} 已删除`);
   }, []);
 
-  // 鍚敤/绂佺敤璐﹀彿
+  // 启用/禁用账号
   const handleToggleStatus = useCallback((record: AccountRecord) => {
-    if (record.accountType === '涓昏处鍙?) {
-      message.warning('涓昏处鍙蜂笉鍙鐢?);
+    if (record.accountType === '主账号') {
+      message.warning('主账号不可禁用');
       return;
     }
     const currentUser = localStorage.getItem('username') || '';
     if (record.username === currentUser) {
-      message.warning('涓嶈兘绂佺敤褰撳墠鐧诲綍鐨勮处鍙?);
+      message.warning('不能禁用当前登录的账号');
       return;
     }
     const newStatus = record.status === 'normal' ? 'disabled' : 'normal';
@@ -510,7 +510,7 @@ const AccountManage: React.FC = () => {
         item.key === record.key ? { ...item, status: newStatus } : item
       )
     );
-    // 鍚屾鏇存柊 registeredUsers 涓殑璐﹀彿鐘舵€侊紝绂佺敤鍚庢棤娉曠櫥褰?
+    // 同步更新 registeredUsers 中的账号状态，禁用后无法登录
     try {
       const regUsers: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
       const idx = regUsers.findIndex((u: any) => u.username === record.username);
@@ -519,10 +519,10 @@ const AccountManage: React.FC = () => {
         localStorage.setItem('registeredUsers', JSON.stringify(regUsers));
       }
     } catch { /* ignore */ }
-    message.success(newStatus === 'normal' ? `璐﹀彿 ${record.displayName} 宸插惎鐢╜ : `璐﹀彿 ${record.displayName} 宸茬鐢╜);
+    message.success(newStatus === 'normal' ? `账号 ${record.displayName} 已启用` : `账号 ${record.displayName} 已禁用`);
   }, []);
 
-  // 鍒囨崲灞忚斀寮圭獥鐘舵€?
+  // 切换屏蔽弹窗状态
   const handleToggleNotificationBlock = useCallback((record: AccountRecord) => {
     const newVal = !record.notificationBlocked;
     setDataSource(prev =>
@@ -530,10 +530,10 @@ const AccountManage: React.FC = () => {
         item.key === record.key ? { ...item, notificationBlocked: newVal } : item
       )
     );
-    message.success(`璐﹀彿 ${record.displayName} ${newVal ? '宸插睆钄? : '宸插彇娑堝睆钄?}寮圭獥閫氱煡`);
+    message.success(`账号 ${record.displayName} ${newVal ? '已屏蔽' : '已取消屏蔽'}弹窗通知`);
   }, []);
 
-  // ========== 鍒嗙粍绠＄悊 ==========
+  // ========== 分组管理 ==========
   const handleAddGroup = useCallback(() => {
     setEditingGroup('');
     setGroupPerms([]);
@@ -551,18 +551,18 @@ const AccountManage: React.FC = () => {
 
   const handleDeleteGroup = useCallback((name: string) => {
     Modal.confirm({
-      title: `纭鍒犻櫎鍒嗙粍銆?{name}銆嶏紵`,
-      content: '鍒犻櫎鍚庤鍒嗙粍涓嬬殑璐﹀彿灏嗗彉涓衡€滄湭鎸囧畾鍒嗙粍鈥?,
-      okText: '纭鍒犻櫎', okType: 'danger', cancelText: '鍙栨秷',
+      title: `确认删除分组「{name}」？`,
+      content: '删除后该分组下的账号将变为“未指定分组」',
+      okText: '确认删除', okType: 'danger', cancelText: '取消',
       onOk: () => {
         const newGroups = groups.filter(g => g.name !== name);
         setGroups(newGroups); saveGroups(newGroups);
-        // 娓呴櫎璐﹀彿涓殑鍒嗙粍鏍囪
+        // 清除账号中的分组标记
         setDataSource(prev => prev.map(item =>
           item.group === name ? { ...item, group: '' } : item
         ));
         if (selectedGroup === name) setSelectedGroup('');
-        message.success(`鍒嗙粍銆?{name}銆嶅凡鍒犻櫎`);
+        message.success(`分组「{name}」已删除`);
       },
     });
   }, [groups, selectedGroup]);
@@ -572,9 +572,9 @@ const AccountManage: React.FC = () => {
       const newName = values.name.trim();
       if (!newName) return;
       if (editingGroup) {
-        // 缂栬緫妯″紡锛氶噸鍛藉悕鍒嗙粍
+        // 编辑模式：重命名分组
         if (newName !== editingGroup && groups.some(g => g.name === newName)) {
-          message.warning('璇ュ垎缁勫悕绉板凡瀛樺湪'); return;
+          message.warning('该分组名称已存在'); return;
         }
         const newGroups = groups.map(g =>
           g.name === editingGroup ? { name: newName, permissions: groupPerms } : g
@@ -584,21 +584,21 @@ const AccountManage: React.FC = () => {
           item.group === editingGroup ? { ...item, group: newName } : item
         ));
         if (selectedGroup === editingGroup) setSelectedGroup(newName);
-        message.success(`鍒嗙粍銆?{newName}銆嶅凡淇濆瓨`);
+        message.success(`分组「{newName}」已保存`);
       } else {
-        // 鏂板妯″紡
+        // 新增模式
         if (groups.some(g => g.name === newName)) {
-          message.warning('璇ュ垎缁勫悕绉板凡瀛樺湪'); return;
+          message.warning('该分组名称已存在'); return;
         }
         const newGroups = [...groups, { name: newName, permissions: groupPerms }];
         setGroups(newGroups); saveGroups(newGroups);
-        message.success(`鍒嗙粍銆?{newName}銆嶅凡鍒涘缓`);
+        message.success(`分组「{newName}」已创建`);
       }
       setGroupModalVisible(false); groupForm.resetFields(); setGroupPerms([]);
-    }).catch(() => { /* 鏍￠獙澶辫触锛氳〃鍗曡鍐呮彁绀?*/ });
+    }).catch(() => { /* 校验失败：表单行内提交*/ });
   }, [editingGroup, groups, selectedGroup, groupForm, groupPerms]);
 
-  // 閲嶇疆瀵嗙爜
+  // 重置密码
   const handleResetPwd = useCallback((record: AccountRecord) => {
     setPwdAccount(record);
     pwdForm.resetFields();
@@ -607,7 +607,7 @@ const AccountManage: React.FC = () => {
 
   const handlePwdConfirm = useCallback(() => {
     pwdForm.validateFields().then(values => {
-      // 鍚屾鏇存柊 registeredUsers 涓殑瀵嗙爜
+      // 同步更新 registeredUsers 中的密码
       if (pwdAccount) {
         try {
           const registeredUsers: any[] = JSON.parse(
@@ -622,13 +622,13 @@ const AccountManage: React.FC = () => {
           }
         } catch { /* ignore */ }
       }
-      message.success(`璐﹀彿 ${pwdAccount?.displayName} 鐨勫瘑鐮佸凡閲嶇疆`);
+      message.success(`账号 ${pwdAccount?.displayName} 的密码已重置`);
       setPwdVisible(false);
       pwdForm.resetFields();
-    }).catch(() => { /* 鏍￠獙澶辫触锛氳〃鍗曡鍐呮彁绀?*/ });
+    }).catch(() => { /* 校验失败：表单行内提交*/ });
   }, [pwdForm, pwdAccount]);
 
-  // 鏂板缓瀛愯处鍙?
+  // 新建子账号
   const handleAdd = useCallback(() => {
     addForm.resetFields();
     updateAddPerms([]);
@@ -638,13 +638,13 @@ const AccountManage: React.FC = () => {
 
   const handleAddConfirm = useCallback(() => {
     addForm.validateFields().then(values => {
-      // 鏍￠獙鐢ㄦ埛鍚嶆槸鍚﹀凡瀛樺湪锛堝瓙璐﹀彿鍒楄〃 + 宸叉敞鍐岃处鍙凤級
+      // 校验用户名是否已存在（子账号列表 + 已注册账号）
       const inputUsername = values.username.trim();
       const existsInList = dataSource.some(
         (a) => a.username.toLowerCase() === inputUsername.toLowerCase()
       );
       if (existsInList) {
-        message.error(`鐢ㄦ埛鍚嶃€?{inputUsername}銆嶅凡瀛樺湪锛岃鎹竴涓敤鎴峰悕`);
+        message.error(`用户名「{inputUsername}」已存在，请换一个用户名`);
         return;
       }
       let registeredUsers: any[] = [];
@@ -656,29 +656,29 @@ const AccountManage: React.FC = () => {
           (u: any) => u.username?.toLowerCase() === inputUsername.toLowerCase()
         );
         if (existsInRegistered) {
-          message.error(`鐢ㄦ埛鍚嶃€?{inputUsername}銆嶅凡琚敞鍐岋紝璇锋崲涓€涓敤鎴峰悕`);
+          message.error(`用户名「{inputUsername}」已被注册，请换一个用户名`);
           return;
         }
       } catch { /* ignore */ }
 
-      // 鎵嬫満鍙风爜锛氭牸寮忔牎楠?+ 鍚屽彿澶氳处鍙锋彁绀猴紙鍚屽彿骞跺瓨鏃舵墜鏈哄彿鐧诲綍灏嗚绂佺敤锛?
+      // 手机号码：格式校验+ 同号多账号提示（同号并存时手机号登录将被禁用）
       const inputPhone = String(values.phone || '').trim();
       if (inputPhone && !/^1[3-9]\d{9}$/.test(inputPhone)) {
-        message.error('鎵嬫満鍙风爜鏍煎紡涓嶆纭紙椤讳负 11 浣嶆湁鏁堟墜鏈哄彿锛?);
+        message.error('手机号码格式不正确（须为 11 位有效手机号）');
         return;
       }
       if (inputPhone) {
         const dupPhones = registeredUsers.filter((u: any) => String(u.phone || '').trim() === inputPhone);
         if (dupPhones.length > 0) {
-          message.warning(`娉ㄦ剰锛氳鎵嬫満鍙峰凡缁戝畾 ${dupPhones.length} 涓叾浠栬处鍙凤紱鍚屼竴鍙风爜缁戝畾澶氫釜绉熸埛/瀛愯处鍙锋椂锛屾墜鏈哄彿鐧诲綍灏嗚绂佺敤锛岃浣跨敤鐢ㄦ埛鍚嶇櫥褰昤);
+          message.warning(`注意：该手机号已绑定 ${dupPhones.length} 个其他账号；同一号码绑定多个租户/子账号时，手机号登录将被禁用，请使用用户名登录`);
         }
       }
 
-      // 鑾峰彇褰撳墠鐧诲綍鐢ㄦ埛鐨勮鑹蹭俊鎭紝瀛愯处鍙风户鎵夸富璐﹀彿鐨勮鑹?
+      // 获取当前登录用户的角色信息，子账号继承主账号的角色信息
       const currentUsername = localStorage.getItem('username') || '';
       const currentUserRole = localStorage.getItem('userRole') || 'supplier';
       const isSub = localStorage.getItem('isSubAccount') === 'true';
-      // 鏂板垱寤虹殑瀛愯处鍙风殑鐖惰处鍙峰簲璇ユ槸涓昏处鍙凤紝鑰屼笉鏄綋鍓嶇櫥褰曠殑瀛愯处鍙?
+      // 新创建的子账号的父账号应该是主账号，而不是当前登录的子账号
       const parentAccount = isSub
         ? (localStorage.getItem('parentAccount') || currentUsername)
         : currentUsername;
@@ -693,7 +693,7 @@ const AccountManage: React.FC = () => {
         role: values.role,
         roles: values.roles || [],
         customPermissions: addPermsRef.current,
-        accountType: '瀛愯处鍙?,
+        accountType: '子账号',
         status: 'normal',
         date: new Date().toISOString().split('T')[0],
         lastLogin: '-',
@@ -704,7 +704,7 @@ const AccountManage: React.FC = () => {
       };
       setDataSource(prev => [newAccount, ...prev]);
 
-      // 鍚屾椂鍐欏叆 registeredUsers锛屼娇瀛愯处鍙峰彲浠ョ櫥褰?
+      // 同时写入 registeredUsers，使子账号可以登录
       registeredUsers.push({
         username: inputUsername,
         password: values.password,
@@ -716,35 +716,35 @@ const AccountManage: React.FC = () => {
         email: '',
         phone: inputPhone,
         isSubAccount: true,
-        parentAccount: parentAccount,  // 浣跨敤涓昏处鍙蜂綔涓虹埗璐﹀彿
+        parentAccount: parentAccount,  // 使用主账号作为父账号
         needsPasswordChange: true,
       });
       localStorage.setItem('registeredUsers', JSON.stringify(registeredUsers));
 
-      message.success(`瀛愯处鍙?${values.displayName} 鍒涘缓鎴愬姛锛佸垵濮嬪瘑鐮佷负锛?{values.password}`);
+      message.success(`子账号「${values.displayName} 创建成功！初始密码为：${values.password}`);
       setAddVisible(false);
       updateAddPerms([]);
       addForm.resetFields();
-    }).catch(() => { /* 鏍￠獙澶辫触锛氳〃鍗曡鍐呮彁绀哄苟婊氬姩鍒伴涓敊璇」 */ });
+    }).catch(() => { /* 校验失败：表单行内提示并滚动到首个错误项 */ });
   }, [addForm, dataSource.length]);
 
-  // ==================== 璐﹀彿瀵煎叆 ====================
+  // ==================== 账号导入 ====================
   const [importVisible, setImportVisible] = useState(false);
   const [importRows, setImportRows] = useState<ImportAccountRow[]>([]);
 
-  // 涓嬭浇瀵煎叆妯℃澘
+  // 下载导入模板
   const handleImportTemplate = useCallback(() => {
     const ws = XLSX.utils.aoa_to_sheet([
-      ['鎵€灞炲垎缁?', '鐢ㄦ埛鍚?', '濮撳悕*', '鍒濆瀵嗙爜', '澶囨敞'],
-      ['閿€鍞儴', 'zhangsan01', '寮犱笁', 'abc123456', '绀轰緥琛屽彲鍒犻櫎'],
+      ['所属分组', '用户名', '姓名*', '初始密码', '备注'],
+      ['销售部', 'zhangsan01', '张三', 'abc123456', '示例行可删除'],
     ]);
     ws['!cols'] = [{ wch: 14 }, { wch: 16 }, { wch: 12 }, { wch: 14 }, { wch: 20 }];
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, '璐﹀彿');
-    XLSX.writeFile(wb, '璐﹀彿瀵煎叆妯℃澘.xlsx');
+    XLSX.utils.book_append_sheet(wb, ws, '账号');
+    XLSX.writeFile(wb, '账号导入模板.xlsx');
   }, []);
 
-  // 瑙ｆ瀽瀵煎叆鏂囦欢锛氭墍灞炲垎缁?鐢ㄦ埛鍚?濮撳悕蹇呭～锛涙潈闄愯嚜鍔ㄧ户鎵垮垎缁勶紱棣栫櫥椤绘敼瀵?
+  // 解析导入文件：所属分组/用户名/姓名必填；权限自动继承分组；首登须改密
   const handleImportFile = useCallback((file: File) => {
     const reader = new FileReader();
     reader.onload = () => {
@@ -760,41 +760,41 @@ const AccountManage: React.FC = () => {
         try { registered = JSON.parse(localStorage.getItem('registeredUsers') || '[]'); } catch { /* ignore */ }
         const seen = new Set<string>();
         const rows: ImportAccountRow[] = raw.map((r, i) => {
-          const group = pick(r, ['鎵€灞炲垎缁?', '鎵€灞炲垎缁?, '鍒嗙粍', '鎵€灞為儴闂?]);
-          const username = pick(r, ['鐢ㄦ埛鍚?', '鐢ㄦ埛鍚?, '璐﹀彿']);
-          const displayName = pick(r, ['濮撳悕*', '濮撳悕', '鍚嶇О']);
-          const password = pick(r, ['鍒濆瀵嗙爜', '瀵嗙爜']) || 'abc123456';
-          const remark = pick(r, ['澶囨敞', '璇存槑']);
+          const group = pick(r, ['所属分组', '所属分组', '分组', '所属部门']);
+          const username = pick(r, ['用户名', '用户名', '账号']);
+          const displayName = pick(r, ['姓名*', '姓名', '名称']);
+          const password = pick(r, ['初始密码', '密码']) || 'abc123456';
+          const remark = pick(r, ['备注', '说明']);
           const row: ImportAccountRow = { rowNo: i + 2, group, username, displayName, password, remark, error: '' };
-          if (!group) row.error = '缂哄皯鎵€灞炲垎缁勶紙蹇呭～锛?;
-          else if (!groups.some(g => g.name === group)) row.error = `鍒嗙粍銆?{group}銆嶄笉瀛樺湪锛岃鍏堝湪鍒嗙粍绠＄悊涓垱寤篳;
+          if (!group) row.error = '缺少所属分组（必填）';
+          else if (!groups.some(g => g.name === group)) row.error = `分组「{group}」不存在，请先在分组管理中创建`;
           if (!row.error) {
-            if (!username) row.error = '缂哄皯鐢ㄦ埛鍚嶏紙蹇呭～锛?;
-            else if (!/^[a-zA-Z][a-zA-Z0-9_]{3,19}$/.test(username)) row.error = '鐢ㄦ埛鍚嶉』瀛楁瘝寮€澶淬€?-20浣嶅瓧姣嶆暟瀛椾笅鍒掔嚎';
-            else if (seen.has(username.toLowerCase())) row.error = '鏂囦欢鍐呯敤鎴峰悕閲嶅';
-            else if (dataSource.some(a => a.username.toLowerCase() === username.toLowerCase())) row.error = '鐢ㄦ埛鍚嶅凡瀛樺湪浜庤处鍙峰垪琛?;
-            else if (registered.some((u: any) => String(u.username || '').toLowerCase() === username.toLowerCase())) row.error = '鐢ㄦ埛鍚嶅凡琚敞鍐?;
+            if (!username) row.error = '缺少用户名（必填）';
+            else if (!/^[a-zA-Z][a-zA-Z0-9_]{3,19}$/.test(username)) row.error = '用户名须字母开头3-20位字母数字下划线';
+            else if (seen.has(username.toLowerCase())) row.error = '文件内用户名重复';
+            else if (dataSource.some(a => a.username.toLowerCase() === username.toLowerCase())) row.error = '用户名已存在于账号列表';
+            else if (registered.some((u: any) => String(u.username || '').toLowerCase() === username.toLowerCase())) row.error = '用户名已被注册';
           }
-          if (!row.error && !displayName) row.error = '缂哄皯濮撳悕锛堝繀濉級';
-          if (!row.error && !(password.length >= 6 && /[a-zA-Z]/.test(password) && /\d/.test(password))) row.error = '鍒濆瀵嗙爜鑷冲皯6浣嶄笖鍚瓧姣嶅拰鏁板瓧';
+          if (!row.error && !displayName) row.error = '缺少姓名（必填）';
+          if (!row.error && !(password.length >= 6 && /[a-zA-Z]/.test(password) && /\d/.test(password))) row.error = '初始密码至少6位且含字母和数字';
           if (!row.error) seen.add(username.toLowerCase());
           return row;
-        }).filter(r => r.group || r.username || r.displayName || r.remark); // 蹇界暐鍏ㄧ┖琛?
-        if (!rows.length) { message.warning('鏈粠鏂囦欢涓鍙栧埌鏈夋晥璐﹀彿琛岋紝璇锋寜妯℃澘濉啓'); return; }
+        }).filter(r => r.group || r.username || r.displayName || r.remark); // 忽略全空行
+        if (!rows.length) { message.warning('未从文件中读取到有效账号行，请按模板填写'); return; }
         setImportRows(rows);
         setImportVisible(true);
       } catch {
-        message.error('鏂囦欢瑙ｆ瀽澶辫触锛岃瀵煎叆妯℃澘瀵煎嚭鐨?Excel/CSV 鏂囦欢');
+        message.error('文件解析失败，请导入模板导出的 Excel/CSV 文件');
       }
     };
     reader.readAsArrayBuffer(file);
-    return false; // 闃绘榛樿涓婁紶琛屼负
+    return false; // 阻止默认上传行为
   }, [groups, dataSource]);
 
-  // 纭瀵煎叆锛氭壒閲忓垱寤哄瓙璐﹀彿锛堟潈闄愮户鎵垮垎缁勩€侀鐧诲繀椤讳慨鏀瑰瘑鐮侊級
+  // 确认导入：批量创建子账号（权限继承分组、首登必须修改密码）
   const handleImportConfirm = useCallback(() => {
     const okRows = importRows.filter(r => !r.error);
-    if (!okRows.length) { message.warning('娌℃湁鍙鍏ョ殑璐﹀彿琛?); return; }
+    if (!okRows.length) { message.warning('没有可导入的账号数'); return; }
     const currentUsername = localStorage.getItem('username') || '';
     const currentUserRole = localStorage.getItem('userRole') || 'supplier';
     const isSub = localStorage.getItem('isSubAccount') === 'true';
@@ -818,12 +818,12 @@ const AccountManage: React.FC = () => {
         displayName: r.displayName,
         role: '',
         roles: [],
-        customPermissions: groupPerms, // 鏉冮檺鑷姩缁ф壙鎵€灞炲垎缁?
-        accountType: '瀛愯处鍙?,
+        customPermissions: groupPerms, // 权限自动继承所属分组
+        accountType: '子账号',
         status: 'normal',
         date: today,
         lastLogin: '-',
-        remark: r.remark || '璐﹀彿瀵煎叆',
+        remark: r.remark || '账号导入',
         person: r.displayName,
         group: r.group,
       });
@@ -839,20 +839,20 @@ const AccountManage: React.FC = () => {
         phone: '',
         isSubAccount: true,
         parentAccount,
-        needsPasswordChange: true, // 棣栨鐧诲綍蹇呴』淇敼瀵嗙爜
+        needsPasswordChange: true, // 首次登录必须修改密码
       });
     });
     localStorage.setItem('registeredUsers', JSON.stringify(registeredUsers));
     setDataSource(prev => [...newAccounts, ...prev]);
     setImportVisible(false);
     setImportRows([]);
-    message.success(`鎴愬姛瀵煎叆 ${newAccounts.length} 涓处鍙凤細鏉冮檺缁ф壙鎵€灞炲垎缁勶紝棣栨鐧诲綍椤讳慨鏀瑰瘑鐮乣);
+    message.success(`成功导入 ${newAccounts.length} 个账号：权限继承所属分组，首次登录须修改密码`);
   }, [importRows, groups, dataSource]);
 
-  // 鎼滅储鍜岄噸缃紙鏌ヨ鏃惰嚜鍔ㄥ埛鏂拌〃鍗曟暟鎹級
+  // 搜索和重置（查询时自动刷新表单数据）
   const handleSearch = useCallback(() => {
     setDataSource(loadAccountsFromStorage());
-    message.info(`鎵惧埌 ${filteredData.length} 鏉¤褰昤);
+    message.info(`找到 ${filteredData.length} 条记录`);
   }, [filteredData.length]);
 
   const handleReset = useCallback(() => {
@@ -861,14 +861,14 @@ const AccountManage: React.FC = () => {
     setRoleFilter('');
   }, []);
 
-  // 瀵煎嚭
+  // 导出
   const handleExport = useCallback(() => {
-    const headers = ['璐﹀彿ID', '鐢ㄦ埛鍚?, '濮撳悕', '瑙掕壊', '璐﹀彿绫诲瀷', '鐘舵€?, '鎵€灞為儴闂?, '鍒涘缓鏃堕棿', '鏈€杩戠櫥褰?, '澶囨敞'];
+    const headers = ['账号ID', '用户名', '姓名', '角色', '账号类型', '状态', '所属部门', '创建时间', '最近登录', '备注'];
     const rows = filteredData.map(item => [
       item.id, item.username, item.displayName,
       (item.roles || []).join('; ') || item.role,
       item.accountType,
-      item.status === 'normal' ? '姝ｅ父' : '绂佺敤',
+      item.status === 'normal' ? '正常' : '禁用',
       item.group || '', item.date, item.lastLogin, item.remark,
     ]);
     const csvContent = '\uFEFF' + [headers, ...rows].map(row => row.join(',')).join('\n');
@@ -876,82 +876,82 @@ const AccountManage: React.FC = () => {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = '璐﹀彿绠＄悊_瀵煎嚭.csv';
+    link.download = '账号管理_导出.csv';
     link.click();
     URL.revokeObjectURL(url);
-    message.success('瀵煎嚭鎴愬姛');
+    message.success('导出成功');
   }, [filteredData]);
 
-  // 鎵归噺鎿嶄綔
+  // 批量操作
   const handleBatchAction = useCallback(({ key }: { key: string }) => {
     if (selectedRowKeys.length === 0) {
-      message.warning('璇峰厛閫夋嫨璐﹀彿');
+      message.warning('请先选择账号');
       return;
     }
     const currentUser = localStorage.getItem('username') || '';
     switch (key) {
       case 'batch-enable': {
         setDataSource(prev => prev.map(item =>
-          selectedRowKeys.includes(item.key) && item.accountType !== '涓昏处鍙?
+          selectedRowKeys.includes(item.key) && item.accountType !== '主账号'
             ? { ...item, status: 'normal' } : item
         ));
-        // 鍚屾 registeredUsers
+        // 同步 registeredUsers
         try {
           const regUsers: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
           const targetUsernames = dataSource
-            .filter(d => selectedRowKeys.includes(d.key) && d.accountType !== '涓昏处鍙?)
+            .filter(d => selectedRowKeys.includes(d.key) && d.accountType !== '主账号')
             .map(d => d.username);
           regUsers.forEach((u: any) => {
             if (targetUsernames.includes(u.username)) u.accountStatus = 'normal';
           });
           localStorage.setItem('registeredUsers', JSON.stringify(regUsers));
         } catch { /* ignore */ }
-        message.success(`宸插惎鐢?${selectedRowKeys.length} 涓处鍙穈);
+        message.success(`已启用 ${selectedRowKeys.length} 个账号`);
         break;
       }
       case 'batch-disable': {
         setDataSource(prev => prev.map(item =>
-          selectedRowKeys.includes(item.key) && item.accountType !== '涓昏处鍙? && item.username !== currentUser
+          selectedRowKeys.includes(item.key) && item.accountType !== '主账号' && item.username !== currentUser
             ? { ...item, status: 'disabled' } : item
         ));
-        // 鍚屾 registeredUsers
+        // 同步 registeredUsers
         try {
           const regUsers: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
           const targetUsernames = dataSource
-            .filter(d => selectedRowKeys.includes(d.key) && d.accountType !== '涓昏处鍙? && d.username !== currentUser)
+            .filter(d => selectedRowKeys.includes(d.key) && d.accountType !== '主账号' && d.username !== currentUser)
             .map(d => d.username);
           regUsers.forEach((u: any) => {
             if (targetUsernames.includes(u.username)) u.accountStatus = 'disabled';
           });
           localStorage.setItem('registeredUsers', JSON.stringify(regUsers));
         } catch { /* ignore */ }
-        message.success(`宸茬鐢?${selectedRowKeys.length} 涓处鍙穈);
+        message.success(`已禁用 ${selectedRowKeys.length} 个账号`);
         break;
       }
       case 'batch-delete':
         Modal.confirm({
-          title: '纭鎵归噺鍒犻櫎',
+          title: '确认批量删除',
           icon: <WarningOutlined style={{ color: '#ff4d4f' }} />,
-          content: `纭畾瑕佸垹闄ら€変腑鐨?${selectedRowKeys.length} 涓处鍙峰悧锛熶富璐﹀彿鍜屽綋鍓嶇櫥褰曡处鍙蜂笉浼氳鍒犻櫎銆俙,
-          okText: '纭鍒犻櫎',
+          content: `确定要删除选中的 ${selectedRowKeys.length} 个账号吗？主账号和当前登录账号不会被删除。`,
+          okText: '确认删除',
           okType: 'danger',
-          cancelText: '鍙栨秷',
+          cancelText: '取消',
           onOk: () => {
-            // 鎵惧嚭灏嗚鍒犻櫎鐨勮处鍙风敤鎴峰悕
+            // 找出将被删除的账号用户名
             const deleteTargets = dataSource.filter(
-              item => selectedRowKeys.includes(item.key) && item.accountType !== '涓昏处鍙? && item.username !== currentUser
+              item => selectedRowKeys.includes(item.key) && item.accountType !== '主账号' && item.username !== currentUser
             ).map(d => d.username);
             setDataSource(prev => prev.filter(item =>
-              (!selectedRowKeys.includes(item.key) || item.accountType === '涓昏处鍙? || item.username === currentUser)
+              (!selectedRowKeys.includes(item.key) || item.accountType === '主账号' || item.username === currentUser)
             ));
-            // 鍚屾浠?registeredUsers 涓Щ闄?
+            // 同步到 registeredUsers 中移除
             try {
               const regUsers: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
               const updated = regUsers.filter((u: any) => !deleteTargets.includes(u.username));
               localStorage.setItem('registeredUsers', JSON.stringify(updated));
             } catch { /* ignore */ }
             setSelectedRowKeys([]);
-            message.success('鎵归噺鍒犻櫎瀹屾垚');
+            message.success('批量删除完成');
           },
         });
         break;
@@ -959,91 +959,91 @@ const AccountManage: React.FC = () => {
   }, [selectedRowKeys]);
 
   const batchMenuItems = [
-    { key: 'batch-enable', icon: <CheckCircleOutlined />, label: '鎵归噺鍚敤' },
-    { key: 'batch-disable', icon: <StopOutlined />, label: '鎵归噺绂佺敤' },
+    { key: 'batch-enable', icon: <CheckCircleOutlined />, label: '批量启用' },
+    { key: 'batch-disable', icon: <StopOutlined />, label: '批量禁用' },
     { type: 'divider' as const },
-    { key: 'batch-delete', icon: <DeleteOutlined />, label: '鎵归噺鍒犻櫎', danger: true },
+    { key: 'batch-delete', icon: <DeleteOutlined />, label: '批量删除', danger: true },
   ];
 
-  // 琛ㄦ牸鍒楀畾涔?
+  // 表格列定义
   const columns: ColumnsType<AccountRecord> = [
-    { title: '璐﹀彿ID', dataIndex: 'id', key: 'id', width: 100 },
-    { title: '鐢ㄦ埛鍚?, dataIndex: 'username', key: 'username', width: 110 },
-    { title: '濮撳悕', dataIndex: 'displayName', key: 'displayName', width: 120 },
+    { title: '账号ID', dataIndex: 'id', key: 'id', width: 100 },
+    { title: '用户名', dataIndex: 'username', key: 'username', width: 110 },
+    { title: '姓名', dataIndex: 'displayName', key: 'displayName', width: 120 },
     {
-      title: '鎵€灞炲垎缁?, dataIndex: 'group', key: 'group', width: 100,
+      title: '所属分组', dataIndex: 'group', key: 'group', width: 100,
       render: (g: string | undefined, record: AccountRecord) => {
-        if (record.accountType === '涓昏处鍙?) return <Tag color="gold">-</Tag>;
-        return g ? <Tag color="blue">{g}</Tag> : <Text type="secondary">鏈寚瀹?/Text>;
+        if (record.accountType === '主账号') return <Tag color="gold">-</Tag>;
+        return g ? <Tag color="blue">{g}</Tag> : <Text type="secondary">未指定</Text>;
       },
     },
     {
-      title: '鏉冮檺瑙掕壊', dataIndex: 'roles', key: 'roles', width: 180,
+      title: '权限角色', dataIndex: 'roles', key: 'roles', width: 180,
       render: (roles: string[], record) => {
         if (!roles || roles.length === 0) {
-          // 鏃犺鑹蹭笖鏃犲崟鐙鑹叉爣绛撅細瀵煎叆璐﹀彿绛夌户鎵垮垎缁勬潈闄愮殑鍥為€€鏄剧ず
-          if (!record.role && record.group) return <Tag color="cyan">缁ф壙銆寋record.group}銆嶆潈闄?/Tag>;
+          // 无角色且无单独角色标签：导入账号等继承分组权限的回退显示
+          if (!record.role && record.group) return <Tag color="cyan">继承「{record.group}」权限</Tag>;
           return <Tag color={roleColorMap[record.role] || 'default'}>{roleLabelMap[record.role] || record.role}</Tag>;
         }
         return (
           <Space size={[0, 4]} wrap>
             {roles.map(r => (
-              <Tag key={r} color={r === '鍏ㄩ儴鏉冮檺' ? 'gold' : r === '鐢熶骇绠＄悊' ? 'blue' : r === '閿€鍞鐞? ? 'green' : r === '璐㈠姟绠＄悊' ? 'purple' : r === '閲囪喘绠＄悊' ? 'cyan' : 'default'}>{r}</Tag>
+              <Tag key={r} color={r === '全部权限' ? 'gold' : r === '生产管理' ? 'blue' : r === '销售管理' ? 'green' : r === '财务管理' ? 'purple' : r === '采购管理' ? 'cyan' : 'default'}>{r}</Tag>
             ))}
           </Space>
         );
       },
     },
     {
-      title: '璐﹀彿绫诲瀷', dataIndex: 'accountType', key: 'accountType', width: 90,
+      title: '账号类型', dataIndex: 'accountType', key: 'accountType', width: 90,
       render: (type: string) => (
-        <Tag color={type === '涓昏处鍙? ? 'gold' : 'blue'}>{type}</Tag>
+        <Tag color={type === '主账号' ? 'gold' : 'blue'}>{type}</Tag>
       ),
     },
     {
-      title: '鐘舵€?, dataIndex: 'status', key: 'status', width: 80,
+      title: '状态', dataIndex: 'status', key: 'status', width: 80,
       render: (status: string) => (
         <Badge
           status={status === 'normal' ? 'success' : 'error'}
-          text={status === 'normal' ? '姝ｅ父' : '绂佺敤'}
+          text={status === 'normal' ? '正常' : '禁用'}
         />
       ),
     },
     {
-      title: '灞忚斀寮圭獥', dataIndex: 'notificationBlocked', key: 'notificationBlocked', width: 90,
+      title: '屏蔽弹窗', dataIndex: 'notificationBlocked', key: 'notificationBlocked', width: 90,
       render: (v: boolean | undefined, record: AccountRecord) => (
         <Tag
           color={v ? 'red' : 'green'}
-          style={{ cursor: record.accountType !== '涓昏处鍙? ? 'pointer' : 'default' }}
+          style={{ cursor: record.accountType !== '主账号' ? 'pointer' : 'default' }}
           onClick={() => {
-            if (record.accountType === '涓昏处鍙?) { message.warning('涓昏处鍙蜂笉鍙缃睆钄?); return; }
+            if (record.accountType === '主账号') { message.warning('主账号不可设置屏蔽'); return; }
             handleToggleNotificationBlock(record);
           }}
-        >{v ? '鏄? : '鍚?}</Tag>
+        >{v ? '是' : '否'}</Tag>
       ),
     },
-    { title: '鎵€灞為儴闂?, dataIndex: 'group', key: 'group', width: 110, render: (v: string) => v || '鈥? },
-    { title: '鍒涘缓鏃堕棿', dataIndex: 'date', key: 'date', width: 110 },
+    { title: '所属部门', dataIndex: 'group', key: 'group', width: 110, render: (v: string) => v || '无' },
+    { title: '创建时间', dataIndex: 'date', key: 'date', width: 110 },
     {
-      title: '鏈€杩戠櫥褰?, dataIndex: 'lastLogin', key: 'lastLogin', width: 110,
-      render: (v: string) => v === '-' ? <Text type="secondary">浠庢湭鐧诲綍</Text> : v,
+      title: '最近登录', dataIndex: 'lastLogin', key: 'lastLogin', width: 110,
+      render: (v: string) => v === '-' ? <Text type="secondary">从未登录</Text> : v,
     },
-    { title: '澶囨敞', dataIndex: 'remark', key: 'remark', width: 160, ellipsis: true },
+    { title: '备注', dataIndex: 'remark', key: 'remark', width: 160, ellipsis: true },
     {
-      title: '鎿嶄綔', key: 'action', width: 260, fixed: 'right',
+      title: '操作', key: 'action', width: 260, fixed: 'right',
       render: (_, record) => (
         <Space size="small" wrap>
-          <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => handleView(record)}>鏌ョ湅</Button>
-          <Button type="link" size="small" icon={<EditOutlined />} onClick={() => handleEdit(record)}>缂栬緫</Button>
-          {record.accountType !== '涓昏处鍙? && (
-            <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => { setPreviewUser(record.username); message.success(`宸插垏鎹负銆?{record.displayName}銆嶉瑙堣瑙掞紝椤甸潰椤堕儴妯箙鍙€€鍑篳); }}>棰勮瑙嗚</Button>
+          <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => handleView(record)}>查看</Button>
+          <Button type="link" size="small" icon={<EditOutlined />} onClick={() => handleEdit(record)}>编辑</Button>
+          {record.accountType !== '主账号' && (
+            <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => { setPreviewUser(record.username); message.success(`已切换为「{record.displayName}」预览视角，页面顶部横幅可退出`); }}>预览视角</Button>
           )}
-          <Button type="link" size="small" icon={<KeyOutlined />} onClick={() => handleResetPwd(record)}>閲嶇疆瀵嗙爜</Button>
+          <Button type="link" size="small" icon={<KeyOutlined />} onClick={() => handleResetPwd(record)}>重置密码</Button>
           <Popconfirm
-            title={record.status === 'normal' ? `纭畾瑕佺鐢?${record.displayName} 鍚楋紵` : `纭畾瑕佸惎鐢?${record.displayName} 鍚楋紵`}
+            title={record.status === 'normal' ? `确定要禁用 ${record.displayName} 吗？` : `确定要启用 ${record.displayName} 吗？`}
             onConfirm={() => handleToggleStatus(record)}
-            okText="纭"
-            cancelText="鍙栨秷"
+            okText="确认"
+            cancelText="取消"
           >
             <Button
               type="link"
@@ -1051,19 +1051,19 @@ const AccountManage: React.FC = () => {
               danger={record.status === 'normal'}
               icon={record.status === 'normal' ? <StopOutlined /> : <CheckCircleOutlined />}
             >
-              {record.status === 'normal' ? '绂佺敤' : '鍚敤'}
+              {record.status === 'normal' ? '禁用' : '启用'}
             </Button>
           </Popconfirm>
-          {record.accountType !== '涓昏处鍙? && (
+          {record.accountType !== '主账号' && (
             <Popconfirm
-              title={`纭畾瑕佸垹闄?${record.displayName} 鍚楋紵`}
-              description="鍒犻櫎鍚庢暟鎹笉鍙仮澶?
+              title={`确定要删除 ${record.displayName} 吗？`}
+              description="删除后数据不可恢复"
               onConfirm={() => handleDelete(record)}
-              okText="纭鍒犻櫎"
+              okText="确认删除"
               okType="danger"
-              cancelText="鍙栨秷"
+              cancelText="取消"
             >
-              <Button type="link" size="small" danger icon={<DeleteOutlined />}>鍒犻櫎</Button>
+              <Button type="link" size="small" danger icon={<DeleteOutlined />}>删除</Button>
             </Popconfirm>
           )}
         </Space>
@@ -1071,27 +1071,27 @@ const AccountManage: React.FC = () => {
     },
   ];
 
-  // 缁熻姣忎釜鍒嗙粍涓嬬殑璐﹀彿鏁伴噺
+  // 统计每个分组下的账号数量
   const groupCounts = useMemo(() => {
     const counts: Record<string, number> = {};
     let ungrouped = 0;
     dataSource.forEach(item => {
-      if (item.accountType === '涓昏处鍙?) return;
+      if (item.accountType === '主账号') return;
       if (item.group) { counts[item.group] = (counts[item.group] || 0) + 1; }
       else { ungrouped++; }
     });
-    return { counts, ungrouped, total: dataSource.filter(d => d.accountType !== '涓昏处鍙?).length };
+    return { counts, ungrouped, total: dataSource.filter(d => d.accountType !== '主账号').length };
   }, [dataSource]);
 
   return (
     <div style={{ display: 'flex', gap: 16 }}>
-      {/* ========== 宸︿晶鍒嗙粍闈㈡澘 ========== */}
+      {/* ========== 左侧分组面板 ========== */}
       <Card
         style={{ width: 220, flexShrink: 0, height: 'fit-content' }}
         bodyStyle={{ padding: '12px 0' }}
         title={<div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 16px' }}>
-          <Text strong style={{ fontSize: 14 }}><TeamOutlined style={{ marginRight: 6 }} />鍒嗙粍</Text>
-          <Button type="link" size="small" icon={<PlusOutlined />} onClick={handleAddGroup}>鏂板缓</Button>
+          <Text strong style={{ fontSize: 14 }}><TeamOutlined style={{ marginRight: 6 }} />分组</Text>
+          <Button type="link" size="small" icon={<PlusOutlined />} onClick={handleAddGroup}>新建</Button>
         </div>}
       >
         <div
@@ -1103,7 +1103,7 @@ const AccountManage: React.FC = () => {
             transition: 'all 0.2s',
           }}
         >
-          <Text>鍏ㄩ儴璐﹀彿</Text>
+          <Text>全部账号</Text>
           <Tag>{groupCounts.total}</Tag>
         </div>
         {groups.map(g => (
@@ -1135,14 +1135,14 @@ const AccountManage: React.FC = () => {
             borderTop: '1px solid #f0f0f0', marginTop: 4, paddingTop: 12,
           }}
         >
-          <Text type="secondary">鏈寚瀹氬垎缁?/Text>
+          <Text type="secondary">未指定分组</Text>
           <Tag>{groupCounts.ungrouped}</Tag>
         </div>
       </Card>
 
-      {/* ========== 鍙充晶涓诲唴瀹瑰尯 ========== */}
+      {/* ========== 右侧主内容区 ========== */}
       <div style={{ flex: 1, minWidth: 0 }}>
-      {/* 椤甸潰澶撮儴 */}
+      {/* 页面头部 */}
       <div style={{
         background: `linear-gradient(135deg, ${PRIMARY} 0%, #2d5a8e 100%)`,
         color: '#fff', padding: '20px 28px', borderRadius: 12, marginBottom: 20,
@@ -1157,30 +1157,30 @@ const AccountManage: React.FC = () => {
             <SafetyCertificateOutlined style={{ fontSize: 22, color: '#fff' }} />
           </div>
           <div>
-            <Title level={4} style={{ color: '#fff', margin: 0, fontSize: 18 }}>璐﹀彿绠＄悊</Title>
+            <Title level={4} style={{ color: '#fff', margin: 0, fontSize: 18 }}>账号管理</Title>
             <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 12 }}>
-              绠＄悊绯荤粺璐﹀彿锛屾柊寤哄瓙璐﹀彿骞跺垎閰嶆潈闄?
+              管理系统账号，新建子账号并分配权限
             </Text>
           </div>
         </div>
         <Space>
-          <Button ghost icon={<ExportOutlined />} onClick={handleExport}>瀵煎嚭</Button>
-          <Button ghost icon={<DownloadOutlined />} onClick={handleImportTemplate}>瀵煎叆妯℃澘</Button>
+          <Button ghost icon={<ExportOutlined />} onClick={handleExport}>导出</Button>
+          <Button ghost icon={<DownloadOutlined />} onClick={handleImportTemplate}>导入模板</Button>
           <Upload accept=".xlsx,.xls,.csv" showUploadList={false} beforeUpload={handleImportFile}>
-            <Button ghost icon={<UploadOutlined />}>瀵煎叆璐﹀彿</Button>
+            <Button ghost icon={<UploadOutlined />}>导入账号</Button>
           </Upload>
           <Button type="primary" ghost icon={<UserAddOutlined />} onClick={handleAdd}>
-            鏂板缓瀛愯处鍙?
+            新建子账号
           </Button>
         </Space>
       </div>
 
-      {/* 缁熻鍗＄墖 */}
+      {/* 统计卡片 */}
       <Row gutter={[16, 16]} style={{ marginBottom: 20 }}>
         <Col xs={24} sm={6}>
           <Card bodyStyle={{ padding: '16px 20px' }}>
             <Statistic
-              title="鎬昏处鍙锋暟"
+              title="总账号数"
               value={stats.totalAccounts}
               prefix={<TeamOutlined style={{ fontSize: 20, color: PRIMARY }} />}
               valueStyle={{ color: '#1a2b45', fontSize: 22 }}
@@ -1190,7 +1190,7 @@ const AccountManage: React.FC = () => {
         <Col xs={24} sm={6}>
           <Card bodyStyle={{ padding: '16px 20px' }}>
             <Statistic
-              title="鍚敤璐﹀彿"
+              title="启用账号"
               value={stats.activeAccounts}
               prefix={<CheckCircleOutlined style={{ fontSize: 20, color: '#52c41a' }} />}
               valueStyle={{ color: '#52c41a', fontSize: 22 }}
@@ -1200,7 +1200,7 @@ const AccountManage: React.FC = () => {
         <Col xs={24} sm={6}>
           <Card bodyStyle={{ padding: '16px 20px' }}>
             <Statistic
-              title="瀛愯处鍙锋暟"
+              title="子账号数"
               value={stats.subAccounts}
               prefix={<UserAddOutlined style={{ fontSize: 20, color: '#1890ff' }} />}
               valueStyle={{ color: '#1890ff', fontSize: 22 }}
@@ -1210,22 +1210,22 @@ const AccountManage: React.FC = () => {
         <Col xs={24} sm={6}>
           <Card bodyStyle={{ padding: '16px 20px' }}>
             <Statistic
-              title="浠婃棩鎿嶄綔璁板綍"
+              title="今日操作记录"
               value={stats.todayLogs}
               prefix={<SettingOutlined style={{ fontSize: 20, color: '#faad14' }} />}
-              suffix="鏉?
+              suffix="条"
               valueStyle={{ color: '#faad14', fontSize: 22 }}
             />
           </Card>
         </Col>
       </Row>
 
-      {/* 鎼滅储绛涢€夊伐鍏锋爮 */}
+      {/* 搜索筛选工具栏 */}
       <Card style={{ marginBottom: 16 }} bodyStyle={{ padding: '16px 24px' }}>
         <Row gutter={[16, 12]} align="middle">
           <Col xs={24} sm={6}>
             <Input
-              placeholder="鎼滅储璐﹀彿ID / 鐢ㄦ埛鍚?/ 濮撳悕"
+              placeholder="搜索账号ID / 用户名 / 姓名"
               prefix={<SearchOutlined style={{ color: '#bfbfbf' }} />}
               value={searchText}
               onChange={e => setSearchText(e.target.value)}
@@ -1234,19 +1234,19 @@ const AccountManage: React.FC = () => {
           </Col>
           <Col xs={12} sm={4}>
             <Select
-              placeholder="璐﹀彿鐘舵€?
+              placeholder="账号状态"
               value={statusFilter || undefined}
               onChange={v => setStatusFilter(v || '')}
               allowClear
               style={{ width: '100%' }}
             >
-              <Option value="normal">姝ｅ父</Option>
-              <Option value="disabled">绂佺敤</Option>
+              <Option value="normal">正常</Option>
+              <Option value="disabled">禁用</Option>
             </Select>
           </Col>
           <Col xs={12} sm={4}>
             <Select
-              placeholder="瑙掕壊绛涢€?
+              placeholder="角色筛选"
               value={roleFilter || undefined}
               onChange={v => setRoleFilter(v || '')}
               allowClear
@@ -1259,29 +1259,29 @@ const AccountManage: React.FC = () => {
           </Col>
           <Col xs={24} sm={4}>
             <Space>
-              <Button type="primary" icon={<SearchOutlined />} onClick={handleSearch}>鏌ヨ</Button>
-              <Button icon={<ReloadOutlined />} onClick={handleReset}>閲嶇疆</Button>
+              <Button type="primary" icon={<SearchOutlined />} onClick={handleSearch}>查询</Button>
+              <Button icon={<ReloadOutlined />} onClick={handleReset}>重置</Button>
             </Space>
           </Col>
           <Col xs={0} sm={6} style={{ textAlign: 'right' }}>
             <Space>
-              <Button icon={<SafetyCertificateOutlined />} onClick={handleViewLogs}>鐧诲綍鏃ュ織</Button>
+              <Button icon={<SafetyCertificateOutlined />} onClick={handleViewLogs}>登录日志</Button>
               <Dropdown menu={{ items: batchMenuItems, onClick: handleBatchAction }}>
-                <Button icon={<SettingOutlined />}>鎵归噺鎿嶄綔</Button>
+                <Button icon={<SettingOutlined />}>批量操作</Button>
               </Dropdown>
             </Space>
           </Col>
         </Row>
       </Card>
 
-      {/* 鏁版嵁琛ㄦ牸 */}
+      {/* 数据表格 */}
       <Card bodyStyle={{ padding: '0 24px 24px' }}>
         <Table
           rowSelection={{
             selectedRowKeys,
             onChange: keys => setSelectedRowKeys(keys),
             getCheckboxProps: (record) => ({
-              disabled: record.accountType === '涓昏处鍙?,
+              disabled: record.accountType === '主账号',
             }),
           }}
           columns={columns}
@@ -1291,20 +1291,20 @@ const AccountManage: React.FC = () => {
           pagination={{
             showSizeChanger: true,
             showQuickJumper: true,
-            showTotal: (total, range) => `绗?${range[0]}-${range[1]} 鏉★紝鍏?${total} 鏉,
+            showTotal: (total, range) => `第 ${range[0]}-${range[1]} 条，共 ${total} 条`,
             pageSizeOptions: ['10', '20', '50'],
             defaultPageSize: 20,
           }}
-          locale={{ emptyText: '鏆傛棤璐﹀彿鏁版嵁' }}
+          locale={{ emptyText: '暂无账号数据' }}
         />
       </Card>
 
-      {/* 璇︽儏鎶藉眽 */}
+      {/* 详情抽屉 */}
       <Drawer
         title={
           <Space>
             <UserOutlined style={{ color: PRIMARY }} />
-            <span>璐﹀彿璇︽儏</span>
+            <span>账号详情</span>
           </Space>
         }
         open={detailVisible}
@@ -1322,7 +1322,7 @@ const AccountManage: React.FC = () => {
                   handleEdit(selectedRecord);
                 }}
               >
-                缂栬緫
+                编辑
               </Button>
             </Space>
           )
@@ -1342,55 +1342,55 @@ const AccountManage: React.FC = () => {
               <Text type="secondary">@{selectedRecord.username}</Text>
             </div>
             <Descriptions column={2} bordered size="small" labelStyle={{ fontWeight: 500 }}>
-              <Descriptions.Item label="璐﹀彿ID">{selectedRecord.id}</Descriptions.Item>
-              <Descriptions.Item label="鐢ㄦ埛鍚?>{selectedRecord.username}</Descriptions.Item>
-              <Descriptions.Item label="濮撳悕">{selectedRecord.displayName}</Descriptions.Item>
-              <Descriptions.Item label="璐﹀彿绫诲瀷">
-                <Tag color={selectedRecord.accountType === '涓昏处鍙? ? 'gold' : 'blue'}>{selectedRecord.accountType}</Tag>
+              <Descriptions.Item label="账号ID">{selectedRecord.id}</Descriptions.Item>
+              <Descriptions.Item label="用户名">{selectedRecord.username}</Descriptions.Item>
+              <Descriptions.Item label="姓名">{selectedRecord.displayName}</Descriptions.Item>
+              <Descriptions.Item label="账号类型">
+                <Tag color={selectedRecord.accountType === '主账号' ? 'gold' : 'blue'}>{selectedRecord.accountType}</Tag>
               </Descriptions.Item>
-              <Descriptions.Item label="鏉冮檺瑙掕壊">
+              <Descriptions.Item label="权限角色">
                 {(selectedRecord.roles || []).length > 0
                   ? (selectedRecord.roles || []).map(r => (
-                      <Tag key={r} color={r === '鍏ㄩ儴鏉冮檺' ? 'gold' : r === '鐢熶骇绠＄悊' ? 'blue' : r === '閿€鍞鐞? ? 'green' : r === '璐㈠姟绠＄悊' ? 'purple' : r === '閲囪喘绠＄悊' ? 'cyan' : 'default'}>{r}</Tag>
+                      <Tag key={r} color={r === '全部权限' ? 'gold' : r === '生产管理' ? 'blue' : r === '销售管理' ? 'green' : r === '财务管理' ? 'purple' : r === '采购管理' ? 'cyan' : 'default'}>{r}</Tag>
                     ))
                   : <Tag color={roleColorMap[selectedRecord.role] || 'default'}>
                       {roleLabelMap[selectedRecord.role] || selectedRecord.role}
                     </Tag>
                 }
               </Descriptions.Item>
-              <Descriptions.Item label="鐘舵€?>
+              <Descriptions.Item label="状态">
                 <Badge status={selectedRecord.status === 'normal' ? 'success' : 'error'}
-                  text={selectedRecord.status === 'normal' ? '姝ｅ父' : '绂佺敤'} />
+                  text={selectedRecord.status === 'normal' ? '正常' : '禁用'} />
               </Descriptions.Item>
-              <Descriptions.Item label="鎵€灞為儴闂?>{selectedRecord.group || '鈥?}</Descriptions.Item>
-              <Descriptions.Item label="鍒涘缓鏃堕棿">{selectedRecord.date}</Descriptions.Item>
-              <Descriptions.Item label="鏈€杩戠櫥褰? span={2}>
-                {selectedRecord.lastLogin === '-' ? '浠庢湭鐧诲綍' : selectedRecord.lastLogin}
+              <Descriptions.Item label="所属部门">{selectedRecord.group || '无'}</Descriptions.Item>
+              <Descriptions.Item label="创建时间">{selectedRecord.date}</Descriptions.Item>
+              <Descriptions.Item label="最近登录" span={2}>
+                {selectedRecord.lastLogin === '-' ? '从未登录' : selectedRecord.lastLogin}
               </Descriptions.Item>
-              <Descriptions.Item label="澶囨敞" span={2}>{selectedRecord.remark || '-'}</Descriptions.Item>
+              <Descriptions.Item label="备注" span={2}>{selectedRecord.remark || '-'}</Descriptions.Item>
             </Descriptions>
           </>
         )}
       </Drawer>
 
-      {/* 缂栬緫璐﹀彿妯℃€佹 */}
+      {/* 编辑账号模态框 */}
       <Modal
         title={
           <Space>
             <EditOutlined style={{ color: PRIMARY }} />
-            <span>缂栬緫璐﹀彿 - {selectedRecord?.displayName}</span>
+            <span>编辑账号 - {selectedRecord?.displayName}</span>
           </Space>
         }
         open={editVisible}
         onCancel={() => { setEditVisible(false); updateEditPerms([]); editForm.resetFields(); }}
         onOk={handleEditConfirm}
-        okText="淇濆瓨淇敼"
-        cancelText="鍙栨秷"
+        okText="保存修改"
+        cancelText="取消"
         width={780}
       >
         <Form form={editForm} layout="vertical" scrollToFirstError style={{ marginTop: 16 }}
           onValuesChange={(changedValues) => {
-            // 浠呭綋鐢ㄦ埛鎵嬪姩鏇存敼瑙掕壊鏃讹紝鍚堝苟鏂拌鑹叉潈闄愬埌鐙珛鏉冮檺涓?
+            // 仅当用户手动更改角色时，合并新角色权限到独立权限）
             if (changedValues.roles) {
               const newRoles: string[] = changedValues.roles || [];
               if (newRoles.length > 0) {
@@ -1405,17 +1405,17 @@ const AccountManage: React.FC = () => {
             }
           }}
         >
-          <Form.Item name="displayName" label="濮撳悕" rules={[{ required: true, message: '璇疯緭鍏ュ鍚? }]}>
-            <Input placeholder="璇疯緭鍏ュ鍚? prefix={<UserOutlined />} />
+          <Form.Item name="displayName" label="姓名" rules={[{ required: true, message: '请输入姓名' }]}>
+            <Input placeholder="请输入姓名" prefix={<UserOutlined />} />
           </Form.Item>
-          <Form.Item name="roles" label="鏉冮檺瑙掕壊" rules={[{ required: true, message: '璇疯嚦灏戦€夋嫨涓€涓鑹? }]}>
-            <Select mode="multiple" placeholder="璇烽€夋嫨瑙掕壊锛堝彲澶氶€夛級" allowClear>
+          <Form.Item name="roles" label="权限角色" rules={[{ required: true, message: '请至少选择一个角色' }]}>
+            <Select mode="multiple" placeholder="请选择角色（可多选）" allowClear>
               {getAllRoles().map(r => (
-                <Option key={r.key} value={r.name}>{r.name}{r.isPreset ? ' (棰勮)' : ''}</Option>
+                <Option key={r.key} value={r.name}>{r.name}{r.isPreset ? ' (预设)' : ''}</Option>
               ))}
             </Select>
           </Form.Item>
-          {/* 鐙珛鏉冮檺鍒嗛厤 */}
+          {/* 独立权限分配 */}
           <div style={{ marginBottom: 16 }}>
             <Button
               type="link"
@@ -1423,18 +1423,18 @@ const AccountManage: React.FC = () => {
               onClick={() => setEditPermExpanded(!editPermExpanded)}
               style={{ paddingLeft: 0, color: editPermExpanded ? PRIMARY : '#666' }}
             >
-              {editPermExpanded ? '鏀惰捣鏉冮檺閰嶇疆' : '灞曞紑鐙珛鏉冮檺閰嶇疆'}
+              {editPermExpanded ? '收起权限配置' : '展开独立权限配置'}
             </Button>
             {editPermExpanded && editVisible && (
               <div style={{ marginTop: 8, padding: 12, background: '#fafafa', borderRadius: 8, border: '1px solid #d9d9d9' }}>
                 <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 12 }}>
-                  姝ゅ璁剧疆鐨勬潈闄愬皢鍦ㄨ鑹叉潈闄愬熀纭€涓婇澶栬拷鍔狅紝浠呭姝ゅ瓙璐﹀彿鐢熸晥
+                  此处设置的权限将在角色权限基础上额外追加，仅对此子账号生效
                 </Text>
                 <CustomPermSelector key={selectedRecord?.key || 'edit'} value={editPerms} onChange={updateEditPerms} roles={editWatchedRoles} />
               </div>
             )}
           </div>
-          {/* PERM_V2 涓汉涓夋€佽鍐欙紙鏈€楂樹紭鍏堢骇锛?*/}
+          {/* PERM_V2 个人三态覆写（最高优先级）*/}
           <div style={{ marginBottom: 16 }}>
             <Button
               type="link"
@@ -1442,26 +1442,26 @@ const AccountManage: React.FC = () => {
               onClick={() => setOverrideExpanded(!overrideExpanded)}
               style={{ paddingLeft: 0, color: overrideExpanded ? PRIMARY : '#666' }}
             >
-              {overrideExpanded ? '鏀惰捣涓汉缁嗙矑搴﹁鍐? : '灞曞紑涓汉缁嗙矑搴﹁鍐欙紙鍏佽/绂佹/缁ф壙锛?}
+              {overrideExpanded ? '收起个人细粒度覆写' : '展开个人细粒度覆写（允许/禁止/继承）'}
             </Button>
             {overrideExpanded && editVisible && (
               <div style={{ marginTop: 8, padding: 12, background: '#fafafa', borderRadius: 8, border: '1px solid #d9d9d9', maxHeight: 400, overflowY: 'auto' }}>
                 <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 8 }}>
-                  鏈€楂樹紭鍏堢骇锛氱姝㈢洿鎺ユ嫤鎴€佸厑璁哥洿鎺ユ斁琛岋紱缁ф壙=娌跨敤 寮€鍙戣€?gt;瑙掕壊&gt;榛樿 瑙ｆ瀽閾?
+                  最高优先级：禁止直接拦截、允许直接放行；继承=沿用 开发者&gt;角色&gt;默认 解析链
                 </Text>
                 <PermEditor scopes={['supplier', 'purchaser', 'factory']} value={overrideDraft} onChange={setOverrideDraft} />
               </div>
             )}
           </div>
-          <Form.Item name="group" label="鎵€灞為儴闂?>
-            <Select placeholder="璇烽€夋嫨閮ㄩ棬锛堝彲閫夛級" allowClear>
+          <Form.Item name="group" label="所属部门">
+            <Select placeholder="请选择部门（可选）" allowClear>
               {groups.map(g => (
                 <Option key={g.name} value={g.name}>{g.name}</Option>
               ))}
             </Select>
           </Form.Item>
-          <Form.Item name="remark" label="澶囨敞">
-            <Input.TextArea rows={3} placeholder="璇疯緭鍏ュ娉ㄤ俊鎭? />
+          <Form.Item name="remark" label="备注">
+            <Input.TextArea rows={3} placeholder="请输入备注信息" />
           </Form.Item>
         </Form>
       </Modal>
@@ -1469,14 +1469,14 @@ const AccountManage: React.FC = () => {
         title={
           <Space>
             <UserAddOutlined style={{ color: '#52c41a' }} />
-            <span>鏂板缓瀛愯处鍙?/span>
+            <span>新建子账号</span>
           </Space>
         }
         open={addVisible}
         onCancel={() => { setAddVisible(false); addForm.resetFields(); }}
         onOk={handleAddConfirm}
-        okText="鍒涘缓璐﹀彿"
-        cancelText="鍙栨秷"
+        okText="创建账号"
+        cancelText="取消"
         width={560}
       >
         <div style={{
@@ -1485,7 +1485,7 @@ const AccountManage: React.FC = () => {
         }}>
           <InfoCircleOutlined style={{ color: '#52c41a', marginRight: 8 }} />
           <Text style={{ color: '#389e0d', fontSize: 13 }}>
-            鍒涘缓鎴愬姛鍚庯紝绯荤粺灏嗚嚜鍔ㄧ敓鎴愬垵濮嬪瘑鐮侊紝璇锋彁閱掔敤鎴烽娆＄櫥褰曞悗淇敼瀵嗙爜
+            创建成功后，系统将自动生成初始密码，请提醒用户首次登录后修改密码
           </Text>
         </div>
         <Form form={addForm} layout="vertical" scrollToFirstError
@@ -1503,7 +1503,7 @@ const AccountManage: React.FC = () => {
               }
             }
             if (changedValues.group !== undefined) {
-              // 閫夋嫨鎵€灞為儴闂ㄥ悗鑷姩缁ф壙閮ㄩ棬鏉冮檺锛堝垏鎹㈤儴闂ㄦ椂绉婚櫎涓婃鑷姩缁ф壙鐨勯儴闂ㄦ潈闄愶級
+              // 选择所属部门后自动继承部门权限（切换部门时移除上次自动继承的部门权限）
               const grpName: string = changedValues.group || '';
               const newGroupPerms = groups.find(g => g.name === grpName)?.permissions || [];
               const prevSet = new Set(addGroupPermsRef.current);
@@ -1517,22 +1517,22 @@ const AccountManage: React.FC = () => {
             <Col span={12}>
               <Form.Item
                 name="username"
-                label="鐢ㄦ埛鍚?
+                label="用户名"
                 rules={[
-                  { required: true, message: '璇疯緭鍏ョ敤鎴峰悕' },
-                  { pattern: /^[a-zA-Z][a-zA-Z0-9_]{3,19}$/, message: '瀛楁瘝寮€澶达紝4-20浣嶅瓧姣嶆暟瀛椾笅鍒掔嚎' },
+                  { required: true, message: '请输入用户名' },
+                  { pattern: /^[a-zA-Z][a-zA-Z0-9_]{3,19}$/, message: '字母开头，4-20位字母数字下划线' },
                 ]}
               >
-                <Input placeholder="璇疯緭鍏ョ敤鎴峰悕" prefix={<UserOutlined />} />
+                <Input placeholder="请输入用户名" prefix={<UserOutlined />} />
               </Form.Item>
             </Col>
             <Col span={12}>
               <Form.Item
                 name="displayName"
-                label="濮撳悕"
-                rules={[{ required: true, message: '璇疯緭鍏ュ鍚? }]}
+                label="姓名"
+                rules={[{ required: true, message: '请输入姓名' }]}
               >
-                <Input placeholder="璇疯緭鍏ュ鍚? prefix={<UserOutlined />} />
+                <Input placeholder="请输入姓名" prefix={<UserOutlined />} />
               </Form.Item>
             </Col>
           </Row>
@@ -1540,34 +1540,34 @@ const AccountManage: React.FC = () => {
             <Col span={12}>
               <Form.Item
                 name="password"
-                label="鍒濆瀵嗙爜"
+                label="初始密码"
                 rules={[
-                  { required: true, message: '璇疯缃垵濮嬪瘑鐮? },
-                  { min: 6, message: '瀵嗙爜鑷冲皯6浣? },
-                  { pattern: /^(?=.*[a-zA-Z])(?=.*\d)/, message: '瀵嗙爜蹇呴』鍖呭惈瀛楁瘝鍜屾暟瀛? },
+                  { required: true, message: '请设置初始密码' },
+                  { min: 6, message: '密码至少6位' },
+                  { pattern: /^(?=.*[a-zA-Z])(?=.*\d)/, message: '密码必须包含字母和数字' },
                 ]}
               >
-                <Input.Password placeholder="璇疯缃垵濮嬪瘑鐮侊紙瀛楁瘝+鏁板瓧锛? prefix={<LockOutlined />} />
+                <Input.Password placeholder="请设置初始密码（字母+数字）" prefix={<LockOutlined />} />
               </Form.Item>
             </Col>
             <Col span={12}>
               <Form.Item
                 name="confirmPassword"
-                label="纭瀵嗙爜"
+                label="确认密码"
                 dependencies={['password']}
                 rules={[
-                  { required: true, message: '璇风‘璁ゅ瘑鐮? },
+                  { required: true, message: '请确认密码' },
                   ({ getFieldValue }) => ({
                     validator(_, value) {
                       if (!value || getFieldValue('password') === value) {
                         return Promise.resolve();
                       }
-                      return Promise.reject(new Error('涓ゆ杈撳叆鐨勫瘑鐮佷笉涓€鑷?));
+                      return Promise.reject(new Error('两次输入的密码不一致'));
                     },
                   }),
                 ]}
               >
-                <Input.Password placeholder="璇峰啀娆¤緭鍏ュ瘑鐮? prefix={<LockOutlined />} />
+                <Input.Password placeholder="请再次输入密码" prefix={<LockOutlined />} />
               </Form.Item>
             </Col>
           </Row>
@@ -1575,29 +1575,29 @@ const AccountManage: React.FC = () => {
             <Col span={12}>
               <Form.Item
                 name="phone"
-                label="鎵嬫満鍙风爜"
-                tooltip="閫夊～锛涘～鍐欏悗璇ュ瓙璐﹀彿鍙敤鎵嬫満鍙风櫥褰曘€傝嫢鍚屼竴鎵嬫満鍙峰悓鏃剁粦瀹氬涓鎴锋垨澶氫釜瀛愯处鍙凤紝鎵嬫満鍙风櫥褰曞皢琚鐢紝椤讳娇鐢ㄧ敤鎴峰悕鐧诲綍"
+                label="手机号码"
+                tooltip="选填；填写后该子账号可用手机号登录。若同一手机号同时绑定多个租户或多个子账号，手机号登录将被禁用，须使用用户名登录"
                 rules={[
-                  { pattern: /^1[3-9]\d{9}$/, message: '璇疯緭鍏?11 浣嶆湁鏁堟墜鏈哄彿鐮? },
+                  { pattern: /^1[3-9]\d{9}$/, message: '请输入 11 位有效手机号）' },
                 ]}
               >
-                <Input placeholder="璇疯緭鍏ユ墜鏈哄彿鐮侊紙閫夊～锛屽彲鐢ㄤ簬鐧诲綍锛? prefix={<MobileOutlined />} allowClear />
+                <Input placeholder="请输入手机号码（选填，可用于登录）" prefix={<MobileOutlined />} allowClear />
               </Form.Item>
             </Col>
           </Row>
           <Row gutter={16}>
             <Col span={12}>
-              <Form.Item name="roles" label="鏉冮檺瑙掕壊">
-                <Select mode="multiple" placeholder="璇烽€夋嫨瑙掕壊锛堝彲澶氶€夛紝鍙€夛級" allowClear>
+              <Form.Item name="roles" label="权限角色">
+                <Select mode="multiple" placeholder="请选择角色（可多选，可选）" allowClear>
                   {getAllRoles().map(r => (
-                    <Option key={r.key} value={r.name}>{r.name}{r.isPreset ? ' (棰勮)' : ''}</Option>
+                    <Option key={r.key} value={r.name}>{r.name}{r.isPreset ? ' (预设)' : ''}</Option>
                   ))}
                 </Select>
               </Form.Item>
             </Col>
             <Col span={12}>
-              <Form.Item name="group" label="鎵€灞為儴闂? rules={[{ required: true, message: '璇烽€夋嫨鎵€灞為儴闂? }]}>
-                <Select placeholder="璇烽€夋嫨閮ㄩ棬锛堣嚜鍔ㄧ户鎵块儴闂ㄦ潈闄愶級" allowClear>
+              <Form.Item name="group" label="所属部门" rules={[{ required: true, message: '请选择所属部门' }]}>
+                <Select placeholder="请选择部门（自动继承部门权限）" allowClear>
                   {groups.map(g => (
                     <Option key={g.name} value={g.name}>{g.name}</Option>
                   ))}
@@ -1605,7 +1605,7 @@ const AccountManage: React.FC = () => {
               </Form.Item>
             </Col>
           </Row>
-          {/* 鐙珛鏉冮檺鍒嗛厤 */}
+          {/* 独立权限分配 */}
           <div style={{ marginBottom: 16 }}>
             <Button
               type="link"
@@ -1613,36 +1613,36 @@ const AccountManage: React.FC = () => {
               onClick={() => setAddPermExpanded(!addPermExpanded)}
               style={{ paddingLeft: 0, color: addPermExpanded ? PRIMARY : '#666' }}
             >
-              {addPermExpanded ? '鏀惰捣鏉冮檺閰嶇疆' : '灞曞紑鐙珛鏉冮檺閰嶇疆'}
+              {addPermExpanded ? '收起权限配置' : '展开独立权限配置'}
             </Button>
             {addPermExpanded && (
               <div style={{ marginTop: 8, padding: 12, background: '#fafafa', borderRadius: 8, border: '1px solid #d9d9d9', maxHeight: 300, overflowY: 'auto' }}>
                 <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 12 }}>
-                  姝ゅ璁剧疆鐨勬潈闄愬皢鍦ㄨ鑹叉潈闄愬熀纭€涓婇澶栬拷鍔狅紝浠呭姝ゅ瓙璐﹀彿鐢熸晥
+                  此处设置的权限将在角色权限基础上额外追加，仅对此子账号生效
                 </Text>
                 <CustomPermSelector value={addPerms} onChange={updateAddPerms} roles={addWatchedRoles} />
               </div>
             )}
           </div>
-          <Form.Item name="remark" label="澶囨敞">
-            <Input.TextArea rows={2} placeholder="璇疯緭鍏ュ娉ㄤ俊鎭紙閫夊～锛? />
+          <Form.Item name="remark" label="备注">
+            <Input.TextArea rows={2} placeholder="请输入备注信息（选填）" />
           </Form.Item>
         </Form>
       </Modal>
 
-      {/* 閲嶇疆瀵嗙爜妯℃€佹 */}
+      {/* 重置密码模态框 */}
       <Modal
         title={
           <Space>
             <KeyOutlined style={{ color: '#faad14' }} />
-            <span>閲嶇疆瀵嗙爜 - {pwdAccount?.displayName}</span>
+            <span>重置密码 - {pwdAccount?.displayName}</span>
           </Space>
         }
         open={pwdVisible}
         onCancel={() => { setPwdVisible(false); pwdForm.resetFields(); }}
         onOk={handlePwdConfirm}
-        okText="纭閲嶇疆"
-        cancelText="鍙栨秷"
+        okText="确认重置"
+        cancelText="取消"
         width={450}
       >
         <div style={{
@@ -1651,57 +1651,57 @@ const AccountManage: React.FC = () => {
         }}>
           <WarningOutlined style={{ color: '#faad14', marginRight: 8 }} />
           <Text style={{ color: '#ad6800', fontSize: 13 }}>
-            閲嶇疆瀵嗙爜鍚庯紝鐢ㄦ埛闇€浣跨敤鏂板瘑鐮侀噸鏂扮櫥褰?
+            重置密码后，用户需使用新密码重新登录
           </Text>
         </div>
         <Form form={pwdForm} layout="vertical">
           <Form.Item
             name="newPassword"
-            label="鏂板瘑鐮?
+            label="新密码"
             rules={[
-              { required: true, message: '璇疯緭鍏ユ柊瀵嗙爜' },
-              { min: 6, message: '瀵嗙爜鑷冲皯6浣? },
-              { pattern: /^(?=.*[a-zA-Z])(?=.*\d)/, message: '瀵嗙爜蹇呴』鍖呭惈瀛楁瘝鍜屾暟瀛? },
+              { required: true, message: '请输入新密码' },
+              { min: 6, message: '密码至少6位' },
+              { pattern: /^(?=.*[a-zA-Z])(?=.*\d)/, message: '密码必须包含字母和数字' },
             ]}
           >
-            <Input.Password placeholder="璇疯緭鍏ユ柊瀵嗙爜锛堝瓧姣?鏁板瓧锛? prefix={<LockOutlined />} />
+            <Input.Password placeholder="请输入新密码（字母+数字）" prefix={<LockOutlined />} />
           </Form.Item>
           <Form.Item
             name="confirmPassword"
-            label="纭鏂板瘑鐮?
+            label="确认新密码"
             dependencies={['newPassword']}
             rules={[
-              { required: true, message: '璇风‘璁ゆ柊瀵嗙爜' },
+              { required: true, message: '请确认新密码' },
               ({ getFieldValue }) => ({
                 validator(_, value) {
                   if (!value || getFieldValue('newPassword') === value) {
                     return Promise.resolve();
                   }
-                  return Promise.reject(new Error('涓ゆ杈撳叆鐨勫瘑鐮佷笉涓€鑷?));
+                  return Promise.reject(new Error('两次输入的密码不一致'));
                 },
               }),
             ]}
           >
-            <Input.Password placeholder="璇峰啀娆¤緭鍏ユ柊瀵嗙爜" prefix={<LockOutlined />} />
+            <Input.Password placeholder="请再次输入新密码" prefix={<LockOutlined />} />
           </Form.Item>
         </Form>
       </Modal>
 
-      {/* 鐧诲綍鏃ュ織寮圭獥 */}
+      {/* 登录日志弹窗 */}
       <Modal
         title={
           <Space>
             <SafetyCertificateOutlined style={{ color: PRIMARY }} />
-            <span>鐧诲綍鏃ュ織锛堟渶杩?00鏉★級</span>
+            <span>登录日志（最近 100条）</span>
           </Space>
         }
         open={logVisible}
         onCancel={() => setLogVisible(false)}
-        footer={<Button onClick={() => setLogVisible(false)}>鍏抽棴</Button>}
+        footer={<Button onClick={() => setLogVisible(false)}>关闭</Button>}
         width={700}
       >
         <div style={{ marginBottom: 12, textAlign: 'right' }}>
-          <Button size="small" danger onClick={handleClearLogs} icon={<DeleteOutlined />}>娓呴櫎鏃ュ織</Button>
+          <Button size="small" danger onClick={handleClearLogs} icon={<DeleteOutlined />}>清除日志</Button>
         </div>
         <Table
           dataSource={loginLogs}
@@ -1709,47 +1709,47 @@ const AccountManage: React.FC = () => {
           size="small"
           pagination={{ pageSize: 10 }}
           columns={[
-            { title: '鏃堕棿', dataIndex: 'time', key: 'time', width: 160 },
-            { title: '璐﹀彿', dataIndex: 'username', key: 'username', width: 120 },
+            { title: '时间', dataIndex: 'time', key: 'time', width: 160 },
+            { title: '账号', dataIndex: 'username', key: 'username', width: 120 },
             {
-              title: '缁撴灉', dataIndex: 'success', key: 'success', width: 80,
+              title: '结果', dataIndex: 'success', key: 'success', width: 80,
               render: (v: boolean) => v
-                ? <Tag color="success">鎴愬姛</Tag>
-                : <Tag color="error">澶辫触</Tag>,
+                ? <Tag color="success">成功</Tag>
+                : <Tag color="error">失败</Tag>,
             },
-            { title: '璇︽儏', dataIndex: 'detail', key: 'detail' },
+            { title: '详情', dataIndex: 'detail', key: 'detail' },
           ]}
-          locale={{ emptyText: '鏆傛棤鐧诲綍鏃ュ織' }}
+          locale={{ emptyText: '暂无登录日志' }}
         />
       </Modal>
 
-      {/* ========== 鍒嗙粍绠＄悊寮圭獥 ========== */}
+      {/* ========== 分组管理弹窗 ========== */}
       <Modal
-        title={editingGroup ? '缂栬緫鍒嗙粍' : '鏂板缓鍒嗙粍'}
+        title={editingGroup ? '编辑分组' : '新建分组'}
         open={groupModalVisible}
         onCancel={() => { setGroupModalVisible(false); groupForm.resetFields(); setGroupPerms([]); }}
         onOk={handleGroupModalOk}
-        okText={editingGroup ? '淇濆瓨' : '鍒涘缓'}
-        cancelText="鍙栨秷"
+        okText={editingGroup ? '保存' : '创建'}
+        cancelText="取消"
         width={600}
       >
         <Form form={groupForm} layout="vertical" style={{ marginTop: 16 }}>
-          <Form.Item name="name" label="鍒嗙粍鍚嶇О" rules={[{ required: true, message: '璇疯緭鍏ュ垎缁勫悕绉? }]}>
-            <Input placeholder="渚嬪锛氫粨搴撱€佸鏈嶃€佽繍钀? maxLength={20} />
+          <Form.Item name="name" label="分组名称" rules={[{ required: true, message: '请输入分组名称' }]}>
+            <Input placeholder="例如：仓库、客服、运营" maxLength={20} />
           </Form.Item>
         </Form>
 
-        {/* 缁勬潈闄愰厤缃?*/}
+        {/* 组权限配置 */}
         <div style={{
           padding: 12, background: '#f0f5ff', borderRadius: 8,
           border: '1px solid #adc6ff', marginBottom: 16,
         }}>
           <Text strong style={{ fontSize: 13, color: PRIMARY }}>
             <SafetyCertificateOutlined style={{ marginRight: 6 }} />
-            鍒嗙粍鏉冮檺閰嶇疆
+            分组权限配置
           </Text>
           <div style={{ fontSize: 12, color: '#666', marginTop: 4, marginBottom: 12 }}>
-            缁勬潈闄愬皢涓庝釜浜烘潈闄愬彔鍔狅紝渚嬪锛氱粍璁锯€滃叏閮ㄥ晢鍝佲€濇潈闄愶紝涓汉璁锯€滄垚鍝佲€濇潈闄愶紝鍒欒鎴愬憳鎷ユ湁鈥滃叏閮ㄥ晢鍝?+ 鎴愬搧鈥濇潈闄?
+            组权限将与个人权限叠加，例如：组设“全部商品”权限，个人设“成品”权限，则该成员拥有“全部商品」+ 成品”权限
           </div>
           <div style={{ maxHeight: 350, overflowY: 'auto', padding: '4px 0' }}>
             {permissionModules.map(mod => {
@@ -1773,7 +1773,7 @@ const AccountManage: React.FC = () => {
                     >
                       <Text strong style={{ fontSize: 13 }}>{mod.label}</Text>
                     </Checkbox>
-                    <Tag color="blue" style={{ marginLeft: 6 }}>{modPerms.length}椤?/Tag>
+                    <Tag color="blue" style={{ marginLeft: 6 }}>{modPerms.length}</Tag>
                   </div>
                   <Row gutter={[8, 2]} style={{ marginLeft: 24 }}>
                     {mod.children.map(child => {
@@ -1801,37 +1801,37 @@ const AccountManage: React.FC = () => {
         </div>
       </Modal>
 
-      {/* 璐﹀彿瀵煎叆棰勮寮圭獥 */}
+      {/* 账号导入预览弹窗 */}
       <Modal
-        title={<Space><UploadOutlined style={{ color: '#1890ff' }} /><span>璐﹀彿瀵煎叆棰勮</span></Space>}
+        title={<Space><UploadOutlined style={{ color: '#1890ff' }} /><span>账号导入预览</span></Space>}
         open={importVisible}
         onCancel={() => { setImportVisible(false); setImportRows([]); }}
         onOk={handleImportConfirm}
-        okText="纭瀵煎叆"
-        cancelText="鍙栨秷"
+        okText="确认导入"
+        cancelText="取消"
         okButtonProps={{ disabled: !importRows.length || importRows.some(r => r.error) }}
         width={880}
       >
         <Alert type="info" showIcon style={{ marginBottom: 12 }}
-          message="鎵€灞炲垎缁勩€佺敤鎴峰悕銆佸鍚嶄负蹇呭～椤癸紱璐﹀彿鏉冮檺鑷姩缁ф壙鎵€灞炲垎缁勬潈闄愶紱瀵煎叆璐﹀彿棣栨鐧诲綍蹇呴』淇敼瀵嗙爜"
-          description={groups.length ? undefined : '褰撳墠灏氭棤鍒嗙粍锛岃鍏堝湪鍒嗙粍绠＄悊涓垱寤哄垎缁勫悗鍐嶅鍏?}
+          message="所属分组、用户名、姓名为必填项；账号权限自动继承所属分组权限；导入账号首次登录必须修改密码"
+          description={groups.length ? undefined : '当前尚无分组，请先在分组管理中创建分组后再导入'}
         />
         <Table size="small" bordered rowKey="rowNo" pagination={false} scroll={{ y: 320 }}
           columns={[
-            { title: '琛屽彿', dataIndex: 'rowNo', key: 'rowNo', width: 60 },
-            { title: '鎵€灞炲垎缁?', dataIndex: 'group', key: 'group', width: 110, render: (v: string) => v || <Text type="danger">缂哄け</Text> },
-            { title: '鐢ㄦ埛鍚?', dataIndex: 'username', key: 'username', width: 140 },
-            { title: '濮撳悕*', dataIndex: 'displayName', key: 'displayName', width: 100 },
-            { title: '鍒濆瀵嗙爜', key: 'password', width: 90, render: () => '鈥⑩€⑩€⑩€⑩€⑩€? },
-            { title: '缁ф壙鏉冮檺鏁?, key: 'permCount', width: 90, render: (_: any, r: ImportAccountRow) => r.error ? '-' : `${(groups.find(g => g.name === r.group)?.permissions || []).length} 椤筦 },
-            { title: '鏍￠獙缁撴灉', key: 'error', render: (_: any, r: ImportAccountRow) => r.error ? <Text type="danger">{r.error}</Text> : <Tag color="green">閫氳繃</Tag> },
+            { title: '行号', dataIndex: 'rowNo', key: 'rowNo', width: 60 },
+            { title: '所属分组', dataIndex: 'group', key: 'group', width: 110, render: (v: string) => v || <Text type="danger">缺失</Text> },
+            { title: '用户名', dataIndex: 'username', key: 'username', width: 140 },
+            { title: '姓名*', dataIndex: 'displayName', key: 'displayName', width: 100 },
+            { title: '初始密码', key: 'password', width: 90, render: () => '••••••' },
+            { title: '继承权限数', key: 'permCount', width: 90, render: (_: any, r: ImportAccountRow) => r.error ? '-' : `${(groups.find(g => g.name === r.group)?.permissions || []).length} 项` },
+            { title: '校验结果', key: 'error', render: (_: any, r: ImportAccountRow) => r.error ? <Text type="danger">{r.error}</Text> : <Tag color="green">通过</Tag> },
           ]}
           dataSource={importRows}
-          locale={{ emptyText: '鏆傛棤鏁版嵁' }}
+          locale={{ emptyText: '暂无数据' }}
         />
       </Modal>
 
-      </div>{/* 鍏抽棴鍙充晶涓诲唴瀹瑰尯 */}
+      </div>{/* 关闭右侧主内容区 */}
     </div>
   );
 };
