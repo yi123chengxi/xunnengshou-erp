@@ -1,0 +1,69 @@
+name: build-and-deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      rollback_ref:
+        description: '回滚目标(tag/commit/分支), 留空表示 main'
+        required: false
+        default: ''
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.rollback_ref || 'main' }}
+          fetch-depth: 1
+
+      - name: 安装 Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: 构建后端
+        run: |
+          cd server
+          npm ci
+          npm run build
+
+      - name: 构建前端
+        run: |
+          cd client
+          npm ci
+          npm run build
+
+      - name: 打包部署物
+        run: |
+          mkdir -p pkg/nginx pkg/client
+          cp -r server pkg/server
+          rm -rf pkg/server/node_modules pkg/server/data pkg/server/downloads pkg/server/uploads pkg/server/logs
+          cp -r client/build pkg/client/build
+          cp ecosystem.config.js pkg/
+          cp nginx/factory-management.conf pkg/nginx/
+          cp server-update.sh pkg/
+          cp server-setup.sh pkg/
+          tar -czf factory-deploy.tar.gz -C pkg .
+
+      - name: 留存产物7天(供手动回滚下载)
+        uses: actions/upload-artifact@v4
+        with:
+          name: factory-deploy
+          path: factory-deploy.tar.gz
+          retention-days: 7
+
+      - name: 部署到阿里云ECS
+        if: ${{ secrets.SERVER_HOST != '' && secrets.SERVER_PASSWORD != '' }}
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq sshpass
+          sshpass -p "${{ secrets.SERVER_PASSWORD }}" scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null factory-deploy.tar.gz root@${{ secrets.SERVER_HOST }}:/root/factory-deploy.tar.gz
+          sshpass -p "${{ secrets.SERVER_PASSWORD }}" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@${{ secrets.SERVER_HOST }} "mkdir -p /root/factory-deploy && tar -xzf /root/factory-deploy.tar.gz -C /root/factory-deploy && bash /root/factory-deploy/server-update.sh"
+
+      - name: 未配置密钥提示
+        if: ${{ secrets.SERVER_HOST == '' || secrets.SERVER_PASSWORD == '' }}
+        run: echo "未配置 SERVER_HOST / SERVER_PASSWORD, 本次仅构建不部署。请到仓库 Settings -> Secrets and variables -> Actions 添加。"
