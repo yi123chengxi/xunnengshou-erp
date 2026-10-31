@@ -1,0 +1,394 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
+    'Noto Sans', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol',
+    'Noto Color Emoji';
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#root {
+  height: 100vh;
+}
+
+/* 全局主题色变量 */
+:root {
+  --primary-color: #1e4a7e;
+  --primary-light: #e8f4fc;
+  --primary-hover: #2d5a8e;
+  --bg-gradient-start: #f0f7ff;
+  --bg-gradient-end: #e6f0f9;
+  --card-bg: #ffffff;
+  --text-primary: #1a1a2e;
+  --text-secondary: #6b7280;
+  --border-color: #e5e9ef;
+}
+
+/* 滚动条美化 */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #c5d9e8;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #a8c4d9;
+}
+
+/* 账单明细表：横向滚动条加粗加深（全局 6px 淡色滚动条在白底表体内不易被发现） */
+.bill-detail-table .ant-table-body::-webkit-scrollbar,
+.bill-detail-table .ant-table-content::-webkit-scrollbar {
+  height: 12px;
+}
+.bill-detail-table .ant-table-body::-webkit-scrollbar-track,
+.bill-detail-table .ant-table-content::-webkit-scrollbar-track {
+  background: #eef2f6;
+  border-radius: 6px;
+}
+.bill-detail-table .ant-table-body::-webkit-scrollbar-thumb,
+.bill-detail-table .ant-table-content::-webkit-scrollbar-thumb {
+  background: #8fa6bc;
+  border-radius: 6px;
+}
+.bill-detail-table .ant-table-body::-webkit-scrollbar-thumb:hover,
+.bill-detail-table .ant-table-content::-webkit-scrollbar-thumb:hover {
+  background: #6d87a0;
+}
+
+/* 卡片样式优化 */
+.ant-card {
+  border-radius: 12px !important;
+  border: none !important;
+  box-shadow: 0 2px 12px rgba(30, 74, 126, 0.08) !important;
+  background: var(--card-bg) !important;
+}
+
+.ant-card-hoverable:hover {
+  box-shadow: 0 8px 24px rgba(30, 74, 126, 0.12) !important;
+  transform: translateY(-2px);
+  transition: all 0.3s ease;
+}
+
+/* 统计卡片样式 */
+.stat-card {
+  background: linear-gradient(135deg, #ffffff 0%, #f8fbff 100%);
+  border-left: 4px solid var(--primary-color);
+}
+
+.stat-card .ant-statistic-title {
+  color: var(--text-secondary);
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+
+.stat-card .ant-statistic-content {
+  color: var(--text-primary);
+  font-size: 24px;
+  font-weight: 600;
+}
+
+/* 主按钮样式 */
+.ant-btn-primary {
+  background: var(--primary-color) !important;
+  border-color: var(--primary-color) !important;
+  border-radius: 8px !important;
+}
+
+.ant-btn-primary:hover {
+  background: var(--primary-hover) !important;
+  border-color: var(--primary-hover) !important;
+}
+
+/* 标签样式 */
+.ant-tag {
+  border-radius: 4px !important;
+  font-size: 12px;
+  padding: 2px 8px;
+}
+
+/* 表格样式优化 */
+.ant-table {
+  background: transparent !important;
+}
+
+.ant-table-thead > tr > th {
+  background: #f6f9fc !important;
+  color: var(--text-primary);
+  font-weight: 600;
+  border-bottom: 1px solid var(--border-color) !important;
+}
+
+.ant-table-tbody > tr:hover > td {
+  background: #f0f7ff !important;
+}
+
+/* 输入框样式 */
+.ant-input,
+.ant-select-selector,
+.ant-picker {
+  border-radius: 8px !important;
+  border-color: var(--border-color) !important;
+}
+
+.ant-input:focus,
+.ant-select-focused .ant-select-selector,
+.ant-picker-focused {
+  border-color: var(--primary-color) !important;
+  box-shadow: 0 0 0 2px rgba(30, 74, 126, 0.1) !important;
+}
+
+/* 菜单样式优化 */
+.ant-menu-dark {
+  background: #1e3a5f !important;
+}
+
+.ant-menu-dark .ant-menu-sub {
+  background: #152a45 !important;
+}
+
+.ant-menu-dark .ant-menu-item-selected {
+  background: rgba(255, 255, 255, 0.1) !important;
+}
+
+/* 进度条样式 */
+.ant-progress-circle .ant-progress-text {
+  color: var(--primary-color) !important;
+  font-weight: 600;
+}
+
+/* 分页样式 */
+.ant-pagination-item-active {
+  border-color: var(--primary-color) !important;
+  background: var(--primary-color) !important;
+}
+
+.ant-pagination-item-active a {
+  color: #fff !important;
+}
+
+/* 对账状态标签颜色 */
+.reconciled-tag { color: #52c41a; }
+.matched-amount-tag { color: #faad14; }
+.mismatch-tag { color: #ff4d4f; }
+.unreconciled-tag { color: #d9d9d9; }
+
+/* 财务模块样式 */
+.finance-dashboard .stat-card {
+  text-align: center;
+  margin-bottom: 16px;
+}
+
+.finance-dashboard .stat-card .amount {
+  font-size: 28px;
+  font-weight: 700;
+}
+
+.finance-dashboard .stat-card .amount.receivable {
+  color: #ff4d4f;
+}
+
+.finance-dashboard .stat-card .amount.payable {
+  color: var(--primary-color);
+}
+
+/* 响应式调整 */
+@media (max-width: 768px) {
+  .ant-tabs-tab {
+    padding: 8px 10px !important;
+    font-size: 12px !important;
+  }
+}
+
+/* 内容区域背景 */
+.content-area {
+  background: linear-gradient(180deg, var(--bg-gradient-start) 0%, var(--bg-gradient-end) 100%);
+  min-height: 100%;
+}
+
+/* 头部样式 */
+.page-header {
+  background: linear-gradient(135deg, var(--primary-color) 0%, #2d5a8e 100%);
+  color: #fff;
+  padding: 24px;
+  border-radius: 12px;
+  margin-bottom: 24px;
+}
+
+.page-header h2 {
+  color: #fff;
+  margin: 0;
+}
+
+/* 订单管理/财务审核/打单拣货：鼠标点击行高亮（黄色底，点击后立即生效，覆盖 hover 样式） */
+.ant-table-tbody > tr.table-row-clicked > td,
+.ant-table-tbody > tr.table-row-clicked:hover > td {
+  background: #f7d774 !important;
+}
+
+/* 订单编辑窗口紧凑布局：压缩字段间距与分区标题，参考 ERP 详情页样式 */
+.order-edit-compact .ant-form-item {
+  margin-bottom: 6px;
+}
+.order-edit-compact .ant-form-item-label {
+  padding-bottom: 0 !important;
+}
+.order-edit-compact .ant-form-item-label > label {
+  height: 20px;
+  font-size: 12px;
+  color: #5a6b7d;
+}
+.order-edit-compact .ant-collapse .ant-collapse-header {
+  padding: 5px 10px !important;
+  background: #f5f7fa;
+  align-items: center !important;
+}
+.order-edit-compact .ant-collapse .ant-collapse-header .ant-collapse-header-text {
+  line-height: 20px;
+}
+
+/* 居中对齐的数字输入框：antd InputNumber 内部 input 默认 text-align:start 会覆盖外层内联居中，此处强制居中（含带 ¥ 前缀的 affix-wrapper 结构） */
+[style*="text-align: center"] .ant-input-number-input,
+.ant-input-number[style*="text-align: center"] .ant-input-number-input {
+  text-align: center;
+}
+
+/* 产品列表单列框选：被框选单元格整格填充背景色并加内描边 */
+.ant-table-tbody > tr > td.col-selected-cell {
+  background: #e6fffb !important;
+  box-shadow: inset 0 0 0 1px #5cdbd3;
+}
+
+/* 居中放大提示（安排生产异常提示等）：窗口垂直居中、字号加大、阴影更明显 */
+.ant-message:has(.app-center-message) {
+  top: 40vh;
+}
+.app-center-message .ant-message-notice-content {
+  font-size: 16px;
+  padding: 14px 28px;
+  border-radius: 10px;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.18);
+}
+.app-center-message .ant-message-custom-content {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 16px;
+}
+
+/* 产品列表列框选高亮 */
+.col-selected-cell {
+  background: #e6f7ff !important;
+  outline: 1px solid #91d5ff;
+  outline-offset: -1px;
+}
+
+/* antd InputNumber 内部输入内容居中（当外层设置了居中时） */
+[style*="text-align: center"] .ant-input-number-input,
+.ant-input-number[style*="text-align: center"] .ant-input-number-input {
+  text-align: center;
+}
+
+/* 订单编辑紧凑布局 */
+.order-edit-compact .ant-collapse-header {
+  padding: 8px 0 !important;
+}
+.order-edit-compact .ant-collapse-content-box {
+  padding: 8px 0 !important;
+}
+.order-edit-compact .ant-form-item {
+  margin-bottom: 10px;
+}
+.order-edit-compact .ant-steps {
+  margin-bottom: 10px;
+}
+.order-edit-compact .ant-divider {
+  margin: 6px 0 10px;
+}
+
+/* 粘贴地址（智能解析）输入框：浅绿色底色 + 浅白色占位说明文字 */
+.smart-address-textarea.ant-input {
+  background: #e4f3dc !important;
+  border-color: #b7e0a8 !important;
+}
+.smart-address-textarea.ant-input::placeholder {
+  color: #73d13d;
+  font-weight: 500;
+  text-shadow: 0 0 1px rgba(255, 255, 255, 0.8);
+}
+
+/* 列宽拖拽手柄锚定到表头单元格右边缘（列分割线位置） */
+.ant-table-thead > tr > th {
+  position: relative;
+}
+
+/* 订单详情只读弹窗：禁用控件文字以正常深色显示（仅可查看、不可修改） */
+.order-readonly-modal .ant-input[disabled],
+.order-readonly-modal textarea.ant-input[disabled],
+.order-readonly-modal .ant-input-affix-wrapper-disabled,
+.order-readonly-modal .ant-input-affix-wrapper-disabled .ant-input,
+.order-readonly-modal .ant-input-number-disabled,
+.order-readonly-modal .ant-input-number-disabled .ant-input-number-input,
+.order-readonly-modal .ant-input-number-disabled .ant-input-number-prefix,
+.order-readonly-modal .ant-input-number-affix-wrapper-disabled .ant-input-number-input,
+.order-readonly-modal .ant-input-number-affix-wrapper-disabled .ant-input-number-prefix,
+.order-readonly-modal .ant-select-disabled .ant-select-selection-item,
+.order-readonly-modal .ant-picker-disabled .ant-picker-input > input {
+  color: rgba(0, 0, 0, 0.88) !important;
+  -webkit-text-fill-color: rgba(0, 0, 0, 0.88) !important;
+}
+
+/* 登记订单弹窗：套餐自动识别的月数/空间GB 禁用态文字以黑色显示 */
+.reg-plan-readonly.ant-input-number-disabled,
+.reg-plan-readonly.ant-input-number-disabled .ant-input-number-input {
+  color: rgba(0, 0, 0, 0.88) !important;
+  -webkit-text-fill-color: rgba(0, 0, 0, 0.88) !important;
+}
+
+/* 商机市场成品卡片：收藏/加购/详情/询价 按键行高缩短 */
+.mkt-card .ant-card-actions > li {
+  padding: 4px 0 !important;
+  min-height: 34px;
+}
+.mkt-card .ant-card-actions > li > span {
+  width: 100%;
+}
+
+/* 商机市场发包表格：表体固定高度，横向滚动条始终固定在窗口最下方 */
+.mkt-fixed-table .ant-table-body { min-height: calc(100vh - 535px); }
+
+/* 日常记账-收入退货：金额输入红色加粗 */
+.return-amount-input .ant-input-number-input { color: #ff4d4f !important; font-weight: 700; }
+.return-amount-input .ant-input-number-prefix { color: #ff4d4f !important; font-weight: 700; }
+
+/* 客户基础信息 Tabs 紧凑行高：去除 nav 下边距并收窄页签内边距 */
+.ci-tabs-compact .ant-tabs-nav { margin-bottom: 0; }
+.ci-tabs-compact .ant-tabs-tab { padding: 6px 0; }
+
+/* 全局矩形化：强制所有 antd 组件 border-radius 为 0 */
+.ant-card, .ant-btn, .ant-input, .ant-input-affix-wrapper,
+.ant-select-selector, .ant-input-number, .ant-input-number-input,
+.ant-picker, .ant-tag, .ant-pagination-item,
+.ant-pagination-prev .ant-pagination-item-link,
+.ant-pagination-next .ant-pagination-item-link,
+.ant-table, .ant-table-thead > tr > th, .ant-table-tbody > tr > td,
+.ant-modal-content, .ant-modal-header, .ant-modal-footer,
+.ant-dropdown-menu, .ant-popover-inner, .ant-tooltip-inner,
+.ant-collapse-header, .ant-collapse-content, .ant-collapse-item {
+  border-radius: 0 !important;
+}
+.ant-card-body > div > div {
+  border-radius: 0 !important;
+}

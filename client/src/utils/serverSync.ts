@@ -1,0 +1,413 @@
+/**
+ * 跨浏览器数据同步（客户端）：
+ * - 服务端（SQLite）是唯一可信数据源，localStorage / IndexedDB 仅作为本地缓存；
+ * - 写入钩子：localStorage 业务数据变更后防抖上传到服务端；
+ * - 启动拉取：登录后先从服务端拉取全量数据覆盖本地缓存；
+ *   本地有但服务端没有的数据自动上传（首次迁移）；
+ * - 服务端不可用时全部静默降级为纯本地模式，不影响现有功能。
+ */
+import { saveDataset, loadDataset } from './dataStore';
+import { getOriginalSetItem, safeSetItem, emergencyFreeSpace } from './storageQuota';
+
+const API_BASE = (process.env.REACT_APP_API_BASE as string) ||
+  (typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1'
+    ? `${window.location.protocol}//${window.location.hostname}:3000/api` // 云部署：前端与后端同主机
+    : 'http://localhost:3000/api');
+
+// 需要同步的业务数据 key 前缀/精确名
+const SYNC_PREFIXES = ['pageData_', 'custom_', 'warehouses_', 'purchaser_suppliers_', 'accounts_', 'shop_info_', 'shop_profit_', 'month_end_check_', 'withdrawal_record_', 'dev_', 'hr_', 'newstyle_', 'brandauth_', 'molds_', 'credit_adjustments_', 'published_credit_', 'payment_requests_', 'payment_request_managers_', 'notification_settings_', 'print_template_', 'price_strategy_'];
+const SYNC_EXACT = ['registeredUsers', 'subscription_orders', 'storage_orders', 'market_publish_orders', 'market_ratings', 'market_trade_orders', 'market_visitor_cart_shares', 'market_mold_listings', 'purchaser_pushed_orders'];
+// 图片块体积大，不参与跨浏览器同步（各浏览器独立）
+const EXCLUDE_PREFIXES = ['prodImg_', 'thumb_', 'payShot_', 'mold_img_'];
+// 仅上传不拉取的键前缀（这类键有独立的恢复机制，避免 pullAllDatasets 的宽限期竞态覆盖本地新数据）
+const UPLOAD_ONLY_PREFIXES = ['credit_adjustments_'];
+// 只增不删的全局列表键（无删除 UI）：允许愈合回传修复服务端缩水，且不会复活已删除记录
+const APPEND_ONLY_GLOBAL_KEYS = ['market_trade_orders', 'purchaser_pushed_orders'];
+
+export function isSyncKey(key: string): boolean {
+  if (!key || key.endsWith('_ts')) return false;
+  if (EXCLUDE_PREFIXES.some(p => key.startsWith(p))) return false;
+  return SYNC_EXACT.includes(key) || SYNC_PREFIXES.some(p => key.startsWith(p));
+}
+
+/** 判断是否为仅上传不拉取的键（有独立恢复机制，pullAllDatasets 应跳过） */
+export function isUploadOnlyKey(key: string): boolean {
+  return UPLOAD_ONLY_PREFIXES.some(p => key.startsWith(p));
+}
+
+/** 当前登录账号的数据归属者（子账号归父账号），与页面 getDataOwner 保持一致 */
+function currentOwner(): string {
+  try {
+    if (localStorage.getItem('isSubAccount') === 'true') {
+      return localStorage.getItem('parentAccount') || localStorage.getItem('username') || '';
+    }
+    return localStorage.getItem('username') || '';
+  } catch { return ''; }
+}
+
+/** key 的 owner 后缀（pageData_module_child_owner / xxx_owner 的最后一段）；全局 key 返回 null */
+function keyOwner(key: string): string | null {
+  if (key === 'registeredUsers') return null;
+  // 商机市场相关键为全局共享数据（跨账号可见），返回 null 使所有账号都能同步
+  if (key.startsWith('market_')) return null;
+  // 打印模板为系统级预设/共享数据：跨账号同步，部署后新浏览器自动拉取
+  if (key.startsWith('print_template_')) return null;
+  const idx = key.lastIndexOf('_');
+  if (idx < 0) return key;
+  return key.slice(idx + 1);
+}
+
+/** 判断是否为全局共享键（跨账号同步，如 registeredUsers、market_*） */
+function isGlobalKey(key: string): boolean {
+  return keyOwner(key) === null;
+}
+
+/** 仅同步当前账号自己的数据集 + 全局键（registeredUsers / market_*），避免拉取他人账号数据造成本地配额溢出/串号 */
+function isKeyForCurrentAccount(key: string): boolean {
+  if (key.startsWith('dev_')) return true; // 开发者后台数据（子账号/客户分组/客户权限）为全局数据，跨浏览器同步
+  const owner = keyOwner(key);
+  if (owner === null) return true; // 全局 key
+  const cur = currentOwner();
+  return owner === cur || owner === '' || owner === 'default';
+}
+
+// ============ 服务器可用性探测（15s 缓存，超时 1.5s） ============
+let serverState: { ok: boolean; at: number } = { ok: false, at: 0 };
+async function serverAvailable(): Promise<boolean> {
+  const now = Date.now();
+  if (now - serverState.at < 15000) return serverState.ok;
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 5000); // 360浏览器等较慢环境给 5s 超时
+    const res = await fetch(`${API_BASE}/health`, { signal: ctrl.signal });
+    clearTimeout(t);
+    serverState = { ok: res.ok, at: now };
+  } catch {
+    serverState = { ok: false, at: now };
+  }
+  return serverState.ok;
+}
+
+async function fetchWithTimeout(url: string, opts: RequestInit = {}, ms = 5000): Promise<Response> {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), ms);
+  try {
+    return await fetch(url, { ...opts, signal: ctrl.signal });
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+// ============ 上传（防抖合并，800ms） ============
+const pending = new Map<string, { timer: any; value: string; ts: number }>();
+
+// 客户端已知的服务端版本（meta 时间戳）：上传时携带 baseTs 供服务端乐观并发判断
+const knownTs = new Map<string, number>();
+
+async function doUpload(key: string, json: string, ts?: number, baseTs?: number): Promise<void> {
+  if (!(await serverAvailable())) return;
+  try {
+    const res = await fetchWithTimeout(`${API_BASE}/sync/dataset`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      // 上传数据本身的写入时间戳（而非上传时刻）+ 已知服务端版本 baseTs
+      body: JSON.stringify({ key, json, updatedAt: ts || Date.now(), baseTs: baseTs ?? knownTs.get(key) ?? 0 }),
+    });
+    if (res.ok) {
+      const data = await res.json().catch(() => null);
+      if (data && typeof data.newTs === 'number') knownTs.set(key, data.newTs);
+    }
+  } catch {
+    serverState = { ok: false, at: Date.now() };
+  }
+}
+
+/** 写入钩子回调：业务 key 变更后调度上传，并刷新本地 _ts 时间戳 */
+export function scheduleDatasetUpload(key: string, value: string): void {
+  if (!isSyncKey(key)) return;
+  // 记录本地写入时间戳，供启动拉取时新旧比对（原生写入，不触发钩子递归）
+  const ts = Date.now();
+  const baseTs = knownTs.get(key) ?? 0;
+  try { getOriginalSetItem()(`${key}_ts`, String(ts)); } catch { /* ignore */ }
+  const exist = pending.get(key);
+  if (exist) {
+    exist.value = value;
+    exist.ts = ts;
+    clearTimeout(exist.timer);
+    exist.timer = setTimeout(() => { pending.delete(key); void doUpload(key, exist.value, exist.ts, baseTs); }, 800);
+  } else {
+    const entry = { value, ts, timer: null as any };
+    entry.timer = setTimeout(() => { pending.delete(key); void doUpload(key, entry.value, entry.ts, baseTs); }, 800);
+    pending.set(key, entry);
+  }
+}
+
+/** 立即上传（注册等关键操作后调用） */
+export function flushDatasetUpload(key: string, value: string): void {
+  if (!isSyncKey(key)) return;
+  const e = pending.get(key);
+  if (e) { clearTimeout(e.timer); pending.delete(key); }
+  void doUpload(key, value);
+}
+
+/** 立即上传并等待完成（关键数据保存后确保服务端已落库） */
+export async function flushDatasetUploadAsync(key: string, value: string): Promise<boolean> {
+  if (!isSyncKey(key)) return false;
+  const e = pending.get(key);
+  if (e) { clearTimeout(e.timer); pending.delete(key); }
+  if (!(await serverAvailable())) return false;
+  try {
+    const res = await fetchWithTimeout(`${API_BASE}/sync/dataset`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key, json: value, updatedAt: Date.now(), baseTs: knownTs.get(key) ?? 0 }),
+    });
+    if (res.ok) {
+      const data = await res.json().catch(() => null);
+      if (data && typeof data.newTs === 'number') knownTs.set(key, data.newTs);
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/** 从服务端恢复指定 key 的数据到 localStorage（当本地数据丢失时调用） */
+export async function ensureDatasetFromServer(key: string): Promise<boolean> {
+  if (!isSyncKey(key)) { console.log('[ensureDataset] not sync key:', key); return false; }
+  // 先检查 localStorage 是否真的有数据
+  try {
+    const existing = localStorage.getItem(key);
+    console.log('[ensureDataset] key=', key, 'existing=', existing ? existing.substring(0, 100) : existing);
+    if (existing && existing !== '[]' && existing !== '""' && existing !== 'null') return false; // 本地有数据，无需恢复
+  } catch { /* ignore */ }
+  const available = await serverAvailable();
+  console.log('[ensureDataset] serverAvailable=', available);
+  if (!available) return false;
+  try {
+    const res = await fetchWithTimeout(`${API_BASE}/sync/dataset?key=${encodeURIComponent(key)}`, {}, 8000);
+    console.log('[ensureDataset] fetch status=', res.status);
+    if (!res.ok) return false;
+    const data = await res.json();
+    console.log('[ensureDataset] server data=', data && data.json ? data.json.substring(0, 100) : data);
+    if (data && typeof data.json === 'string' && data.json !== '[]' && data.json !== '""') {
+      // 使用 safeSetItem（配额溢出时自动紧急清理重试），而非裸 setItem 避免 QuotaExceededError
+      safeSetItem(key, data.json);
+      safeSetItem(`${key}_ts`, String(data.updatedAt || Date.now()));
+      saveDataset(key, data.json);
+      console.log('[ensureDataset] restored successfully');
+      return true;
+    }
+    return false;
+  } catch (e) {
+    console.error('[ensureDataset] error:', e);
+    return false;
+  }
+}
+
+/** 从服务端拉取指定 key 的数据并与本地合并（取并集，按 key/id 去重），返回合并后的 JSON 字符串
+ * 用于关键数据的挂载时同步：无论本地是否有数据，都确保服务端数据不丢失 */
+export async function mergeDatasetFromServer(key: string): Promise<string | null> {
+  if (!isSyncKey(key)) return null;
+  if (!(await serverAvailable())) return null;
+  try {
+    const res = await fetchWithTimeout(`${API_BASE}/sync/dataset?key=${encodeURIComponent(key)}`, {}, 8000);
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data || typeof data.json !== 'string') return null;
+    let serverData: any[] = [];
+    try { serverData = JSON.parse(data.json); } catch { serverData = []; }
+    if (!Array.isArray(serverData)) return null;
+    // 读取本地数据
+    let localData: any[] = [];
+    try { localData = JSON.parse(localStorage.getItem(key) || '[]'); } catch { localData = []; }
+    if (!Array.isArray(localData)) localData = [];
+    // 并集合并：服务端优先 + 保留本地服务端没有的记录
+    const idOf = (r: any) => (r && (r.key || r.id)) ? String(r.key || r.id) : null;
+    const sIds = new Set(serverData.map(idOf));
+    const onlyLocal = localData.filter((r: any) => idOf(r) !== null && !sIds.has(idOf(r)));
+    const merged = [...serverData, ...onlyLocal];
+    const mergedJson = JSON.stringify(merged);
+    // 写回 localStorage：先紧急清理配额再用 safeSetItem，确保小体积关键数据能写入
+    emergencyFreeSpace(key);
+    const wrote = safeSetItem(key, mergedJson);
+    safeSetItem(`${key}_ts`, String(data.updatedAt || Date.now()));
+    saveDataset(key, mergedJson);
+    console.log('[mergeDataset] key=', key, 'server=', serverData.length, 'local=', localData.length, 'merged=', merged.length, 'wrote=', wrote);
+    // 即使 localStorage 写入失败也返回合并数据，保证当次会话显示正确
+    return mergedJson;
+  } catch (e) {
+    console.error('[mergeDataset] error:', e);
+    return null;
+  }
+}
+
+// ============ 拉取 ============
+export async function fetchServerDataset(key: string): Promise<{ json: string; updatedAt: number } | null> {
+  if (!(await serverAvailable())) return null;
+  try {
+    const res = await fetchWithTimeout(`${API_BASE}/sync/dataset?key=${encodeURIComponent(key)}`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data && typeof data.json === 'string' ? { json: data.json, updatedAt: Number(data.updatedAt) || 0 } : null;
+  } catch {
+    return null;
+  }
+}
+
+async function localTimestamp(key: string): Promise<number> {
+  let ts = 0;
+  try {
+    ts = Number(localStorage.getItem(`${key}_ts`) || 0) || 0;
+    if (!ts && localStorage.getItem(key)) ts = 1;
+  } catch { /* ignore */ }
+  try {
+    const idb = await loadDataset(key);
+    if (idb && idb.updatedAt > ts) ts = idb.updatedAt;
+  } catch { /* ignore */ }
+  return ts;
+}
+
+/** 合并服务器账号到本地（并集，本地优先），返回合并后的列表 */
+function mergeRegisteredUsers(serverJson: string): any[] | null {
+  try {
+    const serverUsers = JSON.parse(serverJson);
+    if (!Array.isArray(serverUsers)) return null;
+    const local: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+    let changed = false;
+    serverUsers.forEach((su: any) => {
+      if (su && su.username && !local.some((u: any) => u.username === su.username)) {
+        local.push(su);
+        changed = true;
+      }
+    });
+    if (changed) {
+      const raw = getOriginalSetItem();
+      const json = JSON.stringify(local);
+      raw('registeredUsers', json);
+      raw('registeredUsers_ts', String(Date.now()));
+      saveDataset('registeredUsers', json);
+      flushDatasetUpload('registeredUsers', json);
+    }
+    return local;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 启动时拉取（服务端为唯一数据源）：
+ * 1. 从服务端获取所有数据集元信息
+ * 2. 服务端有的 → 如果比本地新则覆盖本地
+ * 3. 本地有但服务端没有的 → 自动上传（首次迁移 localStorage 数据到数据库）
+ * 4. 拉取完成后派发 sync-data-updated 事件通知已挂载页面刷新
+ */
+export async function pullAllDatasets(): Promise<number> {
+  if (!(await serverAvailable())) return 0;
+  let meta: Record<string, number> = {};
+  try {
+    const res = await fetchWithTimeout(`${API_BASE}/sync/meta`, {}, 5000);
+    if (!res.ok) return 0;
+    meta = (await res.json()) || {};
+  } catch {
+    return 0;
+  }
+  // 记录服务端各数据集版本，供后续上传作 baseTs（乐观并发）
+  for (const k of Object.keys(meta)) knownTs.set(k, Number(meta[k]) || 0);
+  let applied = 0;
+
+  // 第一步：从服务端拉取较新数据覆盖本地（仅限当前账号自己的数据集，避免拉取他人账号数据）
+  // 安全策略：仅当服务端数据比本地新超过 5 秒时才覆盖，避免时钟偏差导致本地新数据被服务端旧数据覆盖
+  // 全局共享键（market_* 等）跳过宽限期，始终拉取并与本地合并（并集），确保跨账号数据实时可见
+  const GRACE_PERIOD_MS = 5000;
+  for (const key of Object.keys(meta)) {
+    if (!isSyncKey(key) || !isKeyForCurrentAccount(key)) continue;
+    // 仅上传不拉取的键（如 credit_adjustments_）：跳过拉取，避免宽限期竞态覆盖本地新数据
+    // 这类键有独立的 ensureDatasetFromServer 恢复机制
+    if (isUploadOnlyKey(key)) continue;
+    try {
+      const serverTs = Number(meta[key]) || 0;
+      const localTs = await localTimestamp(key);
+      const global = isGlobalKey(key);
+      // 全局键跳过宽限期检查，始终拉取；私有键仍需宽限期保护
+      // 额外保护：如果私有键的 localStorage 中不存在数据（可能被 iframe/预览环境清空），
+      // 无论时间戳如何都必须从服务端拉取，否则刷新后数据丢失
+      if (!global && serverTs <= localTs + GRACE_PERIOD_MS) {
+        let hasLocalData = false;
+        try { hasLocalData = localStorage.getItem(key) !== null; } catch { /* ignore */ }
+        if (hasLocalData) continue;
+      }
+      const rec = await fetchServerDataset(key);
+      if (!rec || !rec.json) continue;
+      if (key === 'registeredUsers') {
+        mergeRegisteredUsers(rec.json);
+        applied++;
+        continue;
+      }
+      const raw = getOriginalSetItem();
+      if (global) {
+        // 全局键：与本地数据做并集合并（按 key/id 去重），服务端数据优先
+        let localData: any[] = [];
+        try { localData = JSON.parse(localStorage.getItem(key) || '[]'); } catch { localData = []; }
+        let serverData: any[] = [];
+        try { serverData = JSON.parse(rec.json); } catch { serverData = []; }
+        if (Array.isArray(localData) && Array.isArray(serverData)) {
+          const idOf = (r: any) => (r && (r.key || r.id)) ? String(r.key || r.id) : null;
+          const sIds = new Set(serverData.map(idOf));
+          const onlyLocal = localData.filter((r: any) => !sIds.has(idOf(r)));
+          const merged = JSON.stringify([...serverData, ...onlyLocal]);
+          let sameContent = false;
+          try { sameContent = localStorage.getItem(key) === merged; } catch { /* ignore */ }
+          if (!sameContent) {
+            raw(key, merged);
+            raw(`${key}_ts`, String(rec.updatedAt));
+            saveDataset(key, merged);
+            applied++;
+          } else {
+            raw(`${key}_ts`, String(rec.updatedAt));
+          }
+          // 愈合上传：本地持有服务端缺失的记录时，将并集回传服务端（无论本地是否刚被更新），
+          // 使任何仍保留历史数据的浏览器能自动修复被意外缩水的服务端数据集；仅限只增不删键
+          if (onlyLocal.length > 0 && APPEND_ONLY_GLOBAL_KEYS.includes(key)) {
+            void doUpload(key, merged, Date.now()).catch(() => { /* ignore */ });
+          }
+        }
+        continue;
+      }
+      // 私有键：内容相同则仅对齐时间戳，避免无意义的覆盖/事件派发（防止反复重载重置页面筛选）
+      let sameContent = false;
+      try { sameContent = localStorage.getItem(key) === rec.json; } catch { /* ignore */ }
+      if (sameContent) {
+        raw(`${key}_ts`, String(rec.updatedAt));
+        continue;
+      }
+      raw(key, rec.json);
+      raw(`${key}_ts`, String(rec.updatedAt));
+      saveDataset(key, rec.json);
+      applied++;
+    } catch { /* ignore */ }
+  }
+
+  // 第二步：本地有但服务端没有的数据集 → 自动上传（首次迁移，仅限当前账号）
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key || !isSyncKey(key) || key.endsWith('_ts')) continue;
+      if (!isKeyForCurrentAccount(key)) continue;
+      if (meta[key]) continue; // 服务端已有，跳过
+      const json = localStorage.getItem(key);
+      if (!json || json === '[]' || json === '""') continue;
+      // 携带本地数据的真实写入时间戳，避免旧数据以“最新”时间戳覆盖服务端
+      let localTs = 0;
+      try { localTs = Number(localStorage.getItem(`${key}_ts`) || 0) || 0; } catch { /* ignore */ }
+      await doUpload(key, json, localTs || Date.now());
+    }
+  } catch { /* 首次迁移失败不影响启动 */ }
+
+  if (applied > 0) {
+    // 通知已挂载页面重新读取本地存储，实现多浏览器在线时自动刷新
+    try { window.dispatchEvent(new Event('sync-data-updated')); } catch { /* ignore */ }
+  }
+  return applied;
+}
