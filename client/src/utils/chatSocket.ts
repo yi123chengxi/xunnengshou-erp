@@ -91,10 +91,10 @@ function removeOutbox(cid: string): void {
 
 // ============ 获取 JWT Token ============
 
+import { API_BASE as API_BASE_URL, API_ORIGIN } from './apiBase';
+
 function getWSUrl(): string {
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const host = window.location.hostname;
-  return `${protocol}//${host}:3000/ws/chat`;
+  return `${API_ORIGIN.replace(/^http/, 'ws')}/ws/chat`;
 }
 
 // ============ 连接管理 ============
@@ -370,10 +370,7 @@ export function getChatUsername(): string {
 
 // ============ REST API 降级 ============
 
-const API_BASE = () => {
-  const host = window.location.hostname;
-  return `http://${host}:3000/api`;
-};
+const API_BASE = () => API_BASE_URL;
 
 async function authFetch(url: string, opts?: RequestInit): Promise<Response> {
   const username = resolveChatUsername();

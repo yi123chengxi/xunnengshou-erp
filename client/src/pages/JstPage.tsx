@@ -11,7 +11,7 @@ import axios from 'axios';
 const { Title, Text, Paragraph } = Typography;
 const { TextArea } = Input;
 
-const API_BASE = 'http://localhost:3000/api';
+import { API_BASE } from '../utils/apiBase';
 
 interface JstAction {
   key: string;

@@ -19,11 +19,8 @@ const { Title, Text, Paragraph } = Typography;
 
 const PRIMARY = '#1e4a7e';
 
-// 短信验证码登录接口地址（与 serverSync 同口径）
-const SMS_API_BASE = (process.env.REACT_APP_API_BASE as string) ||
-  (typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1'
-    ? `${window.location.protocol}//${window.location.hostname}:3000/api`
-    : 'http://localhost:3000/api');
+// 短信验证码登录接口地址（统一走 apiBase：开发 localhost:3000，生产同源 /api）
+import { API_BASE as SMS_API_BASE } from '../utils/apiBase';
 
 // === 安全防护工具函数 ===
 const MAX_LOGIN_ATTEMPTS = 5;
@@ -170,8 +167,7 @@ const Auth: React.FC = () => {
   const [forgotVisible, setForgotVisible] = useState(false);
   const [forgotStep, setForgotStep] = useState(0); // 0=输入邮箱, 1=输入验证码, 2=设置新密码
   const [forgotLoading, setForgotLoading] = useState(false);
-  const [forgotEmail, setForgotEmail] = useState('');
-  const [verificationCode, setVerificationCode] = useState('');
+  const [forgotPhone, setForgotPhone] = useState('');
   const [inputCode, setInputCode] = useState('');
   const [countdown, setCountdown] = useState(0);
   const [matchedUser, setMatchedUser] = useState<{ username: string; index: number } | null>(null);
@@ -299,43 +295,80 @@ const Auth: React.FC = () => {
     }
   }, [navigate]);
 
-  // 发送设备验证码
-  const handleSendDeviceCode = useCallback(() => {
-    const code = String(Math.floor(100000 + Math.random() * 900000));
-    setDeviceVerifyCode(code);
-    setDeviceVerifyStep(1);
-    setDeviceVerifyCountdown(60);
-    setDeviceVerifyInput('');
-    message.success(`验证码已发送（演示环境验证码：${code}）`);
-  }, []);
+  // 发送设备验证码（服务端真实短信）
+  const sendDeviceCodeRequest = useCallback(async (): Promise<boolean> => {
+    const phone = String(pendingLoginUser?.phone || '').trim();
+    if (!/^1\d{10}$/.test(phone)) {
+      message.error('该账号未绑定有效手机号，无法进行新设备验证，请联系管理员补充手机号');
+      return false;
+    }
+    try {
+      const resp = await fetch(`${SMS_API_BASE}/sms/send-device-code`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone }),
+      });
+      const data = await resp.json();
+      if (data.code !== 0) {
+        message.error(data.message || '验证码发送失败，请稍后重试');
+        return false;
+      }
+      setDeviceVerifyStep(1);
+      setDeviceVerifyCountdown(60);
+      setDeviceVerifyInput('');
+      if (data.data?.devMode && data.data?.devCode) {
+        message.success(`短信服务未配置（开发模式），验证码：${data.data.devCode}`);
+      } else {
+        message.success('验证码已发送至账号绑定手机');
+      }
+      return true;
+    } catch {
+      message.error('网络异常，验证码发送失败，请稍后重试');
+      return false;
+    }
+  }, [pendingLoginUser]);
 
-  // 验证设备验证码
-  const handleVerifyDeviceCode = useCallback(() => {
-    if (deviceVerifyInput !== deviceVerifyCode) {
-      message.error('验证码错误，请重新输入');
+  const handleSendDeviceCode = useCallback(() => {
+    sendDeviceCodeRequest();
+  }, [sendDeviceCodeRequest]);
+
+  // 验证设备验证码（服务端校验）
+  const handleVerifyDeviceCode = useCallback(async () => {
+    const phone = String(pendingLoginUser?.phone || '').trim();
+    if (!/^\d{6}$/.test(deviceVerifyInput)) {
+      message.error('请输入6位数字验证码');
       return;
     }
-    if (!pendingLoginUser) return;
-    setDeviceVerifyVisible(false);
-    completeLogin(pendingLoginUser, pendingIsViewOnly);
-    message.success('设备验证通过，已信任此设备');
-  }, [deviceVerifyInput, deviceVerifyCode, pendingLoginUser, pendingIsViewOnly, completeLogin]);
+    try {
+      const resp = await fetch(`${SMS_API_BASE}/sms/verify-code`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone, code: deviceVerifyInput }),
+      });
+      const data = await resp.json();
+      if (data.code !== 0) {
+        message.error(data.message || '验证失败，请重新输入');
+        return;
+      }
+      if (!pendingLoginUser) return;
+      setDeviceVerifyVisible(false);
+      completeLogin(pendingLoginUser, pendingIsViewOnly);
+      message.success('设备验证通过，已信任此设备');
+    } catch {
+      message.error('网络异常，验证失败，请稍后重试');
+    }
+  }, [deviceVerifyInput, pendingLoginUser, pendingIsViewOnly, completeLogin]);
 
   // 重新发送设备验证码
   const handleResendDeviceCode = useCallback(() => {
-    const code = String(Math.floor(100000 + Math.random() * 900000));
-    setDeviceVerifyCode(code);
-    setDeviceVerifyCountdown(60);
-    setDeviceVerifyInput('');
-    message.success(`验证码已重新发送（演示环境验证码：${code}）`);
-  }, []);
+    sendDeviceCodeRequest();
+  }, [sendDeviceCodeRequest]);
 
   // 打开找回密码弹窗
   const openForgotModal = () => {
     forgotForm.resetFields();
     setForgotStep(0);
-    setForgotEmail('');
-    setVerificationCode('');
+    setForgotPhone('');
     setInputCode('');
     setCountdown(0);
     setMatchedUser(null);
@@ -348,8 +381,7 @@ const Auth: React.FC = () => {
   const closeForgotModal = () => {
     setForgotVisible(false);
     setForgotStep(0);
-    setForgotEmail('');
-    setVerificationCode('');
+    setForgotPhone('');
     setInputCode('');
     setCountdown(0);
     setMatchedUser(null);
@@ -736,6 +768,7 @@ const Auth: React.FC = () => {
               role,
               name: found.companyName || found.contactPerson || found.username,
               email: found.email || '',
+              phone: found.phone || '',
               trialEndDate: found.trialEndDate || '',
               authorizedUntil: found.authorizedUntil || '',
               isSubAccount: found.isSubAccount || false,
@@ -846,6 +879,7 @@ const Auth: React.FC = () => {
         role,
         name: found.companyName || found.contactPerson || found.username,
         email: found.email || '',
+        phone: found.phone || phone,
         trialEndDate: found.trialEndDate || '',
         authorizedUntil: found.authorizedUntil || '',
         isSubAccount: found.isSubAccount || false,
@@ -861,115 +895,117 @@ const Auth: React.FC = () => {
     setSmsLoading(false);
   };
 
-  // 找回密码 - 步骤0：发送验证码
+  // 找回密码 - 步骤0：发送验证码（服务端真实短信，账号+绑定手机号校验）
   const handleSendCode = async () => {
     try {
-      await forgotForm.validateFields(['forgotUsername', 'forgotEmail']);
-      setForgotLoading(true);
-
-      setTimeout(() => {
-        const username = forgotForm.getFieldValue('forgotUsername').trim();
-        const email = forgotForm.getFieldValue('forgotEmail').trim().toLowerCase();
-        
-        // 从 localStorage 中查找同时匹配账号和邮箱的用户
-        const registeredUsers = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
-        const matched = registeredUsers.find(
-          (u: any) => u.username === username && u.email && u.email.toLowerCase() === email
-        );
-        
-        if (!matched) {
-          message.error('账号与邮箱不匹配，请检查后重试');
-          setForgotLoading(false);
-          return;
-        }
-
-        // 生成6位随机验证码
-        const code = Math.floor(100000 + Math.random() * 900000).toString();
-        setVerificationCode(code);
-        setForgotEmail(email);
-        setMatchedUser({ username: matched.username, index: registeredUsers.indexOf(matched) });
-        setCountdown(60);
-        setForgotLoading(false);
-        setForgotStep(1);
-
-        message.success('验证码已发送至您的邮箱');
-        // 演示环境：弹窗显示验证码
-        Modal.info({
-          title: '验证码已发送',
-          content: (
-            <div>
-              <Alert
-                message={`验证码已发送至 ${email}`}
-                description="请查收邮件中的验证码。如果未收到，请检查垃圾箱。"
-                type="success"
-                showIcon
-                style={{ marginBottom: 16 }}
-              />
-              <Card 
-                size="small" 
-                style={{ background: '#f6ffed', border: '1px solid #b7eb8f', textAlign: 'center' }}
-              >
-                <Text type="secondary" style={{ fontSize: 12 }}>演示环境验证码：</Text>
-                <div style={{ fontSize: 28, fontWeight: 'bold', color: '#52c41a', letterSpacing: 8 }}>
-                  {code}
-                </div>
-              </Card>
-            </div>
-          ),
-          okText: '我知道了',
-        });
-      }, 1500);
+      await forgotForm.validateFields(['forgotUsername', 'forgotPhone']);
     } catch (error) {
-      message.error('请填写账号和邮箱');
+      message.error('请填写账号和手机号');
+      return;
+    }
+    const username = forgotForm.getFieldValue('forgotUsername').trim();
+    const phone = forgotForm.getFieldValue('forgotPhone').trim();
+    setForgotLoading(true);
+    try {
+      // 与登录同口径：先合并服务器账号并集，再本地查找（新电脑本地可能无账号数据）
+      const registeredUsers: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+      if (!registeredUsers.some((u: any) => u.username === username)) {
+        try {
+          const rec = await fetchServerDataset('registeredUsers');
+          if (rec) {
+            const serverUsers = JSON.parse(rec.json);
+            if (Array.isArray(serverUsers)) {
+              let changed = false;
+              serverUsers.forEach((su: any) => {
+                if (su && su.username && !registeredUsers.some((u: any) => u.username === su.username)) { registeredUsers.push(su); changed = true; }
+              });
+              if (changed) safeSetItem('registeredUsers', JSON.stringify(registeredUsers));
+            }
+          }
+        } catch { /* 服务器不可用时保持纯本地 */ }
+      }
+      const idx = registeredUsers.findIndex(
+        (u: any) => u.username === username && String(u.phone || '').trim() === phone
+      );
+      if (idx < 0) {
+        message.error('账号与手机号不匹配，请检查后重试');
+        setForgotLoading(false);
+        return;
+      }
+      const resp = await fetch(`${SMS_API_BASE}/sms/send-device-code`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone }),
+      });
+      const data = await resp.json();
+      if (data.code !== 0) {
+        message.error(data.message || '验证码发送失败，请稍后重试');
+        setForgotLoading(false);
+        return;
+      }
+      const matched = registeredUsers[idx];
+      setForgotPhone(phone);
+      setMatchedUser({ username: matched.username, index: idx });
+      setCountdown(60);
+      setInputCode('');
+      setForgotLoading(false);
+      setForgotStep(1);
+      if (data.data?.devMode && data.data?.devCode) {
+        message.info(`短信服务未配置（开发模式），验证码：${data.data.devCode}`);
+      } else {
+        message.success('验证码已发送至您的手机');
+      }
+    } catch {
+      message.error('无法连接服务器，请稍后重试');
+      setForgotLoading(false);
     }
   };
 
-  // 重新发送验证码
-  const handleResendCode = () => {
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
-    setVerificationCode(code);
-    setInputCode('');
-    setCountdown(60);
-
-    message.success('验证码已重新发送');
-    Modal.info({
-      title: '验证码已重新发送',
-      content: (
-        <div>
-          <Alert
-            message={`验证码已发送至 ${forgotEmail}`}
-            description="请查收新的验证码。"
-            type="success"
-            showIcon
-            style={{ marginBottom: 16 }}
-          />
-          <Card 
-            size="small" 
-            style={{ background: '#f6ffed', border: '1px solid #b7eb8f', textAlign: 'center' }}
-          >
-            <Text type="secondary" style={{ fontSize: 12 }}>演示环境新验证码：</Text>
-            <div style={{ fontSize: 28, fontWeight: 'bold', color: '#52c41a', letterSpacing: 8 }}>
-              {code}
-            </div>
-          </Card>
-        </div>
-      ),
-      okText: '我知道了',
-    });
+  // 重新发送验证码（服务端真实短信）
+  const handleResendCode = async () => {
+    if (!/^1\d{10}$/.test(forgotPhone)) { message.error('缺少手机号，请返回上一步重新填写'); return; }
+    try {
+      const resp = await fetch(`${SMS_API_BASE}/sms/send-device-code`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: forgotPhone }),
+      });
+      const data = await resp.json();
+      if (data.code !== 0) { message.error(data.message || '验证码发送失败，请稍后重试'); return; }
+      setInputCode('');
+      setCountdown(60);
+      if (data.data?.devMode && data.data?.devCode) {
+        message.info(`短信服务未配置（开发模式），验证码：${data.data.devCode}`);
+      } else {
+        message.success('验证码已重新发送');
+      }
+    } catch {
+      message.error('无法连接服务器，请稍后重试');
+    }
   };
 
-  // 找回密码 - 步骤1：验证验证码
-  const handleVerifyCode = () => {
-    if (!inputCode.trim()) {
-      message.warning('请输入验证码');
+  // 找回密码 - 步骤1：验证验证码（服务端校验）
+  const handleVerifyCode = async () => {
+    if (!/^\d{6}$/.test(inputCode.trim())) {
+      message.warning('请输入6位数字验证码');
       return;
     }
-    if (inputCode !== verificationCode) {
-      message.error('验证码错误，请重新输入');
-      return;
+    try {
+      const resp = await fetch(`${SMS_API_BASE}/sms/verify-code`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: forgotPhone, code: inputCode.trim() }),
+      });
+      const data = await resp.json();
+      if (data.code !== 0) {
+        message.error(data.message || '验证码错误，请重新输入');
+        return;
+      }
+      message.success('验证成功，请设置新密码');
+      setForgotStep(2);
+    } catch {
+      message.error('无法连接服务器，请稍后重试');
     }
-    message.success('验证成功，请设置新密码');
-    setForgotStep(2);
   };
 
   // 找回密码 - 步骤2：重置密码
@@ -1774,18 +1810,18 @@ const Auth: React.FC = () => {
             size="small"
             style={{ marginBottom: 20 }}
             items={[
-              { title: '验证邮箱' },
+              { title: '验证手机号' },
               { title: '输入验证码' },
               { title: '设置密码' },
             ]}
           />
 
-          {/* 步骤0：输入账号和邮箱 */}
+          {/* 步骤0：输入账号和手机号 */}
           {forgotStep === 0 && (
             <>
               <Alert
-                message="请输入账号和绑定邮箱"
-                description="系统将向该邮箱发送6位数字验证码，用于验证身份。"
+                message="请输入账号和绑定手机号"
+                description="系统将向该手机号发送6位数字短信验证码，用于验证身份。"
                 type="info"
                 showIcon
                 style={{ marginBottom: 20 }}
@@ -1798,13 +1834,13 @@ const Auth: React.FC = () => {
                   <Input prefix={<UserOutlined />} placeholder="请输入登录账号" />
                 </Form.Item>
                 <Form.Item
-                  name="forgotEmail"
+                  name="forgotPhone"
                   rules={[
-                    { required: true, message: '请输入绑定邮箱' },
-                    { type: 'email', message: '请输入正确的邮箱格式' },
+                    { required: true, message: '请输入绑定手机号' },
+                    { pattern: /^1\d{10}$/, message: '请输入正确的11位手机号' },
                   ]}
                 >
-                  <Input prefix={<MailOutlined />} placeholder="请输入绑定邮箱" />
+                  <Input prefix={<MobileOutlined />} placeholder="请输入绑定手机号" maxLength={11} />
                 </Form.Item>
                 <Form.Item style={{ marginBottom: 0 }}>
                   <Button
@@ -1825,8 +1861,8 @@ const Auth: React.FC = () => {
           {forgotStep === 1 && (
             <>
               <Alert
-                message={`验证码已发送至 ${forgotEmail}`}
-                description={`账号「${matchedUser?.username}」的绑定邮箱已收到验证码，请在下方输入。`}
+                message={`验证码已发送至 ${forgotPhone}`}
+                description={`账号「${matchedUser?.username}」的绑定手机已收到短信验证码，请在下方输入。`}
                 type="success"
                 showIcon
                 style={{ marginBottom: 20 }}
@@ -1961,15 +1997,6 @@ const Auth: React.FC = () => {
                       <span>手机短信验证码</span>
                     </Space>
                   </Radio>
-                  <Radio value="email" style={{
-                    padding: '12px 16px', border: '1px solid #d9d9d9', borderRadius: 8,
-                    width: '100%', background: deviceVerifyMethod === 'email' ? '#e6f7ff' : '#fff',
-                  }}>
-                    <Space>
-                      <MailOutlined style={{ fontSize: 18, color: PRIMARY }} />
-                      <span>邮箱验证码</span>
-                    </Space>
-                  </Radio>
                 </Space>
               </Radio.Group>
             </div>
@@ -1988,14 +2015,10 @@ const Auth: React.FC = () => {
         {deviceVerifyStep === 1 && (
           <>
             <Alert
-              message={`验证码已发送至您的${deviceVerifyMethod === 'phone' ? '手机' : '邮箱'}`}
+              message="验证码已发送至您的手机"
               description={
                 <span>
-                  账号「{pendingLoginUser?.username}」的{deviceVerifyMethod === 'phone' ? '手机' : '邮箱'}已收到验证码，请在下方输入。
-                  <br />
-                  <Text type="secondary" style={{ fontSize: 12 }}>
-                    （演示环境：验证码已显示在上方提示中）
-                  </Text>
+                  账号「{pendingLoginUser?.username}」的绑定手机已收到验证码，请在下方输入。
                 </span>
               }
               type="success"

@@ -11,10 +11,8 @@ import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react'
 import { Modal, Form, Input, Button, Tag, Tooltip, Descriptions, message, Space, Alert, QRCode } from 'antd';
 import { SafetyCertificateOutlined, ReloadOutlined, EditOutlined, ArrowLeftOutlined, LockOutlined, QrcodeOutlined } from '@ant-design/icons';
 
-export const ENTERPRISE_API_BASE = (process.env.REACT_APP_API_BASE as string)
-  || (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1'
-    ? `${window.location.protocol}//${window.location.hostname}:3000/api`
-    : 'http://localhost:3000/api');
+import { API_BASE } from '../utils/apiBase';
+export const ENTERPRISE_API_BASE = API_BASE;
 
 export interface CertInfo {
   username: string;

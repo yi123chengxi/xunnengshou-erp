@@ -188,19 +188,16 @@ interface BoundPurchaser {
   level?: string; // 客户等级（无关联客户档案的采购商行独立存储）
 }
 
-// 模拟直接客户数据
-const initialCustomers: CustomerRecord[] = [
-  { key: '1', id: 'CUST-10001', name: '华为技术有限公司', level: 'vip', contact: '王经理', phone: '13800138001', region: '深圳', credit: 500, status: 'completed', date: '2024-01-15', type: 'direct' },
-  { key: '2', id: 'CUST-10002', name: '比亚迪股份有限公司', level: 'A', contact: '张总', phone: '13800138002', region: '深圳', credit: 300, status: 'completed', date: '2024-02-20', type: 'direct' },
-  { key: '3', id: 'CUST-10003', name: '格力电器', level: 'A', contact: '李工', phone: '13800138003', region: '珠海', credit: 200, status: 'completed', date: '2024-03-10', type: 'direct' },
-  { key: '4', id: 'CUST-10004', name: '三一重工', level: 'B', contact: '赵总监', phone: '13800138004', region: '长沙', credit: 150, status: 'completed', date: '2024-04-05', type: 'direct' },
-  { key: '5', id: 'CUST-10005', name: '宁德时代', level: 'vip', contact: '陈总', phone: '13800138005', region: '宁德', credit: 400, status: 'completed', date: '2024-05-18', type: 'direct' },
-];
+// 初始演示数据已下线：生产环境不预置任何测试客户，新客户一律由用户自行录入
+const initialCustomers: CustomerRecord[] = [];
 
-// 模拟已绑定的采购商数据
-const initialBoundPurchasers: BoundPurchaser[] = [
-  { key: 'b1', id: 'BIND-001', purchaserName: '东莞精工制造采购部', purchaserContact: '陈总监', purchaserPhone: '13900139002', bindDate: '2024-06-21', status: 'approved' },
-];
+// 遗留演示数据 ID（用于一次性清理历史 localStorage 中残留的 mock 数据）
+const LEGACY_DEMO_CUSTOMER_IDS = new Set(['CUST-10001', 'CUST-10002', 'CUST-10003', 'CUST-10004', 'CUST-10005']);
+const LEGACY_DEMO_BOUND_IDS = new Set(['BIND-001']);
+const LEGACY_DEMO_BOUND_NAMES = new Set(['东莞精工制造采购部']);
+
+// 模拟已绑定的采购商数据（已下线）
+const initialBoundPurchasers: BoundPurchaser[] = [];
 
 // 数据归属账号：子账号使用主账号的 username，确保数据共享
 const getDataOwner = () => {
@@ -265,7 +262,7 @@ export const loadBoundPurchasersFromStorage = (): BoundPurchaser[] => {
     const data = localStorage.getItem(storageKey);
     if (data) {
       const parsed = JSON.parse(data) as BoundPurchaser[];
-      if (Array.isArray(parsed)) bound = parsed;
+      if (Array.isArray(parsed)) bound = parsed.filter(b => !LEGACY_DEMO_BOUND_IDS.has(b.id) && !LEGACY_DEMO_BOUND_NAMES.has(b.purchaserName));
     }
   } catch { /* ignore */ }
   // 兜底合并：已批准的合作申请（防止个别批准路径未回写 boundPurchasers 导致客户缺失）
@@ -436,7 +433,7 @@ export const loadCustomersFromStorage = (): CustomerRecord[] => {
     const data = localStorage.getItem(getCustomersStorageKey());
     if (data) {
       const parsed = JSON.parse(data) as CustomerRecord[];
-      if (parsed.length > 0) return parsed;
+      if (parsed.length > 0) return parsed.filter(c => !LEGACY_DEMO_CUSTOMER_IDS.has(c.id));
     }
   } catch { /* ignore */ }
   return initialCustomers;

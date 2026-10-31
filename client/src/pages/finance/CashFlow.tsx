@@ -5,7 +5,7 @@ import axios from 'axios';
 import dayjs from 'dayjs';
 
 const { Title, Text } = Typography;
-const API_BASE = 'http://localhost:3000/api';
+import { API_BASE } from '../../utils/apiBase';
 
 const CashFlow: React.FC = () => {
   const [flows, setFlows] = useState<any[]>([]);

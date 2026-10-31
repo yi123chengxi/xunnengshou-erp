@@ -62,7 +62,8 @@ router.post('/send-code', async (req: Request, res: Response) => {
       const r = await sendSmsCode(phone, code);
       if (!r.ok) { res.json({ code: 500, message: `短信发送失败：${r.message || '请检查阿里云配置'}` }); return; }
     } else {
-      // 开发模式：未配置阿里云短信时验证码随响应返回，配置后自动关闭
+      // 开发模式：未配置阿里云短信时验证码随响应返回；生产环境严禁泄露验证码
+      if (process.env.NODE_ENV === 'production') { res.json({ code: 503, message: '短信服务未配置，请联系管理员' }); return; }
       codeStore.set(phone, { code, expiresAt: now + 5 * 60_000, attempts: 0 });
       sendThrottle.set(phone, { last: now, day, count: (th && th.day === day ? th.count : 0) + 1 });
       res.json({ code: 0, data: { devMode: true, devCode: code }, message: '短信服务未配置（开发模式）' });
@@ -101,6 +102,52 @@ router.post('/login', (req: Request, res: Response) => {
     codeStore.delete(phone);
     if (u.accountStatus === 'disabled' || u.status === '禁用') { res.json({ code: 403, message: '该账号已被禁用，请联系管理员' }); return; }
     res.json({ code: 0, data: { username: u.username } });
+  } catch (err: any) {
+    res.status(500).json({ code: 500, message: err.message });
+  }
+});
+
+/** 新设备验证：发送验证码到账号绑定手机（不依赖服务端用户表，前置门槛为密码已校验通过） */
+router.post('/send-device-code', async (req: Request, res: Response) => {
+  try {
+    const phone = String(req.body?.phone || '').trim();
+    if (!/^1\d{10}$/.test(phone)) { res.json({ code: 400, message: '账号未绑定有效手机号，请联系管理员补充' }); return; }
+    const now = Date.now();
+    const day = new Date().toISOString().slice(0, 10);
+    const th = sendThrottle.get(phone);
+    if (th && now - th.last < 60_000) { res.json({ code: 429, message: '短信发送过于频繁，请 60 秒后再试' }); return; }
+    if (th && th.day === day && th.count >= 10) { res.json({ code: 429, message: '今日发送次数已达上限，请明天再试' }); return; }
+    const code = String(Math.floor(100000 + Math.random() * 900000));
+    if (isSmsConfigured()) {
+      const r = await sendSmsCode(phone, code);
+      if (!r.ok) { res.json({ code: 500, message: `短信发送失败：${r.message || '请检查阿里云配置'}` }); return; }
+    } else {
+      if (process.env.NODE_ENV === 'production') { res.json({ code: 503, message: '短信服务未配置，请联系管理员' }); return; }
+      codeStore.set(phone, { code, expiresAt: now + 5 * 60_000, attempts: 0 });
+      sendThrottle.set(phone, { last: now, day, count: (th && th.day === day ? th.count : 0) + 1 });
+      res.json({ code: 0, data: { devMode: true, devCode: code }, message: '短信服务未配置（开发模式）' });
+      return;
+    }
+    codeStore.set(phone, { code, expiresAt: now + 5 * 60_000, attempts: 0 });
+    sendThrottle.set(phone, { last: now, day, count: (th && th.day === day ? th.count : 0) + 1 });
+    res.json({ code: 0, message: '验证码已发送' });
+  } catch (err: any) {
+    res.status(500).json({ code: 500, message: err.message });
+  }
+});
+
+/** 新设备验证：校验验证码（通过后即消费） */
+router.post('/verify-code', (req: Request, res: Response) => {
+  try {
+    const phone = String(req.body?.phone || '').trim();
+    const code = String(req.body?.code || '').trim();
+    if (!/^1\d{10}$/.test(phone) || !/^\d{6}$/.test(code)) { res.json({ code: 400, message: '手机号或验证码格式不正确' }); return; }
+    const rec = codeStore.get(phone);
+    if (!rec || Date.now() > rec.expiresAt) { codeStore.delete(phone); res.json({ code: 400, message: '验证码已过期，请重新获取' }); return; }
+    if (rec.attempts >= 5) { codeStore.delete(phone); res.json({ code: 400, message: '验证码错误次数过多，请重新获取' }); return; }
+    if (rec.code !== code) { rec.attempts += 1; res.json({ code: 400, message: '验证码不正确' }); return; }
+    codeStore.delete(phone);
+    res.json({ code: 0, message: '验证通过' });
   } catch (err: any) {
     res.status(500).json({ code: 500, message: err.message });
   }

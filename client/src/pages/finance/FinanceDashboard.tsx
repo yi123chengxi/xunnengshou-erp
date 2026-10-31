@@ -3,7 +3,7 @@ import { Row, Col, Card, Statistic, Table, Tag, Space } from 'antd';
 import { ArrowUpOutlined, ArrowDownOutlined, DollarOutlined } from '@ant-design/icons';
 import axios from 'axios';
 
-const API_BASE = 'http://localhost:3000/api';
+import { API_BASE } from '../../utils/apiBase';
 
 interface FinanceSummary {
   receivable: {

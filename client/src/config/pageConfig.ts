@@ -720,7 +720,7 @@ export const salesPages: Record<string, ChildPageConfig> = {
         { label: '老客户介绍', value: '老客户介绍' },
       ], label: '订单来源' },
     ],
-    mockData: Array.from({ length: 15 }, (_, i) => {
+    mockData: Array.from({ length: 0 }, (_, i) => { // 演示数据已下线：生产环境不预置测试数据
       const orderStatuses = ['待付款', '已付款', '已发货', '已完成', '已取消'];
       const orderTags = ['VIP', '加急', '普通', '批发', '零售', '新品'];
       const payMethods = ['支付宝', '微信支付', '银行转账', '现金', '货到付款'];
@@ -1030,7 +1030,7 @@ export const salesPages: Record<string, ChildPageConfig> = {
       ], label: '审核类型' },
       { type: 'dateRange', placeholder: '', label: '提交时间' },
     ],
-    mockData: Array.from({ length: 12 }, (_, i) => {
+    mockData: Array.from({ length: 0 }, (_, i) => { // 演示数据已下线：生产环境不预置测试数据
       const auditTypes = ['收款审核', '开票审核', '退款审核', '信用审核'];
       const customers = ['华为技术', '比亚迪', '格力电器', '三一重工', '宁德时代', '美的集团'];
       const auditors = ['钱七', '周九', '吴十'];
@@ -1104,7 +1104,7 @@ export const salesPages: Record<string, ChildPageConfig> = {
     ],
     // 搜索栏已改为分字段搜索（客户/标签/款式/编码弹窗选择 + 地址三级联动 + 创建时间日期范围），原综合搜索/拣货状态/仓库三控件移除
     filters: [],
-    mockData: Array.from({ length: 12 }, (_, i) => {
+    mockData: Array.from({ length: 0 }, (_, i) => { // 演示数据已下线：生产环境不预置测试数据
       const customers = ['华为技术', '比亚迪', '格力电器', '三一重工', '宁德时代', '美的集团'];
       const details = ['精密主轴组件×2、传动齿轮箱×1', '自动化控制系统×1', '液压缸总成×3', '电气控制柜×1、检测传感器×2', '传动齿轮箱×2'];
       const locations = ['一号仓A-01', '一号仓B-03', '二号仓A-02', '成品仓C-01', '二号仓B-05'];

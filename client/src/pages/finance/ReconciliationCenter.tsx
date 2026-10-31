@@ -11,7 +11,7 @@ import axios from 'axios';
 import dayjs from 'dayjs';
 
 const { Text, Title } = Typography;
-const API_BASE = 'http://localhost:3000/api';
+import { API_BASE } from '../../utils/apiBase';
 
 // 对账结果标签
 const matchResultMap: Record<string, { color: string; text: string; icon: React.ReactNode }> = {

@@ -6,7 +6,7 @@ import { ReloadOutlined, CloudSyncOutlined, KeyOutlined } from '@ant-design/icon
 import axios from 'axios';
 
 const { Text, Paragraph } = Typography;
-const API_BASE = 'http://localhost:3000/api';
+import { API_BASE } from '../utils/apiBase';
 
 interface ColDef { key: string; label: string; }
 

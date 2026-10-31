@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import FieldConfigModal from '../components/FieldConfigModal';
+import { API_BASE } from '../utils/apiBase';
 import {
   Card, Table, Button, Space, Tag, message,
   Typography, Tooltip, Descriptions, Row, Col, Input, Select, Modal, Form, Image, Checkbox, InputNumber,
@@ -663,9 +664,7 @@ const PurchaserSupplierList: React.FC = () => {
   const [publishedCredit, setPublishedCredit] = useState<Record<string, number>>({});
   useEffect(() => {
     let cancelled = false;
-    const apiBase = window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1'
-      ? `${window.location.protocol}//${window.location.hostname}:3000/api`
-      : 'http://localhost:3000/api';
+    const apiBase = API_BASE;
     const owners = dataSource.map((s) => ({ id: s.id, name: s.supplierName, entry: s }));
     Promise.all(owners.map(async ({ id, name, entry }) => {
       let users: any[] = [];

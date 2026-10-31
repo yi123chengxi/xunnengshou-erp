@@ -8,11 +8,7 @@
  */
 import { saveDataset, loadDataset } from './dataStore';
 import { getOriginalSetItem, safeSetItem, emergencyFreeSpace } from './storageQuota';
-
-const API_BASE = (process.env.REACT_APP_API_BASE as string) ||
-  (typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1'
-    ? `${window.location.protocol}//${window.location.hostname}:3000/api` // 云部署：前端与后端同主机
-    : 'http://localhost:3000/api');
+import { API_BASE } from './apiBase';
 
 // 需要同步的业务数据 key 前缀/精确名
 const SYNC_PREFIXES = ['pageData_', 'custom_', 'warehouses_', 'purchaser_suppliers_', 'accounts_', 'shop_info_', 'shop_profit_', 'month_end_check_', 'withdrawal_record_', 'dev_', 'hr_', 'newstyle_', 'brandauth_', 'molds_', 'credit_adjustments_', 'published_credit_', 'payment_requests_', 'payment_request_managers_', 'notification_settings_', 'print_template_', 'price_strategy_'];

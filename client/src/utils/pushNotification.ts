@@ -3,7 +3,7 @@
  * 实现系统级通知：即使浏览器/标签页关闭，只要电脑联网就能收到桌面通知
  */
 
-const API_BASE = (typeof window !== 'undefined' && (window as any).__API_BASE__) || 'http://localhost:3000';
+import { API_ORIGIN as API_BASE } from './apiBase';
 
 // VAPID 公钥缓存
 let cachedPublicKey: string | null = null;
