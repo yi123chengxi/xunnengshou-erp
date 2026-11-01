@@ -809,7 +809,7 @@ const MainLayout: React.FC = () => {
   };
 
   const userMenuItems: MenuProps['items'] = [
-    { key: 'profile', icon: <UserOutlined />, label: '个人中心' },
+    { key: 'profile', icon: <UserOutlined />, label: '企业信息' },
     { key: 'serviceOrders', icon: <ShoppingCartOutlined />, label: '服务订单' },
     { key: 'enterpriseCert', icon: <SafetyCertificateOutlined />, label: '企业认证' },
     { key: 'settings', icon: <SettingOutlined />, label: '系统设置' },
@@ -1984,9 +1984,9 @@ const MainLayout: React.FC = () => {
       <EnterpriseCertModal open={enterpriseCertVisible} onClose={() => setEnterpriseCertVisible(false)} onCertChanged={loadOwnCert} />
       <StorageCleanupModal open={cleanupModalVisible} onClose={() => setCleanupModalVisible(false)} onCleanupComplete={() => { const uname = localStorage.getItem('username') || ''; getUsageBreakdown(uname).then(b => setSpaceUsedKB(b.totalKB)); }} />
 
-      {/* 个人中心弹窗 */}
+      {/* 企业信息弹窗 */}
       <Modal
-        title={<span><UserOutlined style={{ marginRight: 8 }} />个人中心</span>}
+        title={<span><UserOutlined style={{ marginRight: 8 }} />企业信息</span>}
         open={profileVisible}
         onCancel={() => setProfileVisible(false)}
         footer={<Button onClick={() => setProfileVisible(false)}>关闭</Button>}

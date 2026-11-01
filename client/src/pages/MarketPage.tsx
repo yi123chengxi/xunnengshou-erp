@@ -1004,7 +1004,8 @@ const MarketPage: React.FC = () => {
     const candidates = new Set<string>();
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
-      if (!k) continue;
+      // 跳过存储层时间戳元数据键（safeSetItem 会附加 <key>_ts，值为数字，误当账号键会致 prods.filter 崩溃白屏）
+      if (!k || k.endsWith('_ts')) continue;
       if (k.startsWith('market_settings_')) {
         const o = k.slice('market_settings_'.length);
         const cfg = loadJson(k, {});
@@ -1022,7 +1023,8 @@ const MarketPage: React.FC = () => {
     let users: any[] = [];
     try { users = JSON.parse(localStorage.getItem('registeredUsers') || '[]'); } catch { /* ignore */ }
     owners.forEach(owner => {
-      const prods: any[] = loadJson(`pageData_basic-data_product-list_${owner}`, []);
+      const rawProds = loadJson(`pageData_basic-data_product-list_${owner}`, []);
+      const prods: any[] = Array.isArray(rawProds) ? rawProds : [];
       const groups = new Map<string, any>();
       // 过滤条件：产品种类=成品 + 商品状态=在售 + 款式编码非空 + 排除半成品脏数据（SEMI-前缀）
       prods.filter(p => p.productType === '成品' && p.productStatus === '在售' && p.styleCode && !String(p.productCode || '').startsWith('SEMI-')).forEach(p => { if (!groups.has(p.styleCode)) groups.set(p.styleCode, p); });
@@ -1994,7 +1996,7 @@ const addToCart = useCallback((rec: any, qty?: number) => {
 
   const finishedList = useMemo(() => {
     let list = market.filter(r => r.type === 'finished');
-    if (apKw.trim()) { const kw = apKw.trim().toLowerCase(); list = list.filter(r => `${r.styleCode} ${r.shortName} ${r.publisherCompany}`.toLowerCase().includes(kw)); }
+    if (apKw.trim()) { const kw = apKw.trim().toLowerCase(); list = list.filter(r => `${r.id} ${r.styleCode} ${r.shortName} ${r.publisherCompany}`.toLowerCase().includes(kw)); }
     if (titleSearch.trim()) { const ts = titleSearch.trim().toLowerCase(); list = list.filter(r => (r.shortName || '').toLowerCase().includes(ts)); }
     // 图片搜索时按相似度降序排序（得分高的排前面）
     if (imageSearchUrl && Object.keys(imgSimScores).length > 0) {
@@ -2262,7 +2264,7 @@ const addToCart = useCallback((rec: any, qty?: number) => {
         {tab === 'finished' && (
           <>
             <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap', alignItems: 'center' }}>
-              <Input placeholder="搜索款式编码/商品简称/供应商" allowClear style={{ width: 240 }} value={sKw} onChange={e => setSKw(e.target.value)} onPressEnter={() => { setApKw(sKw); setTitleSearch(titleSearchInput); }} />
+              <Input placeholder="搜索货品ID/款式编码/商品简称/供应商" allowClear style={{ width: 240 }} value={sKw} onChange={e => setSKw(e.target.value)} onPressEnter={() => { setApKw(sKw); setTitleSearch(titleSearchInput); }} />
               <Input placeholder="标题搜索产品" allowClear style={{ width: 180 }} prefix={<SearchOutlined style={{ color: '#999' }} />} value={titleSearchInput} onChange={e => setTitleSearchInput(e.target.value)} onPressEnter={() => { setApKw(sKw); setTitleSearch(titleSearchInput); }} />
               <Popover
                 trigger="hover"
