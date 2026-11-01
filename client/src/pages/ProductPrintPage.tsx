@@ -761,7 +761,7 @@ const ProductPrintPage: React.FC = () => {
                 <Select size="large" style={{ width: 220, height: 48 }} value={tplIds.tag} onChange={v => setTplIds(prev => ({ ...prev, tag: v }))} options={tplOptions('tag')} />
                 <Select size="large" style={{ width: 280, height: 48 }} value={printer} onChange={setPrinter}
                   onDropdownVisibleChange={open => { if (open) reloadPrinters(); }}
-                  options={[{ value: '默认使用模板设置的打印机', label: '默认使用模板设置的打印机' }, ...printerList.map((pl: any) => ({ value: pl.name, label: pl.name + (pl.isDefault ? '（系统默认）' : '') + (pl.clientName ? `（@${pl.clientName}）` : '') })), ...(printerList.length ? [] : [{ value: '__print_client_offline__', label: '（打印客户端未在线：暂无法获取打印机列表）', disabled: true }])]} />
+                  options={[{ value: '默认使用模板设置的打印机', label: '默认使用模板设置的打印机' }, ...printerList.map((pl: any) => ({ value: pl.name, label: pl.name + (pl.isDefault ? '（系统默认）' : '') + (pl.clientName ? `（@${pl.clientName}）` : '') })), ...(printerList.length ? [] : [{ value: '__print_client_offline__', label: `（打印客户端未在线：请在接打印机的电脑启动讯能手打印客户端，并登录 ${window.location.origin}）`, disabled: true }])]} />
                 <Text style={{ fontSize: 15 }}>打印数量:</Text>
                 <InputNumber size="large" min={1} style={{ height: 48, width: 90 }} value={qty1} onChange={n => setQty1(Number(n) || 1)} />
                 <Button size="large" type="primary" icon={<PrinterOutlined />} style={{ height: 48, fontSize: 16, padding: '0 28px' }} disabled={!selProduct} onClick={() => doPrintRow('tag', qty1)}>打印吊牌</Button>
