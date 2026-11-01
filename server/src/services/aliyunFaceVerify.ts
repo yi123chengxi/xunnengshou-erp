@@ -71,7 +71,7 @@ export async function initFaceVerify(input: { certName: string; certNo: string; 
       if (String(body.code) === '200' && body.resultObject?.certifyId) {
         return { ok: true, certifyId: body.resultObject.certifyId, certifyUrl: body.resultObject.certifyUrl };
       }
-      lastMsg = `${body.code || ''} ${body.message || ''}`.trim();
+      lastMsg = FACE_CODE_TEXT[String(body.code)] || `${body.code || ''} ${body.message || ''}`.trim();
       if (String(body.code) !== '500') break; // 业务错误不换端点重试
     } catch (e: any) {
       lastMsg = e?.message || '实人认证服务异常';
@@ -92,6 +92,13 @@ export interface FaceDescribeResult {
 const SUB_CODE_TEXT: Record<string, string> = {
   '200': '认证通过',
   '201': '认证通过（疑似）',
+};
+
+/** 常见业务错误码友好文案（官方《服务端接口错误码》；避免把 411 RAM无权限 这类原始码直接抛给用户） */
+const FACE_CODE_TEXT: Record<string, string> = {
+  '410': '服务未开通：请在阿里云控制台开通金融级实人认证并完成 OSS 授权',
+  '411': '云账号子账号缺少实人认证权限：需主账号登录 RAM 控制台 → 身份管理 → 用户，为当前 AccessKey 所属子账号添加系统策略 AliyunAntCloudAuthFullAccess',
+  '412': '阿里云账号欠费（金融级实人认证或 OSS），请充值后重试',
 };
 
 /** 查询刷脸认证结果 */
@@ -119,7 +126,7 @@ export async function describeFaceVerify(certifyId: string): Promise<FaceDescrib
           message: passed ? '刷脸认证通过' : (SUB_CODE_TEXT[subCode] || `刷脸未通过或未完成（${subCode || '无结果'}）`),
         };
       }
-      lastMsg = `${body.code || ''} ${body.message || ''}`.trim();
+      lastMsg = FACE_CODE_TEXT[String(body.code)] || `${body.code || ''} ${body.message || ''}`.trim();
       if (String(body.code) !== '500') break;
     } catch (e: any) {
       lastMsg = e?.message || '实人认证查询异常';
