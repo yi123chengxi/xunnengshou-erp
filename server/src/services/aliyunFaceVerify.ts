@@ -97,6 +97,8 @@ const SUB_CODE_TEXT: Record<string, string> = {
 /** 常见业务错误码友好文案（官方《服务端接口错误码》；避免把 411 RAM无权限 这类原始码直接抛给用户） */
 const FACE_CODE_TEXT: Record<string, string> = {
   '410': '服务未开通：请在阿里云控制台开通金融级实人认证并完成 OSS 授权',
+  '404': '认证场景不存在：服务器配置的场景 ID（ALIYUN_FACE_SCENE_ID）在当前云账号下不存在，请主账号在实人认证控制台「场景管理」新建 H5 网页接入场景并更新配置',
+  '403': '接口权限不足：请检查 RAM 子账号策略是否包含对应实人认证操作权限',
   '411': '云账号子账号缺少实人认证权限：需主账号登录 RAM 控制台 → 身份管理 → 用户，为当前 AccessKey 所属子账号添加系统策略 AliyunAntCloudAuthFullAccess',
   '412': '阿里云账号欠费（金融级实人认证或 OSS），请充值后重试',
 };
