@@ -455,7 +455,6 @@ const PurchaserSupplierList: React.FC = () => {
       if (done) { message.info('与该供应商已建立合作，无需重复处理邀约'); return; }
     } catch { /* ignore */ }
     setInvitePayload(p);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ========== 同意供应商邀约：立即建立合作 ==========
