@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import {
-  Card, Row, Col, Typography, Table, Tag, Button, Space, Modal, Form, Input, InputNumber, Select, message, Badge, Tooltip, Tabs, Descriptions, Empty, Image, Radio, Alert,
+  Card, Row, Col, Typography, Table, Tag, Button, Space, Modal, Form, Input, InputNumber, Select, message, Badge, Tooltip, Tabs, Descriptions, Empty, Image, Radio, Alert, Checkbox,
 } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -45,6 +45,8 @@ import type { CustomerSummaryEntry } from '../utils/paySummary';
 import { buildOrderOccupiedAmountMap, getOrderOccupiedList } from '../utils/orderOccupied';
 import { canFn, usePermTick } from '../utils/perm';
 import { compressImageFile } from '../utils/imageCompress';
+import { getCurrentUserDisplayName } from '../utils/billLog';
+import { buildInviteLink } from '../utils/cooperationInvite';
 
 const { Text } = Typography;
 const { Option } = Select;
@@ -300,6 +302,7 @@ export const loadBoundPurchasersFromStorage = (): BoundPurchaser[] => {
           bindDate: String(a.approveDate || a.applyDate || '').slice(0, 10),
           status: terminatedNames.has(name) ? 'terminated' : 'approved',
           purchaserUsername: a.purchaserUsername || '',
+          salesman: a.salesmanName || '',
           province: (users.find((u: any) => u.username === a.purchaserUsername) as any)?.province || '',
           city: (users.find((u: any) => u.username === a.purchaserUsername) as any)?.city || '',
           district: (users.find((u: any) => u.username === a.purchaserUsername) as any)?.district || '',
@@ -575,6 +578,28 @@ const CustomerInfo: React.FC = () => {
   // 业务员选择弹窗（账号管理-账号列表）
   const [salesmanSelectVisible, setSalesmanSelectVisible] = useState(false);
   const [salesmanTarget, setSalesmanTarget] = useState<{ mode: 'inline' | 'form'; customerId?: string; customerName?: string }>({ mode: 'inline' });
+
+  // 邀约合作弹窗（生成邀约链接：仅携带公司编号，可勾选绑定负责人）
+  const [inviteModalVisible, setInviteModalVisible] = useState(false);
+  const [inviteBind, setInviteBind] = useState(false);
+  const inviteCompanyNo = useMemo(() => {
+    try {
+      const users = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+      return String(users.find((u: any) => u.username === getDataOwner())?.companyNo || '');
+    } catch { return ''; }
+  }, []);
+  const inviteLink = useMemo(() => {
+    if (!inviteModalVisible || !inviteCompanyNo) return '';
+    return buildInviteLink({
+      v: 1,
+      no: inviteCompanyNo,
+      bind: inviteBind ? 1 : 0,
+      salesman: localStorage.getItem('username') || '',
+      salesmanName: getCurrentUserDisplayName(),
+      ts: Date.now(),
+      r: Math.random().toString(36).slice(2, 8),
+    });
+  }, [inviteModalVisible, inviteBind, inviteCompanyNo]);
   const watchCredit = Form.useWatch('credit', addForm);
   const watchTotalPurchase = Form.useWatch('totalPurchase', addForm);
   const watchReceivedPayment = Form.useWatch('receivedPayment', addForm);
@@ -584,11 +609,6 @@ const CustomerInfo: React.FC = () => {
   // 省市区级联（预设中国省市区数据）
   const watchProvince = Form.useWatch('province', addForm);
   const watchCity = Form.useWatch('city', addForm);
-
-  // 邀约合作弹窗
-  const [inviteModalVisible, setInviteModalVisible] = useState(false);
-  const [inviteLink, setInviteLink] = useState('');
-  const [inviteCustomer, setInviteCustomer] = useState<CustomerRecord | null>(null);
 
   // 解除合作弹窗
   const [terminateModalVisible, setTerminateModalVisible] = useState(false);
@@ -1216,10 +1236,26 @@ const CustomerInfo: React.FC = () => {
         cooperationStatus: 'pending',
         addedDate: now,
         remark: '供应商通过采购商编号申请合作',
+        // 供应商主动发起标记：随 purchaser_suppliers_ 同步键跨浏览器送达，采购商侧据此显示待审核
+        supplierInitiated: true,
+        supplierUsername: myUsername,
+        supplierInitiatedDate: now,
       };
       list.unshift(entry);
-      localStorage.setItem(pKey, JSON.stringify(list));
+    } else {
+      // 复用已有条目：拒绝/终止后重新申请回退待确认，并刷新供应商主动发起标记
+      // （cooperation_applications 不参与跨浏览器同步，标记必须落在条目上）
+      const idx = list.findIndex((s: any) => s.supplierName === supplierCompany);
+      entry = {
+        ...entry,
+        cooperationStatus: entry.cooperationStatus === 'rejected' || entry.cooperationStatus === 'terminated' ? 'pending' : entry.cooperationStatus,
+        supplierInitiated: true,
+        supplierUsername: myUsername,
+        supplierInitiatedDate: now,
+      };
+      list[idx] = entry;
     }
+    localStorage.setItem(pKey, JSON.stringify(list));
     apps.push({
       applicationId: `COOP-PNO-${Date.now()}`,
       purchaserUsername: purchaserUser.username,
@@ -2168,6 +2204,9 @@ const CustomerInfo: React.FC = () => {
               >
                 新增客户
               </Button>
+              <Button icon={<LinkOutlined />} onClick={() => { setInviteBind(false); setInviteModalVisible(true); }}>
+                邀约合作
+              </Button>
             </Space>
         </div>
       </Card>
@@ -2190,6 +2229,47 @@ const CustomerInfo: React.FC = () => {
           locale={{ emptyText: '暂无客户数据' }}
         />
       </Card>
+
+      {/* 邀约合作弹窗（生成邀约链接：仅携带公司编号，可勾选绑定负责人） */}
+      <Modal
+        title={<span><LinkOutlined style={{ marginRight: 8, color: '#1890ff' }} />邀约采购商合作</span>}
+        open={inviteModalVisible}
+        onCancel={() => setInviteModalVisible(false)}
+        footer={[
+          <Button key="close" onClick={() => setInviteModalVisible(false)}>关闭</Button>,
+          <Button
+            key="copy"
+            type="primary"
+            icon={<CopyOutlined />}
+            disabled={!inviteLink}
+            onClick={() => {
+              navigator.clipboard.writeText(inviteLink).then(
+                () => message.success('邀约链接已复制到剪贴板'),
+                () => message.error('复制失败，请手动复制'),
+              );
+            }}
+          >
+            复制链接
+          </Button>,
+        ]}
+        width={560}
+      >
+        <Space direction="vertical" size={12} style={{ width: '100%', marginTop: 8 }}>
+          <Checkbox checked={inviteBind} onChange={(e) => setInviteBind(e.target.checked)}>
+            绑定负责人（勾选后合作建立时默认绑定本账户「{getCurrentUserDisplayName()}」）
+          </Checkbox>
+          <Alert
+            type="info"
+            showIcon
+            message={
+              inviteLink
+                ? `链接仅携带本公司编号「${inviteCompanyNo}」，不携带公司账户；采购商打开后进入供应商列表页，确认邀约信息并点击「同意合作」即立即建立合作。`
+                : '当前账户未设置公司编号，无法生成邀约链接，请先在注册信息中完善公司编号'
+            }
+          />
+          <Input.TextArea readOnly value={inviteLink} rows={3} style={{ fontSize: 12 }} />
+        </Space>
+      </Modal>
 
       {/* 新增/编辑客户共用弹窗 */}
       <Modal
@@ -2390,65 +2470,6 @@ const CustomerInfo: React.FC = () => {
           确定要解除与 <strong>「{terminatingCustomer?.name}」</strong> 的合作关系吗？
         </p>
         <p style={{ color: '#999', fontSize: 13 }}>解除后该采购商将从客户列表中移除，历史合作记录不受影响。</p>
-      </Modal>
-
-      {/* 邀约合作弹窗 */}
-      <Modal
-        title={
-          <Space>
-            <LinkOutlined style={{ color: '#1890ff' }} />
-            <span>邀约合作</span>
-          </Space>
-        }
-        open={inviteModalVisible}
-        onCancel={() => setInviteModalVisible(false)}
-        footer={[
-          <Button key="close" onClick={() => setInviteModalVisible(false)}>
-            关闭
-          </Button>,
-          <Button
-            key="copy"
-            type="primary"
-            icon={<CopyOutlined />}
-            onClick={copyInviteLink}
-            style={{
-              border: 'none',
-              background: 'linear-gradient(135deg, #1890ff 0%, #096dd9 100%)',
-            }}
-          >
-            复制链接
-          </Button>,
-        ]}
-        width={560}
-      >
-        <div
-          style={{
-            padding: '12px 16px',
-            background: '#e6f7ff',
-            border: '1px solid #91d5ff',
-            borderRadius: 6,
-            marginBottom: 16,
-            marginTop: 8,
-          }}
-        >
-          <InfoCircleOutlined style={{ color: '#1890ff', marginRight: 8 }} />
-          将该链接发送给采购商 <strong>{inviteCustomer?.name}</strong>，
-          采购商打开链接确认后即可建立双方的合作关系。
-        </div>
-        <div
-          style={{
-            padding: '16px 20px',
-            background: '#fafafa',
-            border: '1px solid #d9d9d9',
-            borderRadius: 8,
-            wordBreak: 'break-all',
-            fontSize: 13,
-            fontFamily: 'monospace',
-            color: '#1890ff',
-          }}
-        >
-          {inviteLink}
-        </div>
       </Modal>
 
       {/* 新增收款弹窗 */}

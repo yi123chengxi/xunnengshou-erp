@@ -36,6 +36,11 @@ interface SupplierEntry {
   remark: string;
   purchaserCompanyId?: string;
   terminateApplyDate?: string;
+  // 供应商主动发起合作标记（随 purchaser_suppliers_ 同步键跨浏览器送达；
+  // cooperation_applications 不参与跨浏览器同步，跨浏览器时以该标记作为待审核依据）
+  supplierInitiated?: boolean;
+  supplierUsername?: string;
+  supplierInitiatedDate?: string;
 }
 
 /** 合作令牌存储结构 */
@@ -139,6 +144,7 @@ const PurchaserCooperationManage: React.FC = () => {
               cooperationStatus: 'approved' as const,
               cooperationDate: approvedApp.applyDate?.split(' ')[0] || dayjs().format('YYYY-MM-DD'),
               supplierName: approvedApp.targetSupplierName || s.supplierName,
+              supplierInitiated: false,
             };
           }
         }
@@ -329,7 +335,8 @@ const PurchaserCooperationManage: React.FC = () => {
   // ========== 批准供应商发起的合作 ==========
   const handleApproveSupplierInitiated = (supplier: SupplierEntry) => {
     const app = getSupplierInitiatedApp(supplier);
-    if (!app) { message.error('未找到对应的合作申请'); return; }
+    // 跨浏览器场景 cooperation_applications 不参与同步，回退以条目上的供应商发起标记为依据
+    if (!app && supplier.supplierInitiated !== true) { message.error('未找到对应的合作申请'); return; }
 
     Modal.confirm({
       title: '确认通过合作',
@@ -339,7 +346,7 @@ const PurchaserCooperationManage: React.FC = () => {
       onOk: () => {
         const updatedSuppliers = dataSource.map((s) =>
           s.id === supplier.id
-            ? { ...s, cooperationStatus: 'approved' as const, cooperationDate: dayjs().format('YYYY-MM-DD') }
+            ? { ...s, cooperationStatus: 'approved' as const, cooperationDate: dayjs().format('YYYY-MM-DD'), supplierInitiated: false }
             : s
         );
         saveData(updatedSuppliers);
@@ -348,19 +355,25 @@ const PurchaserCooperationManage: React.FC = () => {
           localStorage.getItem(COOPERATION_APPLICATIONS_KEY) || '[]'
         );
         const updatedApps = apps.map((a) =>
-          a.applicationId === app.applicationId
+          a.applicationId === app?.applicationId
             ? { ...a, status: 'approved' as const }
             : a
         );
         localStorage.setItem(COOPERATION_APPLICATIONS_KEY, JSON.stringify(updatedApps));
 
+        // 申请记录缺失（跨浏览器）时回退用当前登录账号的采购商信息
+        const registeredUsers: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+        const currentUser = registeredUsers.find((u: any) => u.username === username);
+        const purchaserCompanyName = app?.purchaserCompanyName || currentUser?.companyName || username;
+        const purchaserContact = app?.purchaserContact || currentUser?.contactPerson || '';
+        const purchaserPhone = app?.purchaserPhone || currentUser?.phone || '';
+
         // 同步到供应商端客户列表（boundPurchasers），建立合作后供应商列表自动显示
-        let supUser = (app as any).supplierUsername || '';
+        let supUser = (app as any)?.supplierUsername || supplier.supplierUsername || '';
         if (!supUser) {
           // 申请记录未携带供应商账号时，按供应商公司名称反查注册账号
           try {
-            const users: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
-            const su = users.find((u: any) => (u.companyName || '') === (app.targetSupplierName || ''));
+            const su = registeredUsers.find((u: any) => (u.companyName || '') === (app?.targetSupplierName || supplier.supplierName));
             if (su) supUser = su.username || '';
           } catch { /* ignore */ }
         }
@@ -368,7 +381,7 @@ const PurchaserCooperationManage: React.FC = () => {
           const boundKey = 'boundPurchasers_' + supUser;
           try {
             const bound: any[] = JSON.parse(localStorage.getItem(boundKey) || '[]');
-            const existIdx = bound.findIndex((bp: any) => bp.purchaserName === app.purchaserCompanyName || (app.purchaserUsername && bp.purchaserUsername === app.purchaserUsername));
+            const existIdx = bound.findIndex((bp: any) => bp.purchaserName === purchaserCompanyName || bp.purchaserUsername === username);
             if (existIdx >= 0) {
               // 曾终止合作后重新合作：回退已合作并刷新绑定日期
               bound[existIdx] = { ...bound[existIdx], status: 'approved', bindDate: dayjs().format('YYYY-MM-DD') };
@@ -377,12 +390,12 @@ const PurchaserCooperationManage: React.FC = () => {
               bound.unshift({
                 key: `bp-${Date.now()}`,
                 id: `BIND-${Date.now()}`,
-                purchaserName: app.purchaserCompanyName,
-                purchaserContact: app.purchaserContact || '',
-                purchaserPhone: app.purchaserPhone || '',
+                purchaserName: purchaserCompanyName,
+                purchaserContact,
+                purchaserPhone,
                 bindDate: dayjs().format('YYYY-MM-DD'),
                 status: 'approved',
-                purchaserUsername: app.purchaserUsername,
+                purchaserUsername: username,
               });
               localStorage.setItem(boundKey, JSON.stringify(bound));
             }
@@ -398,7 +411,8 @@ const PurchaserCooperationManage: React.FC = () => {
   // ========== 拒绝供应商发起的合作 ==========
   const handleRejectSupplierInitiated = (supplier: SupplierEntry) => {
     const app = getSupplierInitiatedApp(supplier);
-    if (!app) { message.error('未找到对应的合作申请'); return; }
+    // 跨浏览器场景 cooperation_applications 不参与同步，回退以条目上的供应商发起标记为依据
+    if (!app && supplier.supplierInitiated !== true) { message.error('未找到对应的合作申请'); return; }
 
     Modal.confirm({
       title: '确认拒绝合作',
@@ -409,7 +423,7 @@ const PurchaserCooperationManage: React.FC = () => {
       onOk: () => {
         const updatedSuppliers = dataSource.map((s) =>
           s.id === supplier.id
-            ? { ...s, cooperationStatus: 'rejected' as const, cooperationDate: dayjs().format('YYYY-MM-DD') }
+            ? { ...s, cooperationStatus: 'rejected' as const, cooperationDate: dayjs().format('YYYY-MM-DD'), supplierInitiated: false }
             : s
         );
         saveData(updatedSuppliers);
@@ -418,7 +432,7 @@ const PurchaserCooperationManage: React.FC = () => {
           localStorage.getItem(COOPERATION_APPLICATIONS_KEY) || '[]'
         );
         const updatedApps = apps.map((a) =>
-          a.applicationId === app.applicationId
+          a.applicationId === app?.applicationId
             ? { ...a, status: 'rejected' as const }
             : a
         );
@@ -888,8 +902,8 @@ const PurchaserCooperationManage: React.FC = () => {
             编辑
           </Button>
           
-          {/* 待确认的供应商：供应商主动发起的合作申请显示同意/拒绝，否则可发起合作 */}
-          {record.cooperationStatus === 'pending' && (getSupplierInitiatedApp(record) ? (
+          {/* 待确认的供应商：供应商主动发起的合作申请（含跨浏览器仅同步到条目标记）显示同意/拒绝，否则可发起合作 */}
+          {record.cooperationStatus === 'pending' && ((getSupplierInitiatedApp(record) || record.supplierInitiated === true) ? (
             <>
               <Button
                 type="link"

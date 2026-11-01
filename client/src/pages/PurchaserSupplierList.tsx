@@ -3,7 +3,7 @@ import FieldConfigModal from '../components/FieldConfigModal';
 import { API_BASE } from '../utils/apiBase';
 import {
   Card, Table, Button, Space, Tag, message,
-  Typography, Tooltip, Descriptions, Row, Col, Input, Select, Modal, Form, Image, Checkbox, InputNumber,
+  Typography, Tooltip, Descriptions, Row, Col, Input, Select, Modal, Form, Image, Checkbox, InputNumber, Alert,
 } from 'antd';
 import {
   TeamOutlined,
@@ -40,6 +40,10 @@ import {
 } from '../utils/paySummary';
 import type { SupplierSummaryEntry } from '../utils/paySummary';
 import { writeProductList, loadProductListLatest } from '../utils/dataStore';
+import {
+  takePendingInvite, acceptCooperationInvite, rejectCooperationInvite, resolveUserByCompanyNo,
+} from '../utils/cooperationInvite';
+import type { CooperationInvitePayload } from '../utils/cooperationInvite';
 import { isAccountingMode, writeAutoEntries, loadSubjectOptions, subjectFilterOption } from '../utils/accountingBridge';
 import { getCurrentUserDisplayName } from '../utils/billLog';
 import { compressImageFile } from '../utils/imageCompress';
@@ -79,6 +83,8 @@ interface SupplierEntry {
   branchName?: string;    // 支行名称
   bankAccountNo?: string; // 银行账户
   supplierUsername?: string; // 供应商账号（合作建立时落库）；公司名可能重名，跨账号匹配优先用账号
+  supplierInitiated?: boolean; // 供应商主动发起合作标记（随同步键跨浏览器送达，待审核态依据）
+  supplierInitiatedDate?: string;
 }
 
 const PurchaserSupplierList: React.FC = () => {
@@ -117,6 +123,9 @@ const PurchaserSupplierList: React.FC = () => {
   // 链接弹窗
   const [linkModalVisible, setLinkModalVisible] = useState(false);
   const [generatedLink, setGeneratedLink] = useState('');
+
+  // 供应商邀约合作受理弹窗（邀约落地页写入待受理邀约后本页弹出）
+  const [invitePayload, setInvitePayload] = useState<CooperationInvitePayload | null>(null);
 
   // 编辑供应商弹窗
   const [editModalVisible, setEditModalVisible] = useState(false);
@@ -434,6 +443,41 @@ const PurchaserSupplierList: React.FC = () => {
       window.removeEventListener('cooperation-applications-changed', handleCoopChange);
     };
   }, [reloadData]);
+
+  // 挂载时受理待处理的合作邀约：弹窗显示邀约公司信息（同意/拒绝）
+  useEffect(() => {
+    const p = takePendingInvite();
+    if (!p) return;
+    try {
+      const list: any[] = JSON.parse(localStorage.getItem(storageKey) || '[]');
+      const sup = resolveUserByCompanyNo(p.no);
+      const done = !!sup && list.some((s: any) => (s.supplierName === sup.companyName || String(s.supplierNo || '') === String(p.no)) && s.cooperationStatus === 'approved');
+      if (done) { message.info('与该供应商已建立合作，无需重复处理邀约'); return; }
+    } catch { /* ignore */ }
+    setInvitePayload(p);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ========== 同意供应商邀约：立即建立合作 ==========
+  const handleAcceptInvite = () => {
+    if (!invitePayload) return;
+    const res = acceptCooperationInvite(invitePayload, getDataOwner());
+    if (!res.ok) { message.error(res.msg); return; }
+    setInvitePayload(null);
+    reloadData();
+    message.success(res.msg);
+  };
+
+  // ========== 拒绝供应商邀约 ==========
+  const handleRejectInvite = () => {
+    if (!invitePayload) return;
+    const res = rejectCooperationInvite(invitePayload, getDataOwner());
+    setInvitePayload(null);
+    message.warning(res.msg);
+  };
+
+  // 邀约公司信息（按公司编号解析注册账号）
+  const inviteSupplier = useMemo(() => (invitePayload ? resolveUserByCompanyNo(invitePayload.no) : null), [invitePayload]);
 
   // ========== 采购金额/已付货款/应付欠款：快照加载 + 事件自愈 + 空闲分片巡检 ==========
   const reloadPaySummary = useCallback(() => {
@@ -1381,9 +1425,11 @@ const PurchaserSupplierList: React.FC = () => {
           )}
           <Button type="link" size="small" style={{ color: '#1890ff' }} icon={<DollarOutlined />}
             onClick={() => { setApplyPayTarget(record); setApplyPayAmount(null); setApplyDebit('应付账款'); setApplyCredit('银行存款'); setApplyPayVisible(true); }}>申请付款</Button>
-          {!isApproved && (
+          {!isApproved && (isPending && record.supplierInitiated === true ? (
+            <Tag color="processing">供应商申请待审核</Tag>
+          ) : (
             <Button type="link" size="small" style={{ color: '#52c41a' }} icon={<LinkOutlined />} onClick={() => handleInviteCooperation(record)}>邀约合作</Button>
-          )}
+          ))}
           {isApproved && <Button type="link" size="small" danger icon={<StopOutlined />} onClick={() => handleTerminate(record)}>终止合作</Button>}
           {(() => {
             const termApp = pendingTerminateAppOf(record);
@@ -2243,6 +2289,39 @@ const PurchaserSupplierList: React.FC = () => {
           no: (p: any) => p?.key || '',
         }}
       />
+
+      {/* 供应商邀约合作受理弹窗：显示邀约公司信息，同意后立即建立合作 */}
+      <Modal
+        title={<span><TeamOutlined style={{ marginRight: 8, color: '#1890ff' }} />供应商合作邀约</span>}
+        open={!!invitePayload}
+        onCancel={() => setInvitePayload(null)}
+        footer={[
+          <Button key="reject" danger onClick={handleRejectInvite}>拒绝</Button>,
+          <Button key="accept" type="primary" icon={<CheckCircleOutlined />} onClick={handleAcceptInvite}>
+            同意合作
+          </Button>,
+        ]}
+        width={560}
+      >
+        {invitePayload && (
+          <Space direction="vertical" size={12} style={{ width: '100%', marginTop: 8 }}>
+            <Descriptions column={1} bordered size="small">
+              <Descriptions.Item label="公司名称">{inviteSupplier?.companyName || '（未找到对应注册账号）'}</Descriptions.Item>
+              <Descriptions.Item label="公司编号">{invitePayload.no}</Descriptions.Item>
+              <Descriptions.Item label="联系人">{inviteSupplier?.contactPerson || '-'}</Descriptions.Item>
+              <Descriptions.Item label="联系电话">{inviteSupplier?.phone || '-'}</Descriptions.Item>
+              {invitePayload.bind === 1 && (
+                <Descriptions.Item label="合作负责人">合作建立后绑定供应商负责人「{invitePayload.salesmanName || invitePayload.salesman}」</Descriptions.Item>
+              )}
+            </Descriptions>
+            <Alert
+              type="info"
+              showIcon
+              message="同意后将与该供应商立即建立合作关系并加入供应商列表；如列表中已有相同公司编号/名称的供应商，将自动更新该条目。"
+            />
+          </Space>
+        )}
+      </Modal>
     </div>
   );
 };

@@ -10,6 +10,8 @@ import useStickTableHeight from '../hooks/useStickTableHeight';
 import { getDevIdentity, loadGroups, saveGroups, loadGroupPerms, saveGroupPerms, applyGroupPermsToMembers, loadCustomerPerms, saveCustomerPerms, allPermKeys, buildPermTree, updateRegisteredUsers, getSubRole, loadDevSubAccounts, loadFollowups, addFollowup, loadCustomerLogs, addCustomerLog } from '../utils/devStore';
 import { readDevPermSet, PERM_V2, PERM_V3, PERM_V3_DEFAULT_KEYS, PERM_V4, PERM_V4_DEFAULT_KEYS, PERM_V5, PERM_V5_DEFAULT_KEYS, PERM_V6, PERM_V6_DEFAULT_KEYS, PERM_V7, PERM_V7_DEFAULT_KEYS, PERM_V8, PERM_V8_DEFAULT_KEYS, PERM_V9, PERM_V9_DEFAULT_KEYS, PERM_V10, PERM_V10_DEFAULT_KEYS } from '../utils/devPerms';
 import { loadDevDeny, saveDevDeny } from '../utils/perm';
+import { CertBadge, fetchCertBatch } from '../components/EnterpriseCertModal';
+import type { CertInfo } from '../components/EnterpriseCertModal';
 import type { DevGroup, PermNode } from '../utils/devStore';
 
 // 权限树叶子键提取
@@ -267,6 +269,14 @@ const DevDashboard: React.FC = () => {
     window.addEventListener('storage', onStorage);
     return () => window.removeEventListener('storage', onStorage);
   }, []);
+  // 租户企业认证状态（服务端权威）：列表加载后批量拉取徽章数据，供表格列与详情弹窗展示
+  const [certMap, setCertMap] = useState<Record<string, CertInfo>>({});
+  useEffect(() => {
+    if (!users.length) { setCertMap({}); return; }
+    let cancelled = false;
+    fetchCertBatch(users.map(u => u.username)).then(m => { if (!cancelled) setCertMap(m || {}); });
+    return () => { cancelled = true; };
+  }, [users]);
   const handleClaim = (rec: RegisteredUser) => {
     const ok = updateRegisteredUsers(list => list.map(u => u.username === rec.username ? { ...u, devOwner: identity.user, devOwnerName: identity.name, devClaimDate: dayjs().format('YYYY-MM-DD') } : u));
     if (!ok) { message.error('领取失败：本地存储写入未成功（可能存储空间不足），请清理后重试'); return; }
@@ -671,6 +681,12 @@ const DevDashboard: React.FC = () => {
       ),
     },
     {
+      title: '认证状态',
+      key: 'certStatus',
+      width: 100,
+      render: (_: any, record: RegisteredUser) => <CertBadge info={certMap[record.username] || null} showUncertified />,
+    },
+    {
       title: '空间使用',
       key: 'storageUsage',
       width: 160,
@@ -1005,6 +1021,9 @@ const DevDashboard: React.FC = () => {
               <Descriptions.Item label="电子邮箱" span={2}>{selectedUser.email}</Descriptions.Item>
               <Descriptions.Item label="纳税人识别号">{selectedUser.taxpayerCode || '-'}</Descriptions.Item>
               <Descriptions.Item label="法人">{selectedUser.legalPerson || '-'}</Descriptions.Item>
+              <Descriptions.Item label="认证状态" span={2}>
+                <CertBadge info={certMap[selectedUser.username] || null} showUncertified />
+              </Descriptions.Item>
               <Descriptions.Item label="负责人">
                 {selectedUser.devOwnerName ? (
                   <span>

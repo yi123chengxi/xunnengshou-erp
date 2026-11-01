@@ -12,7 +12,7 @@ import { API_BASE } from './apiBase';
 
 // 需要同步的业务数据 key 前缀/精确名
 const SYNC_PREFIXES = ['pageData_', 'custom_', 'warehouses_', 'purchaser_suppliers_', 'accounts_', 'shop_info_', 'shop_profit_', 'month_end_check_', 'withdrawal_record_', 'dev_', 'hr_', 'newstyle_', 'brandauth_', 'molds_', 'credit_adjustments_', 'published_credit_', 'payment_requests_', 'payment_request_managers_', 'notification_settings_', 'print_template_', 'price_strategy_'];
-const SYNC_EXACT = ['registeredUsers', 'subscription_orders', 'storage_orders', 'market_publish_orders', 'market_ratings', 'market_trade_orders', 'market_visitor_cart_shares', 'market_mold_listings', 'purchaser_pushed_orders'];
+const SYNC_EXACT = ['registeredUsers', 'subscription_orders', 'storage_orders', 'market_publish_orders', 'market_ratings', 'market_trade_orders', 'market_visitor_cart_shares', 'market_mold_listings', 'purchaser_pushed_orders', 'cooperation_applications'];
 // 图片块体积大，不参与跨浏览器同步（各浏览器独立）
 const EXCLUDE_PREFIXES = ['prodImg_', 'thumb_', 'payShot_', 'mold_img_'];
 // 仅上传不拉取的键前缀（这类键有独立的恢复机制，避免 pullAllDatasets 的宽限期竞态覆盖本地新数据）
@@ -44,6 +44,8 @@ function currentOwner(): string {
 /** key 的 owner 后缀（pageData_module_child_owner / xxx_owner 的最后一段）；全局 key 返回 null */
 function keyOwner(key: string): string | null {
   if (key === 'registeredUsers') return null;
+  // 合作申请为双方跨租户协作数据：全局共享同步（并集合并），保证供应商/采购商跨浏览器互见申请与审批结果
+  if (key === 'cooperation_applications') return null;
   // 商机市场相关键为全局共享数据（跨账号可见），返回 null 使所有账号都能同步
   if (key.startsWith('market_')) return null;
   // 打印模板为系统级预设/共享数据：跨账号同步，部署后新浏览器自动拉取
@@ -220,7 +222,7 @@ export async function mergeDatasetFromServer(key: string): Promise<string | null
     try { localData = JSON.parse(localStorage.getItem(key) || '[]'); } catch { localData = []; }
     if (!Array.isArray(localData)) localData = [];
     // 并集合并：服务端优先 + 保留本地服务端没有的记录
-    const idOf = (r: any) => (r && (r.key || r.id)) ? String(r.key || r.id) : null;
+    const idOf = (r: any) => (r && (r.key || r.id || r.applicationId)) ? String(r.key || r.id || r.applicationId) : null;
     const sIds = new Set(serverData.map(idOf));
     const onlyLocal = localData.filter((r: any) => idOf(r) !== null && !sIds.has(idOf(r)));
     const merged = [...serverData, ...onlyLocal];
@@ -349,7 +351,7 @@ export async function pullAllDatasets(): Promise<number> {
         let serverData: any[] = [];
         try { serverData = JSON.parse(rec.json); } catch { serverData = []; }
         if (Array.isArray(localData) && Array.isArray(serverData)) {
-          const idOf = (r: any) => (r && (r.key || r.id)) ? String(r.key || r.id) : null;
+          const idOf = (r: any) => (r && (r.key || r.id || r.applicationId)) ? String(r.key || r.id || r.applicationId) : null;
           const sIds = new Set(serverData.map(idOf));
           const onlyLocal = localData.filter((r: any) => !sIds.has(idOf(r)));
           const merged = JSON.stringify([...serverData, ...onlyLocal]);

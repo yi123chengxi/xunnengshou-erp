@@ -191,7 +191,12 @@ router.post('/face/init', async (req: Request, res: Response) => {
     const th = faceInitThrottle.get(username) || 0;
     if (now - th < 60_000) { res.json({ code: 429, message: '发起过于频繁，请稍后再试' }); return; }
     const outerOrderNo = `F${Date.now()}${Math.random().toString(36).slice(2, 8)}`.toUpperCase().slice(0, 32);
-    const metaInfo = String(req.body?.metaInfo || '');
+    const metaInfo = String(req.body?.metaInfo || '').trim();
+    // 前置校验 MetaInfo：浏览器 SDK 未加载时前端传空，直接调阿里云只会得到晦涩的 401 参数非法(metaInfo)
+    if (!metaInfo.startsWith('{') || metaInfo.length < 20) {
+      res.json({ code: 400, message: '浏览器刷脸环境信息（MetaInfo）缺失或无效：请刷新页面重试，仍失败请改用 Chrome/Edge 浏览器并确认网络可访问 o.alicdn.com' });
+      return;
+    }
     const r = await initFaceVerify({ certName: row.legal_person, certNo: row.id_card, outerOrderNo, metaInfo });
     if (!r.ok || !r.certifyId || !r.certifyUrl) {
       res.json({ code: 500, message: r.message || (r.certifyId ? '阿里云未返回认证链接（MetaInfo 无效或缺失），请刷新页面后重试' : '发起刷脸认证失败，请稍后重试') });

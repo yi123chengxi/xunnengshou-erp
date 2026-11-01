@@ -28,6 +28,7 @@ const PurchaserBillPage = React.lazy(() => import('./pages/PurchaserBillPage'));
 const PurchaserProfile = React.lazy(() => import('./pages/PurchaserProfile'));
 const CooperationConfirmPage = React.lazy(() => import('./pages/CooperationConfirmPage'));
 const PurchaserCooperationConfirmPage = React.lazy(() => import('./pages/PurchaserCooperationConfirmPage'));
+const PurchaserInvitePage = React.lazy(() => import('./pages/PurchaserInvitePage'));
 const WorkflowTemplatePage = React.lazy(() => import('./pages/production/WorkflowTemplatePage'));
 const JstPage = React.lazy(() => import('./pages/JstPage'));
 const JstDataPage = React.lazy(() => import('./pages/JstDataPage'));
@@ -329,6 +330,9 @@ function App() {
 
         {/* 采购商合作确认页面（独立页面，供应商邀约链接打开） */}
         <Route path="/purchaser-cooperation-confirm/:token" element={<PurchaserCooperationConfirmPage />} />
+
+        {/* 供应商邀约合作落地页（链接仅携带公司编号；已登录跳转供应商列表页弹窗受理） */}
+        <Route path="/purchaser-invite/:token" element={<PurchaserInvitePage />} />
 
         {/* 开发者后台（独立布局：客户管理/业绩分析/系统设置）；登录地址后缀混淆，不对外公开 */}
         <Route path="/dev/entry-7x2qf9" element={<DevLogin />} />

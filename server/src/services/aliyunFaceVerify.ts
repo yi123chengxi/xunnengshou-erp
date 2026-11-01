@@ -58,7 +58,7 @@ export async function initFaceVerify(input: { certName: string; certNo: string; 
     certType: 'IDENTITY_CARD',
     certName: input.certName,
     certNo: input.certNo,
-    metaInfo: input.metaInfo || '{}', // H5 方案须传前端 getMetaInfo() 实时获取的真实 MetaInfo，否则阿里云不返回 CertifyUrl
+    metaInfo: input.metaInfo, // 路由层已校验非空；传占位 '{}' 必被阿里云拒为 401 参数非法(metaInfo)
     returnUrl: process.env.ALIYUN_FACE_RETURN_URL || 'https://www.aliyun.com',
     // certifyUrlType 不传：部分场景校验严格会报参数非法，未传时由阿里云基于 MetaInfo 自动识别
   });
@@ -101,6 +101,7 @@ const FACE_CODE_TEXT: Record<string, string> = {
   '403': '接口权限不足：请检查 RAM 子账号策略是否包含对应实人认证操作权限',
   '411': '云账号子账号缺少实人认证权限：需主账号登录 RAM 控制台 → 身份管理 → 用户，为当前 AccessKey 所属子账号添加系统策略 AliyunAntCloudAuthFullAccess',
   '412': '阿里云账号欠费（金融级实人认证或 OSS），请充值后重试',
+  '401': 'MetaInfo 参数非法：浏览器刷脸组件未正确加载，请刷新页面重试，仍失败请检查网络或以 HTTPS 访问',
 };
 
 /** 查询刷脸认证结果 */

@@ -9,12 +9,9 @@ dotenv.config();
 const JWT_SECRET = process.env.JWT_SECRET || 'factory-management-secret-key-2024';
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
 
-// ============ Mock 用户（与客户端 Auth.tsx 中的 mockUsers 保持一致） ============
-const MOCK_USERS = [
-  { username: 'admin', password: '123456', role: 'supplier', name: '管理员', company_name: '演示公司' },
-  { username: 'purchaser1', password: '123456', role: 'purchaser', name: '采购商1', company_name: '采购商演示' },
-  { username: 'both1', password: '123456', role: 'both', name: '供应商兼采购商', company_name: '双角色演示' },
-];
+// ============ Mock 用户（演示账号已取消：与客户端 Auth.tsx 的 mockUsers 空数组保持一致，
+// 登录仅走 registered_users 表与 registeredUsers 数据集；admin 等演示身份不再可登录） ============
+const MOCK_USERS: { username: string; password: string; role: string; name: string; company_name: string }[] = [];
 
 // ============ JWT 中间件 ============
 export interface JWTPayload {

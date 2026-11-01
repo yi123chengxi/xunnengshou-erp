@@ -17,24 +17,35 @@ export const ENTERPRISE_API_BASE = API_BASE;
 /** 加载阿里云实人认证 H5 SDK 并获取 MetaInfo（官方要求：不传真实 MetaInfo 则 InitFaceVerify 不返回 CertifyUrl） */
 const getCloudauthMetaInfo = (): Promise<string> => new Promise(resolve => {
   const w = window as any;
+  let settled = false;
+  const finish = (v: string) => { if (!settled) { settled = true; resolve(v); } };
   const done = () => {
     try {
-      if (typeof w.getMetaInfo === 'function') { resolve(w.getMetaInfo()); return; }
+      if (typeof w.getMetaInfo === 'function') {
+        // SDK 返回的是对象而非字符串：直传会被序列化成 "[object Object]"，被阿里云拒为 401 参数非法(metaInfo)
+        const raw = w.getMetaInfo();
+        const mi = typeof raw === 'string' ? raw : JSON.stringify(raw || {});
+        if (mi && mi !== '{}') { finish(mi); return; }
+      }
     } catch { /* ignore */ }
-    resolve('');
+    finish('');
   };
+  // 全局超时兜底：SDK 加载异常/事件丢失时避免 Promise 悬挂导致刷脸按钮永久 loading
+  setTimeout(() => finish(''), 8000);
   if (typeof w.getMetaInfo === 'function') { done(); return; }
-  const existing = document.getElementById('cloudauth-jsvm');
+  const existing = document.getElementById('cloudauth-jsvm') as HTMLScriptElement | null;
   if (existing) {
-    existing.addEventListener('load', done);
-    existing.addEventListener('error', () => resolve(''));
+    // 历史加载失败的 script 元素不会重发 error 事件，靠超时兜底；加载中则等事件
+    if (existing.dataset.loaded === '1') { done(); return; }
+    existing.addEventListener('load', () => { existing.dataset.loaded = '1'; done(); });
+    existing.addEventListener('error', () => finish(''));
     return;
   }
   const s = document.createElement('script');
   s.id = 'cloudauth-jsvm';
   s.src = 'https://o.alicdn.com/yd-cloudauth/cloudauth-cdn/jsvm_all.js';
-  s.onload = () => done();
-  s.onerror = () => resolve('');
+  s.onload = () => { s.dataset.loaded = '1'; done(); };
+  s.onerror = () => finish('');
   document.head.appendChild(s);
 });
 
@@ -188,6 +199,12 @@ const EnterpriseCertModal: React.FC<{ open: boolean; onClose: () => void; onCert
     try {
       // 实时获取 MetaInfo（随浏览器/设备变化，官方禁止硬编码）
       const metaInfo = await getCloudauthMetaInfo();
+      // 空 MetaInfo 会被阿里云拒为 401 参数非法(metaInfo)：前端先拦截并给出可操作提示，不打服务端
+      if (!metaInfo || !metaInfo.startsWith('{')) {
+        message.error('阿里云刷脸组件加载失败（MetaInfo 为空）：请检查网络后刷新页面重试，仍失败请改用 Chrome/Edge 浏览器或以 HTTPS 访问');
+        setFaceLoading(false);
+        return;
+      }
       const res = await fetch(`${ENTERPRISE_API_BASE}/enterprise/face/init`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

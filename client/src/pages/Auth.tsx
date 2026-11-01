@@ -21,6 +21,7 @@ const PRIMARY = '#1e4a7e';
 
 // 短信验证码登录接口地址（统一走 apiBase：开发 localhost:3000，生产同源 /api）
 import { API_BASE as SMS_API_BASE } from '../utils/apiBase';
+import { cleanupDemoAccountsAndSession } from '../utils/demoAccountCleanup';
 
 // === 安全防护工具函数 ===
 const MAX_LOGIN_ATTEMPTS = 5;
@@ -133,18 +134,8 @@ const trustDevice = (username: string) => {
 const mockUsers: { username: string; password: string; role: string; name: string }[] = [];
 
 // 一次性清理残留演示账号：从 registeredUsers（含服务端同步副本）移除内置演示凭据，
-// 任何浏览器加载登录页时自动执行，保证部署环境演示身份不可登录
-(() => {
-  try {
-    const list: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
-    const DEMO = new Set(['admin|123456', 'purchaser1|123456', 'both1|123456']);
-    const next = list.filter(u => !DEMO.has(`${u?.username}|${u?.password}`));
-    if (next.length !== list.length) {
-      safeSetItem('registeredUsers', JSON.stringify(next));
-      flushDatasetUpload('registeredUsers', JSON.stringify(next));
-    }
-  } catch { /* ignore */ }
-})();
+// 并清除遗留的演示账号会话（应用启动时已执行，登录页加载再兜底一次）
+cleanupDemoAccountsAndSession();
 
 const Auth: React.FC = () => {
   const navigate = useNavigate();
@@ -283,6 +274,11 @@ const Auth: React.FC = () => {
     // 登录成功后初始化 Web Push 推送订阅
     initPushNotifications();
 
+    // 待受理供应商合作邀约：登录后直达供应商列表页弹窗确认
+    if (localStorage.getItem('pending_cooperation_invite') && (foundUser.role === 'purchaser' || foundUser.role === 'both')) {
+      navigate('/purchaser/suppliers/list');
+      return;
+    }
     if (foundUser.role === 'factory' || (String(foundUser.role || '').includes('factory') && !String(foundUser.role || '').includes('supplier') && !String(foundUser.role || '').includes('purchaser'))) {
       navigate('/factory/dashboard');
     } else if (foundUser.role === 'supplier') {
@@ -640,6 +636,11 @@ const Auth: React.FC = () => {
       safeSetItem('forcePasswordChange', 'true');
     }
 
+    // 待受理供应商合作邀约：登录后直达供应商列表页弹窗确认
+    if (localStorage.getItem('pending_cooperation_invite') && (foundUser.role === 'purchaser' || foundUser.role === 'both')) {
+      navigate('/purchaser/suppliers/list');
+      return;
+    }
     if (foundUser.role === 'factory' || (String(foundUser.role || '').includes('factory') && !String(foundUser.role || '').includes('supplier') && !String(foundUser.role || '').includes('purchaser'))) {
       navigate('/factory/dashboard');
     } else if (foundUser.role === 'supplier') {

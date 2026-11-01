@@ -524,6 +524,8 @@ const CooperationManage: React.FC = () => {
       if (list[existIdx].cooperationStatus === 'terminated' || list[existIdx].cooperationStatus === 'rejected') {
         list[existIdx] = { ...list[existIdx], cooperationStatus: 'pending' };
       }
+      // 供应商主动发起标记：随 purchaser_suppliers_ 同步键跨浏览器送达，采购商侧据此显示待审核
+      list[existIdx] = { ...list[existIdx], supplierInitiated: true, supplierUsername: username, supplierInitiatedDate: now };
       entryId = list[existIdx].id;
     } else {
       entryId = `SP-${Date.now()}`;
@@ -537,6 +539,9 @@ const CooperationManage: React.FC = () => {
         cooperationStatus: 'pending',
         addedDate: now,
         remark: '供应商重新发起合作',
+        supplierInitiated: true,
+        supplierUsername: username,
+        supplierInitiatedDate: now,
       });
     }
     localStorage.setItem(pKey, JSON.stringify(list));
