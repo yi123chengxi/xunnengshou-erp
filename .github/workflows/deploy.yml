@@ -13,6 +13,10 @@ on:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+    # secrets 上下文不能用于 step 级 if:，先在 job 级映射到 env 再供条件与脚本使用
+    env:
+      SERVER_HOST: ${{ secrets.SERVER_HOST }}
+      SERVER_PASSWORD: ${{ secrets.SERVER_PASSWORD }}
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
@@ -57,13 +61,13 @@ jobs:
           retention-days: 7
 
       - name: 部署到阿里云ECS
-        if: ${{ secrets.SERVER_HOST != '' && secrets.SERVER_PASSWORD != '' }}
+        if: ${{ env.SERVER_HOST != '' && env.SERVER_PASSWORD != '' }}
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq sshpass
-          sshpass -p "${{ secrets.SERVER_PASSWORD }}" scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null factory-deploy.tar.gz root@${{ secrets.SERVER_HOST }}:/root/factory-deploy.tar.gz
-          sshpass -p "${{ secrets.SERVER_PASSWORD }}" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@${{ secrets.SERVER_HOST }} "mkdir -p /root/factory-deploy && tar -xzf /root/factory-deploy.tar.gz -C /root/factory-deploy && bash /root/factory-deploy/server-update.sh"
+          sshpass -p "$SERVER_PASSWORD" scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null factory-deploy.tar.gz root@${SERVER_HOST}:/root/factory-deploy.tar.gz
+          sshpass -p "$SERVER_PASSWORD" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@${SERVER_HOST} "mkdir -p /root/factory-deploy && tar -xzf /root/factory-deploy.tar.gz -C /root/factory-deploy && bash /root/factory-deploy/server-update.sh"
 
       - name: 未配置密钥提示
-        if: ${{ secrets.SERVER_HOST == '' || secrets.SERVER_PASSWORD == '' }}
+        if: ${{ env.SERVER_HOST == '' || env.SERVER_PASSWORD == '' }}
         run: echo "未配置 SERVER_HOST / SERVER_PASSWORD, 本次仅构建不部署。请到仓库 Settings -> Secrets and variables -> Actions 添加。"
