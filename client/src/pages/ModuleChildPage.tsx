@@ -1699,6 +1699,8 @@ const ModuleChildPage: React.FC = () => {
   const [bankActiveTab, setBankActiveTab] = useState<'list' | 'flow'>('list');
   // 银行账户：U盾密码/取款密码 明文显示开关（默认隐藏，点击切换，键为 记录key:字段）
   const [pwdRevealed, setPwdRevealed] = useState<Record<string, boolean>>({});
+  // 银行账户导入：隐藏文件选择输入（Excel/CSV，账户名称或银行账号已存在或重复则提示并跳过）
+  const bankImportInputRef = useRef<HTMLInputElement>(null);
 
   // 银行账户对账功能
   const [reconcileModalVisible, setReconcileModalVisible] = useState(false);
@@ -11717,6 +11719,76 @@ const handleBatchAttrsConfirm = () => {
   // 默认显示列数
   const defaultVisibleCount = effectivePageConfig?.columns.filter(c => c.defaultVisible !== false).length || 0;
 
+  // ============ 银行账户导入（Excel/CSV；账户名称或银行账号已存在/文件内重复则提示并跳过） ============
+  const handleBankImportFile = useCallback((file: File) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const data = new Uint8Array(e.target?.result as ArrayBuffer);
+        const wb = XLSX.read(data, { type: 'array' });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const jsonData = XLSX.utils.sheet_to_json<Record<string, any>>(ws, { defval: '' });
+        if (jsonData.length === 0) { message.warning('文件中没有数据'); return; }
+        // 表头标题→字段映射（复用银行账户列配置，另加常用别名）
+        const titleToKey: Record<string, string> = {};
+        effectivePageConfig?.columns.forEach(c => { titleToKey[c.title] = c.dataIndex; });
+        titleToKey['账户名'] = 'name';
+        titleToKey['账号'] = 'bankAccountNo';
+        const normAcct = (v: any) => String(v ?? '').replace(/\s/g, '');
+        const seenNames = new Set<string>();
+        const seenAccts = new Set<string>();
+        const accepted: Record<string, any>[] = [];
+        const skipped: string[] = [];
+        jsonData.forEach((row, idx) => {
+          const lineNo = idx + 2;
+          const mapped: Record<string, any> = {};
+          Object.entries(row).forEach(([header, value]) => {
+            const key = titleToKey[String(header).trim()];
+            if (key) mapped[key] = typeof value === 'string' ? value.trim() : value;
+          });
+          const name = String(mapped.name || '').trim();
+          const acct = normAcct(mapped.bankAccountNo);
+          if (!name && !acct) { skipped.push(`第${lineNo}行：账户名称与银行账号均为空`); return; }
+          // 与已有账户重复：账户名称或银行账号命中即跳过
+          const dupName = !!name && dataSource.some((r: any) => String(r.name || '').trim() === name);
+          const dupAcct = !!acct && dataSource.some((r: any) => normAcct(r.bankAccountNo) === acct);
+          if (dupName || dupAcct) { skipped.push(`第${lineNo}行（${name || acct}）：${dupName ? '账户名称已存在' : '银行账号已存在'}，已跳过`); return; }
+          // 文件内部重复
+          if (name && seenNames.has(name)) { skipped.push(`第${lineNo}行（${name}）：文件内账户名称重复，已跳过`); return; }
+          if (acct && seenAccts.has(acct)) { skipped.push(`第${lineNo}行（${acct}）：文件内银行账号重复，已跳过`); return; }
+          if (name) seenNames.add(name);
+          if (acct) seenAccts.add(acct);
+          // Excel 日期序列号/日期对象 → YYYY-MM-DD 字符串
+          if (typeof mapped.openDate === 'number') mapped.openDate = dayjs('1899-12-30').add(mapped.openDate, 'day').format('YYYY-MM-DD');
+          else if (mapped.openDate instanceof Date) mapped.openDate = dayjs(mapped.openDate).format('YYYY-MM-DD');
+          if (mapped.balance !== undefined && mapped.balance !== '') mapped.balance = Number(mapped.balance) || 0;
+          const now = new Date();
+          accepted.push({
+            key: `ba-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
+            transactions: [],
+            creator: getCurrentUserDisplayName(),
+            createdAt: now.toISOString().slice(0, 10),
+            updatedAt: now.toISOString().slice(0, 10),
+            ...mapped,
+          });
+        });
+        if (accepted.length) {
+          setDataSource(prev => [...accepted, ...prev]);
+          message.success(`导入成功 ${accepted.length} 条银行账户`);
+        }
+        if (skipped.length) {
+          Modal.warning({
+            title: `已跳过 ${skipped.length} 条重复或无效数据`,
+            content: <div style={{ maxHeight: 320, overflow: 'auto' }}>{skipped.map((s, i) => <div key={i} style={{ fontSize: 12, lineHeight: 1.8 }}>{s}</div>)}</div>,
+            okText: '知道了',
+          });
+        }
+        if (!accepted.length && !skipped.length) message.warning('文件中没有有效的银行账户数据');
+      } catch { message.error('文件解析失败，请上传 Excel 或 CSV 文件'); }
+    };
+    reader.readAsArrayBuffer(file);
+  }, [dataSource, effectivePageConfig]);
+
   // 操作按键组：显示字段/导出/新增/批量操作/驳回（生产订单移至搜索栏下方独立行左对齐显示）
   const renderPoActionButtons = () => (
     <>
@@ -13241,6 +13313,9 @@ const handleBatchAttrsConfirm = () => {
                   <Tooltip title="导出为CSV文件">
                     <Button icon={<DownloadOutlined />} onClick={handleExport}>导出</Button>
                   </Tooltip>
+                  <Tooltip title="从Excel/CSV文件导入银行账户（账户名称或银行账号已存在或重复时提示并跳过）">
+                    <Button icon={<UploadOutlined />} onClick={() => bankImportInputRef.current?.click()}>导入</Button>
+                  </Tooltip>
                   <Tooltip title="新增一条记录">
                     <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>新增</Button>
                   </Tooltip>
@@ -13251,6 +13326,13 @@ const handleBatchAttrsConfirm = () => {
                     onChange={(v) => setReconcileFilterMonth(v)}
                     style={{ width: 130 }}
                     allowClear
+                  />
+                  <input
+                    ref={bankImportInputRef}
+                    type="file"
+                    accept=".xlsx,.xls,.csv"
+                    style={{ display: 'none' }}
+                    onChange={e => { const f = e.target.files?.[0]; if (f) handleBankImportFile(f); e.target.value = ''; }}
                   />
                 </>
               )}
