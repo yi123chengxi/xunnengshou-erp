@@ -2186,10 +2186,16 @@ export const OwnBrandEditor: React.FC<{ brands: OwnBrand[]; onChange: (l: OwnBra
         <Input placeholder="注册商标号" title="商标注册号" style={{ width: 140 }} value={nb.trademarkNo} onChange={e => setNb({ ...nb, trademarkNo: e.target.value })} />
         <Input placeholder="类目" title="商标注册类目，如 25 类" style={{ width: 140 }} value={nb.category} onChange={e => setNb({ ...nb, category: e.target.value })} />
         <Input placeholder="落款公司" title="授权书落款公司，留空用公司名" style={{ width: 180 }} value={nb.signCompany} onChange={e => setNb({ ...nb, signCompany: e.target.value })} />
-        <Select value={nb.isExclusive || '否'} onChange={v => setNb({ ...nb, isExclusive: v })} style={{ width: 110 }} title="是否专版品牌">
-          <Select.Option value="否">否</Select.Option>
-          <Select.Option value="是">是</Select.Option>
-        </Select>
+        <Tooltip title="是否专版：标识该品牌是否为专版品牌，选择“是”或“否”">
+          <Space size={4}>
+            <Text type="secondary" style={{ fontSize: 12 }}>是否专版</Text>
+            <Select value={nb.isExclusive || '否'} onChange={v => setNb({ ...nb, isExclusive: v })} style={{ width: 80 }}>
+              <Select.Option value="否">否</Select.Option>
+              <Select.Option value="是">是</Select.Option>
+            </Select>
+            <QuestionCircleOutlined style={{ color: '#999' }} />
+          </Space>
+        </Tooltip>
         <Button type="primary" icon={<PlusOutlined />} onClick={add}>添加</Button>
       </Space>
     </div>
