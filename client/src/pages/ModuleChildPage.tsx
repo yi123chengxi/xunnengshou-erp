@@ -806,6 +806,9 @@ const ModuleChildPage: React.FC = () => {
   const [orderPickStyles, setOrderPickStyles] = useState<string[]>([]);
   const [appliedOrderCodes, setAppliedOrderCodes] = useState<string[]>([]);
   const [appliedOrderStyles, setAppliedOrderStyles] = useState<string[]>([]);
+  // 订单管理：客户名称/负责人点击选择弹窗（当前选择字段 + 弹窗内过滤关键字）
+  const [orderFieldPickLabel, setOrderFieldPickLabel] = useState<'' | '客户名称' | '负责人'>('');
+  const [orderFieldPickSearch, setOrderFieldPickSearch] = useState('');
   const [orderCodePickVisible, setOrderCodePickVisible] = useState(false);
   const [orderStylePickVisible, setOrderStylePickVisible] = useState(false);
   const [orderCodePickSearch, setOrderCodePickSearch] = useState('');
@@ -5340,7 +5343,10 @@ const ModuleChildPage: React.FC = () => {
             if (directField) {
               if (!String(item[directField] || '').toLowerCase().includes(val.toLowerCase())) return false;
             } else {
-              const searchFields = ['styleCode', 'productCode', 'name', 'shortName', 'nationalCode', 'id', 'customerName', 'person', 'outboundNo', 'bankName', 'branchName', 'bankAccountNo'];
+              // 订单管理综合搜索框按字段拆分：客户名称/负责人/款式/商品编码均已有独立搜索框，综合框仅搜订单编号，删除重复匹配
+              const searchFields = (pageConfig?.title === '订单管理' && f.label === '搜索')
+                ? ['id']
+                : ['styleCode', 'productCode', 'name', 'shortName', 'nationalCode', 'id', 'customerName', 'person', 'outboundNo', 'bankName', 'branchName', 'bankAccountNo'];
               const match = searchFields.some(field =>
                 String(item[field] || '').toLowerCase().includes(val.toLowerCase())
               );
@@ -5537,6 +5543,26 @@ const ModuleChildPage: React.FC = () => {
     }
     return list;
   }, [dataSource, appliedSearchText, appliedStatusFilter, pageConfig, appliedDynamicFilters, appliedBankNameFilter, appliedBillProductCodes, appliedBillStyleCodes, jgApplied, legacyPickList, pickAppliedFilters, pickFieldCfg, poShowCompleted, billUnreconOnly, billRange, appliedOrderCodes, appliedOrderStyles, appliedOrderAddr, pickTimeRangeApplied, poAppliedFilters, poStatusQuick]);
+
+  // 订单管理：客户名称/负责人点击选择弹窗候选（订单数据源已有值去重，支持关键字过滤）
+  const orderFieldPickOptions = useMemo(() => {
+    if (pageConfig?.title !== '订单管理' || !orderFieldPickLabel) return [] as string[];
+    const key = orderFieldPickLabel === '客户名称' ? 'customerName' : 'person';
+    const set = new Set<string>();
+    (dataSource || []).forEach((r: any) => { const v = String(r[key] || '').trim(); if (v) set.add(v); });
+    const kw = orderFieldPickSearch.trim().toLowerCase();
+    return Array.from(set).filter(v => !kw || v.toLowerCase().includes(kw)).sort((a, b) => a.localeCompare(b, 'zh-CN'));
+  }, [dataSource, orderFieldPickLabel, orderFieldPickSearch, pageConfig]);
+
+  // 订单管理：弹窗选中客户名称/负责人后写入草稿+生效双态，立即过滤
+  const handlePickOrderFieldValue = (val: string) => {
+    if (!orderFieldPickLabel) return;
+    const label = orderFieldPickLabel;
+    setDynamicFilterValues(prev => ({ ...prev, [label]: val }));
+    setAppliedDynamicFilters(prev => ({ ...prev, [label]: val }));
+    setOrderFieldPickLabel('');
+    message.success(`已选择${label}：${val}`);
+  };
 
   // 打单拣货：订单标签候选（数据源去重，供标签多选弹窗）
   const pickTagOptions = useMemo(() => {
@@ -12921,6 +12947,18 @@ const handleBatchAttrsConfirm = () => {
                       allowClear={(f.label === '款式编码' ? orderPickStyles : orderPickCodes).length > 0}
                       onChange={e => { if (!e.target.value) { if (f.label === '款式编码') setOrderPickStyles([]); else setOrderPickCodes([]); } }}
                       style={{ cursor: 'pointer', textOverflow: 'ellipsis' }}
+                    />
+                  ) : pageConfig?.title === '订单管理' && (f.label === '客户名称' || f.label === '负责人') ? (
+                    // 客户名称/负责人：点击弹窗从订单已有值去重列表中选择
+                    <Input
+                      readOnly
+                      prefix={<SearchOutlined style={{ color: '#b0bec5' }} />}
+                      placeholder={`${f.label}(点击选择)`}
+                      value={dynamicFilterValues[f.label] || ''}
+                      onClick={() => { setOrderFieldPickSearch(''); setOrderFieldPickLabel(f.label as '客户名称' | '负责人'); }}
+                      allowClear
+                      onChange={e => { if (!e.target.value) { setDynamicFilterValues(prev => ({ ...prev, [f.label]: '' })); setAppliedDynamicFilters(prev => ({ ...prev, [f.label]: '' })); } }}
+                      style={{ cursor: 'pointer' }}
                     />
                   ) : pageConfig?.title === '账单明细' && f.label === '客户名称' ? (
                     // 客户名称：点击弹窗从客户基础信息客户列表中选择
@@ -21893,6 +21931,36 @@ tr:nth-child(even) { background: #f5f9ff; }
         search={orderStylePickSearch} setSearch={setOrderStylePickSearch}
         onClose={() => setOrderStylePickVisible(false)}
         onOk={() => { setOrderPickStyles(orderStylePickSelected); setOrderStylePickVisible(false); }} />
+      {/* 订单管理：客户名称/负责人点击选择弹窗（已有值去重列表，可关键字过滤） */}
+      <Modal
+        title={`选择${orderFieldPickLabel || ''}`}
+        open={!!orderFieldPickLabel}
+        onCancel={() => setOrderFieldPickLabel('')}
+        footer={null}
+        width={420}
+      >
+        <Input
+          placeholder="输入关键字过滤"
+          allowClear
+          value={orderFieldPickSearch}
+          onChange={e => setOrderFieldPickSearch(e.target.value)}
+          style={{ marginBottom: 12 }}
+        />
+        <div style={{ maxHeight: 400, overflowY: 'auto' }}>
+          {orderFieldPickOptions.length === 0 ? (
+            <Empty description="暂无数据" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+          ) : orderFieldPickOptions.map(v => (
+            <div
+              key={v}
+              onClick={() => handlePickOrderFieldValue(v)}
+              style={{
+                padding: '8px 12px', cursor: 'pointer', borderRadius: 4,
+                background: (dynamicFilterValues[orderFieldPickLabel || ''] || '') === v ? '#e6f4ff' : undefined,
+              }}
+            >{v}</div>
+          ))}
+        </div>
+      </Modal>
     </div>
   );
 };

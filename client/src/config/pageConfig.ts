@@ -695,7 +695,7 @@ export const salesPages: Record<string, ChildPageConfig> = {
       { title: '订单来源', dataIndex: 'orderSource', key: 'orderSource', width: 110, type: 'tag', group: '其他信息' },
     ],
     filters: [
-      { type: 'input', placeholder: '搜索订单编号/客户/负责人', label: '搜索' },
+      { type: 'input', placeholder: '搜索订单编号', label: '搜索' },
       { type: 'input', placeholder: '客户名称', label: '客户名称' },
       { type: 'input', placeholder: '负责人', label: '负责人' },
       { type: 'input', placeholder: '款式编码', label: '款式编码' },
