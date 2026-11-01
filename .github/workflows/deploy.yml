@@ -40,6 +40,10 @@ jobs:
           cd client
           npm ci
           npm run build
+        env:
+          # 超大 bundle 在 runner 默认堆内存下易 OOM；关闭 sourcemap 降低内存与耗时
+          NODE_OPTIONS: '--max-old-space-size=6144'
+          GENERATE_SOURCEMAP: 'false'
 
       - name: 打包部署物
         run: |
