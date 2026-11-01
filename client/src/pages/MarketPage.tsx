@@ -364,6 +364,26 @@ const imgOf = (owner: string, p: any): string => {
   try { return localStorage.getItem(`prodImg_${owner}_${p && p.key}`) || ''; } catch { return ''; }
 };
 
+// 收集款式下各颜色主图（排除代表产品——其图已记入卡片 image 字段，避免 base64 重复存储），
+// 嵌入卡片记录随 market_publish_orders 同步服务器，供跨账号展示
+const collectVariantImages = (ownerKey: string, prods: any[], styleCode: string, repKey: string): { key: string; color: string; src: string }[] => {
+  const out: { key: string; color: string; src: string }[] = [];
+  (prods || []).forEach((p: any) => {
+    if (!p || p.styleCode !== styleCode || !p.key || p.key === repKey) return;
+    let src = p.image || '';
+    if (!src) { try { src = localStorage.getItem(`prodImg_${ownerKey}_${p.key}`) || ''; } catch { /* ignore */ } }
+    if (src) out.push({ key: p.key, color: p.color || '', src });
+  });
+  return out;
+};
+// 跨账号颜色图解析：本地存储（发布方本机）优先，回退卡片内嵌图（productColor→image / variantImages）
+const embeddedSrcOf = (rec: any, color: string): string => {
+  if (!rec) return '';
+  if (color && color === (rec.productColor || '') && rec.image) return rec.image;
+  const emb = (Array.isArray(rec.variantImages) ? rec.variantImages : []).find((e: any) => (e.color || '') === color);
+  return emb?.src || '';
+};
+
 // 六面图后缀（与 PlanDesignPage SIX_VIEWS 一致：主图+五张视角图）
 const SIX_SUFFIX = ['_side', '_back', '_front2', '_top', '_bottom'];
 // IndexedDB 图片库读取（prodImages/imgs，键=变体key+后缀）
@@ -892,16 +912,21 @@ const MarketPage: React.FC = () => {
       // 缩略图组合：①每个颜色的主图 ②任一颜色存在的六面图（跳过缺失）
       (async () => {
         const owner = rec.publisherUsername;
-        const colors: string[] = Array.from(new Set(vars.map(v => v.color || '').filter(Boolean)));
+        const embedded: any[] = Array.isArray(rec.variantImages) ? rec.variantImages : [];
+        const colors: string[] = Array.from(new Set([
+          ...vars.map(v => v.color || '').filter(Boolean),
+          ...embedded.map((e: any) => e.color || '').filter(Boolean),
+        ]));
         const thumbs: { src: string; label: string }[] = [];
         if (colors.length) {
           for (const c of colors) {
             const v = vars.find(x => (x.color || '') === c);
-            const src = (v && v.image) || (v ? await resolveImg(owner, v.key) : '');
+            const local = (v && v.image) || (v ? await resolveImg(owner, v.key) : '');
+            const src = local || embeddedSrcOf(rec, c);
             if (src) thumbs.push({ src, label: `${c}主图` });
           }
         } else {
-          const src = rec.image || await resolveImg(owner, rec.productKey);
+          const src = rec.image || embedded[0]?.src || await resolveImg(owner, rec.productKey);
           if (src) thumbs.push({ src, label: '主图' });
         }
         for (const c of colors) {
@@ -915,7 +940,7 @@ const MarketPage: React.FC = () => {
           if (views.length) { thumbs.push(...views); break; }
         }
         setDetailThumbs(thumbs);
-        setDetailImg(thumbs[0]?.src || '');
+        setDetailImg(thumbs[0]?.src || rec.image || '');
       })();
     } else {
       setDetailVariants([]); setDetailColor('');
@@ -997,10 +1022,11 @@ const MarketPage: React.FC = () => {
             publisherUsername: owner, publisherCompany: u?.companyName || owner, publishTime: new Date().toISOString(),
             status: '待报价', styleCode: sc, shortName: p.shortName || p.productCode || sc, productCode: p.productCode,
             productKey: p.key, unit: p.unit || '件', quantity: Number(p.actualStock) || 0, targetPrice: Number(p.suggestedPrice) || 0,
-            image: resolvedImg, processTypes: [], quotes: [], remark: '系统自动上架（在售成品）',
+            image: resolvedImg, productColor: p.color || '', variantImages: collectVariantImages(owner, prods, sc, p.key),
+            processTypes: [], quotes: [], remark: '系统自动上架（在售成品）',
           }, ...out];
         } else {
-          out = out.map(r => (r.key === exist.key ? { ...r, shortName: p.shortName || r.shortName, targetPrice: Number(p.suggestedPrice) || r.targetPrice, image: resolvedImg || r.image, productKey: p.key || r.productKey } : r));
+          out = out.map(r => (r.key === exist.key ? { ...r, shortName: p.shortName || r.shortName, targetPrice: Number(p.suggestedPrice) || r.targetPrice, image: resolvedImg || r.image, productKey: p.key || r.productKey, productColor: p.color || r.productColor, variantImages: (() => { const vi = collectVariantImages(owner, prods, sc, p.key); return vi.length ? vi : (r.variantImages || []); })() } : r));
         }
       });
     });
@@ -1049,6 +1075,45 @@ const MarketPage: React.FC = () => {
     };
     syncAndResweep();
   }, [tab, sweepFinished]);
+
+  // 图片回填：历史已发布卡片（手动发布/自动上架关闭时发布）的图片仅存于发布方本地 prodImg 键，
+  // 而 prodImg_ 不参与服务器同步，导致其他账号看不到图片；此处把图片写回卡片记录（随 market_publish_orders 同步服务器）
+  useEffect(() => {
+    if (tab !== 'finished') return;
+    let cancelled = false;
+    (async () => {
+      const list = loadJson(MARKET_KEY, []);
+      const prods: any[] = loadJson(`pageData_basic-data_product-list_${owner}`, []);
+      let changed = false;
+      const updated: any[] = [];
+      for (const r of list) {
+        if (!r || r.type !== 'finished' || r.publisherUsername !== owner) { updated.push(r); continue; }
+        let next = r;
+        if (!next.image && next.productKey) {
+          const src = prods.find((p: any) => p.key === next.productKey)?.image
+            || localStorage.getItem(`prodImg_${owner}_${next.productKey}`)
+            || await idbGet(next.productKey) || '';
+          if (src) next = { ...next, image: src };
+        }
+        if (!next.productColor && next.productKey) {
+          const pc = prods.find((p: any) => p.key === next.productKey)?.color || '';
+          if (pc) next = { ...next, productColor: pc };
+        }
+        if ((!Array.isArray(next.variantImages) || next.variantImages.length === 0) && next.styleCode) {
+          const vi: { key: string; color: string; src: string }[] = [];
+          for (const p of prods.filter((p: any) => p.styleCode === next.styleCode && p.key && p.key !== next.productKey)) {
+            const src = p.image || localStorage.getItem(`prodImg_${owner}_${p.key}`) || await idbGet(p.key) || '';
+            if (src) vi.push({ key: p.key, color: p.color || '', src });
+          }
+          if (vi.length) next = { ...next, variantImages: vi };
+        }
+        if (next !== r) changed = true;
+        updated.push(next);
+      }
+      if (!cancelled && changed) { saveJson(MARKET_KEY, updated); setMarket(updated); }
+    })();
+    return () => { cancelled = true; };
+  }, [tab, owner]);
 
   // 监听产品图片上传/修改事件，触发成品市场自动上架刷新
   useEffect(() => {
@@ -1106,12 +1171,15 @@ const MarketPage: React.FC = () => {
       // 检查是否有图片
       const hasImage = rep.image || localStorage.getItem(`prodImg_${owner}_${rep.key}`);
       if (!hasImage) return; // 无图片不发布
+      // 图片嵌入卡片记录：prodImg_ 不参与服务器同步，不嵌入则其他账号看不到图片
+      const resolvedImg = rep.image || localStorage.getItem(`prodImg_${owner}_${rep.key}`) || '';
       out = [{
         key: `mkt_fin_${owner}_${sc}`, id: nextMarketId(out), type: 'finished', auto: false,
         publisherUsername: owner, publisherCompany: u?.companyName || owner, publishTime: new Date().toISOString(),
         status: '待报价', styleCode: sc, shortName: rep.shortName || rep.productCode || sc, productCode: rep.productCode,
         productKey: rep.key, unit: rep.unit || '件', quantity: Number(rep.actualStock) || 0, targetPrice: Number(rep.suggestedPrice) || 0,
-        image: rep.image || '', processTypes: [], quotes: [], remark: '手动发布到成品市场',
+        image: resolvedImg, productColor: rep.color || '', variantImages: collectVariantImages(owner, manualPublishProducts, sc, rep.key),
+        processTypes: [], quotes: [], remark: '手动发布到成品市场',
       }, ...out];
       published++;
     });
@@ -1640,7 +1708,7 @@ const addToCart = useCallback((rec: any, qty?: number) => {
         if (exist) next = next.map(f => ((f.itemKey || f.cardKey) === ik ? { ...f, quantity: (Number(f.quantity) || 0) + (Number(q) || 0) } : f));
         else next.push({
           itemKey: ik, cardKey: rec.key, styleCode: rec.styleCode, quantity: Number(q) || 0, addTime: new Date().toISOString(),
-          sku: { productKey: v.key, productCode: v.productCode, color: v.color || '', spec: v.spec || '', unitPrice: Number(v.suggestedPrice) || 0, image: imgOf(owner, v), shortName: rec.shortName, unit: v.unit || rec.unit || '件' },
+          sku: { productKey: v.key, productCode: v.productCode, color: v.color || '', spec: v.spec || '', unitPrice: Number(v.suggestedPrice) || 0, image: imgOf(owner, v) || embeddedSrcOf(rec, v.color || ''), shortName: rec.shortName, unit: v.unit || rec.unit || '件' },
         });
       });
       saveJson(`market_cart_${username}`, next);
@@ -2902,13 +2970,13 @@ const addToCart = useCallback((rec: any, qty?: number) => {
                     <Descriptions.Item label="上架时间">{dayjs(detailRec.publishTime).format('YYYY-MM-DD')}</Descriptions.Item>
                     <Descriptions.Item label="供应商" span={2}><CreditTag username={detailRec.publisherUsername} company={detailRec.publisherCompany} openShare /></Descriptions.Item>
                   </Descriptions>
-                  {detailVariants.some(v => v.color) && (
+                  {(detailVariants.some(v => v.color) || (Array.isArray(detailRec.variantImages) && detailRec.variantImages.some((e: any) => e.color))) && (
                     <div style={{ marginTop: 8 }}>
                       <Text type="secondary">颜色：</Text>
                       <Space size={4} wrap>
                         <Tag color={!detailColor ? 'blue' : undefined} style={{ cursor: 'pointer' }} onClick={() => setDetailColor('')}>全部</Tag>
-                        {Array.from(new Set(detailVariants.map(v => v.color).filter(Boolean))).map(c => (
-                          <Tag key={c} color={detailColor === c ? 'blue' : undefined} style={{ cursor: 'pointer' }} onClick={() => { setDetailColor(c); const vv = detailVariants.find(x => x.color === c); if (vv) setDetailImg(imgOf(detailRec.publisherUsername, vv)); }}>{c}</Tag>
+                        {Array.from(new Set([...detailVariants.map(v => v.color).filter(Boolean), ...(Array.isArray(detailRec.variantImages) ? detailRec.variantImages.map((e: any) => e.color || '').filter(Boolean) : [])])).map(c => (
+                          <Tag key={c} color={detailColor === c ? 'blue' : undefined} style={{ cursor: 'pointer' }} onClick={() => { setDetailColor(c); const vv = detailVariants.find(x => x.color === c); setDetailImg((vv && vv.image) || (vv ? imgOf(detailRec.publisherUsername, vv) : '') || embeddedSrcOf(detailRec, c)); }}>{c}</Tag>
                         ))}
                       </Space>
                     </div>
@@ -3101,8 +3169,8 @@ const addToCart = useCallback((rec: any, qty?: number) => {
                     <Text type="secondary">颜色：</Text>
                     <Space size={4} wrap>
                       <Tag color={!addToCartColor ? 'blue' : undefined} style={{ cursor: 'pointer' }} onClick={() => { setAddToCartColor(''); setAddToCartImg(addToCartModalRec.image || imgOf(addToCartModalRec.publisherUsername, { key: addToCartModalRec.productKey })); }}>全部</Tag>
-                      {Array.from(new Set(addToCartVariants.map(v => v.color).filter(Boolean))).map(c => (
-                        <Tag key={c} color={addToCartColor === c ? 'blue' : undefined} style={{ cursor: 'pointer' }} onClick={() => { setAddToCartColor(c); const vv = addToCartVariants.find(x => x.color === c); if (vv) setAddToCartImg(imgOf(addToCartModalRec.publisherUsername, vv)); }}>{c}</Tag>
+                      {Array.from(new Set([...addToCartVariants.map(v => v.color).filter(Boolean), ...(Array.isArray(addToCartModalRec?.variantImages) ? addToCartModalRec.variantImages.map((e: any) => e.color || '').filter(Boolean) : [])])).map(c => (
+                        <Tag key={c} color={addToCartColor === c ? 'blue' : undefined} style={{ cursor: 'pointer' }} onClick={() => { setAddToCartColor(c); const vv = addToCartVariants.find(x => x.color === c); setAddToCartImg((vv && vv.image) || (vv ? imgOf(addToCartModalRec.publisherUsername, vv) : '') || embeddedSrcOf(addToCartModalRec, c)); }}>{c}</Tag>
                       ))}
                     </Space>
                   </div>

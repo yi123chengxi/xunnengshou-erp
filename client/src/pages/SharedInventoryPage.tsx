@@ -51,6 +51,13 @@ const imgOfVisitor = (p: any): string => {
   if (p.image) return String(p.image);
   try { return localStorage.getItem(`prodImg_${p.publisherUsername}_${p && p.key}`) || ''; } catch { return ''; }
 };
+// 跨账号颜色图回退：卡片记录内嵌图（productColor→image / variantImages，随市场数据同步服务器）
+const embSrcOf = (rec: any, color: string): string => {
+  if (!rec) return '';
+  if (color && color === (rec.productColor || '') && rec.image) return rec.image;
+  const emb = (Array.isArray(rec.variantImages) ? rec.variantImages : []).find((e: any) => (e.color || '') === color);
+  return emb?.src || '';
+};
 
 /** 尺码范围格式化：连续整数段（如 35,36,37,38,39,40）显示为 35-40；非连续或含非数字则逗号拼接 */
 const fmtSizeRange = (specs: string[]): string => {
@@ -281,7 +288,7 @@ const SharedInventoryPage: React.FC = () => {
         unit: detailProduct.unit || '件',
         price: Number(v.suggestedPrice ?? detailProduct.targetPrice ?? detailProduct.price) || 0,
         qty: Number(qty) || 0,
-        image: imgOfVisitor({ ...v, publisherUsername: detailProduct.publisherUsername, productKey: v.productKey || detailProduct.productKey }),
+        image: imgOfVisitor({ ...v, publisherUsername: detailProduct.publisherUsername, productKey: v.productKey || detailProduct.productKey }) || embSrcOf(detailProduct, v.color || ''),
         supplierName: detailProduct.supplierName || detailProduct.publisherCompany || '',
         color: v.color || '',
         spec: v.spec || '',
@@ -569,7 +576,7 @@ const SharedInventoryPage: React.FC = () => {
       const specs: string[] = Array.from(new Set(src.map((v: any) => String(v.spec || '').trim()).filter(Boolean)));
       // 图片：每个颜色取该颜色首条变体图；无颜色时取款式主图
       const imgs: string[] = colors.length
-        ? colors.map(c => { const v = src.find((x: any) => x.color === c); return imgOfVisitor({ ...v, publisherUsername: v?.publisherUsername || p.publisherUsername || supplier }); })
+        ? colors.map(c => { const v = src.find((x: any) => x.color === c); return imgOfVisitor({ ...v, publisherUsername: v?.publisherUsername || p.publisherUsername || supplier }) || embSrcOf(p, c); })
         : [imgOfVisitor({ ...p, publisherUsername: p.publisherUsername || supplier })];
       const stock = src.reduce((s: number, v: any) => s + (Number(v.actualStock) || 0), 0);
       rows.push({
@@ -1084,7 +1091,7 @@ const SharedInventoryPage: React.FC = () => {
                       <Space size={4} wrap>
                         <Tag color={!detailColor ? 'blue' : undefined} style={{ cursor: 'pointer' }} onClick={() => { setDetailColor(''); setDetailImg(imgOfVisitor(detailProduct)); }}>全部</Tag>
                         {Array.from(new Set(detailVariants.map(v => v.color).filter(Boolean))).map(c => (
-                          <Tag key={c} color={detailColor === c ? 'blue' : undefined} style={{ cursor: 'pointer' }} onClick={() => { setDetailColor(c); const vv = detailVariants.find(x => x.color === c); if (vv) setDetailImg(imgOfVisitor({ ...vv, publisherUsername: detailProduct.publisherUsername })); }}>{c}</Tag>
+                          <Tag key={c} color={detailColor === c ? 'blue' : undefined} style={{ cursor: 'pointer' }} onClick={() => { setDetailColor(c); const vv = detailVariants.find(x => x.color === c); setDetailImg((vv ? imgOfVisitor({ ...vv, publisherUsername: detailProduct.publisherUsername }) : '') || embSrcOf(detailProduct, c)); }}>{c}</Tag>
                         ))}
                       </Space>
                     </div>

@@ -122,7 +122,17 @@ router.post('/send-device-code', async (req: Request, res: Response) => {
       const r = await sendSmsCode(phone, code);
       if (!r.ok) { res.json({ code: 500, message: `短信发送失败：${r.message || '请检查阿里云配置'}` }); return; }
     } else {
-      if (process.env.NODE_ENV === 'production') { res.json({ code: 503, message: '短信服务未配置，请联系管理员' }); return; }
+      // 未配置阿里云短信：开发模式回显验证码；生产环境默认回退“跳过新设备验证”（密码门槛仍前置生效），
+      // 如需生产环境强制验证（宁锁定不跳过）可设环境变量 DEVICE_VERIFY_STRICT=true
+      if (process.env.NODE_ENV === 'production') {
+        if (process.env.DEVICE_VERIFY_STRICT === 'true') {
+          res.json({ code: 503, message: '短信服务未配置：请联系管理员配置阿里云短信，或在服务器环境变量设置 DEVICE_VERIFY_STRICT=false 允许跳过新设备验证' });
+          return;
+        }
+        codeStore.delete(phone);
+        res.json({ code: 0, data: { smsUnconfigured: true }, message: '短信服务未配置（生产回退：跳过新设备验证）' });
+        return;
+      }
       codeStore.set(phone, { code, expiresAt: now + 5 * 60_000, attempts: 0 });
       sendThrottle.set(phone, { last: now, day, count: (th && th.day === day ? th.count : 0) + 1 });
       res.json({ code: 0, data: { devMode: true, devCode: code }, message: '短信服务未配置（开发模式）' });

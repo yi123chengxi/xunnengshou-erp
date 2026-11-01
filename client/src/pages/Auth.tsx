@@ -313,6 +313,16 @@ const Auth: React.FC = () => {
         message.error(data.message || '验证码发送失败，请稍后重试');
         return false;
       }
+      // 生产环境未配置短信服务：服务端返回 smsUnconfigured，回退为跳过新设备验证直接登录
+      if (data.data?.smsUnconfigured) {
+        if (pendingLoginUser) {
+          trustDevice(pendingLoginUser.username);
+          setDeviceVerifyVisible(false);
+          completeLogin(pendingLoginUser, pendingIsViewOnly);
+          message.warning('服务器未配置短信服务，本次已跳过新设备验证；配置阿里云短信后将自动恢复验证');
+        }
+        return true;
+      }
       setDeviceVerifyStep(1);
       setDeviceVerifyCountdown(60);
       setDeviceVerifyInput('');
@@ -326,7 +336,7 @@ const Auth: React.FC = () => {
       message.error('网络异常，验证码发送失败，请稍后重试');
       return false;
     }
-  }, [pendingLoginUser]);
+  }, [pendingLoginUser, pendingIsViewOnly, completeLogin]);
 
   const handleSendDeviceCode = useCallback(() => {
     sendDeviceCodeRequest();
@@ -668,12 +678,19 @@ const Auth: React.FC = () => {
         // 先在 mockUsers 中查找
         const mockUser = mockUsers.find(u => u.username === username && u.password === password);
         if (mockUser) {
+          // 手机号透传：mock 分支也须从 registeredUsers 补齐 phone，否则新设备验证取不到绑定手机号
+          let mockPhone = '';
+          try {
+            const ruForPhone: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+            mockPhone = String(ruForPhone.find((u: any) => u.username === mockUser.username)?.phone || '');
+          } catch { /* ignore */ }
           foundUser = {
             username: mockUser.username,
             password: mockUser.password,
             role: mockUser.role,
             name: mockUser.name,
             email: '',
+            phone: mockPhone,
             trialEndDate: '',
             authorizedUntil: '',
             isSubAccount: false,
