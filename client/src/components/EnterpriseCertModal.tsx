@@ -14,6 +14,30 @@ import { SafetyCertificateOutlined, ReloadOutlined, EditOutlined, ArrowLeftOutli
 import { API_BASE } from '../utils/apiBase';
 export const ENTERPRISE_API_BASE = API_BASE;
 
+/** 加载阿里云实人认证 H5 SDK 并获取 MetaInfo（官方要求：不传真实 MetaInfo 则 InitFaceVerify 不返回 CertifyUrl） */
+const getCloudauthMetaInfo = (): Promise<string> => new Promise(resolve => {
+  const w = window as any;
+  const done = () => {
+    try {
+      if (typeof w.getMetaInfo === 'function') { resolve(w.getMetaInfo()); return; }
+    } catch { /* ignore */ }
+    resolve('');
+  };
+  if (typeof w.getMetaInfo === 'function') { done(); return; }
+  const existing = document.getElementById('cloudauth-jsvm');
+  if (existing) {
+    existing.addEventListener('load', done);
+    existing.addEventListener('error', () => resolve(''));
+    return;
+  }
+  const s = document.createElement('script');
+  s.id = 'cloudauth-jsvm';
+  s.src = 'https://o.alicdn.com/yd-cloudauth/cloudauth-cdn/jsvm_all.js';
+  s.onload = () => done();
+  s.onerror = () => resolve('');
+  document.head.appendChild(s);
+});
+
 export interface CertInfo {
   username: string;
   status: 'certified' | 'abnormal' | 'revoked' | 'pending' | string;
@@ -162,10 +186,12 @@ const EnterpriseCertModal: React.FC<{ open: boolean; onClose: () => void; onCert
     setFaceLoading(true);
     setFaceResult(null);
     try {
+      // 实时获取 MetaInfo（随浏览器/设备变化，官方禁止硬编码）
+      const metaInfo = await getCloudauthMetaInfo();
       const res = await fetch(`${ENTERPRISE_API_BASE}/enterprise/face/init`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username }),
+        body: JSON.stringify({ username, metaInfo }),
       });
       const j = await res.json();
       if (j.code === 0 && j.data?.certifyUrl) {

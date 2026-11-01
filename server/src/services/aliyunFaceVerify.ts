@@ -45,7 +45,7 @@ export interface FaceInitResult {
 }
 
 /** 发起刷脸认证：返回 CertifyId 与 H5 认证链接 */
-export async function initFaceVerify(input: { certName: string; certNo: string; outerOrderNo: string }): Promise<FaceInitResult> {
+export async function initFaceVerify(input: { certName: string; certNo: string; outerOrderNo: string; metaInfo?: string }): Promise<FaceInitResult> {
   if (!isFaceConfigured()) {
     // 开发模式：返回占位链接，UI 全流程可联调（describe 将直接返回通过）
     return { ok: true, devMode: true, certifyId: `dev-${Date.now()}`, certifyUrl: 'https://eda.cloudauth.aliyuncs.com/?certifyId=devMode' };
@@ -58,7 +58,7 @@ export async function initFaceVerify(input: { certName: string; certNo: string; 
     certType: 'IDENTITY_CARD',
     certName: input.certName,
     certNo: input.certNo,
-    metaInfo: '{}', // 服务端直调时官方示例传 "{}"；设备信息由 H5 认证页自行采集
+    metaInfo: input.metaInfo || '{}', // H5 方案须传前端 getMetaInfo() 实时获取的真实 MetaInfo，否则阿里云不返回 CertifyUrl
     returnUrl: process.env.ALIYUN_FACE_RETURN_URL || 'https://www.aliyun.com',
     // certifyUrlType 不传：部分场景校验严格会报参数非法，未传时由阿里云基于 MetaInfo 自动识别
   });

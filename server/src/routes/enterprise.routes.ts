@@ -191,8 +191,12 @@ router.post('/face/init', async (req: Request, res: Response) => {
     const th = faceInitThrottle.get(username) || 0;
     if (now - th < 60_000) { res.json({ code: 429, message: '发起过于频繁，请稍后再试' }); return; }
     const outerOrderNo = `F${Date.now()}${Math.random().toString(36).slice(2, 8)}`.toUpperCase().slice(0, 32);
-    const r = await initFaceVerify({ certName: row.legal_person, certNo: row.id_card, outerOrderNo });
-    if (!r.ok || !r.certifyId || !r.certifyUrl) { res.json({ code: 500, message: r.message || '发起刷脸认证失败，请稍后重试' }); return; }
+    const metaInfo = String(req.body?.metaInfo || '');
+    const r = await initFaceVerify({ certName: row.legal_person, certNo: row.id_card, outerOrderNo, metaInfo });
+    if (!r.ok || !r.certifyId || !r.certifyUrl) {
+      res.json({ code: 500, message: r.message || (r.certifyId ? '阿里云未返回认证链接（MetaInfo 无效或缺失），请刷新页面后重试' : '发起刷脸认证失败，请稍后重试') });
+      return;
+    }
     faceInitCache.set(username, { certifyId: r.certifyId, certifyUrl: r.certifyUrl, devMode: r.devMode, createdAt: now });
     faceInitThrottle.set(username, now);
     res.json({ code: 0, data: { certifyId: r.certifyId, certifyUrl: r.certifyUrl, devMode: !!r.devMode, expireMinutes: 30 } });
