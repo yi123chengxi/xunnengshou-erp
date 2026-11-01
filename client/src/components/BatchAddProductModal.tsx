@@ -323,7 +323,7 @@ const BatchAddProductModal: React.FC<BatchAddProductModalProps> = ({
         title={<span style={{ color: PRIMARY }}><PlusOutlined style={{ marginRight: 8 }} />批量新增产品</span>}
         open={open}
         onCancel={handleClose}
-        width={900}
+        width={1080}
         zIndex={zIndex}
         destroyOnClose
         footer={[
@@ -355,8 +355,8 @@ const BatchAddProductModal: React.FC<BatchAddProductModalProps> = ({
                 <InputNumber value={batchBasePrice} onChange={(v: number | null) => setBatchBasePrice(v === null ? undefined : v)} min={0} precision={2} placeholder="69" style={{ flex: 1, minWidth: 0, width: 'auto' }} />
               </div>
               <div style={{ display: 'flex', alignItems: 'center', minWidth: 0 }}>
-                {labelSpan('鞋面材质', false, 72)}
-                <Input value={batchShoeUpper} onChange={e => setBatchShoeUpper(e.target.value)} placeholder="如：真皮/网布" style={{ flex: 1, minWidth: 0, width: 'auto' }} />
+                {labelSpan('成本价', isRaw, 72)}
+                <InputNumber value={batchCostPrice} onChange={(v: number | null) => setBatchCostPrice(v === null ? undefined : v)} min={0} precision={2} placeholder="0.00" style={{ flex: 1, minWidth: 0, width: 'auto' }} />
               </div>
               <div style={{ display: 'flex', alignItems: 'center', minWidth: 0 }}>
                 {labelSpan('商品标签')}
@@ -393,18 +393,18 @@ const BatchAddProductModal: React.FC<BatchAddProductModalProps> = ({
                 </div>
               ) : (
                 <div style={{ display: 'flex', alignItems: 'center', minWidth: 0 }}>
-                  {labelSpan('成本价', false, 72)}
-                  <InputNumber value={batchCostPrice} onChange={(v: number | null) => setBatchCostPrice(v === null ? undefined : v)} min={0} precision={2} placeholder="0.00" style={{ flex: 1, minWidth: 0, width: 'auto' }} />
+                  {labelSpan('鞋面材质', false, 72)}
+                  <Input value={batchShoeUpper} onChange={e => setBatchShoeUpper(e.target.value)} placeholder="如：真皮/网布" style={{ flex: 1, minWidth: 0, width: 'auto' }} />
                 </div>
               )}
               {needLevel ? (
                 <div style={{ display: 'flex', alignItems: 'center', minWidth: 0 }}>
-                  {labelSpan('成本价', isRaw)}
-                  <InputNumber value={batchCostPrice} onChange={(v: number | null) => setBatchCostPrice(v === null ? undefined : v)} min={0} precision={2} placeholder="0.00" style={{ flex: 1, minWidth: 0, width: 'auto' }} />
+                  {labelSpan('鞋面材质', false, 72)}
+                  <Input value={batchShoeUpper} onChange={e => setBatchShoeUpper(e.target.value)} placeholder="如：真皮/网布" style={{ flex: 1, minWidth: 0, width: 'auto' }} />
                 </div>
               ) : (
                 <div style={{ display: 'flex', alignItems: 'center', minWidth: 0 }}>
-                  {labelSpan('商品状态', true)}
+                  {labelSpan('商品状态', true, 72)}
                   <Select value={batchProductStatus || undefined} onChange={v => setBatchProductStatus(v)} placeholder="请选择" style={{ flex: 1, minWidth: 0 }}
                     options={[
                       { label: '在售', value: '在售' },
