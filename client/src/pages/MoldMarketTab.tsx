@@ -207,6 +207,7 @@ const MoldMarketTab: React.FC<{ onContact?: (username: string, subject: string) 
   const handleSaveEdit = () => {
     if (!editingListing) return;
     if (!editTitle.trim()) { message.warning('请填写标题'); return; }
+    if (!editImages || editImages.length === 0) { message.warning('请至少保留一张展示图片：模具无图片不能发布'); return; }
     if (editMode === 'rent' && !editRentPrice) { message.warning('请填写每天租金'); return; }
     if (editMode === 'sell' && !editSellPrice) { message.warning('请填写出售价格'); return; }
     const updated: MoldListing = {
@@ -343,7 +344,8 @@ const MoldMarketTab: React.FC<{ onContact?: (username: string, subject: string) 
     setRentPrice(0);
     setSellPrice(0);
     setListingRemark('');
-    setListingTitle(`${mold.moldName || ''} ${mold.spec || ''}`.trim());
+    // 标题默认取模具名称（不拼规格，规格不再进入标题）；发布时必填校验
+    setListingTitle(mold.moldName || '');
     // 自动获取模具已有的图片
     setListingImages(mold.images && mold.images.length > 0 ? [...mold.images] : []);
     setModeVisible(true);
@@ -352,6 +354,7 @@ const MoldMarketTab: React.FC<{ onContact?: (username: string, subject: string) 
   const handlePublish = () => {
     if (!selectedMold) return;
     if (!listingTitle.trim()) { message.warning('请填写标题'); return; }
+    if (!listingImages || listingImages.length === 0) { message.warning('请至少上传一张展示图片：模具无图片不能发布'); return; }
     if (mode === 'rent' && !rentPrice) { message.warning('请填写每天租金'); return; }
     if (mode === 'sell' && !sellPrice) { message.warning('请填写出售价格'); return; }
 
@@ -735,7 +738,6 @@ const MoldMarketTab: React.FC<{ onContact?: (username: string, subject: string) 
                       </div>
                       <div style={{ fontSize: 12, color: '#666', marginBottom: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         <Tag color="blue" style={{ fontSize: 10, marginRight: 4, padding: '0 4px' }}>{r.moldCode}</Tag>
-                        {r.spec || '—'}
                       </div>
                       <div style={{ display: 'flex', alignItems: 'baseline', marginBottom: 6 }}>
                         {r.mode === 'rent' ? (
@@ -743,9 +745,6 @@ const MoldMarketTab: React.FC<{ onContact?: (username: string, subject: string) 
                         ) : (
                           <><span style={{ color: '#52c41a', fontSize: 11 }}>售价</span><span style={{ color: '#52c41a', fontSize: 20, fontWeight: 700, lineHeight: 1 }}>¥{r.sellPrice}</span></>
                         )}
-                      </div>
-                      <div style={{ fontSize: 12, color: '#666', marginBottom: 4 }}>
-                        规格：{r.spec || '—'}
                       </div>
                       <div style={{ fontSize: 12, color: '#999', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {resolveCompany(r.publisher) || r.publisherCompany || r.publisher}
@@ -879,7 +878,7 @@ const MoldMarketTab: React.FC<{ onContact?: (username: string, subject: string) 
           </Radio.Group>
         </div>
         <div style={{ marginBottom: 12 }}>
-          <span style={{ marginRight: 8, fontWeight: 500 }}>标题：</span>
+          <span style={{ marginRight: 8, fontWeight: 500 }}><span style={{ color: '#ff4d4f' }}>*</span> 标题：</span>
           <Input style={{ width: 300 }} placeholder="请输入标题（必填）" value={listingTitle} onChange={e => setListingTitle(e.target.value)} maxLength={50} showCount />
         </div>
         {mode === 'rent' ? (
@@ -897,7 +896,7 @@ const MoldMarketTab: React.FC<{ onContact?: (username: string, subject: string) 
           <Input.TextArea rows={2} placeholder="备注说明（选填）" value={listingRemark} onChange={e => setListingRemark(e.target.value)} />
         </div>
         {/* 图片上传 */}
-        <div style={{ marginBottom: 8, fontSize: 13, fontWeight: 500 }}>展示图片 <span style={{ fontSize: 11, color: '#999', fontWeight: 400 }}>（拖动可调整顺序）</span></div>
+        <div style={{ marginBottom: 8, fontSize: 13, fontWeight: 500 }}><span style={{ color: '#ff4d4f' }}>*</span> 展示图片 <span style={{ fontSize: 11, color: '#999', fontWeight: 400 }}>（必填：无图片不能发布，拖动可调整顺序）</span></div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, padding: 12, border: '1px dashed #d9d9d9', borderRadius: 8, background: '#fafafa', minHeight: 80, alignItems: 'flex-start' }}>
           {listingImages.map((img, idx) => (
             <div key={idx}
@@ -1064,7 +1063,7 @@ const MoldMarketTab: React.FC<{ onContact?: (username: string, subject: string) 
           </Radio.Group>
         </div>
         <div style={{ marginBottom: 12 }}>
-          <span style={{ marginRight: 8, fontWeight: 500 }}>标题：</span>
+          <span style={{ marginRight: 8, fontWeight: 500 }}><span style={{ color: '#ff4d4f' }}>*</span> 标题：</span>
           <Input style={{ width: 300 }} placeholder="请输入标题（必填）" value={editTitle} onChange={e => setEditTitle(e.target.value)} maxLength={50} showCount />
         </div>
         {editMode === 'rent' ? (
@@ -1082,7 +1081,7 @@ const MoldMarketTab: React.FC<{ onContact?: (username: string, subject: string) 
           <Input.TextArea rows={2} placeholder="备注说明（选填）" value={editRemark} onChange={e => setEditRemark(e.target.value)} />
         </div>
         {/* 图片编辑 */}
-        <div style={{ marginBottom: 8, fontSize: 13, fontWeight: 500 }}>展示图片 <span style={{ fontSize: 11, color: '#999', fontWeight: 400 }}>（拖动可调整顺序）</span></div>
+        <div style={{ marginBottom: 8, fontSize: 13, fontWeight: 500 }}><span style={{ color: '#ff4d4f' }}>*</span> 展示图片 <span style={{ fontSize: 11, color: '#999', fontWeight: 400 }}>（必填：无图片不能发布，拖动可调整顺序）</span></div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, padding: 12, border: '1px dashed #d9d9d9', borderRadius: 8, background: '#fafafa', minHeight: 80, alignItems: 'flex-start' }}>
           {editImages.map((img, idx) => (
             <div key={idx}
