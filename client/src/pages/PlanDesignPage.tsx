@@ -1409,6 +1409,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
   // 新增半成品确认
   const handleConfirmNewSemi = useCallback(() => {
     if (!newSemiName.trim()) { message.warning('请输入名称'); return; }
+    if (!newSemiStyleCode.trim()) { message.warning('请输入款式编码'); return; }
     const owner = getDataOwner();
     const plKey = `pageData_basic-data_product-list_${owner}`;
     // 编辑模式（复制并创建/行内编辑）：覆盖保存已有半成品，不新建记录
@@ -1465,7 +1466,8 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
     try {
       // 写入前重新读取 localStorage，确保拿到最新数据（避免 pullAllDatasets 等异步操作覆盖）
       const existing: any[] = JSON.parse(localStorage.getItem(plKey) || '[]');
-      const code = newSemiCode.trim() || `SEMI-${Date.now()}`;
+      if (!newSemiCode.trim()) { message.warning('请输入商品编码'); return; }
+      const code = newSemiCode.trim();
       // 去重检查：同时检查 localStorage 和 bomSelectData 中已有编码
       const allItems = [...existing, ...bomSelectData];
       if (allItems.some((p: any) => String(p.productCode || '').trim() === code)) {
@@ -3190,13 +3192,13 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
               <Input size="small" placeholder="商品简称" value={newSemiName} onChange={e => setNewSemiName(e.target.value)} />
             </Col>
             <Col span={8}>
-              <div style={{ marginBottom: 4, fontSize: 12, color: '#5a6d85' }}>款式编码</div>
+              <div style={{ marginBottom: 4, fontSize: 12, color: '#5a6d85' }}>款式编码 <span style={{ color: '#ff4d4f' }}>*</span></div>
               <Input size="small" placeholder="款式编码" value={newSemiStyleCode} onChange={e => setNewSemiStyleCode(e.target.value)} />
             </Col>
             <Col span={8}>
-              <div style={{ marginBottom: 4, fontSize: 12, color: '#5a6d85' }}>商品编码</div>
+              <div style={{ marginBottom: 4, fontSize: 12, color: '#5a6d85' }}>商品编码 <span style={{ color: '#ff4d4f' }}>*</span></div>
               <Space.Compact style={{ width: '100%' }}>
-                <Input size="small" placeholder="留空自动生成" value={newSemiCode} onChange={e => setNewSemiCode(e.target.value)} style={{ flex: 1 }} />
+                <Input size="small" placeholder="请输入商品编码" value={newSemiCode} onChange={e => setNewSemiCode(e.target.value)} style={{ flex: 1 }} />
                 <Tooltip title="随机生成唯一编码">
                   <Button size="small" icon={<ReloadOutlined />} onClick={generateRandomSemiCode} />
                 </Tooltip>
@@ -4260,19 +4262,21 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
         onSelect={(code) => { setAddColorMoldNumber(code); setAddColorMoldPickerVisible(false); }}
         onCancel={() => setAddColorMoldPickerVisible(false)}
       />
-      {/* 新增半成品 - 模具选择弹窗 */}
+      {/* 新增半成品 - 模具选择弹窗（层级须高于半成品弹窗的 1200） */}
       <MoldPickerModal
         open={newSemiMoldPickerVisible}
         value={newSemiMoldNumber}
         onSelect={(code) => { setNewSemiMoldNumber(code); setNewSemiMoldPickerVisible(false); }}
         onCancel={() => setNewSemiMoldPickerVisible(false)}
+        zIndex={1300}
       />
-      {/* 新增原材料 - 模具选择弹窗 */}
+      {/* 新增原材料 - 模具选择弹窗（层级须高于原材料弹窗的 1200/1400） */}
       <MoldPickerModal
         open={newRawMoldPickerVisible}
         value={newRawMoldNumber}
         onSelect={(code) => { setNewRawMoldNumber(code); setNewRawMoldPickerVisible(false); }}
         onCancel={() => setNewRawMoldPickerVisible(false)}
+        zIndex={newSemiBomMode ? 1500 : 1300}
       />
     </div>
   );
