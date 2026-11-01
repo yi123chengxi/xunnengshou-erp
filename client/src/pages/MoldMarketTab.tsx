@@ -34,6 +34,7 @@ export interface MoldListing {
   remark?: string;
   specs?: MoldSpec[];      // 规格明细与数量
   totalQuantity?: number;  // 模具数量总计
+  dealt?: boolean;         // 成交标记（成交后模具管理列表按类型显示已出租/已出售）
 }
 
 const getDataOwner = (): string => {
@@ -427,6 +428,19 @@ const MoldMarketTab: React.FC<{ onContact?: (username: string, subject: string) 
     message.success('已加入购物车');
   };
 
+  // 标记/取消成交：成交后模具管理列表按类型显示已出租/已出售
+  const handleToggleDeal = (key: string) => {
+    let currentListings: MoldListing[] = [];
+    try { currentListings = JSON.parse(localStorage.getItem(STORAGE_KEY()) || '[]'); } catch { /* ignore */ }
+    const next = currentListings.map(l => l.key === key ? { ...l, dealt: !l.dealt } : l);
+    const json = JSON.stringify(next);
+    setListings(next.map(resolveImageKeys));
+    safeSetItem(STORAGE_KEY(), json);
+    flushDatasetUpload(STORAGE_KEY(), json);
+    const target = next.find(l => l.key === key);
+    message.success(target?.dealt ? `已标记成交（${target.mode === 'rent' ? '已出租' : '已出售'}）` : '已取消成交标记');
+  };
+
   // 我的模具列表
   const myListings = useMemo(() => listings.filter(l => l.publisher === username), [listings, username]);
 
@@ -543,10 +557,11 @@ const MoldMarketTab: React.FC<{ onContact?: (username: string, subject: string) 
     },
     { title: '发布时间', dataIndex: 'createdAt', key: 'createdAt', width: 110, align: 'center' as const },
     {
-      title: '操作', key: 'action', width: 150, align: 'center' as const,
+      title: '操作', key: 'action', width: 220, align: 'center' as const,
       render: (_: any, r: MoldListing) => (
         <Space size={4}>
           <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openEditListing(r)}>编辑</Button>
+          <Button type="link" size="small" onClick={() => handleToggleDeal(r.key)}>{r.dealt ? '取消成交' : '标记成交'}</Button>
           <Button type="link" size="small" danger onClick={() => handleDelete(r.key)}>下架</Button>
         </Space>
       ),
@@ -989,17 +1004,25 @@ const MoldMarketTab: React.FC<{ onContact?: (username: string, subject: string) 
               {/* 规格与数量明细 */}
               {detailRecord.specs && detailRecord.specs.length > 0 && detailRecord.specs.some((s: any) => s.specName) && (
                 <Col span={24}>
-                  <div style={{ background: '#fafafa', border: '1px solid #f0f0f0', borderRadius: 8, padding: '10px 14px' }}>
+                  <div>
                     <div style={{ fontSize: 13, color: '#666', marginBottom: 6 }}>规格明细与数量：</div>
-                    {detailRecord.specs.filter((s: any) => s.specName).map((s: any, idx: number) => (
-                      <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', fontSize: 13 }}>
-                        <span>{s.specName}</span>
-                        <span style={{ color: PRIMARY, fontWeight: 500 }}>× {s.quantity}</span>
-                      </div>
-                    ))}
-                    <div style={{ borderTop: '1px solid #f0f0f0', marginTop: 6, paddingTop: 6, textAlign: 'right', fontSize: 14, color: '#333' }}>
-                      模具数量总计：<strong style={{ color: PRIMARY, fontSize: 16 }}>{detailRecord.totalQuantity ?? detailRecord.specs.reduce((sum: number, s: any) => sum + (Number(s.quantity) || 0), 0)}</strong>
-                    </div>
+                    <Table
+                      size="small"
+                      bordered
+                      pagination={false}
+                      rowKey={(s: any, idx?: number) => `${s.specName}-${idx}`}
+                      dataSource={detailRecord.specs.filter((s: any) => s.specName)}
+                      columns={[
+                        { title: '规格型号', dataIndex: 'specName', key: 'specName', align: 'center' as const },
+                        { title: '数量', dataIndex: 'quantity', key: 'quantity', width: 120, align: 'center' as const, render: (v: number) => <span style={{ color: PRIMARY, fontWeight: 500 }}>× {v}</span> },
+                      ]}
+                      summary={() => (
+                        <Table.Summary.Row>
+                          <Table.Summary.Cell index={0}><div style={{ textAlign: 'right' }}>模具数量总计：</div></Table.Summary.Cell>
+                          <Table.Summary.Cell index={1}><strong style={{ color: PRIMARY, fontSize: 15 }}>{detailRecord.totalQuantity ?? (detailRecord.specs || []).reduce((sum: number, s: any) => sum + (Number(s.quantity) || 0), 0)}</strong></Table.Summary.Cell>
+                        </Table.Summary.Row>
+                      )}
+                    />
                   </div>
                 </Col>
               )}

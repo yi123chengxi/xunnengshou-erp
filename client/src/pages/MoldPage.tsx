@@ -74,6 +74,29 @@ const MoldPage: React.FC = () => {
   const [detailVisible, setDetailVisible] = useState(false);
   const [detailRecord, setDetailRecord] = useState<MoldRecord | null>(null);
 
+  // 模具租/售市场发布状态（全局键 market_mold_listings，同步事件刷新）
+  const [moldListings, setMoldListings] = useState<any[]>(() => {
+    try { return JSON.parse(localStorage.getItem('market_mold_listings') || '[]'); } catch { return []; }
+  });
+  useEffect(() => {
+    const reloadListings = () => {
+      try { setMoldListings(JSON.parse(localStorage.getItem('market_mold_listings') || '[]')); } catch { /* ignore */ }
+    };
+    window.addEventListener('sync-data-updated', reloadListings);
+    return () => window.removeEventListener('sync-data-updated', reloadListings);
+  }, []);
+  // moldKey -> 发布/成交状态（任一记录成交即视为成交，成交类型取该条 mode）
+  const publishStatusMap = useMemo(() => {
+    const map: Record<string, { dealt: boolean; mode: string }> = {};
+    moldListings.forEach((l: any) => {
+      if (!l || !l.moldKey) return;
+      const cur = map[l.moldKey] || { dealt: false, mode: l.mode };
+      if (l.dealt) { cur.dealt = true; cur.mode = l.mode; }
+      map[l.moldKey] = cur;
+    });
+    return map;
+  }, [moldListings]);
+
   // ===================== 字段显示控制 =====================
   const MOLD_ALL_FIELDS = [
     { key: 'image', label: '主图' },
@@ -82,6 +105,7 @@ const MoldPage: React.FC = () => {
     { key: 'spec', label: '规格型号' },
     { key: 'totalQuantity', label: '模具数量' },
     { key: 'status', label: '状态' },
+    { key: 'publishStatus', label: '发布状态' },
     { key: 'remark', label: '备注' },
     { key: 'creator', label: '创建人' },
     { key: 'createdAt', label: '创建时间' },
@@ -89,7 +113,7 @@ const MoldPage: React.FC = () => {
   const [fieldOrder, setFieldOrder] = useState<string[]>(() => {
     try {
       const saved = localStorage.getItem(`moldFieldOrder_${owner}`);
-      if (saved) { const arr = JSON.parse(saved); if (Array.isArray(arr) && arr.length) return arr; }
+      if (saved) { const arr = JSON.parse(saved); if (Array.isArray(arr) && arr.length) { MOLD_ALL_FIELDS.forEach(f => { if (!arr.includes(f.key)) arr.push(f.key); }); return arr; } }
     } catch { /* ignore */ }
     return MOLD_ALL_FIELDS.map(f => f.key);
   });
@@ -246,6 +270,17 @@ const MoldPage: React.FC = () => {
         return <Tag color={colors[v] || 'default'}>{v || '—'}</Tag>;
       },
     },
+    {
+      title: '发布状态', key: 'publishStatus', width: 100, align: 'center',
+      render: (_v, r) => {
+        const st = publishStatusMap[r.key];
+        if (!st) return <span style={{ color: '#ccc' }}>未发布</span>;
+        if (st.dealt) return st.mode === 'rent'
+          ? <Tag color="blue">已出租</Tag>
+          : <Tag color="green">已出售</Tag>;
+        return <Tag color="cyan">已发布</Tag>;
+      },
+    },
     { title: '备注', dataIndex: 'remark', key: 'remark', width: 140, align: 'center', ellipsis: true, render: v => v ? <Tooltip title={v}>{v}</Tooltip> : '—' },
     { title: '创建人', dataIndex: 'creator', key: 'creator', width: 90, align: 'center', render: v => v || '—' },
     { title: '创建时间', dataIndex: 'createdAt', key: 'createdAt', width: 110, align: 'center', render: v => v || '—' },
@@ -264,8 +299,10 @@ const MoldPage: React.FC = () => {
   const cols = useMemo(() => {
     const colMap: Record<string, any> = {};
     baseCols.forEach(c => { colMap[c.key as string] = c; });
-    return fieldOrder.filter(k => fieldVis[k] && colMap[k]).map(k => colMap[k]);
-  }, [fieldOrder, fieldVis]);
+    const configured = fieldOrder.filter(k => fieldVis[k] && colMap[k]).map(k => colMap[k]);
+    // 操作列固定末尾展示，不参与字段显示配置
+    return [...configured, colMap['action']];
+  }, [fieldOrder, fieldVis, publishStatusMap]);
 
   return (
     <div style={{ padding: 12, background: '#fff', borderRadius: 8, flex: 1, minHeight: 0, overflow: 'auto' }}>
@@ -435,17 +472,25 @@ const MoldPage: React.FC = () => {
               {/* 规格与数量明细 */}
               {detailRecord.specs && detailRecord.specs.length > 0 && detailRecord.specs.some(s => s.specName) && (
                 <Col span={24}>
-                  <div style={{ background: '#fafafa', border: '1px solid #f0f0f0', borderRadius: 8, padding: '10px 14px' }}>
+                  <div>
                     <div style={{ fontSize: 13, color: '#666', marginBottom: 6 }}>规格明细与数量：</div>
-                    {detailRecord.specs.filter(s => s.specName).map((s, idx) => (
-                      <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', fontSize: 13 }}>
-                        <span>{s.specName}</span>
-                        <span style={{ color: PRIMARY, fontWeight: 500 }}>× {s.quantity}</span>
-                      </div>
-                    ))}
-                    <div style={{ borderTop: '1px solid #f0f0f0', marginTop: 6, paddingTop: 6, textAlign: 'right', fontSize: 14, color: '#333' }}>
-                      模具数量总计：<strong style={{ color: PRIMARY, fontSize: 16 }}>{detailRecord.totalQuantity ?? detailRecord.specs.reduce((sum, s) => sum + (Number(s.quantity) || 0), 0)}</strong>
-                    </div>
+                    <Table
+                      size="small"
+                      bordered
+                      pagination={false}
+                      rowKey={(s: any, idx?: number) => `${s.specName}-${idx}`}
+                      dataSource={detailRecord.specs.filter(s => s.specName)}
+                      columns={[
+                        { title: '规格型号', dataIndex: 'specName', key: 'specName', align: 'center' as const },
+                        { title: '数量', dataIndex: 'quantity', key: 'quantity', width: 120, align: 'center' as const, render: (v: number) => <span style={{ color: PRIMARY, fontWeight: 500 }}>× {v}</span> },
+                      ]}
+                      summary={() => (
+                        <Table.Summary.Row>
+                          <Table.Summary.Cell index={0}><div style={{ textAlign: 'right' }}>模具数量总计：</div></Table.Summary.Cell>
+                          <Table.Summary.Cell index={1}><strong style={{ color: PRIMARY, fontSize: 15 }}>{detailRecord.totalQuantity ?? (detailRecord.specs || []).reduce((sum, s) => sum + (Number(s.quantity) || 0), 0)}</strong></Table.Summary.Cell>
+                        </Table.Summary.Row>
+                      )}
+                    />
                   </div>
                 </Col>
               )}
