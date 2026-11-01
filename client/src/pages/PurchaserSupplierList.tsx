@@ -1652,7 +1652,7 @@ const PurchaserSupplierList: React.FC = () => {
         width={600}
         destroyOnClose
       >
-        <Form form={addForm} layout="vertical" style={{ marginTop: 16 }}>
+        <Form autoComplete="off" form={addForm} layout="vertical" style={{ marginTop: 16 }}>
           <Form.Item
             name="supplierName"
             label="供应商名称"
@@ -1758,7 +1758,7 @@ const PurchaserSupplierList: React.FC = () => {
         width={600}
         destroyOnClose
       >
-        <Form form={editForm} layout="vertical" style={{ marginTop: 16 }}>
+        <Form autoComplete="off" form={editForm} layout="vertical" style={{ marginTop: 16 }}>
           <Form.Item
             name="supplierName"
             label="供应商名称"
@@ -1875,7 +1875,7 @@ const PurchaserSupplierList: React.FC = () => {
         }}>
           终止合作需要供应商确认后方可生效。生效后供应商信息将保留，但双方数据联动将终止。
         </div>
-        <Form form={terminateForm} layout="vertical">
+        <Form autoComplete="off" form={terminateForm} layout="vertical">
           <Form.Item name="supplierName" label="终止对象">
             <Input disabled />
           </Form.Item>

@@ -469,7 +469,7 @@ const BrandAuthPage: React.FC<{ embedded?: boolean }> = ({ embedded }) => {
       </div>
 
       <Modal title={editing ? '编辑授权记录' : '新增授权记录'} open={visible} onOk={handleSave} onCancel={() => setVisible(false)} okText="保存" cancelText="取消" width={860} destroyOnClose>
-        <Form form={form} layout="vertical">
+        <Form autoComplete="off" form={form} layout="vertical">
           <Row gutter={12}>
             <Col span={6}><Form.Item name="brandName" label="品牌名称" rules={[{ required: true, message: '必填' }]}><AutoComplete options={brandNameOpts} placeholder="选择或输入品牌名称" filterOption={(input, option) => String(option?.value || '').toLowerCase().includes(input.toLowerCase())} /></Form.Item></Col>
             <Col span={6}><Form.Item name="shopType" label={<span>店铺类型 <Tooltip title="公司内部店铺：保证金由我方代付，标记退回时自动登记其他应收款台账并记账；分销商店铺：保证金由分销商自行支付，仅记录状态不记账"><QuestionCircleOutlined style={{ color: '#999', cursor: 'pointer' }} /></Tooltip></span>}><Select options={SHOP_TYPE_OPTS.map(x => ({ value: x, label: x }))} /></Form.Item></Col>

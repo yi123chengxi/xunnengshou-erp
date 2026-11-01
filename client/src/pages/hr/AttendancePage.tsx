@@ -497,7 +497,7 @@ const AttendancePage: React.FC = () => {
 
       {/* 补卡弹窗 */}
       <Modal title="补卡" open={makeupVisible} onOk={handleMakeup} onCancel={() => setMakeupVisible(false)} okText="保存" cancelText="取消" width={480}>
-        <Form form={makeupForm} layout="vertical" style={{ marginTop: 16 }}>
+        <Form autoComplete="off" form={makeupForm} layout="vertical" style={{ marginTop: 16 }}>
           <Row gutter={16}>
             <Col span={12}>
               <Form.Item name="employeeUsername" label="员工" rules={[{ required: true, message: '请选择' }]}>

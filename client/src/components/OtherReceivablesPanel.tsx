@@ -426,7 +426,7 @@ const OtherReceivablesPanel: React.FC = () => {
         onCancel={() => setModalVisible(false)}
         okText="保存" cancelText="取消" width={520} destroyOnClose
       >
-        <Form form={form} layout="vertical" style={{ marginTop: 12 }}>
+        <Form autoComplete="off" form={form} layout="vertical" style={{ marginTop: 12 }}>
           <Row gutter={12}>
             <Col span={12}>
               <Form.Item name="recvDate" label="应收日期" rules={[{ required: true, message: '请选择应收日期' }]}>
@@ -510,7 +510,7 @@ const OtherReceivablesPanel: React.FC = () => {
             应收 ¥{fmt(receiveTarget.amount)}　已收 ¥{fmt(receiveTarget.receivedAmount)}　未收 <Text strong style={{ color: '#ff4d4f' }}>¥{fmt((Number(receiveTarget.amount) || 0) - (Number(receiveTarget.receivedAmount) || 0))}</Text>
           </div>
         )}
-        <Form form={receiveForm} layout="vertical">
+        <Form autoComplete="off" form={receiveForm} layout="vertical">
           <Row gutter={12}>
             <Col span={12}>
               <Form.Item name="amount" label="本次收款金额" rules={[{ required: true, message: '请输入收款金额' }]}>

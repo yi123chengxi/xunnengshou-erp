@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import JsBarcode from 'jsbarcode';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import {
@@ -14024,7 +14024,7 @@ const handleBatchAttrsConfirm = () => {
         <ConfigProvider componentDisabled={isOrderEditCtx && orderReadonly}>
         {activeTab?.formType === 'formula' ? (
           // ============ 生产管理费公式模式编辑表单 ============
-          <Form form={editForm} layout="vertical" style={{ marginTop: 16 }}>
+          <Form autoComplete="off" form={editForm} layout="vertical" style={{ marginTop: 16 }}>
             <Row gutter={16}>
               <Col span={12}>
                 <Form.Item name="name" label="费用名称" rules={[{ required: true, message: '请输入费用名称' }]}>
@@ -14117,7 +14117,7 @@ const handleBatchAttrsConfirm = () => {
                     key: 'trade',
                     label: <span style={{ fontWeight: 600, color: PRIMARY }}>交易信息</span>,
                     children: (
-                      <Form form={editForm} layout="vertical">
+                      <Form autoComplete="off" form={editForm} layout="vertical">
                         <Row gutter={16}>
                           <Col span={8}>
                             <Form.Item name="id" label={<span style={{ fontSize: 12 }}>订单编号</span>}>
@@ -14167,7 +14167,7 @@ const handleBatchAttrsConfirm = () => {
                     key: 'remark',
                     label: <span style={{ fontWeight: 600, color: PRIMARY }}>备注信息</span>,
                     children: (
-                      <Form form={editForm} layout="vertical">
+                      <Form autoComplete="off" form={editForm} layout="vertical">
                         <Row gutter={16}>
                           <Col span={12}>
                             <Form.Item name="sellerMessage" label={<span style={{ fontSize: 12 }}>卖家备注</span>}>
@@ -14237,7 +14237,7 @@ const handleBatchAttrsConfirm = () => {
                     key: 'address',
                     label: <span style={{ fontWeight: 600, color: PRIMARY }}>收货地址信息</span>,
                     children: (
-                      <Form form={editForm} layout="vertical">
+                      <Form autoComplete="off" form={editForm} layout="vertical">
                         {/* Row 1: 客户名称 | 买家账号 | 唛头 | 收货人 | 电话 */}
                         <Row gutter={16}>
                           <Col span={3}>
@@ -14539,7 +14539,7 @@ const handleBatchAttrsConfirm = () => {
                     key: 'pay',
                     label: <span style={{ fontWeight: 600, color: PRIMARY }}>订单支付情况</span>,
                     children: (
-                      <Form form={editForm} layout="vertical">
+                      <Form autoComplete="off" form={editForm} layout="vertical">
                         {/* 付款方式 / 剩余额度 / 已付金额 / 货品总额 / 收款账户 / 付款截图 / 确认收款 — 同一行 flex-wrap */}
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 2em', alignItems: 'flex-end', marginBottom: 8 }}>
                           <div>
@@ -14705,7 +14705,7 @@ const handleBatchAttrsConfirm = () => {
                     key: 'invoice',
                     label: <span style={{ fontWeight: 600, color: PRIMARY }}>发票信息</span>,
                     children: (
-                      <Form form={editForm} layout="vertical">
+                      <Form autoComplete="off" form={editForm} layout="vertical">
                         <Row gutter={16}>
                           <Col span={24}>
                             <Form.Item name="remark" label={<span style={{ fontSize: 12 }}>发票备注</span>}>
@@ -14759,7 +14759,7 @@ const handleBatchAttrsConfirm = () => {
             )}
           </div>
         ) : isProductList && pageConfig?.columnGroups ? (
-          <Form form={editForm} layout="vertical" style={{ marginTop: 16, maxHeight: 540, overflowY: 'auto' }}>
+          <Form autoComplete="off" form={editForm} layout="vertical" style={{ marginTop: 16, maxHeight: 540, overflowY: 'auto' }}>
             {pageConfig.columnGroups.filter(group => group !== '销售统计').map(group => {
               const groupCols = (effectivePageConfig?.columns?.filter(c =>
                 c.group === group && c.dataIndex !== 'image'
@@ -14823,7 +14823,7 @@ const handleBatchAttrsConfirm = () => {
                           ) : col.type === 'ellipsis' ? (
                             <Input.TextArea size="small" rows={2} placeholder={col.title} />
                           ) : (
-                            <Input size="small" placeholder={col.title} />
+                            <Input size="small" placeholder={col.title} autoComplete="off" />
                           )}
                         </Form.Item>
                       </Col>
@@ -14835,7 +14835,7 @@ const handleBatchAttrsConfirm = () => {
             })}
           </Form>
         ) : (
-          <Form form={editForm} layout="vertical" style={{ marginTop: 16, maxHeight: 540, overflowY: 'auto' }}>
+          <Form autoComplete="off" form={editForm} layout="vertical" style={{ marginTop: 16, maxHeight: 540, overflowY: 'auto' }}>
             <Row gutter={16}>
               {(effectivePageConfig?.columns || []).filter(c => c.dataIndex !== 'image').map(col => (
                 <Col span={8} key={col.key}>
@@ -14908,7 +14908,7 @@ const handleBatchAttrsConfirm = () => {
                     ) : col.type === 'ellipsis' ? (
                       <Input.TextArea size="small" rows={2} placeholder={col.title} />
                     ) : (
-                      <Input size="small" placeholder={col.title} />
+                      <Input size="small" placeholder={col.title} autoComplete="off" />
                     )}
                   </Form.Item>
                 </Col>
@@ -14983,7 +14983,7 @@ const handleBatchAttrsConfirm = () => {
       >
         {activeTab?.formType === 'formula' ? (
           // ============ 生产管理费公式模式表单 ============
-          <Form form={addForm} layout="vertical" style={{ marginTop: 16 }}>
+          <Form autoComplete="off" form={addForm} layout="vertical" style={{ marginTop: 16 }}>
             <Row gutter={16}>
               <Col span={12}>
                 <Form.Item name="name" label="费用名称" rules={[{ required: true, message: '请输入费用名称' }]}>
@@ -15051,7 +15051,7 @@ const handleBatchAttrsConfirm = () => {
           </Form>
         ) : pageConfig?.title === '订单管理' ? (
           // ============ 订单管理分区表单 ============
-          <Form form={addForm} layout="vertical" style={{ marginTop: 4, maxHeight: 560, overflowY: 'auto', overflowX: 'hidden', padding: '0 1em', boxSizing: 'border-box' }}>
+          <Form autoComplete="off" form={addForm} layout="vertical" style={{ marginTop: 4, maxHeight: 560, overflowY: 'auto', overflowX: 'hidden', padding: '0 1em', boxSizing: 'border-box' }}>
             <Collapse
               activeKey={['basic', 'receiver', 'goods', 'pay', 'invoice']}
               collapsible="disabled"
@@ -15615,7 +15615,7 @@ const handleBatchAttrsConfirm = () => {
             />
           </Form>
         ) : effectivePageConfig?.columns?.some(c => c.group) ? (
-          <Form form={addForm} layout="vertical" style={{ marginTop: 16, maxHeight: 540, overflowY: 'auto' }}>
+          <Form autoComplete="off" form={addForm} layout="vertical" style={{ marginTop: 16, maxHeight: 540, overflowY: 'auto' }}>
             {(() => {
               const groups = pageConfig.columnGroups || Array.from(new Set(effectivePageConfig?.columns?.filter(c => c.group).map(c => c.group!) || []));
               return groups.filter(group => group !== '销售统计').map(group => {
@@ -15729,7 +15729,7 @@ const handleBatchAttrsConfirm = () => {
                           ) : col.type === 'ellipsis' ? (
                             <Input.TextArea size="small" rows={2} placeholder={col.title} />
                           ) : (
-                            <Input size="small" placeholder={col.title} />
+                            <Input size="small" placeholder={col.title} autoComplete="off" />
                           )}
                         </Form.Item>
                       </Col>
@@ -15773,7 +15773,7 @@ const handleBatchAttrsConfirm = () => {
             )}
           </Form>
         ) : (
-          <Form form={addForm} layout="vertical" style={{ marginTop: 16, maxHeight: 540, overflowY: 'auto' }}>
+          <Form autoComplete="off" form={addForm} layout="vertical" style={{ marginTop: 16, maxHeight: 540, overflowY: 'auto' }}>
             <Row gutter={16}>
               {(effectivePageConfig?.columns || []).filter(c => c.dataIndex !== 'image').map(col => {
                 // 生产工序必填字段：工价、工时、工序名称、工序编号
@@ -15864,7 +15864,7 @@ const handleBatchAttrsConfirm = () => {
                       ) : col.type === 'ellipsis' ? (
                         <Input.TextArea size="small" rows={2} placeholder={col.title} />
                       ) : (
-                        <Input size="small" placeholder={col.title} />
+                        <Input size="small" placeholder={col.title} autoComplete="off" />
                       )}
                     </Form.Item>
                   </Col>
@@ -17607,7 +17607,7 @@ const handleBatchAttrsConfirm = () => {
                 正在编辑半成品：修改不同处后点击“保存修改”覆盖保存（含图片与物料清单）
               </div>
             )}
-            <Form form={bomSelectNewForm} layout="vertical" size="small">
+            <Form autoComplete="off" form={bomSelectNewForm} layout="vertical" size="small">
               {bomSelectType === 'process' ? (
                 <>
                   <Row gutter={16}>
@@ -18035,7 +18035,7 @@ const handleBatchAttrsConfirm = () => {
         zIndex={1280}
         destroyOnClose
       >
-        <Form form={quickAddSupplierForm} layout="vertical" style={{ marginTop: 16 }}>
+        <Form autoComplete="off" form={quickAddSupplierForm} layout="vertical" style={{ marginTop: 16 }}>
           <Form.Item name="supplierName" label="供应商名称" rules={[{ required: true, message: '请输入供应商名称' }]}>
             <Input placeholder="请输入供应商企业名称" />
           </Form.Item>
@@ -18351,7 +18351,7 @@ const handleBatchAttrsConfirm = () => {
         destroyOnClose
       >
         {pageConfig?.columnGroups && (
-          <Form form={styleDetailForm} layout="vertical" style={{ marginTop: 16, maxHeight: 520, overflowY: 'auto' }}>
+          <Form autoComplete="off" form={styleDetailForm} layout="vertical" style={{ marginTop: 16, maxHeight: 520, overflowY: 'auto' }}>
             {pageConfig.columnGroups.map(group => {
               const groupCols = (effectivePageConfig?.columns?.filter(c =>
                 c.group === group && c.dataIndex !== 'image'
@@ -18447,7 +18447,7 @@ const handleBatchAttrsConfirm = () => {
                           ) : col.type === 'ellipsis' ? (
                             <Input.TextArea size="small" rows={2} placeholder={col.title} />
                           ) : (
-                            <Input size="small" placeholder={col.title} />
+                            <Input size="small" placeholder={col.title} autoComplete="off" />
                           )}
                         </Form.Item>
                       </Col>
@@ -20128,7 +20128,7 @@ tr:nth-child(even) { background: #f5f9ff; }
         <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 12 }}>
           勾选的半成品加工订单将以发包订单形式发布到商机市场，所有加工厂均可报价；确认中标后自动建立合作并推送加工订单（订单来源=发包市场）。
         </Paragraph>
-        <Form form={pubMktForm} layout="vertical">
+        <Form autoComplete="off" form={pubMktForm} layout="vertical">
           <Row gutter={12}>
             <Col span={8}><Form.Item name="targetPrice" label="期望单价(元)"><InputNumber min={0} precision={2} style={{ width: '100%' }} placeholder="默认取订单单价" /></Form.Item></Col>
             <Col span={8}><Form.Item name="deposit" label="保证金(元)"><InputNumber min={0} precision={2} style={{ width: '100%' }} placeholder="选填" /></Form.Item></Col>
@@ -20150,7 +20150,7 @@ tr:nth-child(even) { background: #f5f9ff; }
         width={440}
         destroyOnClose
       >
-        <Form form={rateForm} layout="vertical" style={{ marginTop: 12 }}>
+        <Form autoComplete="off" form={rateForm} layout="vertical" style={{ marginTop: 12 }}>
           <Form.Item name="score" label="评分（1-5 星）" rules={[{ required: true, message: '请选择评分' }]} initialValue={5}>
             <Select options={[5, 4, 3, 2, 1].map(v => ({ value: v, label: `${'★'.repeat(v)}${'☆'.repeat(5 - v)} ${v} 星` }))} placeholder="请选择评分" />
           </Form.Item>
@@ -23590,7 +23590,7 @@ function WarehouseManagePage() {
           </Space>
         )}>
         {editRecord ? (
-        <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
+        <Form autoComplete="off" form={form} layout="vertical" style={{ marginTop: 16 }}>
           <Row gutter={16}>
             <Col span={12}><Form.Item name="warehouseCode" label="仓库编码" rules={[{ required: true }]}><Input placeholder="如：WH-001" /></Form.Item></Col>
             <Col span={12}><Form.Item name="warehouseName" label="仓库名称" rules={[{ required: true }]}><Input placeholder="如：主仓库" /></Form.Item></Col>

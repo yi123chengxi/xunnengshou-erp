@@ -1194,7 +1194,7 @@ const Auth: React.FC = () => {
         <Radio.Button value="sms" style={{ width: '50%', textAlign: 'center' }}>手机验证码登录</Radio.Button>
       </Radio.Group>
       {loginMode === 'account' ? (
-      <Form form={form} layout="vertical" size="large">
+      <Form autoComplete="off" form={form} layout="vertical" size="large">
         <Form.Item
           name="username"
           rules={[{ required: true, message: '请输入登录账号' }]}
@@ -1242,7 +1242,7 @@ const Auth: React.FC = () => {
         </Form.Item>
       </Form>
       ) : (
-        <Form layout="vertical" size="large">
+        <Form autoComplete="off" layout="vertical" size="large">
           <Form.Item>
             <Input
               prefix={<MobileOutlined />}
@@ -1324,7 +1324,7 @@ const Auth: React.FC = () => {
           style={{ marginBottom: 32 }}
         />
 
-        <Form form={form} layout="vertical" size="large">
+        <Form autoComplete="off" form={form} layout="vertical" size="large">
           {/* 步骤1：基本信息 */}
           {registerStep === 0 && (
             <>
@@ -1844,7 +1844,7 @@ const Auth: React.FC = () => {
                 showIcon
                 style={{ marginBottom: 20 }}
               />
-              <Form form={forgotForm} layout="vertical" size="large">
+              <Form autoComplete="off" form={forgotForm} layout="vertical" size="large">
                 <Form.Item
                   name="forgotUsername"
                   rules={[{ required: true, message: '请输入登录账号' }]}

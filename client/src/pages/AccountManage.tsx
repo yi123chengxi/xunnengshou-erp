@@ -1388,7 +1388,7 @@ const AccountManage: React.FC = () => {
         cancelText="取消"
         width={780}
       >
-        <Form form={editForm} layout="vertical" scrollToFirstError style={{ marginTop: 16 }}
+        <Form autoComplete="off" form={editForm} layout="vertical" scrollToFirstError style={{ marginTop: 16 }}
           onValuesChange={(changedValues) => {
             // 仅当用户手动更改角色时，合并新角色权限到独立权限）
             if (changedValues.roles) {
@@ -1488,7 +1488,7 @@ const AccountManage: React.FC = () => {
             创建成功后，系统将自动生成初始密码，请提醒用户首次登录后修改密码
           </Text>
         </div>
-        <Form form={addForm} layout="vertical" scrollToFirstError
+        <Form autoComplete="off" form={addForm} layout="vertical" scrollToFirstError
           onValuesChange={(changedValues) => {
             if (changedValues.roles) {
               const newRoles: string[] = changedValues.roles || [];
@@ -1654,7 +1654,7 @@ const AccountManage: React.FC = () => {
             重置密码后，用户需使用新密码重新登录
           </Text>
         </div>
-        <Form form={pwdForm} layout="vertical">
+        <Form autoComplete="off" form={pwdForm} layout="vertical">
           <Form.Item
             name="newPassword"
             label="新密码"
@@ -1733,7 +1733,7 @@ const AccountManage: React.FC = () => {
         cancelText="取消"
         width={600}
       >
-        <Form form={groupForm} layout="vertical" style={{ marginTop: 16 }}>
+        <Form autoComplete="off" form={groupForm} layout="vertical" style={{ marginTop: 16 }}>
           <Form.Item name="name" label="分组名称" rules={[{ required: true, message: '请输入分组名称' }]}>
             <Input placeholder="例如：仓库、客服、运营" maxLength={20} />
           </Form.Item>

@@ -719,7 +719,7 @@ const DevPerformanceNewPage: React.FC<{ platform?: AnalyticsPlatform }> = ({ pla
       </Card>
 
       <Modal title={editIdx !== null ? '编辑职级' : '新增职级'} open={rankModal} onOk={confirmRank} onCancel={() => setRankModal(false)} okText="保存" cancelText="取消" width={560} destroyOnClose>
-        <Form layout="vertical" style={{ marginTop: 12 }}>
+        <Form autoComplete="off" layout="vertical" style={{ marginTop: 12 }}>
           <Space style={{ display: 'flex' }} size={12} wrap>
             <Form.Item label="职级序号" style={{ width: 100 }}><Input style={{ width: '100%' }} prefix="P" value={rankForm.rank} onChange={e => setRankForm(f => ({ ...f, rank: e.target.value.replace(/[^0-9]/g, '') }))} placeholder="1" /></Form.Item>
             <Form.Item label="职级名称" style={{ width: 160 }}><Input value={rankForm.name} onChange={e => setRankForm(f => ({ ...f, name: e.target.value }))} placeholder="如：初级运营" /></Form.Item>

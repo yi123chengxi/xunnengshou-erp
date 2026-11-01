@@ -236,7 +236,7 @@ const LeavePage: React.FC = () => {
       </Card>
 
       <Modal title="新增请假申请" open={modalVisible} onOk={handleSave} onCancel={() => setModalVisible(false)} okText="提交" cancelText="取消" width={520}>
-        <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
+        <Form autoComplete="off" form={form} layout="vertical" style={{ marginTop: 16 }}>
           <Form.Item name="employeeUsername" label="员工" rules={[{ required: true, message: '请选择员工' }]}>
             <Select showSearch placeholder="选择员工" optionFilterProp="label"
               options={employees.map(e => ({ value: e.username, label: e.displayName }))}

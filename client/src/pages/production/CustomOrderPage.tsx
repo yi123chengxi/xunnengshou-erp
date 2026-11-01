@@ -503,7 +503,7 @@ const CustomOrderPage: React.FC = () => {
         destroyOnClose
         maskClosable={false}
       >
-        <Form form={createForm} layout="vertical" style={{ marginTop: 8 }}>
+        <Form autoComplete="off" form={createForm} layout="vertical" style={{ marginTop: 8 }}>
           <Form.Item label="订单来源" style={{ marginBottom: 12 }}>
             <Radio.Group value={createMode} onChange={e => setCreateMode(e.target.value)}>
               <Radio.Button value="select">选择已有订单</Radio.Button>

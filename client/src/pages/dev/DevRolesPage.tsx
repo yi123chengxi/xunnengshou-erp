@@ -160,7 +160,7 @@ const DevRolesPage: React.FC = () => {
         width={640}
         destroyOnClose
       >
-        <Form form={form} layout="vertical" style={{ marginTop: 12 }}>
+        <Form autoComplete="off" form={form} layout="vertical" style={{ marginTop: 12 }}>
           <Space style={{ display: 'flex' }} size={12}>
             <Form.Item name="name" label="角色名称" rules={[{ required: true, message: '请输入角色名称' }]} style={{ width: 290 }}>
               <Input placeholder="如：客服一组" maxLength={20} />

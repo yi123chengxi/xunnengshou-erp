@@ -1511,7 +1511,7 @@ const GeneralLedgerPage: React.FC<{ simple?: boolean }> = ({ simple = false }) =
         width={480}
         destroyOnClose
       >
-        <Form form={subjectForm} layout="vertical" style={{ marginTop: 16 }}>
+        <Form autoComplete="off" form={subjectForm} layout="vertical" style={{ marginTop: 16 }}>
           <Form.Item label="选择已有科目（编辑/删除）">
             <Select allowClear showSearch optionFilterProp="label" placeholder="选择科目进行编辑或删除；清空则为新增"
               value={editingSubject?.key}
@@ -1582,7 +1582,7 @@ const GeneralLedgerPage: React.FC<{ simple?: boolean }> = ({ simple = false }) =
         width={520}
         destroyOnClose
       >
-        <Form form={entryForm} layout="vertical" style={{ marginTop: 16 }}>
+        <Form autoComplete="off" form={entryForm} layout="vertical" style={{ marginTop: 16 }}>
           {isCreatingEntry && (
             <div style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
               <Button

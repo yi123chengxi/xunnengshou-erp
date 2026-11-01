@@ -2531,7 +2531,7 @@ const CustomerInfo: React.FC = () => {
             </div>
           </div>
         </div>
-        <Form form={creditAdjustForm} layout="vertical">
+        <Form autoComplete="off" form={creditAdjustForm} layout="vertical">
           <Form.Item label="操作类型" style={{ marginBottom: 12 }}>
             <Radio.Group
               value={creditAdjustType}

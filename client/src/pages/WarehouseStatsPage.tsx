@@ -768,7 +768,7 @@ const StockTab: React.FC = () => {
       />
       </div>
       <Modal title={editing ? '编辑备货记录' : '新增备货记录'} open={visible} onOk={handleSave} onCancel={() => setVisible(false)} okText="保存" cancelText="取消" width={600} destroyOnClose>
-        <Form form={form} layout="vertical">
+        <Form autoComplete="off" form={form} layout="vertical">
           <Row gutter={12}>
             <Col span={6}><Form.Item name="orderNo" label="单号" rules={[{ required: true, message: '必填' }]}><Input placeholder="如 ST2025001" /></Form.Item></Col>
             <Col span={6}><Form.Item name="productCode" label="货号"><Input placeholder="如 9001" /></Form.Item></Col>
@@ -920,7 +920,7 @@ const PickTab: React.FC = () => {
         <Table rowKey="key" size="small" bordered columns={wrapPickCols(cols)} dataSource={filtered} scroll={{ x: 800, y: pickScrollY }} pagination={{ defaultPageSize: 20, showSizeChanger: true, pageSizeOptions: ['20', '50', '100', '200'], showTotal: t => `共 ${t} 条` }} style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }} />
       </div>
       <Modal title={editing ? '编辑配货记录' : '新增配货记录'} open={visible} onOk={handleSave} onCancel={() => setVisible(false)} okText="保存" width={480} destroyOnClose>
-        <Form form={form} layout="vertical">
+        <Form autoComplete="off" form={form} layout="vertical">
           <Row gutter={12}>
             <Col span={8}><Form.Item name="orderNo" label="内部单号" rules={[{ required: true }]}><Input /></Form.Item></Col>
             <Col span={8}><Form.Item name="quantity" label="数量" rules={[{ required: true }]}><InputNumber min={0} style={{ width: '100%' }} /></Form.Item></Col>
@@ -1345,7 +1345,7 @@ const UrgentTab: React.FC = () => {
       />
       </div>
       <Modal title={editing ? '编辑急采记录' : '新增急采记录'} open={visible} onOk={handleSave} onCancel={() => setVisible(false)} okText="保存" cancelText="取消" width={600} destroyOnClose>
-        <Form form={form} layout="vertical">
+        <Form autoComplete="off" form={form} layout="vertical">
           <Row gutter={12}>
             <Col span={6}><Form.Item name="orderNo" label="单号" rules={[{ required: true, message: '必填' }]}><Input placeholder="如 ST2025001" /></Form.Item></Col>
             <Col span={6}><Form.Item name="productCode" label="货号"><Input placeholder="如 9001" /></Form.Item></Col>
@@ -1449,7 +1449,7 @@ const WageTab: React.FC = () => {
         </Col>
       </Row>
       <Modal title={stockEditing ? '编辑备货单工价' : '新增备货单工价'} open={stockVisible} onOk={stockHandleSave} onCancel={() => setStockVisible(false)} okText="保存" width={480} destroyOnClose>
-        <Form form={stockForm} layout="vertical">
+        <Form autoComplete="off" form={stockForm} layout="vertical">
           <Form.Item name="material" label="材质" rules={[{ required: true, message: '请输入材质名称' }]}><Input placeholder="如 洞洞鞋、棉鞋、单鞋" /></Form.Item>
           <Form.Item name="rate" label="质检工价（元/双）" rules={[{ required: true }]}><InputNumber min={0} step={0.1} style={{ width: '100%' }} /></Form.Item>
           <Form.Item name="packRate" label="打包员工价（元/双）"><InputNumber min={0} step={0.1} style={{ width: '100%' }} /></Form.Item>
@@ -1457,7 +1457,7 @@ const WageTab: React.FC = () => {
         </Form>
       </Modal>
       <Modal title={urgentEditing ? '编辑急采工价' : '新增急采工价'} open={urgentVisible} onOk={urgentHandleSave} onCancel={() => setUrgentVisible(false)} okText="保存" width={480} destroyOnClose>
-        <Form form={urgentForm} layout="vertical">
+        <Form autoComplete="off" form={urgentForm} layout="vertical">
           <Form.Item name="material" label="材质" rules={[{ required: true, message: '请输入材质名称' }]}><Input placeholder="如 洞洞鞋、棉鞋、单鞋" /></Form.Item>
           <Form.Item name="rate" label="质检工价（元/双）" rules={[{ required: true }]}><InputNumber min={0} step={0.1} style={{ width: '100%' }} /></Form.Item>
           <Form.Item name="packRate" label="打包员工价（元/双）"><InputNumber min={0} step={0.1} style={{ width: '100%' }} /></Form.Item>
@@ -1465,7 +1465,7 @@ const WageTab: React.FC = () => {
         </Form>
       </Modal>
       <Modal title={pickEditing ? '编辑配货员工价' : '设置配货员工价'} open={pickVisible} onOk={pickHandleSave} onCancel={() => setPickVisible(false)} okText="保存" width={360} destroyOnClose>
-        <Form form={pickForm} layout="vertical">
+        <Form autoComplete="off" form={pickForm} layout="vertical">
           <Form.Item name="rate" label="配货员工价（元/双）" rules={[{ required: true, message: '请输入工价' }]}><InputNumber min={0} step={0.1} style={{ width: '100%' }} /></Form.Item>
         </Form>
       </Modal>
@@ -1503,7 +1503,7 @@ const GroupTab: React.FC = () => {
       </Card>
       <Table rowKey="key" size="middle" bordered columns={wrapGroupCols(cols)} dataSource={groups} pagination={false} />
       <Modal title={editing ? '编辑成员' : '添加成员'} open={visible} onOk={handleSave} onCancel={() => setVisible(false)} okText="保存" width={480} destroyOnClose>
-        <Form form={form} layout="vertical">
+        <Form autoComplete="off" form={form} layout="vertical">
           <Row gutter={12}>
             <Col span={12}><Form.Item name="inspector" label="质检员" rules={[{ required: true }]}><AutoComplete options={staffOpts} placeholder="选择或输入姓名" filterOption={(input, option) => String(option?.value || '').toLowerCase().includes(input.toLowerCase())} /></Form.Item></Col>
             <Col span={12}><Form.Item name="inspectorId" label="质检员编号"><Input /></Form.Item></Col>
@@ -1547,7 +1547,7 @@ const NoteTab: React.FC = () => {
       <Button type="primary" icon={<PlusOutlined />} onClick={openAdd} style={{ marginBottom: 12 }}>新增奖惩</Button>
       <Table rowKey="key" size="middle" bordered columns={wrapNoteCols(cols)} dataSource={notes} pagination={{ pageSize: 20, showTotal: t => `共 ${t} 条` }} />
       <Modal title={editing ? '编辑奖惩' : '新增奖惩'} open={visible} onOk={handleSave} onCancel={() => setVisible(false)} okText="保存" width={480} destroyOnClose>
-        <Form form={form} layout="vertical">
+        <Form autoComplete="off" form={form} layout="vertical">
           <Form.Item name="type" label="类型" rules={[{ required: true }]}>
             <Radio.Group>
               <Radio value="reward">奖励</Radio>
@@ -2005,7 +2005,7 @@ const OrderLabelTab: React.FC = () => {
       />
       </div>
       <Modal title={editing ? '编辑标签记录' : '新增标签记录'} open={visible} onOk={handleSave} onCancel={() => setVisible(false)} okText="保存" cancelText="取消" width={520} destroyOnClose>
-        <Form form={form} layout="vertical">
+        <Form autoComplete="off" form={form} layout="vertical">
           <Row gutter={12}>
             <Col span={12}><Form.Item name="orderNo" label="内部订单号" rules={[{ required: true, message: '必填' }]}><Input placeholder="如 1231" /></Form.Item></Col>
             <Col span={12}><Form.Item name="label" label="标签" rules={[{ required: true, message: '必填' }]}><Input placeholder="如 洞洞鞋棉鞋" onChange={e => { const mat = matchMaterial(e.target.value); if (mat) form.setFieldValue('material', mat); }} /></Form.Item></Col>

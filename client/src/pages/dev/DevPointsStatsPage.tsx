@@ -313,7 +313,7 @@ const DevPointsStatsPage: React.FC<{ platform?: AnalyticsPlatform }> = ({ platfo
           load();
         }).catch(() => message.warning('请完善奖品信息'))}
         okText="保存" cancelText="取消" width={520} destroyOnClose>
-        <Form form={rewardForm} layout="vertical" style={{ marginTop: 12 }}>
+        <Form autoComplete="off" form={rewardForm} layout="vertical" style={{ marginTop: 12 }}>
           <Form.Item name="name" label="奖品名称" rules={[{ required: true, message: '请输入奖品名称' }]}>
             <Input placeholder="如：星巴克咖啡券" maxLength={30} />
           </Form.Item>

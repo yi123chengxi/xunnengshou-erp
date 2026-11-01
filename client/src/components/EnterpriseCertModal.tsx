@@ -377,7 +377,7 @@ const EnterpriseCertModal: React.FC<{ open: boolean; onClose: () => void; onCert
             <Alert type="info" showIcon icon={<LockOutlined />} style={{ marginBottom: 12 }}
               message="变更认证信息后，企业名称、统一社会信用代码、法人姓名将重新核验，并需法人重新刷脸认证。" />
           )}
-          <Form form={form} layout="vertical">
+          <Form autoComplete="off" form={form} layout="vertical">
             <Form.Item name="companyName" label="企业名称" rules={[{ required: true, message: '请输入企业名称' }]}
               extra={reCertMode ? '变更认证时可修改企业名称，将重新核验' : '与注册账号一致，不可修改'}>
               <Input placeholder="请输入企业全称" disabled={!reCertMode} />

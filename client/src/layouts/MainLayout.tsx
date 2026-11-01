@@ -2006,7 +2006,7 @@ const MainLayout: React.FC = () => {
         width={560}
         destroyOnClose
       >
-        <Form form={editProfileForm} layout="vertical" style={{ marginTop: 16 }}>
+        <Form autoComplete="off" form={editProfileForm} layout="vertical" style={{ marginTop: 16 }}>
           {ownCertInfo?.status === 'certified' && (
             <Alert type="warning" showIcon style={{ marginBottom: 16 }}
               message="企业已通过认证，公司名称和法人代表不可修改。如需变更，请先申请变更认证。"
@@ -2205,7 +2205,7 @@ const MainLayout: React.FC = () => {
         <div style={{ marginBottom: 16, color: '#fa8c16' }}>
           为保障账号安全，首次登录请修改初始密码。
         </div>
-        <Form form={forcePwdForm} layout="vertical">
+        <Form autoComplete="off" form={forcePwdForm} layout="vertical">
           <Form.Item
             name="newPwd"
             label="新密码"

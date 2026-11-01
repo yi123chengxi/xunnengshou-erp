@@ -321,7 +321,7 @@ const DevActionPointsPage: React.FC<{ platform?: AnalyticsPlatform }> = ({ platf
       </Card>
 
       <Modal title="积分奖惩" open={adjustOpen} onOk={handleAdjust} onCancel={() => setAdjustOpen(false)} okText="确定" cancelText="取消" width={480} destroyOnClose>
-        <Form form={adjustForm} layout="vertical" style={{ marginTop: 12 }} initialValues={{ type: 'reward' }}>
+        <Form autoComplete="off" form={adjustForm} layout="vertical" style={{ marginTop: 12 }} initialValues={{ type: 'reward' }}>
           <Form.Item name="staffId" label="运营人员" rules={[{ required: true, message: '请选择运营人员' }]}>
             <Select placeholder="选择子账号运营人员" options={staffList.map(s => ({ value: s.id, label: s.name }))} />
           </Form.Item>

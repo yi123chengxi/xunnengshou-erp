@@ -391,7 +391,7 @@ const BrandApplyPage: React.FC = () => {
           </div>
         )}
 
-        <Form form={form} layout="vertical" onValuesChange={() => { setAgrReady(false); setAgrRendered(''); }}>
+        <Form autoComplete="off" form={form} layout="vertical" onValuesChange={() => { setAgrReady(false); setAgrRendered(''); }}>
           <Row gutter={12}>
             <Col span={12}><Form.Item name="companyName" label="公司名称" rules={[{ required: true, message: '必填' }]}><Input placeholder="营业执照上的公司名称" /></Form.Item></Col>
             <Col span={12}><Form.Item name="taxpayerCode" label="纳税人识别码" rules={[{ required: true, message: '必填' }]}><Input /></Form.Item></Col>

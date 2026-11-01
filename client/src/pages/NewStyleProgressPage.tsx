@@ -564,7 +564,7 @@ const PhotoTab: React.FC<{ photos: PhotoRec[]; save: (l: PhotoRec[]) => void; st
         pagination={{ pageSize: 15, showTotal: t => `共 ${t} 条` }} locale={{ emptyText: <Empty description="暂无回传记录" /> }} />
       {/* 新增/编辑：新增仅保留关联货号+图片；编辑额外保留状态/备注/时间 */}
       <Modal title={editing ? '编辑回传图片' : '新增回传图片'} open={visible} onOk={handleSave} onCancel={() => setVisible(false)} okText="保存" cancelText="取消" width={520} destroyOnClose>
-        <Form form={form} layout="vertical" style={{ marginTop: 8 }}>
+        <Form autoComplete="off" form={form} layout="vertical" style={{ marginTop: 8 }}>
           <Row gutter={12}>
             <Col span={12}>
               <Form.Item name="styleCode" label="关联货号" rules={[{ required: true, message: '请选择或搜索货号' }]}>
@@ -800,7 +800,7 @@ const ArrivalTab: React.FC<{ arrivals: ArrivalRec[]; save: (l: ArrivalRec[]) => 
       <Table rowKey="key" bordered size="small" columns={wrapColumns(columns as any)} dataSource={list} scroll={{ x: 900, y: scrollY }}
         pagination={{ pageSize: 15, showTotal: t => `共 ${t} 条` }} locale={{ emptyText: <Empty description="暂无到货款式" /> }} />
       <Modal title={editing ? '编辑到货款式' : '新增到货款式'} open={visible} onOk={handleSave} onCancel={() => setVisible(false)} okText="保存" cancelText="取消" width={520} destroyOnClose>
-        <Form form={form} layout="vertical" style={{ marginTop: 8 }}>
+        <Form autoComplete="off" form={form} layout="vertical" style={{ marginTop: 8 }}>
           <Row gutter={12}>
             <Col span={12}>
               <Form.Item name="styleCode" label="关联货号" rules={[{ required: true, message: '请选择或搜索货号' }]}>
@@ -897,7 +897,7 @@ const ListingTab: React.FC<{ listings: ListingRec[]; save: (l: ListingRec[]) => 
       <Table rowKey="key" bordered size="small" columns={wrapColumns(columns as any)} dataSource={list} scroll={{ x: 1500, y: scrollY }}
         pagination={{ pageSize: 15, showTotal: t => `共 ${t} 条` }} locale={{ emptyText: <Empty description="暂无商品属性记录" /> }} />
       <Modal title={editing ? `编辑商品属性 - ${editing.styleCode}` : '新增商品属性'} open={visible} onOk={handleSave} onCancel={() => setVisible(false)} okText="保存" cancelText="取消" width={760} destroyOnClose>
-        <Form form={form} layout="vertical" style={{ marginTop: 8 }} onValuesChange={(_c, all) => form.setFieldsValue({ dataComplete: completeOf(all) })}>
+        <Form autoComplete="off" form={form} layout="vertical" style={{ marginTop: 8 }} onValuesChange={(_c, all) => form.setFieldsValue({ dataComplete: completeOf(all) })}>
           <Row gutter={12}>
             <Col span={8}>
               <Form.Item name="styleCode" label="货号" rules={[{ required: true, message: '请选择或搜索货号' }]}>
@@ -1591,7 +1591,7 @@ const NewStyleProgressPage: React.FC<{ photoOnly?: boolean }> = ({ photoOnly = f
 
       {/* 新增/编辑新款 */}
       <Modal title={editing ? `编辑新款 - ${editing.styleCode}` : '新增新款'} open={editVisible} onOk={handleSave} onCancel={() => setEditVisible(false)} okText="保存" cancelText="取消" width={860} destroyOnClose>
-        <Form form={form} layout="vertical" style={{ marginTop: 8 }}>
+        <Form autoComplete="off" form={form} layout="vertical" style={{ marginTop: 8 }}>
           <Row gutter={12}>
             <Col span={6}><Form.Item name="styleCode" label="货号" rules={[{ required: true, message: '请输入货号' }]}><Input placeholder="如 NBL-0406" /></Form.Item></Col>
             <Col span={6}><Form.Item name="brand" label="品牌"><AutoComplete placeholder="下拉选择或输入新增" options={brandOpts}
@@ -1670,7 +1670,7 @@ const NewStyleProgressPage: React.FC<{ photoOnly?: boolean }> = ({ photoOnly = f
 
       {/* 关联任务新增 */}
       <Modal title={relType === 'photo' ? `新增外拍回传 - ${relStyle}` : `新增到货任务 - ${relStyle}`} open={relAddVisible} onOk={handleRelAdd} onCancel={() => setRelAddVisible(false)} okText="保存" cancelText="取消" width={560} destroyOnClose>
-        <Form form={relForm} layout="vertical" style={{ marginTop: 8 }}>
+        <Form autoComplete="off" form={relForm} layout="vertical" style={{ marginTop: 8 }}>
           <Row gutter={12}>
             {relType === 'photo' ? (
               <>
@@ -1692,7 +1692,7 @@ const NewStyleProgressPage: React.FC<{ photoOnly?: boolean }> = ({ photoOnly = f
 
       {/* 上架进度编辑 */}
       <Modal title={`商品属性 - ${listStyle}`} open={listVisible} onOk={handleListSave} onCancel={() => setListVisible(false)} okText="保存" cancelText="取消" width={760} destroyOnClose>
-        <Form form={listForm} layout="vertical" style={{ marginTop: 8 }} onValuesChange={(_c, all) => listForm.setFieldsValue({ dataComplete: completeListOf(all) })}>
+        <Form autoComplete="off" form={listForm} layout="vertical" style={{ marginTop: 8 }} onValuesChange={(_c, all) => listForm.setFieldsValue({ dataComplete: completeListOf(all) })}>
           <Row gutter={12}>
             <Col span={8}><Form.Item name="dataComplete" label="数据是否完善（自动判定）"><Select disabled options={[{ value: '资料未完善' }, { value: '资料已完善' }]} /></Form.Item></Col>
             <Col span={8}><Form.Item name="date" label="日期（自动记录）"><Input disabled /></Form.Item></Col>

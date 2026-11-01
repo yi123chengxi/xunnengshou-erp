@@ -595,7 +595,7 @@ const ContractFactoryPage: React.FC<ContractFactoryPageProps> = ({ title = '代�
         width={640}
         destroyOnClose
       >
-        <Form form={form} layout="vertical" style={{ marginTop: 12 }}>
+        <Form autoComplete="off" form={form} layout="vertical" style={{ marginTop: 12 }}>
           <Form.Item name="factoryName" label="工厂名称" rules={[{ required: true, message: '请输入工厂名称' }]}>
             <Input placeholder="请输入加工厂的公司名称" maxLength={50} />
           </Form.Item>
@@ -661,7 +661,7 @@ const ContractFactoryPage: React.FC<ContractFactoryPageProps> = ({ title = '代�
         width={460}
         destroyOnClose
       >
-        <Form form={terminateForm} layout="vertical" style={{ marginTop: 12 }}>
+        <Form autoComplete="off" form={terminateForm} layout="vertical" style={{ marginTop: 12 }}>
           <Form.Item name="reason" label="终止原因">
             <Input.TextArea rows={3} placeholder="请填写终止合作的原因（选填）" maxLength={200} />
           </Form.Item>

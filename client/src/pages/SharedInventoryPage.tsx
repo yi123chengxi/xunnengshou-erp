@@ -913,7 +913,7 @@ const SharedInventoryPage: React.FC = () => {
         cancelText="取消"
         width={640}
       >
-        <Form form={checkoutForm} layout="vertical" style={{ marginTop: 12 }}>
+        <Form autoComplete="off" form={checkoutForm} layout="vertical" style={{ marginTop: 12 }}>
           <div style={{ background: '#fafafa', padding: 12, borderRadius: 6, marginBottom: 12 }}>
             <div style={{ fontWeight: 600, marginBottom: 6 }}>订单概要</div>
             <div style={{ fontSize: 12, color: '#666' }}>商品总数 {cartCount} 件 ｜ 订单金额 ¥{cartTotal.toFixed(2)}</div>

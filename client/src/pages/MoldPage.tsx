@@ -355,7 +355,7 @@ const MoldPage: React.FC = () => {
       />
 
       <Modal title={editing ? '编辑模具' : '新增模具'} open={visible} onOk={handleSave} onCancel={() => setVisible(false)} okText="保存" cancelText="取消" width={560} destroyOnClose>
-        <Form form={form} layout="vertical">
+        <Form autoComplete="off" form={form} layout="vertical">
           <Row gutter={12}>
             <Col span={12}>
               <Form.Item name="moldCode" label="模具编号" rules={[{ required: true, message: '请输入模具编号' }]}>

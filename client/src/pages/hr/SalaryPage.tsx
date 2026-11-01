@@ -549,7 +549,7 @@ const SalaryPage: React.FC = () => {
 
       {/* 扣款规则设置弹窗 */}
       <Modal title="考勤扣款规则设置" open={rulesVisible} onOk={saveRules} onCancel={() => setRulesVisible(false)} okText="保存" cancelText="取消" width={600}>
-        <Form form={rulesForm} layout="vertical" style={{ marginTop: 16 }}>
+        <Form autoComplete="off" form={rulesForm} layout="vertical" style={{ marginTop: 16 }}>
           <Form.Item label="选择班次" tooltip="针对不同班次分别设置扣款规则">
             <Select
               value={currentRuleShiftKey}

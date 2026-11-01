@@ -354,7 +354,7 @@ const EmployeePage: React.FC = () => {
       </Card>
 
       <Modal title={`HR档案 - ${employees.find(e => e.username === editingUsername)?.name || ''}`} open={modalVisible} onOk={handleSaveProfile} onCancel={() => setModalVisible(false)} okText="保存" cancelText="取消" width={600}>
-        <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
+        <Form autoComplete="off" form={form} layout="vertical" style={{ marginTop: 16 }}>
           <Row gutter={16}>
             <Col span={8}>
               <Form.Item name="gender" label="性别">

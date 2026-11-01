@@ -154,7 +154,7 @@ const DevAccountManage: React.FC = () => {
       </Card>
 
       <Modal title="创建开发者子账号" open={addVisible} onOk={handleAdd} onCancel={() => setAddVisible(false)} okText="创建" cancelText="取消" width={440} destroyOnClose>
-        <Form form={form} layout="vertical" style={{ marginTop: 12 }}>
+        <Form autoComplete="off" form={form} layout="vertical" style={{ marginTop: 12 }}>
           <Form.Item name="username" label="登录账号" rules={[
             { required: true, message: '请输入登录账号' },
             { pattern: /^[a-zA-Z][a-zA-Z0-9_]{3,19}$/, message: '字母开头，4-20位字母数字下划线' },
@@ -171,7 +171,7 @@ const DevAccountManage: React.FC = () => {
       </Modal>
 
       <Modal title={`重置密码 - ${pwdTarget?.displayName || ''}`} open={pwdVisible} onOk={handleResetPwd} onCancel={() => setPwdVisible(false)} okText="保存" cancelText="取消" width={400} destroyOnClose>
-        <Form form={pwdForm} layout="vertical" style={{ marginTop: 12 }}>
+        <Form autoComplete="off" form={pwdForm} layout="vertical" style={{ marginTop: 12 }}>
           <Form.Item name="password" label="新密码" rules={[{ required: true, message: '请输入新密码' }, { min: 6, message: '密码至少6位' }]}>
             <Input.Password placeholder="请输入新密码" />
           </Form.Item>

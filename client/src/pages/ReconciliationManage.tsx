@@ -2226,7 +2226,7 @@ const ReconciliationManage: React.FC = () => {
           </Text>
         </div>
 
-        <Form form={entryForm} layout="vertical">
+        <Form autoComplete="off" form={entryForm} layout="vertical">
           <Row gutter={16}>
             <Col span={12}>
               <Form.Item

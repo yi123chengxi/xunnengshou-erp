@@ -892,7 +892,7 @@ const ShiftPage: React.FC = () => {
         cancelText="取消"
         width={640}
       >
-        <Form form={form} layout="vertical" style={{ marginTop: 16, maxHeight: '65vh', overflowY: 'auto', paddingRight: 8 }}>
+        <Form autoComplete="off" form={form} layout="vertical" style={{ marginTop: 16, maxHeight: '65vh', overflowY: 'auto', paddingRight: 8 }}>
           {/* 班次类型 */}
           <Form.Item name="shiftType" label="班次类型" rules={[{ required: true, message: '请选择班次类型' }]}>
             <ShiftTypeSelector />
@@ -1093,7 +1093,7 @@ const ShiftPage: React.FC = () => {
         cancelText="取消"
         width={520}
       >
-        <Form form={schedShiftForm} layout="vertical" style={{ marginTop: 16 }}>
+        <Form autoComplete="off" form={schedShiftForm} layout="vertical" style={{ marginTop: 16 }}>
           <Form.Item name="name" label="班次名称" rules={[{ required: true, message: '请输入班次名称' }, { max: 8, message: '不能超过8个字符' }]}>
             <Input placeholder="例：早班，不能超过8个字符" maxLength={8} />
           </Form.Item>

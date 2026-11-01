@@ -1151,7 +1151,7 @@ const PurchaserCooperationManage: React.FC = () => {
         cancelText="取消"
         width={520}
       >
-        <Form form={cooperationForm} layout="vertical" style={{ marginTop: 16 }}>
+        <Form autoComplete="off" form={cooperationForm} layout="vertical" style={{ marginTop: 16 }}>
           <Form.Item
             name="supplierName"
             label="供应商名称"
@@ -1246,7 +1246,7 @@ const PurchaserCooperationManage: React.FC = () => {
         cancelText="取消"
         width={520}
       >
-        <Form form={editForm} layout="vertical" style={{ marginTop: 16 }}>
+        <Form autoComplete="off" form={editForm} layout="vertical" style={{ marginTop: 16 }}>
           <Form.Item
             name="supplierName"
             label="供应商名称"

@@ -1387,7 +1387,7 @@ const DevDashboard: React.FC = () => {
         width={640}
         destroyOnClose
       >
-        <Form form={editCustForm} layout="vertical" style={{ marginTop: 8 }}>
+        <Form autoComplete="off" form={editCustForm} layout="vertical" style={{ marginTop: 8 }}>
           <Row gutter={16}>
             <Col span={12}><Form.Item name="companyName" label="公司名称" rules={[{ required: true, message: '公司名称不能为空' }]}><Input placeholder="公司名称" /></Form.Item></Col>
             <Col span={12}><Form.Item name="taxpayerCode" label="纳税人识别号"><Input placeholder="纳税人识别号" /></Form.Item></Col>

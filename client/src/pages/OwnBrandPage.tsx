@@ -1602,7 +1602,7 @@ const OwnBrandPage: React.FC<{ embedded?: boolean }> = ({ embedded }) => {
       <Modal title="品牌方收款账户" open={recvVisible} onCancel={() => setRecvVisible(false)} width={520}
         onOk={() => recvForm.validateFields().then(v => { saveRecv({ ...v }); setRecvVisible(false); })} okText="保存" cancelText="取消">
         <div style={{ marginBottom: 8, color: '#888', fontSize: 12 }}>默认读取个人中心维护的银行账户，可在此修改；修改后同步展示给外部申请页的代理商。</div>
-        <Form form={recvForm} layout="vertical">
+        <Form autoComplete="off" form={recvForm} layout="vertical">
           <Row gutter={12}>
             <Col span={12}><Form.Item name="accountName" label="户名"><Input /></Form.Item></Col>
             <Col span={12}><Form.Item name="bankName" label="开户银行"><Input /></Form.Item></Col>
@@ -1777,7 +1777,7 @@ const OwnBrandPage: React.FC<{ embedded?: boolean }> = ({ embedded }) => {
           <Button key="gen" type="primary" icon={<SafetyCertificateOutlined />} onClick={handleGenCert}>生成授权书</Button>,
           <Button key="cancel" onClick={() => setCertCfgVisible(false)}>取消</Button>,
         ]}>
-        <Form form={certForm} layout="vertical">
+        <Form autoComplete="off" form={certForm} layout="vertical">
           <Row gutter={12}>
             <Col span={12}>
               <Form.Item label="生成模版">
@@ -1856,7 +1856,7 @@ const OwnBrandPage: React.FC<{ embedded?: boolean }> = ({ embedded }) => {
       {/* 编辑申请（代理商填错信息代改） */}
       <Modal title={`编辑申请 - ${editAppTarget?.companyName || ''}`} open={editAppVisible} onCancel={() => setEditAppVisible(false)} width={760}
         onOk={handleEditApp} okText="保存" cancelText="取消">
-        <Form form={editAppForm} layout="vertical">
+        <Form autoComplete="off" form={editAppForm} layout="vertical">
           <Row gutter={12}>
             <Col span={12}><Form.Item name="companyName" label="开店公司" rules={[{ required: true, message: '必填' }]}><Input /></Form.Item></Col>
             <Col span={12}><Form.Item name="taxpayerCode" label="纳税人识别码" rules={[{ required: true, message: '必填' }]}><Input /></Form.Item></Col>

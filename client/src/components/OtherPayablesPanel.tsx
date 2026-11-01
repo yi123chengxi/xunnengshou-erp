@@ -426,7 +426,7 @@ const OtherPayablesPanel: React.FC = () => {
         onCancel={() => setModalVisible(false)}
         okText="保存" cancelText="取消" width={520} destroyOnClose
       >
-        <Form form={form} layout="vertical" style={{ marginTop: 12 }}>
+        <Form autoComplete="off" form={form} layout="vertical" style={{ marginTop: 12 }}>
           <Row gutter={12}>
             <Col span={12}>
               <Form.Item name="payDate" label="应付日期" rules={[{ required: true, message: '请选择应付日期' }]}>
@@ -476,7 +476,7 @@ const OtherPayablesPanel: React.FC = () => {
             应付 ¥{fmt(payTarget.amount)}　已付 ¥{fmt(payTarget.paidAmount)}　未付 <Text strong style={{ color: '#ff4d4f' }}>¥{fmt((Number(payTarget.amount) || 0) - (Number(payTarget.paidAmount) || 0))}</Text>
           </div>
         )}
-        <Form form={payForm} layout="vertical">
+        <Form autoComplete="off" form={payForm} layout="vertical">
           <Row gutter={12}>
             <Col span={12}>
               <Form.Item name="amount" label="本次付款金额" rules={[{ required: true, message: '请输入付款金额' }]}>

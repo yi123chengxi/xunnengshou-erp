@@ -321,7 +321,7 @@ const RoleManage: React.FC = () => {
         width={700}
         bodyStyle={{ maxHeight: '70vh', overflowY: 'auto' }}
       >
-        <Form form={addForm} layout="vertical" style={{ marginTop: 16 }}>
+        <Form autoComplete="off" form={addForm} layout="vertical" style={{ marginTop: 16 }}>
           <Row gutter={16}>
             <Col span={12}>
               <Form.Item name="name" label="角色名称" rules={[{ required: true, message: '请输入角色名称' }]}>
@@ -349,7 +349,7 @@ const RoleManage: React.FC = () => {
         width={700}
         bodyStyle={{ maxHeight: '70vh', overflowY: 'auto' }}
       >
-        <Form form={editForm} layout="vertical" style={{ marginTop: 16 }}>
+        <Form autoComplete="off" form={editForm} layout="vertical" style={{ marginTop: 16 }}>
           <Row gutter={16}>
             <Col span={12}>
               <Form.Item name="name" label="角色名称" rules={[{ required: true, message: '请输入角色名称' }]}>

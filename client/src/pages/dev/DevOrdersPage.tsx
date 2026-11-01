@@ -217,7 +217,7 @@ const DevOrdersPage: React.FC = () => {
       </Card>
 
       <Modal title="登记订单（补录线下支付等）" open={addVisible} onOk={handleAdd} onCancel={() => setAddVisible(false)} okText="保存" cancelText="取消" width={560} destroyOnClose>
-        <Form form={form} layout="vertical" style={{ marginTop: 12 }} initialValues={{ type: '软件费' }}>
+        <Form autoComplete="off" form={form} layout="vertical" style={{ marginTop: 12 }} initialValues={{ type: '软件费' }}>
           <Row gutter={12}>
             <Col span={10}>
               <Form.Item name="type" label="订单类型">

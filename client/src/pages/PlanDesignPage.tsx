@@ -3486,7 +3486,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
         zIndex={1400}
         destroyOnClose
       >
-        <Form form={quickAddSupplierForm} layout="vertical" style={{ marginTop: 16 }}>
+        <Form autoComplete="off" form={quickAddSupplierForm} layout="vertical" style={{ marginTop: 16 }}>
           <Form.Item name="supplierName" label="供应商名称" rules={[{ required: true, message: '请输入供应商名称' }]}>
             <Input placeholder="请输入供应商全称" />
           </Form.Item>

@@ -83,7 +83,7 @@ const DevLogin: React.FC = () => {
           style={{ marginBottom: 24 }}
         />
 
-        <Form form={form} layout="vertical" size="large">
+        <Form autoComplete="off" form={form} layout="vertical" size="large">
           <Form.Item
             name="username"
             rules={[{ required: true, message: '请输入开发者账号' }]}

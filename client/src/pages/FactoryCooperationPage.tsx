@@ -343,7 +343,7 @@ const FactoryCooperationPage: React.FC = () => {
         <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 12 }}>
           填写发包工厂的公司编号（注册账号时生成，8位字母数字）发起建立合作申请，对方在其「供应商 - 代加工厂」菜单中批准后建立合作。
         </Paragraph>
-        <Form form={addForm} layout="vertical">
+        <Form autoComplete="off" form={addForm} layout="vertical">
           <Form.Item name="companyNo" label="发包工厂公司编号" rules={[{ required: true, message: '请输入发包工厂的公司编号' }]}>
             <Input placeholder="请输入发包工厂的公司编号" maxLength={20} />
           </Form.Item>

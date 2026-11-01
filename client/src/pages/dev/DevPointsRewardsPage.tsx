@@ -256,7 +256,7 @@ const DevPointsRewardsPage: React.FC = () => {
         width={560}
         destroyOnClose
       >
-        <Form form={form} layout="vertical" style={{ marginTop: 12 }}>
+        <Form autoComplete="off" form={form} layout="vertical" style={{ marginTop: 12 }}>
           <Space style={{ display: 'flex' }} size={12}>
             <Form.Item name="name" label="奖品名称" rules={[{ required: true, message: '请输入奖品名称' }]} style={{ width: 260 }}>
               <Input placeholder="如：星巴克咖啡券" maxLength={30} />

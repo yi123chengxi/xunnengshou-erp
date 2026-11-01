@@ -472,7 +472,7 @@ const CreateInventoryModal: React.FC<CreateInventoryModalProps> = ({ onCancel, o
 
   return (
     <div>
-      <Form layout="vertical" style={{ marginBottom: 16 }}>
+      <Form autoComplete="off" layout="vertical" style={{ marginBottom: 16 }}>
         <Form.Item label="货盘名称" required>
           <Input
             placeholder="请输入货盘名称"
@@ -2811,7 +2811,7 @@ const addToCart = useCallback((rec: any, qty?: number) => {
         width={400}
       >
         {editInventoryData && (
-          <Form layout="vertical">
+          <Form autoComplete="off" layout="vertical">
             <Form.Item label="货盘名称" required>
               <Input
                 id="edit-inventory-name-input"
@@ -2849,7 +2849,7 @@ const addToCart = useCallback((rec: any, qty?: number) => {
 
       {/* 发布/编辑发包订单弹窗 */}
       <Modal title={pubEdit ? '编辑发包订单' : '发布发包订单'} open={pubVisible} onOk={handlePublish} onCancel={() => { setPubVisible(false); setPubEdit(null); }} okText="保存" cancelText="取消" width={640} destroyOnClose>
-        <Form form={pubForm} layout="vertical" style={{ marginTop: 12 }}>
+        <Form autoComplete="off" form={pubForm} layout="vertical" style={{ marginTop: 12 }}>
           <Row gutter={12}>
             <Col span={12}><Form.Item name="shortName" label="商品简称" rules={[{ required: true, message: '请输入商品简称' }]}><Input placeholder="请输入商品简称" maxLength={40} /></Form.Item></Col>
             <Col span={12}><Form.Item name="styleCode" label="款式编码" rules={[{ required: true, message: '请输入款式编码' }]}><Input placeholder="请输入款式编码" maxLength={40} /></Form.Item></Col>
@@ -3138,7 +3138,7 @@ const addToCart = useCallback((rec: any, qty?: number) => {
 
       {/* 报价/询价弹窗 */}
       <Modal title={quoteRec?.type === 'finished' ? '成品询价/报价' : '提交报价'} open={!!quoteRec} onOk={handleQuote} onCancel={() => setQuoteRec(null)} okText="提交" cancelText="取消" width={520} destroyOnClose>
-        <Form form={quoteForm} layout="vertical" style={{ marginTop: 12 }}>
+        <Form autoComplete="off" form={quoteForm} layout="vertical" style={{ marginTop: 12 }}>
           <Form.Item name="unitPrice" label="单价(元)" rules={[{ required: true, message: '请输入单价' }]}><InputNumber min={0} precision={2} style={{ width: '100%' }} placeholder="您的报价单价" /></Form.Item>
           <Form.Item name="quantity" label="数量" initialValue={quoteRec?.quantity}><InputNumber min={1} style={{ width: '100%' }} /></Form.Item>
           <Form.Item name="deliveryDays" label="交期(天)"><InputNumber min={1} style={{ width: '100%' }} placeholder="承诺交期天数" /></Form.Item>
@@ -3304,7 +3304,7 @@ const addToCart = useCallback((rec: any, qty?: number) => {
         <Paragraph type="secondary" style={{ marginTop: 12 }}>
           共 {checkedItems.length} 件商品，合计 ¥{checkedItems.reduce((s: number, c: any) => { const rec = market.find(r => r.key === c.cardKey); return s + (Number(c.sku?.unitPrice ?? rec?.targetPrice) || 0) * (Number(c.quantity) || 0); }, 0)}；地址默认取注册账号地址，可手动修改。
         </Paragraph>
-        <Form form={orderForm} layout="vertical">
+        <Form autoComplete="off" form={orderForm} layout="vertical">
           <Space.Compact style={{ width: '100%' }}>
             <Form.Item name="province" label="省份" rules={[{ required: true, message: '请选择省份' }]} style={{ width: '25%', marginRight: 4 }}>
               <Select placeholder="省份" allowClear showSearch options={getProvinceOptions()}
@@ -3504,7 +3504,7 @@ const addToCart = useCallback((rec: any, qty?: number) => {
             <Button type="primary" onClick={handleSaveFinishedEdit}>保存</Button>
           </Space>
         } width={480}>
-        <Form form={editFinishedForm} layout="vertical" style={{ marginTop: 12 }}>
+        <Form autoComplete="off" form={editFinishedForm} layout="vertical" style={{ marginTop: 12 }}>
           <Form.Item name="shortName" label="商品简称" rules={[{ required: true, message: '请输入商品简称' }]}>
             <Input placeholder="请输入商品简称" />
           </Form.Item>
