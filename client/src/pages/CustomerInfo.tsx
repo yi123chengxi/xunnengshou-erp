@@ -2201,13 +2201,13 @@ const CustomerInfo: React.FC = () => {
         cancelText="取消"
         width={560}
       >
-        <Form form={addForm} layout="vertical" style={{ marginTop: 16 }}>
+        <Form form={addForm} layout="vertical" style={{ marginTop: 16 }} autoComplete="off">
           <Form.Item
             name="name"
             label="客户名称"
             rules={[{ required: true, message: '请输入客户名称' }]}
           >
-            <Input placeholder="请输入客户企业名称" />
+            <Input placeholder="请输入客户企业名称" autoComplete="off" />
           </Form.Item>
           <Row gutter={16}>
             <Col span={12}>
