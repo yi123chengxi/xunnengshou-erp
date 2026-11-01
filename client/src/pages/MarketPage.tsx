@@ -950,7 +950,10 @@ const MarketPage: React.FC = () => {
   const [quoteRec, setQuoteRec] = useState<any>(null);
   const [quoteForm] = Form.useForm();
   // 成品市场：设置/收藏/购物车/比价
-  const [autoOn, setAutoOn] = useState<boolean>(() => (loadJson(`market_settings_${owner}`, {}) || {}).autoPublishOnSale === true);
+  const [autoOn, setAutoOn] = useState<boolean>(() => {
+      const cfg = loadJson(`market_settings_${owner}`, {}) || {};
+      return cfg.autoPublishOnSale !== false; // 未设置时默认开启，仅显式关闭才为关
+    });
   // 手动发布弹窗
   const [manualPublishVisible, setManualPublishVisible] = useState(false);
   const [manualPublishSelected, setManualPublishSelected] = useState<Set<string>>(new Set());
@@ -992,17 +995,30 @@ const MarketPage: React.FC = () => {
     } catch { /* ignore */ }
   }, [market, openDetail]);
 
-  // 成品市场自动上架（公开信息）：扫描所有开启「在售成品自动上架」设置的账号的产品列表，
+  // 成品市场自动上架（公开信息）：扫描所有未显式关闭「在售成品自动上架」的账号（未设置默认开启）的产品列表，
   // 按款式编码聚合为卡片写入全局市场键（成品页与产品列表共享 pageData_basic-data_product-list_<账号> 键）
   const sweepFinished = useCallback((list: any[]) => {
     let out = [...list];
-    const owners: string[] = [];
+    // 候选账号 = 设置键 ∪ 产品列表键；显式 autoPublishOnSale=false 为关闭，其余（含未设置）一律开启
+    const settingOn = new Map<string, boolean>();
+    const candidates = new Set<string>();
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
-      if (!k || !k.startsWith('market_settings_')) continue;
-      const cfg = loadJson(k, {});
-      if (cfg && cfg.autoPublishOnSale === true) owners.push(k.slice('market_settings_'.length));
+      if (!k) continue;
+      if (k.startsWith('market_settings_')) {
+        const o = k.slice('market_settings_'.length);
+        const cfg = loadJson(k, {});
+        settingOn.set(o, !(cfg && cfg.autoPublishOnSale === false));
+        candidates.add(o);
+      } else if (k.startsWith('pageData_basic-data_product-list_')) {
+        candidates.add(k.slice('pageData_basic-data_product-list_'.length));
+      }
     }
+    const owners: string[] = [];
+    const disabled: string[] = [];
+    candidates.forEach(o => { if (settingOn.get(o) === false) disabled.push(o); else owners.push(o); });
+    // 显式关闭的账号：清理其存量自动卡片，保证开关关闭后立即下架
+    disabled.forEach(o => { out = out.filter(r => !(r.type === 'finished' && r.auto && r.publisherUsername === o)); });
     let users: any[] = [];
     try { users = JSON.parse(localStorage.getItem('registeredUsers') || '[]'); } catch { /* ignore */ }
     owners.forEach(owner => {

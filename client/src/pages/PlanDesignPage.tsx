@@ -809,7 +809,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
       // 检查自动上架开关，若开启则触发成品市场扫描
       try {
         const cfg = JSON.parse(localStorage.getItem(`market_settings_${owner}`) || '{}');
-        if (cfg.autoPublishOnSale === true) {
+        if (cfg.autoPublishOnSale !== false) { // 未设置默认开启，与成品市场开关口径一致
           window.dispatchEvent(new CustomEvent('product-status-updated'));
         }
       } catch { /* ignore */ }
