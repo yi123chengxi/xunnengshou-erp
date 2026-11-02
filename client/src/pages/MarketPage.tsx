@@ -25,6 +25,13 @@ const PRIMARY = '#1e4a7e';
 
 // ============ 商机市场全局存储与工具 ============
 const MARKET_KEY = 'market_publish_orders';
+
+// 发布资格校验：基础价（基础售价）不等于 0 且大于成本价，才能发布到成品市场（自动上架/手动发布同口径）
+const isPricePublishable = (p: any): boolean => {
+  const base = Number(p?.suggestedPrice) || 0;
+  const cost = Number(p?.costPrice) || 0;
+  return base !== 0 && base > cost;
+};
 const RATINGS_KEY = 'market_ratings';
 const TRADE_KEY = 'market_trade_orders';
 
@@ -1026,8 +1033,8 @@ const MarketPage: React.FC = () => {
       const rawProds = loadJson(`pageData_basic-data_product-list_${owner}`, []);
       const prods: any[] = Array.isArray(rawProds) ? rawProds : [];
       const groups = new Map<string, any>();
-      // 过滤条件：产品种类=成品 + 商品状态=在售 + 款式编码非空 + 排除半成品脏数据（SEMI-前缀）
-      prods.filter(p => p.productType === '成品' && p.productStatus === '在售' && p.styleCode && !String(p.productCode || '').startsWith('SEMI-')).forEach(p => { if (!groups.has(p.styleCode)) groups.set(p.styleCode, p); });
+      // 过滤条件：产品种类=成品 + 商品状态=在售 + 款式编码非空 + 排除半成品脏数据（SEMI-前缀）+ 基础价≠0且大于成本价
+      prods.filter(p => p.productType === '成品' && p.productStatus === '在售' && p.styleCode && !String(p.productCode || '').startsWith('SEMI-') && isPricePublishable(p)).forEach(p => { if (!groups.has(p.styleCode)) groups.set(p.styleCode, p); });
       // 下架清理：该账号不再在售的款式移除自动卡片
       out = out.filter(r => !(r.type === 'finished' && r.auto && r.publisherUsername === owner && !groups.has(r.styleCode)));
       const u = users.find(x => x.username === owner);
@@ -1179,13 +1186,16 @@ const MarketPage: React.FC = () => {
     const u = users.find((x: any) => x.username === owner);
     const styleCodes = Array.from(manualPublishSelected);
     let published = 0;
+    let blocked = 0;
     styleCodes.forEach(sc => {
       // 检查是否已存在
       const exist = out.find((r: any) => r.type === 'finished' && r.publisherUsername === owner && r.styleCode === sc);
       if (exist) return;
-      // 找该款式的一个代表产品
-      const rep = manualPublishProducts.find((p: any) => p.styleCode === sc);
+      // 找该款式的一个代表产品（优先取符合价格资格的：基础价≠0且大于成本价）
+      const rep = manualPublishProducts.find((p: any) => p.styleCode === sc && isPricePublishable(p)) || manualPublishProducts.find((p: any) => p.styleCode === sc);
       if (!rep) return;
+      // 价格资格校验：基础价不等于 0 且大于成本价才能发布
+      if (!isPricePublishable(rep)) { blocked++; return; }
       // 检查是否有图片
       const hasImage = rep.image || localStorage.getItem(`prodImg_${owner}_${rep.key}`);
       if (!hasImage) return; // 无图片不发布
@@ -1204,9 +1214,9 @@ const MarketPage: React.FC = () => {
     if (published > 0) {
       saveJson(MARKET_KEY, out);
       setMarket(out);
-      message.success(`成功发布 ${published} 个款式到成品市场`);
+      message.success(`成功发布 ${published} 个款式到成品市场${blocked > 0 ? `；${blocked} 个款式基础价为 0 或不大于成本价，未发布` : ''}`);
     } else {
-      message.warning('所选款式已发布或无图片，无法发布');
+      message.warning('所选款式已发布、无图片，或基础价为 0/不大于成本价，无法发布');
     }
     setManualPublishVisible(false);
     setManualPublishSelected(new Set());
@@ -3446,7 +3456,7 @@ const addToCart = useCallback((rec: any, qty?: number) => {
           </Space>
         }>
         <div style={{ marginBottom: 12 }}>
-          <Text type="secondary">勾选需要发布的成品款式（按款式编码分组），无图片的款式不可发布</Text>
+          <Text type="secondary">勾选需要发布的成品款式（按款式编码分组）；无图片、基础价为 0 或不大于成本价的款式不可发布</Text>
         </div>
         <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center', flexWrap: 'wrap' }}>
           <Input placeholder="搜索款式编码" allowClear style={{ width: 160 }} value={manualPublishSearch.styleCode} onChange={e => setManualPublishSearch(prev => ({ ...prev, styleCode: e.target.value }))} />
@@ -3456,7 +3466,8 @@ const addToCart = useCallback((rec: any, qty?: number) => {
         </div>
         <Table rowKey="styleCode" bordered size="small" dataSource={manualPublishProducts.reduce((acc: any[], p) => {
           const exist = acc.find(x => x.styleCode === p.styleCode);
-          if (!exist) acc.push({ styleCode: p.styleCode, shortName: p.shortName, productCode: p.productCode, unit: p.unit, suggestedPrice: p.suggestedPrice, actualStock: p.actualStock, key: p.key, image: p.image });
+          if (!exist) acc.push({ styleCode: p.styleCode, shortName: p.shortName, productCode: p.productCode, unit: p.unit, suggestedPrice: p.suggestedPrice, costPrice: p.costPrice, actualStock: p.actualStock, key: p.key, image: p.image });
+          else if (!isPricePublishable(exist) && isPricePublishable(p)) Object.assign(exist, { shortName: p.shortName, productCode: p.productCode, unit: p.unit, suggestedPrice: p.suggestedPrice, costPrice: p.costPrice, actualStock: p.actualStock, key: p.key, image: p.image });
           return acc;
         }, []).filter(r => {
           const hasImg = r.image || localStorage.getItem(`prodImg_${username}_${r.key}`);
@@ -3472,7 +3483,7 @@ const addToCart = useCallback((rec: any, qty?: number) => {
             selectedRowKeys: Array.from(manualPublishSelected),
             onChange: (keys) => setManualPublishSelected(new Set(keys as string[])),
             getCheckboxProps: (record) => ({
-              disabled: !record.image && !localStorage.getItem(`prodImg_${username}_${record.key}`),
+              disabled: (!record.image && !localStorage.getItem(`prodImg_${username}_${record.key}`)) || !isPricePublishable(record),
             }),
           }}
           columns={[
@@ -3481,6 +3492,11 @@ const addToCart = useCallback((rec: any, qty?: number) => {
             { key: 'productCode', title: '商品编码', dataIndex: 'productCode', width: 120, align: 'center', render: (v: string) => v || '—' },
             { key: 'unit', title: '单位', dataIndex: 'unit', width: 60, align: 'center', render: (v: string) => v || '件' },
             { key: 'suggestedPrice', title: '建议售价', dataIndex: 'suggestedPrice', width: 90, align: 'center', render: (v: number) => `¥${Number(v) || 0}` },
+            { key: 'priceOk', title: '价格资格', width: 90, align: 'center', render: (_: any, r: any) => (
+              isPricePublishable(r)
+                ? <CheckCircleOutlined style={{ color: '#52c41a' }} />
+                : <Tooltip title="基础价不等于 0 且大于成本价才能发布"><CloseCircleOutlined style={{ color: '#ff4d4f' }} /></Tooltip>
+            ) },
             { key: 'actualStock', title: '库存', dataIndex: 'actualStock', width: 70, align: 'center', render: (v: number) => Number(v) || 0 },
             { key: 'published', title: '发布情况', width: 90, align: 'center', render: (_: any, r: any) => {
               const isPublished = market.some(m => m.styleCode === r.styleCode && m.publisherUsername === owner);
