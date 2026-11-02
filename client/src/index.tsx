@@ -21,6 +21,18 @@ installStorageQuotaGuard();
 registerSetItemHook((key, value) => scheduleDatasetUpload(key, value));
 // 残留演示账号与遗留登录会话清理：测试期遗留的 admin 等会话在启动时即清除，回退登录页
 cleanupDemoAccountsAndSession();
+
+// 登录鉴权守卫：未登录（无 username 会话）直接打开后台路由时统一重定向到登录页；
+// 公开链接（合作确认/货盘分享/品牌公开页/邀约落地页）与开发者入口（自有 devLoggedIn 守卫）除外
+(() => {
+  const path = window.location.pathname;
+  const publicPrefix = /^\/(login|register|cooperation-confirm\/|shared\/|brand-apply\/|brand-cert\/|purchaser-cooperation-confirm\/|purchaser-invite\/|dev\/)/;
+  try {
+    if (!localStorage.getItem('username') && !publicPrefix.test(path)) {
+      window.location.replace('/login');
+    }
+  } catch { /* ignore */ }
+})();
 // 启动后延迟主动配额清理：存储占用过高时提前释放，避免关键数据写入静默失败
 setTimeout(() => proactiveQuotaCleanup(), 2000);
 

@@ -303,6 +303,12 @@ const readDevPermSet = (): Set<string> | null => {
 
 const MainLayout: React.FC = () => {
   const [collapsed, setCollapsed] = useState(true);
+  // 登录守卫：未登录直接访问后台路由时回登录页（避免无会话时渲染回退身份）
+  useEffect(() => {
+    if (!localStorage.getItem('username')) {
+      window.location.replace('/login');
+    }
+  }, []);
   const [collapsedOpenKeys, setCollapsedOpenKeys] = useState<string[]>([]);
   const [collapsedHoverKey, setCollapsedHoverKey] = useState<string | null>(null);
   const [activeModule, setActiveModule] = useState('dashboard');

@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useCallback } from 'react';
+import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import { Layout, Menu, Avatar, Dropdown, Space, Typography, Button, Tag } from 'antd';
 import {
   HomeOutlined, ShopOutlined, ToolOutlined, DollarOutlined,
@@ -53,6 +53,12 @@ const factoryMenus = [
 
 const FactoryLayout: React.FC = () => {
   const navigate = useNavigate();
+  // 登录守卫：未登录直接访问后台路由时回登录页（避免无会话时渲染回退身份）
+  useEffect(() => {
+    if (!localStorage.getItem('username')) {
+      window.location.replace('/login');
+    }
+  }, []);
   const location = useLocation();
   const [collapsed, setCollapsed] = useState(false);
   const [openKeys, setOpenKeys] = useState<string[]>(['finance', 'settings']);
