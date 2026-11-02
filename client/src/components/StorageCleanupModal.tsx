@@ -1,7 +1,7 @@
 /**
  * 存储空间整理清理弹窗
- * 支持按页面 + 时间范围清理 localStorage 中的数据
- * 每个页面可勾选"只清理图片"，不勾选则全部清除（数据 + 图片）
+ * 按页面清理，且所有页面均只清理关联图片，页面数据一律不删除
+ * 产品列表为核心主数据，仅展示占用体积，不可勾选清理
  * 支持备份和恢复数据功能
  */
 import React, { useState, useCallback, useMemo, useEffect } from 'react';
@@ -24,11 +24,13 @@ interface PageInfo {
   requiredBy?: string[]; // 被哪些页面依赖（清理本页面会影响这些页面）
   keyPrefixes?: string[]; // 自定义数据键前缀（拼接 owner 后缀，非 pageData_ 体系）
   hidden?: boolean; // 不在清理页面目录中显示（如全局共享键，按账号清理不安全）
+  viewOnly?: boolean; // 仅在目录中展示占用体积，不可勾选清理（核心主数据页面）
+  dataKeyPrefixes?: string[]; // 非 pageData_ 体系的业务数据键前缀（拼接 owner，如 purchaser_bills_ / ws_stock_）
+  embeddedImageFields?: string[]; // 数据记录内嵌 base64 图片的字段名；清理时剥离图片保留记录
 }
 
 // 排除列表：这些页面不在清理选项中显示
 const EXCLUDED_PAGES = new Set([
-  'basic-data_product-list',        // 产品列表（核心主数据，不允许在此清理；图片走「产品图片」项）
   'settings_production-fee',        // 生产工价
   'settings_print-template',        // 打印模板
   'sales_print-picking',            // 打印拣货
@@ -46,10 +48,11 @@ const EXCLUDED_PAGES = new Set([
 const PAGE_INFO_MAP: Record<string, PageInfo> = {
   'basic-data_product-list': {
     name: '产品列表',
-    description: '商品资料中的产品数据（名称、规格、价格等）',
+    description: '商品资料中的产品数据（名称、规格、价格等）；仅展示占用，不可勾选清理（图片请走「产品图片」项）',
     imagePrefix: 'prodImg_',
     imageDescription: '产品图片（prodImg_ 前缀）',
     requiredBy: ['sales_order-manage', 'production_processing-order', 'production_production-order', 'customer_bill-detail'],
+    viewOnly: true,
   },
   'product_images': {
     name: '产品图片',
@@ -172,6 +175,20 @@ const PAGE_INFO_MAP: Record<string, PageInfo> = {
     name: '仓库管理',
     description: '仓库统计数据',
   },
+  'purchase_bill': {
+    name: '采购账单',
+    description: '采购商账单记录；清理仅剥离账单内嵌图片，账单数据保留',
+    dataKeyPrefixes: ['purchaser_bills_'],
+    embeddedImageFields: ['images', 'supplierImages', 'purchaserImages'],
+    imageDescription: '账单内嵌图片（images / supplierImages / purchaserImages 字段）',
+  },
+  'warehouse_stats': {
+    name: '仓库统计',
+    description: '仓库统计备货/配货/急采记录；清理仅剥离记录内嵌图片，记录数据保留',
+    dataKeyPrefixes: ['ws_stock_', 'ws_pick_', 'ws_urgent_'],
+    embeddedImageFields: ['image'],
+    imageDescription: '记录内嵌图片（image 字段）',
+  },
   'brand_auth': {
     name: '品牌授权',
     description: '品牌管理中的授权书数据',
@@ -258,6 +275,7 @@ interface PageUsage {
 
 interface ScanResult {
   keys: string[];
+  stripItems: { key: string; fields: string[] }[];
   totalSize: number;
   timeRange?: { from: string; to: string };
   pageBreakdown: {
@@ -272,7 +290,6 @@ interface ScanResult {
 
 const StorageCleanupModal: React.FC<StorageCleanupModalProps> = ({ open, onClose, onCleanupComplete }) => {
   const [selectedPages, setSelectedPages] = useState<string[]>([]);
-  const [onlyImagePages, setOnlyImagePages] = useState<Set<string>>(new Set());
   const [dateRange, setDateRange] = useState<[Dayjs | null, Dayjs | null] | null>(null);
   const [scanning, setScanning] = useState(false);
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
@@ -363,6 +380,19 @@ const StorageCleanupModal: React.FC<StorageCleanupModalProps> = ({ open, onClose
         existing.totalSize += size;
         usageMap.set(page, existing);
       });
+      // 非 pageData_ 体系的业务数据键（采购账单/仓库统计等）计入对应页面用量
+      (PAGE_INFO_MAP[page]?.dataKeyPrefixes || []).forEach(pfx => {
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (!k || !k.startsWith(pfx) || !k.includes(owner)) continue;
+          const value = localStorage.getItem(k) || '';
+          const size = (k.length + value.length) * 2;
+          const existing = usageMap.get(page) || { page, dataSize: 0, imageSize: 0, totalSize: 0 };
+          existing.dataSize += size;
+          existing.totalSize += size;
+          usageMap.set(page, existing);
+        }
+      });
     });
 
     setAvailablePages(Array.from(pages).sort());
@@ -417,6 +447,8 @@ const StorageCleanupModal: React.FC<StorageCleanupModalProps> = ({ open, onClose
 
     setTimeout(() => {
       const matchedKeys: string[] = [];
+      const stripItems: { key: string; fields: string[] }[] = [];
+      const stripKeys = new Set<string>();
       let totalSize = 0;
       const pageBreakdownMap = new Map<string, {
         dataCount: number;
@@ -439,31 +471,43 @@ const StorageCleanupModal: React.FC<StorageCleanupModalProps> = ({ open, onClose
         const pageInfo = PAGE_INFO_MAP[page];
         if (!pageInfo) continue;
 
-        const onlyImage = onlyImagePages.has(page);
-        const stats = { dataCount: 0, dataSize: 0, imageCount: 0, imageSize: 0, onlyImage };
+        // 所有页面一律只清理图片：独立图片键删除 + 内嵌 base64 图片剥离，页面数据记录保留
+        const stats = { dataCount: 0, dataSize: 0, imageCount: 0, imageSize: 0, onlyImage: true };
 
-        // 1. 清理页面数据（pageData_* 键 + 自定义数据键）
-        if (!onlyImage) {
-          const pageDataKey = `pageData_${page}_${owner}`;
-          const pageDataValue = localStorage.getItem(pageDataKey);
-          if (pageDataValue) {
-            const size = (pageDataKey.length + pageDataValue.length) * 2;
-            matchedKeys.push(pageDataKey);
-            totalSize += size;
-            stats.dataCount++;
-            stats.dataSize += size;
-          }
-          resolveCustomKeys(page).forEach(k => {
-            const v = localStorage.getItem(k) || '';
-            const size = (k.length + v.length) * 2;
-            matchedKeys.push(k);
-            totalSize += size;
-            stats.dataCount++;
-            stats.dataSize += size;
+        // 1. 内嵌图片剥离（采购账单/仓库统计等：清空记录内 base64 图片字段，保留记录）
+        const embFields = pageInfo.embeddedImageFields || [];
+        if (embFields.length) {
+          (pageInfo.dataKeyPrefixes || []).forEach(pfx => {
+            for (let i = 0; i < localStorage.length; i++) {
+              const key = localStorage.key(i);
+              if (!key || !key.startsWith(pfx) || !key.includes(owner)) continue;
+              if (stripKeys.has(key)) continue;
+              const raw = localStorage.getItem(key) || '';
+              try {
+                const parsed = JSON.parse(raw);
+                const list: any[] = Array.isArray(parsed) ? parsed : [parsed];
+                let cnt = 0, saved = 0;
+                list.forEach((rec: any) => {
+                  if (!rec || typeof rec !== 'object') return;
+                  embFields.forEach(f => {
+                    const v = rec[f];
+                    if (Array.isArray(v)) v.forEach((s: any) => { if (typeof s === 'string' && s) { cnt++; saved += s.length * 2; } });
+                    else if (typeof v === 'string' && v) { cnt++; saved += v.length * 2; }
+                  });
+                });
+                if (cnt > 0) {
+                  stripKeys.add(key);
+                  stripItems.push({ key, fields: embFields });
+                  stats.imageCount += cnt;
+                  stats.imageSize += saved;
+                  totalSize += saved;
+                }
+              } catch { /* ignore */ }
+            }
           });
         }
 
-        // 2. 清理关联图片
+        // 2. 清理关联独立图片键
         if (pageInfo.imagePrefix) {
           for (let i = 0; i < localStorage.length; i++) {
             const key = localStorage.key(i);
@@ -507,6 +551,7 @@ const StorageCleanupModal: React.FC<StorageCleanupModalProps> = ({ open, onClose
 
       setScanResult({
         keys: matchedKeys,
+        stripItems,
         totalSize,
         timeRange: minDate && maxDate ? { from: minDate, to: maxDate } : undefined,
         pageBreakdown,
@@ -517,7 +562,7 @@ const StorageCleanupModal: React.FC<StorageCleanupModalProps> = ({ open, onClose
         message.info(dateFrom && dateTo ? '指定时间范围内未找到符合条件的数据' : '未找到符合条件的数据');
       }
     }, 300);
-  }, [selectedPages, onlyImagePages, owner, dateRange, extractDateFromBusinessData, resolveCustomKeys]);
+  }, [selectedPages, owner, dateRange, extractDateFromBusinessData]);
 
   // 执行清理
   const executeCleanup = useCallback(() => {
@@ -571,13 +616,30 @@ const StorageCleanupModal: React.FC<StorageCleanupModalProps> = ({ open, onClose
           for (const key of scanResult.keys) {
             localStorage.removeItem(key);
           }
+          // 内嵌图片剥离：清空记录内 base64 图片字段，保留数据记录
+          for (const op of (scanResult.stripItems || [])) {
+            const raw = localStorage.getItem(op.key);
+            if (!raw) continue;
+            try {
+              const parsed = JSON.parse(raw);
+              const isArr = Array.isArray(parsed);
+              const list: any[] = isArr ? parsed : [parsed];
+              list.forEach((rec: any) => {
+                if (!rec || typeof rec !== 'object') return;
+                op.fields.forEach(f => {
+                  if (Array.isArray(rec[f])) rec[f] = [];
+                  else if (typeof rec[f] === 'string') rec[f] = '';
+                });
+              });
+              localStorage.setItem(op.key, JSON.stringify(isArr ? parsed : list[0]));
+            } catch { /* ignore */ }
+          }
 
           message.success(`清理完成，已释放 ${formatStorageSize(scanResult.totalSize / 1024)} 空间`);
           
           window.dispatchEvent(new Event('storage-usage-updated'));
           
           setSelectedPages([]);
-          setOnlyImagePages(new Set());
           setDateRange(null);
           setScanResult(null);
           onCleanupComplete?.();
@@ -622,6 +684,19 @@ const StorageCleanupModal: React.FC<StorageCleanupModalProps> = ({ open, onClose
         if (v) {
           try { backupData[k] = JSON.parse(v); } catch { backupData[k] = v; }
           backupKeys.push(k);
+        }
+      });
+
+      // 备份非 pageData_ 体系业务数据键（采购账单/仓库统计等）
+      (pageInfo.dataKeyPrefixes || []).forEach(pfx => {
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (!k || !k.startsWith(pfx) || !k.includes(owner)) continue;
+          const v = localStorage.getItem(k);
+          if (v) {
+            try { backupData[k] = JSON.parse(v); } catch { backupData[k] = v; }
+            backupKeys.push(k);
+          }
         }
       });
 
@@ -751,26 +826,12 @@ const StorageCleanupModal: React.FC<StorageCleanupModalProps> = ({ open, onClose
 
   const handleClose = useCallback(() => {
     setSelectedPages([]);
-    setOnlyImagePages(new Set());
     setDateRange(null);
     setScanResult(null);
     setScanning(false);
     setCleaning(false);
     onClose();
   }, [onClose]);
-
-  // 切换"只清理图片"
-  const toggleOnlyImage = useCallback((page: string) => {
-    setOnlyImagePages(prev => {
-      const next = new Set(prev);
-      if (next.has(page)) {
-        next.delete(page);
-      } else {
-        next.add(page);
-      }
-      return next;
-    });
-  }, []);
 
   return (
     <Modal
@@ -821,10 +882,11 @@ const StorageCleanupModal: React.FC<StorageCleanupModalProps> = ({ open, onClose
         message="清理说明"
         description={
           <div>
-            <p style={{ marginBottom: 4 }}>选择要清理的页面，每个页面可勾选<strong>「只清理图片」</strong>：</p>
+            <p style={{ marginBottom: 4 }}>选择要清理的页面，<strong>所有页面均只清理图片，页面数据一律保留</strong>：</p>
             <ul style={{ margin: 0, paddingLeft: 20, fontSize: 12 }}>
-              <li>勾选「只清理图片」：仅清理该页面关联的图片，页面数据保留</li>
-              <li>不勾选：清理该页面的数据 + 关联图片（全部清除）</li>
+              <li>独立图片键（产品图片 / 付款截图）：直接删除图片键</li>
+              <li>内嵌图片（采购账单 / 仓库统计记录内的 base64 图片）：剥离图片字段，记录保留</li>
+              <li>「产品列表」仅展示占用体积，不可勾选清理（其图片请走「产品图片」项）</li>
             </ul>
             <p style={{ marginTop: 8, marginBottom: 0, fontSize: 12 }}>
               <strong>备份功能：</strong>清理前可点击「备份数据」将选中页面的数据导出为 JSON 文件保存到本地电脑，以便后续恢复。
@@ -893,12 +955,10 @@ const StorageCleanupModal: React.FC<StorageCleanupModalProps> = ({ open, onClose
                 const pageInfo = PAGE_INFO_MAP[page];
                 const name = pageInfo?.name || page;
                 const description = pageInfo?.description || '';
-                const hasImage = !!pageInfo?.imagePrefix;
+                const hasImage = !!pageInfo?.imagePrefix || !!(pageInfo?.embeddedImageFields || []).length;
                 const imageDesc = pageInfo?.imageDescription || '';
-                // 依赖关系展示过滤已排除页面（如产品列表/销售订单不在清理范围，不再作为警告依据）
-                const reqBy = (pageInfo?.requiredBy || []).filter(p => !EXCLUDED_PAGES.has(p));
                 const depOn = (pageInfo?.dependsOn || []).filter(p => !EXCLUDED_PAGES.has(p));
-                const onlyImage = onlyImagePages.has(page) || !!reqBy.length; // 有依赖的页面强制只清理图片
+                const viewOnly = !!pageInfo?.viewOnly; // 仅展示页面不可勾选清理
                 const usage = pageUsageMap.get(page);
 
                 return (
@@ -908,12 +968,12 @@ const StorageCleanupModal: React.FC<StorageCleanupModalProps> = ({ open, onClose
                       padding: '12px 14px',
                       border: '1px solid #d9d9d9',
                       borderRadius: 8,
-                      background: selectedPages.includes(page) ? (onlyImage ? '#e6f7ff' : '#f0f5ff') : '#fafafa',
+                      background: selectedPages.includes(page) ? '#e6f7ff' : '#fafafa',
                       transition: 'all 0.3s',
                     }}
                   >
                     <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
-                      <Checkbox value={page} style={{ marginTop: 2 }} />
+                      <Checkbox value={page} disabled={viewOnly} style={{ marginTop: 2 }} />
                       <div style={{ flex: 1 }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4, flexWrap: 'wrap' }}>
                           <Tag color="purple" style={{ fontSize: 12, margin: 0 }}>{name}</Tag>
@@ -929,44 +989,22 @@ const StorageCleanupModal: React.FC<StorageCleanupModalProps> = ({ open, onClose
                           ) : (
                             <Tag style={{ fontSize: 11, margin: 0, color: '#8c8c8c' }}>无数据</Tag>
                           )}
-                          {hasImage && selectedPages.includes(page) && (
-                            <Checkbox
-                              checked={onlyImage}
-                              onChange={() => toggleOnlyImage(page)}
-                              disabled={!!reqBy.length} // 有依赖的页面禁止取消
-                              style={{ fontSize: 12 }}
-                            >
-                              <Text style={{ fontSize: 12, color: reqBy.length ? '#999' : '#1890ff' }}>
-                                只清理图片
-                                {reqBy.length ? '（被其他页面依赖，禁止清理数据）' : ''}
-                              </Text>
-                            </Checkbox>
+                          {viewOnly && (
+                            <Tag style={{ fontSize: 11, margin: 0, color: '#8c8c8c' }}>仅展示，不可清理</Tag>
+                          )}
+                          {hasImage && !viewOnly && (
+                            <Text style={{ fontSize: 12, color: '#1890ff' }}>只清理图片，数据保留</Text>
                           )}
                         </div>
                         {description && (
                           <Text type="secondary" style={{ fontSize: 12, display: 'block' }}>
                             {description}
-                            {hasImage && !onlyImage && selectedPages.includes(page) && (
+                            {hasImage && (
                               <span style={{ color: '#1890ff' }}> + {imageDesc}</span>
-                            )}
-                            {hasImage && onlyImage && selectedPages.includes(page) && (
-                              <span style={{ color: reqBy.length ? '#999' : '#1890ff' }}>
-                                （仅清理图片，数据保留）
-                                {reqBy.length ? ' - 被其他页面依赖，禁止清理数据' : ''}
-                              </span>
                             )}
                           </Text>
                         )}
-                        {/* 依赖关系警告 */}
-                        {reqBy.length > 0 && (
-                          <div style={{ marginTop: 6, fontSize: 11 }}>
-                            <Tooltip title={`清理「${name}」后，以下页面的关联数据将受影响：${reqBy.map(p => PAGE_INFO_MAP[p]?.name || p).join('、')}`}>
-                              <Tag color="red" style={{ fontSize: 10, margin: 0, cursor: 'help' }}>
-                                ⚠️ 被{reqBy.length}个页面依赖
-                              </Tag>
-                            </Tooltip>
-                          </div>
-                        )}
+                        {/* 依赖提示（数据不再清理，仅作信息展示） */}
                         {depOn.length > 0 && (
                           <div style={{ marginTop: 4, fontSize: 11 }}>
                             <Tooltip title={`本页面依赖以下页面的数据：${depOn.map(p => PAGE_INFO_MAP[p]?.name || p).join('、')}`}>
