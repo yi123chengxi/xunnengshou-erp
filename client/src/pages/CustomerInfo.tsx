@@ -48,6 +48,7 @@ import { compressImageFile } from '../utils/imageCompress';
 import { getCurrentUserDisplayName } from '../utils/billLog';
 import { buildInviteLink } from '../utils/cooperationInvite';
 import { startCooperationTermination, cancelCooperationTermination, TERMINATE_GRACE_MS } from '../utils/cooperationTerminate';
+import { reconcileCooperationPairs } from '../utils/cooperationReconcile';
 import { copyText } from '../utils/clipboard';
 
 const { Text } = Typography;
@@ -830,8 +831,9 @@ const CustomerInfo: React.FC = () => {
     setBoundPurchasers(loadBoundPurchasersFromStorage());
   }, []);
 
-  // 首次进入页面同步数据
+  // 首次进入页面同步数据（先做合作状态闭环对账，保证与对方后台显示一致）
   useEffect(() => {
+    reconcileCooperationPairs();
     syncBoundPurchasers();
   }, [syncBoundPurchasers]);
 

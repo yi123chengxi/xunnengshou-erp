@@ -10,9 +10,10 @@ import { saveDataset, loadDataset } from './dataStore';
 import { getOriginalSetItem, safeSetItem, emergencyFreeSpace } from './storageQuota';
 import { API_BASE } from './apiBase';
 import { repairPurchaserSupplierNames } from './cooperationTerminate';
+import { reconcileCooperationPairs } from './cooperationReconcile';
 
 // 需要同步的业务数据 key 前缀/精确名
-const SYNC_PREFIXES = ['pageData_', 'custom_', 'warehouses_', 'purchaser_suppliers_', 'accounts_', 'shop_info_', 'shop_profit_', 'month_end_check_', 'withdrawal_record_', 'dev_', 'hr_', 'newstyle_', 'brandauth_', 'molds_', 'credit_adjustments_', 'published_credit_', 'payment_requests_', 'payment_request_managers_', 'notification_settings_', 'print_template_', 'price_strategy_'];
+const SYNC_PREFIXES = ['pageData_', 'custom_', 'warehouses_', 'purchaser_suppliers_', 'boundPurchasers_', 'accounts_', 'shop_info_', 'shop_profit_', 'month_end_check_', 'withdrawal_record_', 'dev_', 'hr_', 'newstyle_', 'brandauth_', 'molds_', 'credit_adjustments_', 'published_credit_', 'payment_requests_', 'payment_request_managers_', 'notification_settings_', 'print_template_', 'price_strategy_'];
 const SYNC_EXACT = ['registeredUsers', 'subscription_orders', 'storage_orders', 'market_publish_orders', 'market_ratings', 'market_trade_orders', 'market_visitor_cart_shares', 'market_mold_listings', 'purchaser_pushed_orders', 'cooperation_applications'];
 // 图片块体积大，不参与跨浏览器同步（各浏览器独立）
 const EXCLUDE_PREFIXES = ['prodImg_', 'thumb_', 'payShot_', 'mold_img_'];
@@ -305,6 +306,8 @@ function mergeRegisteredUsers(serverJson: string): any[] | null {
 export async function pullAllDatasets(): Promise<number> {
   // 合作存量数据修复：采购商侧供应商名称统一为已认证公司全称（轻量，随同步轮询执行）
   try { repairPurchaserSupplierNames(); } catch { /* ignore */ }
+  // 合作状态闭环：同一公司对双向镜像状态对齐（终止/终止中/已合作取最进阶），保证两公司后台显示一致
+  try { reconcileCooperationPairs(); } catch { /* ignore */ }
   if (!(await serverAvailable())) return 0;
   let meta: Record<string, number> = {};
   try {
@@ -389,6 +392,9 @@ export async function pullAllDatasets(): Promise<number> {
       applied++;
     } catch { /* ignore */ }
   }
+
+  // 拉取完成后再次闭环对账：服务端拉下的镜像若与本地其他镜像状态分叉，立即对齐
+  try { reconcileCooperationPairs(); } catch { /* ignore */ }
 
   // 第二步：本地有但服务端没有的数据集 → 自动上传（首次迁移，仅限当前账号）
   try {
