@@ -44,8 +44,7 @@ jobs:
         continue-on-error: true
         run: |
           cd client
-          npm ci
-          npm run build 2>&1 | tee build.log
+          { npm ci && npm run build; } 2>&1 | tee build.log
           exit ${PIPESTATUS[0]}
         env:
           # 超大 bundle 在 runner 默认堆内存下易 OOM；关闭 sourcemap 降低内存与耗时
@@ -56,11 +55,11 @@ jobs:
         if: steps.build_fe.outcome == 'failure'
         run: |
           mkdir -p ci-logs
-          cp client/build.log ci-logs/fe_build.log
+          if [ -f client/build.log ]; then cp client/build.log ci-logs/fe_build.log; else echo "build.log missing (failed before tee)" > ci-logs/fe_build.log; fi
           git config user.name "ci-bot"
           git config user.email "ci-bot@users.noreply.github.com"
-          git add ci-logs/fe_build.log
-          git commit -m "chore: 回传 CI 前端构建日志 [skip ci]"
+          git add -f ci-logs/fe_build.log
+          git commit -m "chore: 回传 CI 前端构建日志 [skip ci]" || true
           git push origin HEAD:main || true
 
       - name: 前端构建失败判定
