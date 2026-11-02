@@ -17,6 +17,7 @@ import {
   EditOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
+import { copyText } from '../utils/clipboard';
 
 const { Text, Title } = Typography;
 
@@ -595,10 +596,9 @@ const PurchaserCooperationManage: React.FC = () => {
   // ========== 复制链接 ==========
   const copyLink = () => {
     if (!generatedLink) return;
-    navigator.clipboard.writeText(generatedLink).then(
-      () => message.success('链接已复制到剪贴板'),
-      () => message.error('复制失败，请手动复制'),
-    );
+    copyText(generatedLink).then(ok => (ok
+      ? message.success('链接已复制到剪贴板')
+      : message.error('复制失败，请手动复制')));
   };
 
   // ========== 发起终止合作申请（需供应商确认）==========

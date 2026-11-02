@@ -8,6 +8,7 @@ import { loadDataset, saveDataset } from '../utils/dataStore';
 import { pullAllDatasets } from '../utils/serverSync';
 import { getProvinceOptions, getCityOptions, getDistrictOptions } from '../utils/regions';
 import { connectChatWS, setGuestIdentity, sendMessage, onNewMessage, fetchHistory, httpMarkRead } from '../utils/chatSocket';
+import { copyText } from '../utils/clipboard';
 
 const PRIMARY = '#1e4a7e';
 const SHARED_INVENTORY_KEY = 'market_shared_inventories';
@@ -1038,7 +1039,7 @@ const SharedInventoryPage: React.FC = () => {
                 <div style={{ color: '#666', marginBottom: 6 }}>分享链接</div>
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                   <span style={{ flex: 1, wordBreak: 'break-all', fontSize: 12, color: PRIMARY }}>{link}</span>
-                  <Button size="small" icon={<CopyOutlined />} onClick={() => { navigator.clipboard.writeText(link); message.success('已复制'); }}>复制</Button>
+                  <Button size="small" icon={<CopyOutlined />} onClick={() => { copyText(link).then(ok => (ok ? message.success('已复制') : message.error('复制失败，请手动复制'))); }}>复制</Button>
                 </div>
               </div>
               <div style={{ color: '#999', fontSize: 12 }}>

@@ -96,6 +96,7 @@ import type { ChildPageConfig, RecordStatus } from '../config/pageConfig';
 import type { ColumnsType } from 'antd/es/table';
 import * as XLSX from 'xlsx-js-style';
 import { unzipSync, zipSync } from 'fflate';
+import { copyText } from '../utils/clipboard';
 import { getFullImage, saveFullImage, deleteFullImage, batchDeleteFullImages } from '../utils/imageStore';
 import BatchAddProductModal from '../components/BatchAddProductModal';
 import ScheduleBoard from '../components/ScheduleBoard';
@@ -5654,17 +5655,9 @@ const ModuleChildPage: React.FC = () => {
           .filter(r => colSelection.rowKeys.includes(String(r.key)))
           .map(r => r[colKey] ?? '');
         const text = values.join('\n');
-        navigator.clipboard.writeText(text).then(() => {
-          message.success(`已复制 ${values.length} 行数据`);
-        }).catch(() => {
-          // fallback
-          const ta = document.createElement('textarea');
-          ta.value = text;
-          document.body.appendChild(ta);
-          ta.select();
-          document.execCommand('copy');
-          document.body.removeChild(ta);
-          message.success(`已复制 ${values.length} 行数据`);
+        copyText(text).then(ok => {
+          if (ok) message.success(`已复制 ${values.length} 行数据`);
+          else message.error('复制失败，请手动复制');
         });
       }
     };
@@ -11207,7 +11200,9 @@ const handleBatchAttrsConfirm = () => {
                     `支行名称：${record.branchName || '—'}`,
                     `银行账号：${record.bankAccountNo || '—'}`,
                   ];
-                  navigator.clipboard.writeText(lines.join('\n')).then(() => message.success('账户信息已复制到剪贴板'));
+                  copyText(lines.join('\n')).then(ok => (ok
+                    ? message.success('账户信息已复制到剪贴板')
+                    : message.error('复制失败，请手动复制')));
                 }}
                 style={{ color: '#13c2c2' }}
               >

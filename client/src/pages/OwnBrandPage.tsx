@@ -31,6 +31,7 @@ import {
 import { loadTenantUsers } from '../utils/tenantUsers';
 import { pushBankTransaction, isAccountingMode, writeAutoEntries } from '../utils/accountingBridge';
 import { useColResize } from '../utils/colResize';
+import { copyText } from '../utils/clipboard';
 import useStickTableHeight from '../hooks/useStickTableHeight';
 import FieldConfigModal from '../components/FieldConfigModal';
 
@@ -1194,7 +1195,7 @@ const OwnBrandPage: React.FC<{ embedded?: boolean }> = ({ embedded }) => {
     {
       title: '查询链接', key: 'share', width: 90, align: 'center',
       render: (_v, r) => (r.shareCode
-        ? <Tooltip title={certLink(r)}><Button type="link" size="small" icon={<CopyOutlined />} onClick={() => { navigator.clipboard?.writeText(certLink(r)); message.success('查询链接已复制，可发给代理商'); }}>复制</Button></Tooltip>
+        ? <Tooltip title={certLink(r)}><Button type="link" size="small" icon={<CopyOutlined />} onClick={() => { copyText(certLink(r)).then(ok => (ok ? message.success('查询链接已复制，可发给代理商') : message.error('复制失败，请手动复制'))); }}>复制</Button></Tooltip>
         : '—'),
     },
     {
@@ -1530,7 +1531,7 @@ const OwnBrandPage: React.FC<{ embedded?: boolean }> = ({ embedded }) => {
         <div style={{ marginBottom: 8, color: '#666', fontSize: 13 }}>将此链接发给代理商/分销商，无需登录即可提交品牌授权申请，提交后自动出现在本页列表。</div>
         <Input.Group compact>
           <Input value={applyLink} readOnly style={{ width: 'calc(100% - 90px)' }} />
-          <Button type="primary" icon={<CopyOutlined />} onClick={() => { navigator.clipboard?.writeText(applyLink); message.success('链接已复制'); }}>复制</Button>
+          <Button type="primary" icon={<CopyOutlined />} onClick={() => { copyText(applyLink).then(ok => (ok ? message.success('链接已复制') : message.error('复制失败，请手动复制'))); }}>复制</Button>
         </Input.Group>
         <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <Checkbox checked={bindPic} onChange={e => {

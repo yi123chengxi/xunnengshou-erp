@@ -47,6 +47,7 @@ import { canFn, usePermTick } from '../utils/perm';
 import { compressImageFile } from '../utils/imageCompress';
 import { getCurrentUserDisplayName } from '../utils/billLog';
 import { buildInviteLink } from '../utils/cooperationInvite';
+import { copyText } from '../utils/clipboard';
 
 const { Text } = Typography;
 const { Option } = Select;
@@ -2243,10 +2244,9 @@ const CustomerInfo: React.FC = () => {
             icon={<CopyOutlined />}
             disabled={!inviteLink}
             onClick={() => {
-              navigator.clipboard.writeText(inviteLink).then(
-                () => message.success('邀约链接已复制到剪贴板'),
-                () => message.error('复制失败，请手动复制'),
-              );
+              copyText(inviteLink).then(ok => (ok
+                ? message.success('邀约链接已复制到剪贴板')
+                : message.error('复制失败，请手动复制')));
             }}
           >
             复制链接
