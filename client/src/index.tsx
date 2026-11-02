@@ -36,6 +36,26 @@ cleanupDemoAccountsAndSession();
   } catch { /* ignore */ }
 })();
 
+// 心跳检测（兼容浏览器"恢复上次会话"还原 sessionStorage 的场景）：
+// 页面运行期间每 5 秒写一次心跳；启动时若心跳已中断超过 20 秒，
+// 说明期间所有页面都已关闭（浏览器重启/标签全关），本次打开视为未登入，
+// 清除残留登录会话回退登录页；刷新或同会话内新开标签心跳新鲜，保持登录
+(() => {
+  try {
+    const HEARTBEAT_KEY = 'erpHeartbeat';
+    const last = Number(localStorage.getItem(HEARTBEAT_KEY) || 0);
+    const hasSession = !!localStorage.getItem('username');
+    if (hasSession && last && Date.now() - last > 20000) {
+      ['userRole', 'username', 'isViewOnly', 'isSubAccount', 'parentAccount', 'userRoles', 'userCustomPermissions'].forEach(k => localStorage.removeItem(k));
+      try { sessionStorage.removeItem('erpSessionAlive'); } catch { /* ignore */ }
+    }
+    const beat = () => { try { localStorage.setItem(HEARTBEAT_KEY, String(Date.now())); } catch { /* ignore */ } };
+    beat();
+    setInterval(beat, 5000);
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') beat(); });
+  } catch { /* ignore */ }
+})();
+
 // 登录鉴权守卫：未登录（无 username 会话）直接打开后台路由时统一重定向到登录页；
 // 公开链接（合作确认/货盘分享/品牌公开页/邀约落地页）与开发者入口（自有 devLoggedIn 守卫）除外
 (() => {
@@ -54,12 +74,50 @@ setTimeout(() => proactiveQuotaCleanup(), 2000);
 // 登录成功后会再次调用以确保订阅与当前用户绑定
 initPushNotifications();
 
+// 懒加载 chunk 失败守卫：版本更新后旧页面引用已删除的旧 hash chunk 会 404，
+// 未捕获异常将整棵 React 树卸载造成整页空白；此处统一捕获并自动刷新一次加载新版本，
+// 刷新仍失败则展示重试界面，杜绝"偶尔空白需手动刷新"问题
+class ChunkGuard extends React.Component<{ children: React.ReactNode }, { err: string }> {
+  state = { err: '' };
+  static getDerivedStateFromError(e: any) {
+    return { err: String((e && e.message) || e || 'unknown error') };
+  }
+  componentDidCatch(e: any) {
+    const msg = String((e && e.message) || e || '');
+    const isChunk = /Loading chunk|chunk .*failed|Failed to fetch dynamically imported|dynamically imported module|Importing a module script failed|error loading dynamically/i.test(msg);
+    try {
+      const last = Number(sessionStorage.getItem('chunkReloadAt') || 0);
+      if (isChunk && Date.now() - last > 15000) {
+        sessionStorage.setItem('chunkReloadAt', String(Date.now()));
+        window.location.reload();
+      }
+    } catch { /* ignore */ }
+  }
+  render() {
+    if (this.state.err) {
+      return (
+        <div style={{ padding: 60, textAlign: 'center', fontFamily: 'sans-serif' }}>
+          <p style={{ fontSize: 15, color: '#333' }}>页面资源加载失败（系统可能已更新到新版本）</p>
+          <button
+            style={{ marginTop: 12, padding: '8px 24px', background: '#1890ff', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer' }}
+            onClick={() => window.location.reload()}
+          >
+            立即刷新
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 const root = ReactDOM.createRoot(
   document.getElementById('root') as HTMLElement
 );
 
 root.render(
   <React.StrictMode>
+    <ChunkGuard>
     <ConfigProvider locale={zhCN} theme={{
       token: {
         colorPrimary: '#1890ff',
@@ -84,5 +142,6 @@ root.render(
         <App />
       </BrowserRouter>
     </ConfigProvider>
+    </ChunkGuard>
   </React.StrictMode>
 );
