@@ -4,7 +4,8 @@
  * 配置项（server/.env）：
  *   ENTERPRISE_APPCODE —— 阿里云市场 AppCode（请求头 Authorization: APPCODE xxx）
  *   ENTERPRISE_API_URL —— 商品接口地址（控制台「接口」页的请求 URL）
- * 未配置时走 devMode（直接返回匹配成功，便于联调 UI），配置后自动切换真实调用。
+ * 未配置时默认拒绝核验（防止错误工商信息被“格式校验通过即匹配”放行），
+ * 仅当 .env 显式 ENTERPRISE_DEV_MODE=1 时才走 devMode（直接返回匹配成功，便于联调 UI）。
  *
  * 响应解析采用宽容模式：先识别外层信封 code，再在多层结构中查找匹配标志，
  * 兼容市面常见三要素接口返回形态；拿到正式接口文档后可在 parseMatch 中精确化。
@@ -20,6 +21,11 @@ export interface VerifyResult {
 
 export function isEnterpriseConfigured(): boolean {
   return !!(process.env.ENTERPRISE_APPCODE && process.env.ENTERPRISE_API_URL);
+}
+
+/** 开发模式开关：仅 .env 显式 ENTERPRISE_DEV_MODE=1 时生效；生产未配置接口地址时必须拒绝核验而非假匹配 */
+export function isEnterpriseDevMode(): boolean {
+  return process.env.ENTERPRISE_DEV_MODE === '1' || process.env.ENTERPRISE_DEV_MODE === 'true';
 }
 
 const TRUTHY = new Set(['1', 'true', 'match', 'matched', 'yes', '一致', '匹配']);
@@ -96,7 +102,10 @@ export async function verifyThreeElements(input: VerifyInput): Promise<VerifyRes
     return { ok: false, reason: 'badcode', message: '统一社会信用代码格式不正确（18 位）' };
   }
   if (!isEnterpriseConfigured()) {
-    // 开发模式：格式校验通过即视为匹配，便于联调全流程；记录 check_result=devMode 便于识别
+    if (!isEnterpriseDevMode()) {
+      return { ok: false, reason: 'not_configured', message: '企业三要素核验接口未配置（服务端 .env 缺 ENTERPRISE_API_URL），本次提交未生效；请联系管理员在阿里云市场控制台补全接口地址后重试' };
+    }
+    // 开发模式（显式开启）：格式校验通过即视为匹配，便于联调全流程；记录 check_result=devMode 便于识别
     return { ok: true, matched: true, devMode: true, message: '企业认证接口未配置（开发模式）' };
   }
   return callRemote({ companyName, creditCode, legalPerson });
