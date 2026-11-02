@@ -49,11 +49,11 @@ export const PERM_V8_DEFAULT_KEYS = [
   // 供应商平台（9项）
   'finance/bank-account', 'finance/daily-bookkeeping', 'finance/reimbursement',
   'finance/payment-request', 'finance/reconciliation', 'finance/shop-management',
-  'finance/other-currency', 'finance/general-ledger', 'finance/simple-ledger',
+  'finance/other-currency', 'finance/general-ledger', 'finance/simple-ledger', 'customer/reconciliation',
   // 采购商平台（9项）
   'purchaser/finance/bank-account', 'purchaser/finance/daily-bookkeeping', 'purchaser/finance/reimbursement',
   'purchaser/finance/payment-request', 'purchaser/finance/reconciliation', 'purchaser/finance/shop-management',
-  'purchaser/finance/other-currency', 'purchaser/finance/general-ledger', 'purchaser/finance/simple-ledger',
+  'purchaser/finance/other-currency', 'purchaser/finance/general-ledger', 'purchaser/finance/simple-ledger', 'purchaser/suppliers/reconciliation',
   // 加工厂平台（6项）
   'factory/finance/bank-account', 'factory/finance/daily-bookkeeping', 'factory/finance/reimbursement',
   'factory/finance/other-currency', 'factory/finance/general-ledger', 'factory/finance/simple-ledger',
@@ -122,6 +122,9 @@ export const ECOM_KEY_MIGRATION: Record<string, string> = {
   'purchaser/newstyle/progress': 'purchaser/ecommerce/progress',
   'purchaser/brandauth/manage': 'purchaser/ecommerce/manage',
   'purchaser/finance/shop-management': 'purchaser/ecommerce/shop-management',
+  // 对账管理菜单迁移：财务 → 客户管理(供应商) / 供应商菜单(采购商)
+  'finance/reconciliation': 'customer/reconciliation',
+  'purchaser/finance/reconciliation': 'purchaser/suppliers/reconciliation',
 };
 
 // 读取开发者后台设置的客户软件菜单权限（dev_customer_perms_<账号>，未设置=全部允许）

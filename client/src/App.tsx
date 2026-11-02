@@ -160,8 +160,9 @@ function App() {
           <Route path="settings/account-manage" element={<AccountManage />} />
           <Route path="settings/role-manage" element={<RoleManage />} />
           <Route path="settings/notification-settings" element={<NotificationSettingsPage />} />
-          {/* 对账管理 - 专用页面，支持客户对账与供应商对账 */}
-          <Route path="finance/reconciliation" element={<ReconciliationManage />} />
+          {/* 对账管理 - 专用页面（菜单已迁至客户管理），旧财务路径重定向 */}
+          <Route path="customer/reconciliation" element={<ReconciliationManage />} />
+          <Route path="finance/reconciliation" element={<Navigate to="/customer/reconciliation" replace />} />
           {/* 店铺管理 - 内部侧边栏包装页面 */}
           <Route path="finance/shop-management" element={<ShopManagementPage />} />
           <Route path="finance/shop-management/profit" element={<ShopProfitPage />} />
@@ -281,7 +282,9 @@ function App() {
           <Route path="finance/general-ledger" element={<GeneralLedgerPage />} />
           <Route path="finance/simple-ledger" element={<SimpleLedgerPage />} />
           <Route path="finance/:childKey" element={<ModuleChildPage />} />
-          <Route path="finance/reconciliation" element={<ReconciliationManage />} />
+          {/* 对账管理（菜单已迁至供应商菜单），旧财务路径重定向 */}
+          <Route path="suppliers/reconciliation" element={<ReconciliationManage />} />
+          <Route path="finance/reconciliation" element={<Navigate to="/purchaser/suppliers/reconciliation" replace />} />
           {/* 店铺管理 - 内部侧边栏包装页面 */}
           <Route path="finance/shop-management" element={<ShopManagementPage />} />
           <Route path="finance/shop-management/profit" element={<ShopProfitPage />} />

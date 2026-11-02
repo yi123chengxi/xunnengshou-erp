@@ -2623,7 +2623,7 @@ const WarehouseStatsPage: React.FC = () => {
     { key: 'group', label: <span><TeamOutlined /> 分组</span>, children: <GroupTab /> },
     { key: 'note', label: <span><FileTextOutlined /> 奖惩记录</span>, children: <NoteTab /> },
     { key: 'salary', label: <span><BarChartOutlined /> 工资汇总</span>, children: <SalaryTab /> },
-    { key: 'orderLabel', label: <span><TagsOutlined /> 导入数据源</span>, children: <OrderLabelTab /> },
+    { key: 'orderLabel', label: <span><TagsOutlined /> 导入数据源 <Tooltip placement="bottomLeft" title={<ul style={{ margin: 0, paddingLeft: 16, fontSize: 12, lineHeight: '20px' }}><li>备货单统计：「更新信息→更新材质」按内部单号匹配并回填材质、货号；「更新比对结果」按内部单号比对数量生成超记/一致/少于/无源四态及「导入数据源数量」统计值；材质筛选项依赖回填的材质</li><li>急采统计：同备货单统计，支持更新材质与更新比对结果</li><li>数据分析：「比对结果分布」图表基于本数据源与备货单的数量比对结果统计</li><li>若本数据源缺失或未更新，上述功能将显示「无源」或材质为空，请及时导入/维护最新数据</li></ul>}><QuestionCircleOutlined style={{ color: '#bfbfbf', cursor: 'help' }} /></Tooltip></span>, children: <OrderLabelTab /> },
     { key: 'analysis', label: <span><FundOutlined /> 数据分析</span>, children: <DataAnalysisTab /> },
   ];
 

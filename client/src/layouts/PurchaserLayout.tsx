@@ -85,6 +85,7 @@ const purchaserMenus = [
       { key: 'factory-list', label: '加工厂列表' },
       { key: 'cooperation', label: '合作申请' },
       { key: 'bill', label: '采购账单' },
+      { key: 'reconciliation', label: '对账管理' },
     ],
   },
   {
@@ -103,7 +104,6 @@ const purchaserMenus = [
       { key: 'bank-account', label: '银行账户' },
       { key: 'reimbursement', label: '报销' },
       { key: 'payment-request', label: '收/付申请' },
-      { key: 'reconciliation', label: '对账管理' },
       { key: 'general-ledger', label: '会计账薄' },
       { key: 'simple-ledger', label: '简易账薄' },
     ],
