@@ -1479,6 +1479,10 @@ const ModuleChildPage: React.FC = () => {
   const [importPreviewData, setImportPreviewData] = useState<Record<string, any>[]>([]);
   const [importErrors, setImportErrors] = useState<{ row: number; field: string; message: string }[]>([]);
   const [importResult, setImportResult] = useState<{ added: number; updated: number; skipped: number } | null>(null);
+  // 字段匹配情况（文件列 → 系统字段），导入预览步骤展示
+  const [importMapping, setImportMapping] = useState<{ header: string; dataIndex: string | null; title: string | null; required: boolean }[]>([]);
+  // 导入进度（分块执行，预览步骤实时展示）
+  const [importProgress, setImportProgress] = useState<{ running: boolean; done: number; total: number }>({ running: false, done: 0, total: 0 });
 
   // 判断是否为产品列表页面（启用导入功能 + 行内编辑）
   const isProductList = moduleKey === 'basic-data' && (childKey === 'product-list' || isProductFamily);
@@ -2378,19 +2382,29 @@ const ModuleChildPage: React.FC = () => {
     );
   };
 
+  // 导入必填字段（与模板标注、解析校验一致）：商品编码通用必填；成品另需款式编码/基础售价；原材料另需款式编码/供应商/成本价/单位
+  const getImportRequiredFields = useCallback((): Set<string> => {
+    const s = new Set(['productCode']);
+    const t = pageConfig?.productTypeFilter;
+    if (t === '成品') ['styleCode', 'suggestedPrice', 'supplierName'].forEach(f => s.add(f));
+    else if (t === '原材料') ['styleCode', 'supplierName', 'costPrice', 'unit'].forEach(f => s.add(f));
+    return s;
+  }, [pageConfig]);
+
+  // 文件列未覆盖的必填字段（预览步骤红色警示，并阻止确认导入）
+  const importMissingRequired = useMemo(() => {
+    const mapped = new Set(importMapping.filter(m => m.dataIndex).map(m => m.dataIndex as string));
+    return Array.from(getImportRequiredFields()).filter(k => !mapped.has(k))
+      .map(k => effectivePageConfig?.columns.find(c => c.dataIndex === k)?.title || k);
+  }, [importMapping, getImportRequiredFields, effectivePageConfig]);
+
   // 下载导入模板
   const handleDownloadTemplate = useCallback(() => {
     if (!effectivePageConfig?.columns) return;
     // 使用所有列（排除操作列和特殊列）
     const cols = effectivePageConfig.columns.filter(c => c.key !== 'actions');
     const productTypeFilter = pageConfig?.productTypeFilter;
-    // 根据产品种类确定必填字段
-    const requiredFields: Set<string> = new Set(['productCode']); // 所有产品通用必填
-    if (productTypeFilter === '成品') {
-      ['styleCode', 'suggestedPrice'].forEach(f => requiredFields.add(f));
-    } else if (productTypeFilter === '原材料') {
-      ['styleCode', 'supplierName', 'costPrice', 'unit'].forEach(f => requiredFields.add(f));
-    }
+    const requiredFields = getImportRequiredFields();
     const headers = cols.map(c => {
       const isRequired = requiredFields.has(c.key);
       return isRequired ? `${c.title}（必填）` : c.title;
@@ -2432,7 +2446,7 @@ const ModuleChildPage: React.FC = () => {
     XLSX.utils.book_append_sheet(wb, ws, '产品导入模板');
     XLSX.writeFile(wb, `产品导入模板_${productTypeFilter || '产品'}_${new Date().toLocaleDateString('zh-CN')}.xlsx`);
     message.success('模板已下载，红色标记字段为必填项');
-  }, [pageConfig]);
+  }, [pageConfig, getImportRequiredFields]);
 
   // 解析导入文件
   const handleImportFile = useCallback((file: File) => {
@@ -2462,6 +2476,19 @@ const ModuleChildPage: React.FC = () => {
         // 额外添加一些常用别名
         titleToKey['产品名称'] = 'name';
         titleToKey['产品编码'] = 'id';
+        // 兼容模板表头：剥离“（必填）”后缀后再匹配（模板下载的必填列带此后缀）
+        const resolveHeaderKey = (h: string) => {
+          const t = String(h).trim();
+          return titleToKey[t.replace(/（必填）$/, '')] || titleToKey[t] || null;
+        };
+
+        // 字段匹配情况：文件列 → 系统字段（未匹配列将被忽略），预览步骤展示
+        const requiredFields = getImportRequiredFields();
+        setImportMapping(Object.keys(jsonData[0] || {}).map(h => {
+          const key = resolveHeaderKey(h);
+          const col = key ? effectivePageConfig?.columns.find(c => c.dataIndex === key) : null;
+          return { header: String(h), dataIndex: key, title: col?.title || null, required: !!key && requiredFields.has(key) };
+        }));
 
         const errors: { row: number; field: string; message: string }[] = [];
         const parsedRows: Record<string, any>[] = [];
@@ -2469,7 +2496,7 @@ const ModuleChildPage: React.FC = () => {
         jsonData.forEach((row, idx) => {
           const mapped: Record<string, any> = {};
           Object.entries(row).forEach(([header, value]) => {
-            const key = titleToKey[header.trim()];
+            const key = resolveHeaderKey(header);
             if (key) {
               mapped[key] = value;
             }
@@ -2544,13 +2571,16 @@ const ModuleChildPage: React.FC = () => {
     };
     reader.readAsArrayBuffer(file);
     return false; // prevent default upload
-  }, [pageConfig]);
+  }, [pageConfig, effectivePageConfig, getImportRequiredFields]);
 
-  // 验证并执行导入
-  const handleImportConfirm = useCallback(() => {
-    if (importPreviewData.length === 0) return;
+  // 验证并执行导入（分块执行 + 实时进度展示）
+  const handleImportConfirm = useCallback(async () => {
+    if (importPreviewData.length === 0 || importProgress.running) return;
     const typeFilter = pageConfig?.productTypeFilter;
     const errors: { row: number; field: string; message: string }[] = [...importErrors];
+    const total = importPreviewData.length;
+    const tick = () => new Promise<void>(r => setTimeout(r, 0));
+    setImportProgress({ running: true, done: 0, total });
 
     // 检查导入数据内部的重复
     const codeSet = new Set<string>();
@@ -2600,135 +2630,106 @@ const ModuleChildPage: React.FC = () => {
     let added = 0;
     let updated = 0;
     let skipped = 0;
+    // 新增行统一补齐默认字段（与单条新增口径一致）
+    const prepareNewRow = (row: Record<string, any>, idx: number) => {
+      row.id = row.id || `PRD-${String(Date.now()).slice(-8)}-${idx}`;
+      row.name = row.name || row.shortName || `产品-${String(row.productCode || '').trim()}`;
+      row.amount = row.suggestedPrice || 0;
+      row.quantity = row.actualStock || 0;
+      row.date = row.createdAt;
+      row.person = row.creator;
+      row.dept = row.dept || '仓储部';
+      row.progress = 0;
+      row.passRate = '';
+      row.deliveryDays = 0;
+      row.margin = '';
+      // 子页面导入时自动设置产品种类
+      if (typeFilter && !row.productType) row.productType = typeFilter;
+    };
 
     if (importMode === 'add') {
-      // 新增模式：检查商品编码和国标码是否已存在
-      importPreviewData.forEach((row, idx) => {
+      // 新增模式：商品编码/国标码已存在或校验错误的行跳过，逐行分块上报进度
+      const validRows: Record<string, any>[] = [];
+      for (let idx = 0; idx < total; idx++) {
+        const row = importPreviewData[idx];
         const pc = String(row.productCode || '').trim();
         const nc = String(row.nationalCode || '').trim();
-        if (pc && existingCodes.has(pc)) {
+        if (errors.some(e => e.row === idx + 2)) {
+          skipped++;
+        } else if (pc && existingCodes.has(pc)) {
           errors.push({ row: idx + 2, field: '商品编码', message: `商品编码 "${pc}" 已存在，新增失败` });
           skipped++;
-          return;
-        }
-        if (nc && existingNationals.has(nc)) {
+        } else if (nc && existingNationals.has(nc)) {
           errors.push({ row: idx + 2, field: '国标码', message: `国标码 "${nc}" 已存在，新增失败` });
           skipped++;
-          return;
+        } else {
+          prepareNewRow(row, idx);
+          validRows.push(row);
+          added++;
         }
-        // 新增
-        row.id = row.id || `PRD-${String(Date.now()).slice(-8)}-${idx}`;
-        row.name = row.name || row.shortName || `产品-${pc}`;
-        row.amount = row.suggestedPrice || 0;
-        row.quantity = row.actualStock || 0;
-        row.date = row.createdAt;
-        row.person = row.creator;
-        row.dept = row.dept || '仓储部';
-        row.progress = 0;
-        row.passRate = '';
-        row.deliveryDays = 0;
-        row.margin = '';
-        // 子页面导入时自动设置产品种类
-        if (typeFilter && !row.productType) row.productType = typeFilter;
-        added++;
-      });
-
-      if (errors.length > importErrors.length) {
-        setImportErrors(errors);
+        if ((idx + 1) % 20 === 0 || idx === total - 1) {
+          setImportProgress({ running: true, done: idx + 1, total });
+          await tick();
+        }
       }
-
-      const validRows = importPreviewData.filter((_, idx) => {
-        const pc = String(importPreviewData[idx].productCode || '').trim();
-        const nc = String(importPreviewData[idx].nationalCode || '').trim();
-        // 排除有验证错误的行（包括必填字段验证和重复检查）
-        const hasError = errors.some(e => e.row === idx + 2);
-        return !hasError && !existingCodes.has(pc) && !(nc && existingNationals.has(nc));
-      });
-
-      setDataSource(prev => [...validRows, ...prev]);
+      if (validRows.length > 0) setDataSource(prev => [...validRows, ...prev]);
     } else {
-      // 更新模式：以商品编码匹配
-      const updatedCodes = new Set<string>();
-      importPreviewData.forEach((row, idx) => {
+      // 更新模式：以商品编码匹配，逐行分块上报进度
+      const updateMap = new Map<string, Record<string, any>>();
+      for (let idx = 0; idx < total; idx++) {
+        const row = importPreviewData[idx];
         const pc = String(row.productCode || '').trim();
         const nc = String(row.nationalCode || '').trim();
-        // 检查国标码是否与其他商品编码的记录冲突
-        if (nc) {
-          const conflict = dataSource.find(d =>
-            String(d.nationalCode || '').trim() === nc &&
-            String(d.productCode || '').trim() !== pc
-          );
-          if (conflict) {
-            errors.push({ row: idx + 2, field: '国标码', message: `国标码 "${nc}" 已被商品编码 "${conflict.productCode}" 使用` });
-            skipped++;
-            return;
-          }
-        }
-        // 检查导入数据内部国标码与商品编码交叉冲突
-        const crossConflict = importPreviewData.find((r, ridx) =>
+        if (importErrors.some(e => e.row === idx + 2)) {
+          skipped++;
+        } else if (nc && dataSource.some(d =>
+          String(d.nationalCode || '').trim() === nc &&
+          String(d.productCode || '').trim() !== pc
+        )) {
+          const conflict = dataSource.find(d => String(d.nationalCode || '').trim() === nc);
+          errors.push({ row: idx + 2, field: '国标码', message: `国标码 "${nc}" 已被商品编码 "${conflict?.productCode}" 使用` });
+          skipped++;
+        } else if (nc && importPreviewData.some((r, ridx) =>
           ridx !== idx &&
-          String(r.nationalCode || '').trim() === nc && nc !== '' &&
+          String(r.nationalCode || '').trim() === nc &&
           String(r.productCode || '').trim() !== pc
-        );
-        if (crossConflict) {
+        )) {
           errors.push({ row: idx + 2, field: '国标码', message: `国标码 "${nc}" 与导入中其他记录冲突` });
           skipped++;
-          return;
+        } else {
+          updateMap.set(pc, row);
         }
-        updatedCodes.add(pc);
-        updated++;
-      });
-
-      if (errors.length > importErrors.length) {
-        setImportErrors(errors);
+        if ((idx + 1) % 20 === 0 || idx === total - 1) {
+          setImportProgress({ running: true, done: idx + 1, total });
+          await tick();
+        }
       }
-
-      // 执行更新
-      setDataSource(prev => prev.map(item => {
-        const pc = String(item.productCode || '').trim();
-        const matchRow = importPreviewData.find(r =>
-          String(r.productCode || '').trim() === pc
-        );
-        if (matchRow && !updatedCodes.has(pc) === false) {
-          // 检查是否被跳过
-          const isSkipped = importPreviewData.some((_, idx) => {
-            return String(importPreviewData[idx].productCode || '').trim() === pc &&
-              errors.some(e => e.row === idx + 2);
-          });
-          if (!isSkipped) {
-            return { ...item, ...matchRow, key: item.key };
-          }
-        }
-        return item;
-      }));
-
-      // 对于现有数据中不存在的商品编码，作为新增
-      const newRows = importPreviewData.filter(r => {
-        const pc = String(r.productCode || '').trim();
-        return !existingCodes.has(pc) && !errors.some(e => {
-          const idx = importPreviewData.indexOf(r);
-          return e.row === idx + 2;
-        });
-      });
-      if (newRows.length > 0) {
-        newRows.forEach(r => {
-          r.id = r.id || `PRD-${String(Date.now()).slice(-8)}`;
-          r.name = r.name || r.shortName || `产品-${r.productCode}`;
-          r.amount = r.suggestedPrice || 0;
-          r.quantity = r.actualStock || 0;
-          // 子页面导入时自动设置产品种类
-          if (typeFilter && !r.productType) r.productType = typeFilter;
+      // 匹配到已有记录的更新；商品编码不存在的转新增
+      const newRows: Record<string, any>[] = [];
+      updateMap.forEach((row, pc) => {
+        if (existingCodes.has(pc)) {
+          updated++;
+        } else {
+          prepareNewRow(row, importPreviewData.indexOf(row));
+          newRows.push(row);
+          updateMap.delete(pc);
           added++;
-        });
-        setDataSource(prev => [...newRows, ...prev]);
-        updated -= newRows.length; // 修正计数
-        added += newRows.length;
+        }
+      });
+      if (updateMap.size > 0) {
+        setDataSource(prev => prev.map(item => {
+          const m = updateMap.get(String(item.productCode || '').trim());
+          return m ? { ...item, ...m, key: item.key } : item;
+        }));
       }
+      if (newRows.length > 0) setDataSource(prev => [...newRows, ...prev]);
     }
 
-    setImportResult({ added, updated: Math.max(0, updated), skipped });
+    setImportErrors(errors);
+    setImportProgress({ running: false, done: total, total });
+    setImportResult({ added, updated, skipped });
     setImportStep(2);
-  }, [importPreviewData, importErrors, importMode, dataSource, pageConfig, supplierOptions, getDataOwner]);
+  }, [importPreviewData, importErrors, importMode, dataSource, pageConfig, supplierOptions, getDataOwner, importProgress.running]);
 
   // 重置导入状态
   const resetImport = useCallback(() => {
@@ -2738,6 +2739,8 @@ const ModuleChildPage: React.FC = () => {
     setImportPreviewData([]);
     setImportErrors([]);
     setImportResult(null);
+    setImportMapping([]);
+    setImportProgress({ running: false, done: 0, total: 0 });
   }, []);
 
   // ============ 账单明细（客户管理）：基于订单生成账单行 ============
@@ -13341,6 +13344,12 @@ const handleBatchAttrsConfirm = () => {
                   <Button icon={<PlusOutlined />} onClick={() => { setBatchAddVisible(true); setBatchAddForm({}); }}>批量新增</Button>
                 </Tooltip>
               )}
+              {/* 成品/半成品/原材料 三个窗口的导入入口（弹窗内可下载模板，导入时显示字段匹配与进度） */}
+              {(pageConfig?.productTypeFilter === '成品' || pageConfig?.productTypeFilter === '半成品' || pageConfig?.productTypeFilter === '原材料') && (
+                <Tooltip title="从Excel导入产品数据（弹窗内可下载导入模板）">
+                  <Button icon={<ImportOutlined />} onClick={() => { resetImport(); setImportVisible(true); }}>导入</Button>
+                </Tooltip>
+              )}
               {pageConfig?.title !== '生产订单' && renderPoActionButtons()}
 
               {pageConfig?.title === '财务审核' && (
@@ -18098,7 +18107,8 @@ const handleBatchAttrsConfirm = () => {
           ] : importStep === 1 ? [
             <Button key="back" onClick={() => setImportStep(0)}>上一步</Button>,
             <Button key="confirm" type="primary" onClick={handleImportConfirm}
-              disabled={importPreviewData.length === 0}>
+              loading={importProgress.running}
+              disabled={importPreviewData.length === 0 || importProgress.running || importMissingRequired.length > 0}>
               确认导入 ({importPreviewData.length} 条)
             </Button>,
           ] : [
@@ -18176,6 +18186,37 @@ const handleBatchAttrsConfirm = () => {
                 {importMode === 'add' ? '新增模式' : '更新模式'}
               </Tag>
             </div>
+            {/* 字段匹配情况：文件列 → 系统字段，未匹配列忽略；必填缺失红色警示 */}
+            {importMapping.length > 0 && (
+              <div style={{ marginBottom: 12, border: '1px solid #f0f0f0', borderRadius: 6, padding: '8px 12px', background: '#fafafa' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, flexWrap: 'wrap' }}>
+                  <Text strong style={{ fontSize: 13 }}>字段匹配情况</Text>
+                  <Tag color="green" style={{ margin: 0 }}>已匹配 {importMapping.filter(m => m.dataIndex).length}/{importMapping.length} 列</Tag>
+                  {importMissingRequired.length > 0 && (
+                    <Tag color="red" style={{ margin: 0 }}>缺少必填字段：{importMissingRequired.join('、')}</Tag>
+                  )}
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, maxHeight: 92, overflowY: 'auto' }}>
+                  {importMapping.map((m, i) => (
+                    <Tag key={i} color={m.dataIndex ? (m.required ? 'blue' : 'default') : 'red'} style={{ fontSize: 12 }}>
+                      {m.dataIndex ? <CheckCircleOutlined style={{ marginRight: 4 }} /> : <CloseCircleOutlined style={{ marginRight: 4 }} />}
+                      {m.header} → {m.title || '未匹配（忽略）'}
+                    </Tag>
+                  ))}
+                </div>
+              </div>
+            )}
+            {/* 导入进度：分块执行实时展示 */}
+            {importProgress.running && (
+              <div style={{ marginBottom: 12 }}>
+                <Progress
+                  percent={importProgress.total ? Math.round((importProgress.done / importProgress.total) * 100) : 0}
+                  status="active"
+                  format={() => `${importProgress.done}/${importProgress.total}`}
+                />
+                <Text type="secondary" style={{ fontSize: 12 }}>正在导入，请稍候…</Text>
+              </div>
+            )}
             {importErrors.length > 0 && (
               <Alert
                 type="error"
