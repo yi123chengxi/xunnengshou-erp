@@ -44,6 +44,7 @@ import {
   takePendingInvite, acceptCooperationInvite, rejectCooperationInvite, resolveUserByCompanyNo,
 } from '../utils/cooperationInvite';
 import type { CooperationInvitePayload } from '../utils/cooperationInvite';
+import { findInviteRecord, markInviteUsed } from '../utils/inviteRegistry';
 import { isAccountingMode, writeAutoEntries, loadSubjectOptions, subjectFilterOption } from '../utils/accountingBridge';
 import { getCurrentUserDisplayName } from '../utils/billLog';
 import { compressImageFile } from '../utils/imageCompress';
@@ -460,8 +461,30 @@ const PurchaserSupplierList: React.FC = () => {
   // ========== 同意供应商邀约：立即建立合作 ==========
   const handleAcceptInvite = () => {
     if (!invitePayload) return;
+    const code = (invitePayload as any).code as string | undefined;
+    if (code) {
+      const rec = findInviteRecord(code);
+      if (rec?.usedAt) { message.error('该邀约链接已失效（一次性链接已被使用），请联系供应商重新生成'); setInvitePayload(null); return; }
+    }
     const res = acceptCooperationInvite(invitePayload, getDataOwner());
     if (!res.ok) { message.error(res.msg); return; }
+    // 一次性邀约码：同意即消耗、链接立即失效；并把客户行标识回写供应商侧绑定采购商卡片（供其客户列表升级对应客户行）
+    if (code) {
+      let myCompany = getDataOwner();
+      try { const us = JSON.parse(localStorage.getItem('registeredUsers') || '[]'); myCompany = us.find((u: any) => u.username === getDataOwner())?.companyName || myCompany; } catch { /* ignore */ }
+      markInviteUsed(code, getDataOwner(), myCompany, 'approved');
+      try {
+        const sup = resolveUserByCompanyNo(invitePayload.no);
+        const cid = (invitePayload as any).customerId;
+        const cname = (invitePayload as any).customerName;
+        if (sup && cid) {
+          const bKey = 'boundPurchasers_' + sup.username;
+          const bound: any[] = JSON.parse(localStorage.getItem(bKey) || '[]');
+          const next = bound.map((bp: any) => (bp.purchaserUsername === getDataOwner() ? { ...bp, customerId: cid, customerName: cname || '' } : bp));
+          localStorage.setItem(bKey, JSON.stringify(next));
+        }
+      } catch { /* ignore */ }
+    }
     setInvitePayload(null);
     reloadData();
     message.success(res.msg);
@@ -470,7 +493,18 @@ const PurchaserSupplierList: React.FC = () => {
   // ========== 拒绝供应商邀约 ==========
   const handleRejectInvite = () => {
     if (!invitePayload) return;
+    const code = (invitePayload as any).code as string | undefined;
+    if (code) {
+      const rec = findInviteRecord(code);
+      if (rec?.usedAt) { message.error('该邀约链接已失效（一次性链接已被使用）'); setInvitePayload(null); return; }
+    }
     const res = rejectCooperationInvite(invitePayload, getDataOwner());
+    // 一次性邀约码：拒绝同样消耗链接
+    if (code) {
+      let myCompany = getDataOwner();
+      try { const us = JSON.parse(localStorage.getItem('registeredUsers') || '[]'); myCompany = us.find((u: any) => u.username === getDataOwner())?.companyName || myCompany; } catch { /* ignore */ }
+      markInviteUsed(code, getDataOwner(), myCompany, 'rejected');
+    }
     setInvitePayload(null);
     message.warning(res.msg);
   };
@@ -1827,7 +1861,7 @@ const PurchaserSupplierList: React.FC = () => {
           </Form.Item>
           <Row gutter={16}>
             <Col span={12}>
-              <Form.Item name="accountName" label="账户名称">
+              <Form.Item name="accountName" label="账户名称" extra="默认同步供应商企业信息中维护的银行信息；手动修改后停止自动同步">
                 <Input placeholder="收款账户名称（公司名/姓名）" />
               </Form.Item>
             </Col>

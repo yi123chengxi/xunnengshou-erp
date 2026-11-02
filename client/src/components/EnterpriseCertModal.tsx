@@ -12,7 +12,8 @@ import { Modal, Form, Input, Button, Tag, Tooltip, Descriptions, message, Space,
 import { SafetyCertificateOutlined, ReloadOutlined, EditOutlined, ArrowLeftOutlined, LockOutlined, QrcodeOutlined } from '@ant-design/icons';
 
 import { API_BASE } from '../utils/apiBase';
-import { cacheCertStatus } from '../utils/storageQuota';
+import { cacheCertStatus, safeSetItem } from '../utils/storageQuota';
+import { saveDataset } from '../utils/dataStore';
 export const ENTERPRISE_API_BASE = API_BASE;
 
 /** 加载阿里云实人认证 H5 SDK 并获取 MetaInfo（官方要求：不传真实 MetaInfo 则 InitFaceVerify 不返回 CertifyUrl） */
@@ -157,8 +158,10 @@ const EnterpriseCertModal: React.FC<{ open: boolean; onClose: () => void; onCert
     void loadStatus();
     form.setFieldsValue({
       companyName: profile.companyName || '',
-      creditCode: profile.companyNo || '',
-      legalPerson: profile.legalPerson || profile.contactPerson || '',
+      // 信用代码（纳税人识别码）预填企业信息中的 taxpayerCode；严禁用公司编号 companyNo 充数
+      creditCode: profile.taxpayerCode || '',
+      // 法人姓名只取企业信息登记的 legalPerson，不回退联系人（两者并非同一主体）
+      legalPerson: profile.legalPerson || '',
       idCard: '',
     });
   }, [open]);
@@ -264,6 +267,18 @@ const EnterpriseCertModal: React.FC<{ open: boolean; onClose: () => void; onCert
       });
       const j = await res.json();
       if (j.code === 0) {
+        // 核验受理成功后把信用代码/法人回写企业信息的纳税人识别码/法人代表，保持两处一致
+        try {
+          const list: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+          const nextList = list.map((u: any) => (u.username === username ? {
+            ...u,
+            taxpayerCode: String(values.creditCode || '').trim() || u.taxpayerCode,
+            legalPerson: String(values.legalPerson || '').trim() || u.legalPerson,
+          } : u));
+          const ruJson = JSON.stringify(nextList);
+          safeSetItem('registeredUsers', ruJson);
+          saveDataset('registeredUsers', ruJson);
+        } catch { /* ignore */ }
         if (j.data?.status === 'pending') {
           // 三要素通过 → 进入法人刷脸步骤
           setInfo(j.data || null);
@@ -300,7 +315,7 @@ const EnterpriseCertModal: React.FC<{ open: boolean; onClose: () => void; onCert
           : reCertMode
             ? <Space><Button icon={<ArrowLeftOutlined />} onClick={() => setReCertMode(false)}>返回</Button><Button type="primary" loading={loading} onClick={handleSubmit}>提交变更认证</Button></Space>
             : isPending
-              ? <Space><Button onClick={onClose}>关闭</Button><Button type="primary" icon={<QrcodeOutlined />} loading={faceLoading} onClick={() => void startFaceInit()}>继续完成刷脸认证</Button></Space>
+              ? <Space><Button onClick={onClose}>关闭</Button><Button icon={<EditOutlined />} onClick={() => { setReCertMode(true); form.setFieldsValue({ companyName: info?.companyName || profile.companyName || '', creditCode: profile.taxpayerCode || '', legalPerson: profile.legalPerson || '', idCard: '' }); }}>重新填写认证信息</Button><Button type="primary" icon={<QrcodeOutlined />} loading={faceLoading} onClick={() => void startFaceInit()}>继续完成刷脸认证</Button></Space>
               : undefined}
       onOk={showForm ? handleSubmit : undefined}
       okText={reCertMode ? '提交变更认证' : '提交认证'}
@@ -312,6 +327,10 @@ const EnterpriseCertModal: React.FC<{ open: boolean; onClose: () => void; onCert
         <div style={{ textAlign: 'center', padding: '8px 0' }}>
           <Alert type="success" showIcon style={{ marginBottom: 16, textAlign: 'left' }}
             message="三要素核验已通过" description="请完成法人活体刷脸以确认法人本人真实意愿，刷脸通过后认证即生效。" />
+          {info?.checkResult === 'devMode' && (
+            <Alert type="warning" showIcon style={{ marginBottom: 12, textAlign: 'left' }}
+              message="三要素核验处于开发模式（工商接口未配置），本次刷脸通过不构成有效认证" />
+          )}
           <div style={{ display: 'inline-block', padding: 12, border: '1px solid #f0f0f0', borderRadius: 8, background: '#fff' }}>
             <QRCode value={faceInfo.certifyUrl} size={176} />
           </div>
@@ -365,6 +384,11 @@ const EnterpriseCertModal: React.FC<{ open: boolean; onClose: () => void; onCert
       ) : isPending && !reCertMode ? (
         <div style={{ textAlign: 'center', padding: '16px 0' }}>
           <CertBadge info={info} />
+          {info?.checkResult === 'devMode' && (
+            <Alert type="warning" showIcon style={{ margin: '0 0 12px', textAlign: 'left' }}
+              message="本次核验为开发模式（工商三要素接口未配置），未做真实工商比对"
+              description="请点击下方「重新填写认证信息」核对信用代码与法人姓名；接口配置完成前即使刷脸通过也不构成有效认证" />
+          )}
           <div style={{ margin: '12px 0 4px', fontWeight: 600 }}>三要素核验已通过，还差最后一步</div>
           <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 16 }}>
             请使用<b>法人本人</b>手机扫码完成活体刷脸，认证方可生效
