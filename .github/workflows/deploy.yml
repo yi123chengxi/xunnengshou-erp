@@ -1,5 +1,9 @@
 name: build-and-deploy
 
+# CI 回传诊断日志需要向本仓库推送 [skip ci] 提交
+permissions:
+  contents: write
+
 on:
   push:
     branches: [main]
@@ -36,14 +40,32 @@ jobs:
           npm run build
 
       - name: 构建前端
+        id: build_fe
+        continue-on-error: true
         run: |
           cd client
           npm ci
-          npm run build
+          npm run build 2>&1 | tee build.log
+          exit ${PIPESTATUS[0]}
         env:
           # 超大 bundle 在 runner 默认堆内存下易 OOM；关闭 sourcemap 降低内存与耗时
           NODE_OPTIONS: '--max-old-space-size=6144'
           GENERATE_SOURCEMAP: 'false'
+
+      - name: 失败时回传前端构建日志供诊断
+        if: steps.build_fe.outcome == 'failure'
+        run: |
+          mkdir -p ci-logs
+          cp client/build.log ci-logs/fe_build.log
+          git config user.name "ci-bot"
+          git config user.email "ci-bot@users.noreply.github.com"
+          git add ci-logs/fe_build.log
+          git commit -m "chore: 回传 CI 前端构建日志 [skip ci]"
+          git push origin HEAD:main || true
+
+      - name: 前端构建失败判定
+        if: steps.build_fe.outcome == 'failure'
+        run: exit 1
 
       - name: 打包部署物
         run: |
