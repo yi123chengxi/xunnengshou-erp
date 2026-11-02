@@ -22,6 +22,9 @@ let tray: Tray | null = null;
 let ws: WebSocket | null = null;
 let jwtToken = '';
 let serverUrl = '';
+
+// 内置阿里云生产服务器地址：登录页不再询问服务器地址，由后端统一持有
+const DEFAULT_SERVER_URL = 'http://120.27.143.175';
 let username = '';
 let reconnectTimer: NodeJS.Timeout | null = null;
 let reconnectDelay = 1000;
@@ -178,10 +181,9 @@ async function attemptLogin(base: string, user: string, password: string): Promi
   }
 }
 
-async function handleLogin(_event: any, url: string, user: string, password: string) {
-  // localhost 统一走 IPv4：Electron 主进程 fetch 对 localhost 优先解析 IPv6(::1)，
-  // 而部分开发服务仅监听 IPv4，会直接连接被拒（fetch failed）
-  let base = url.replace(/\/+$/, '').replace(/\/\/localhost/, '//127.0.0.1');
+async function handleLogin(_event: any, user: string, password: string) {
+  // 服务器地址由后端内置（阿里云生产），渲染进程不再传入
+  let base = DEFAULT_SERVER_URL.replace(/\/+$/, '');
   let r = await attemptLogin(base, user, password);
   // 填了网页端口或错误端口时：自动探测一次 API 默认端口 3000
   if (!r.ok && r.notApi) {
