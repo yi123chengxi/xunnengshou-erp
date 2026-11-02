@@ -21,6 +21,9 @@ const EXCLUDE_PREFIXES = ['prodImg_', 'thumb_', 'payShot_', 'mold_img_'];
 const UPLOAD_ONLY_PREFIXES = ['credit_adjustments_'];
 // 只增不删的全局列表键（无删除 UI）：允许愈合回传修复服务端缩水，且不会复活已删除记录
 const APPEND_ONLY_GLOBAL_KEYS = ['market_trade_orders', 'purchaser_pushed_orders'];
+// 带下架语义的全局列表键：并集合并会在查看端复活已删除记录并回传服务器，
+// 拉取时改为“服务端不旧于本地则整体替换；本地有更新写入则保留本地但同步服务端墓碑”
+const REPLACE_PULL_GLOBAL_KEYS = ['market_publish_orders'];
 
 export function isSyncKey(key: string): boolean {
   if (!key || key.endsWith('_ts')) return false;
@@ -349,6 +352,38 @@ export async function pullAllDatasets(): Promise<number> {
       }
       const raw = getOriginalSetItem();
       if (global) {
+        // 下架语义键：并集会让查看端复活已删除记录并经 saveDataset 回传服务器，
+        // 服务端版本不旧于本地时直接用服务端整体替换；本地有未上传的新写入时保留本地，
+        // 但同步服务端的下架墓碑，避免本地随后上传把已下架卡片复活
+        if (REPLACE_PULL_GLOBAL_KEYS.includes(key)) {
+          if (serverTs >= localTs) {
+            let sameContent = false;
+            try { sameContent = localStorage.getItem(key) === rec.json; } catch { /* ignore */ }
+            if (!sameContent) { raw(key, rec.json); applied++; }
+            raw(`${key}_ts`, String(rec.updatedAt));
+          } else {
+            let localData: any[] = [];
+            try { localData = JSON.parse(localStorage.getItem(key) || '[]'); } catch { localData = []; }
+            let serverData: any[] = [];
+            try { serverData = JSON.parse(rec.json); } catch { serverData = []; }
+            if (Array.isArray(localData) && Array.isArray(serverData)) {
+              const idOfR = (r: any) => (r && (r.key || r.id)) ? String(r.key || r.id) : null;
+              const tomb = new Map<string, any>();
+              serverData.forEach((r: any) => { const id = idOfR(r); if (id && r && r.delisted === true) tomb.set(id, r); });
+              let changed = false;
+              const mergedLocal = localData.map((r: any) => {
+                const id = idOfR(r);
+                const t = id ? tomb.get(id) : null;
+                if (t && r.delisted !== true) { changed = true; return { ...r, delisted: true, delistedAt: t.delistedAt }; }
+                return r;
+              });
+              const lIds = new Set(localData.map(idOfR));
+              serverData.forEach((r: any) => { const id = idOfR(r); if (r && r.delisted === true && id && !lIds.has(id)) { mergedLocal.push(r); changed = true; } });
+              if (changed) { raw(key, JSON.stringify(mergedLocal)); applied++; }
+            }
+          }
+          continue;
+        }
         // 全局键：与本地数据做并集合并（按 key/id 去重），服务端数据优先
         let localData: any[] = [];
         try { localData = JSON.parse(localStorage.getItem(key) || '[]'); } catch { localData = []; }

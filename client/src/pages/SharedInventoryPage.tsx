@@ -192,7 +192,7 @@ const SharedInventoryPage: React.FC = () => {
       // 全量分享模式：无分享码且带 supplier 参数时，展示该供应商在成品市场的全部在售商品
       if (!found && supplierUser) {
         const sup = supplierUser;
-        const prods = marketData.filter((r: any) => r.type === 'finished' && r.publisherUsername === sup);
+        const prods = marketData.filter((r: any) => r.type === 'finished' && !r.delisted && r.publisherUsername === sup);
         const products = prods.map((p: any) => ({
           ...p,
           image: p.image || (p.productKey ? localStorage.getItem(`prodImg_${sup}_${p.productKey}`) || '' : ''),

@@ -443,9 +443,9 @@ const CreateInventoryModal: React.FC<CreateInventoryModalProps> = ({ onCancel, o
   const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
   const [searchText, setSearchText] = useState('');
 
-  // 获取当前用户的成品列表
+  // 获取当前用户的成品列表（排除已下架墓碑卡片）
   const myFinished = useMemo(() => {
-    return market.filter(r => r.type === 'finished' && r.publisherUsername === username);
+    return market.filter(r => r.type === 'finished' && !r.delisted && r.publisherUsername === username);
   }, [market, username]);
 
   // 过滤后的产品列表
@@ -605,9 +605,9 @@ const AddProductsToInventoryModal: React.FC<AddProductsToInventoryModalProps> = 
   const currentInventory = inventoryLists.find(l => l.id === inventoryId);
   const existingKeys = currentInventory?.productKeys || [];
 
-  // 获取当前用户的成品列表
+  // 获取当前用户的成品列表（排除已下架墓碑卡片）
   const myFinished = useMemo(() => {
-    return market.filter(r => r.type === 'finished' && r.publisherUsername === username);
+    return market.filter(r => r.type === 'finished' && !r.delisted && r.publisherUsername === username);
   }, [market, username]);
 
   // 过滤后的产品列表（排除已存在的）
@@ -812,7 +812,7 @@ const MarketPage: React.FC = () => {
     (async () => {
       const refFeat = await computeSubjectFeatures(imageSearchUrl);
       if (cancelled || refFeat.hist.length === 0) { setImgSimComputing(false); return; }
-      const finishedItems = market.filter(r => r.type === 'finished');
+      const finishedItems = market.filter(r => r.type === 'finished' && !r.delisted);
       const scores: Record<string, number> = {};
       for (const item of finishedItems) {
         if (cancelled) break;
@@ -986,6 +986,11 @@ const MarketPage: React.FC = () => {
   const [cartVisible, setCartVisible] = useState(false);
   const [favorites, setFavorites] = useState<any[]>(() => loadJson(`market_favorites_${username}`, []));
   const [cart, setCart] = useState<any[]>(() => loadJson(`market_cart_${username}`, []));
+  // 收藏夹剔除已下架（墓碑标记）卡片
+  const liveFavorites = useMemo(() => {
+    const delisted = new Set(market.filter(r => r.delisted === true).map(r => r.key));
+    return favorites.filter(f => !delisted.has(f.cardKey));
+  }, [favorites, market]);
   const [compareVisible, setCompareVisible] = useState(false);
   const [compareCode, setCompareCode] = useState<string>('');
   // 合同打印
@@ -1038,17 +1043,21 @@ const MarketPage: React.FC = () => {
     const disabled: string[] = [];
     candidates.forEach(o => { if (settingOn.get(o) === false) disabled.push(o); else owners.push(o); });
     // 显式关闭的账号：清理其存量自动卡片，保证开关关闭后立即下架
-    disabled.forEach(o => { out = out.filter(r => !(r.type === 'finished' && r.auto && r.publisherUsername === o)); });
+    disabled.forEach(o => { out = out.map(r => (r.type === 'finished' && r.auto && r.publisherUsername === o && !r.delisted ? { ...r, delisted: true, delistedAt: new Date().toISOString() } : r)); });
     let users: any[] = [];
     try { users = JSON.parse(localStorage.getItem('registeredUsers') || '[]'); } catch { /* ignore */ }
     owners.forEach(owner => {
-      const rawProds = loadJson(`pageData_basic-data_product-list_${owner}`, []);
+      const pkeyName = `pageData_basic-data_product-list_${owner}`;
+      const hasProdKey = localStorage.getItem(pkeyName) !== null;
+      const rawProds = loadJson(pkeyName, []);
       const prods: any[] = Array.isArray(rawProds) ? rawProds : [];
       const groups = new Map<string, any>();
       // 过滤条件：产品种类=成品 + 商品状态=在售 + 款式编码非空 + 排除半成品脏数据（SEMI-前缀）+ 基础价≠0且大于成本价
       prods.filter(p => p.productType === '成品' && p.productStatus === '在售' && p.styleCode && !String(p.productCode || '').startsWith('SEMI-') && isPricePublishable(p)).forEach(p => { if (!groups.has(p.styleCode)) groups.set(p.styleCode, p); });
-      // 下架清理：该账号不再在售的款式移除自动卡片
-      out = out.filter(r => !(r.type === 'finished' && r.auto && r.publisherUsername === owner && !groups.has(r.styleCode)));
+      // 下架清理：该账号不再在售的款式自动卡片打墓碑标记（全局键并集合并，物理删除会被其他账号合并复活）
+      out = out.map(r => (r.type === 'finished' && r.auto && r.publisherUsername === owner && !r.delisted && !groups.has(r.styleCode) ? { ...r, delisted: true, delistedAt: new Date().toISOString() } : r));
+      // 下架收敛：本地存在产品列表键时，不再在售款式的手动卡片同样打墓碑，保证下架状态跨账号收敛不被并集复活
+      if (hasProdKey) out = out.map(r => (r.type === 'finished' && !r.auto && r.publisherUsername === owner && !r.delisted && !groups.has(r.styleCode) ? { ...r, delisted: true, delistedAt: new Date().toISOString() } : r));
       const u = users.find(x => x.username === owner);
       groups.forEach((p, sc) => {
         const exist = out.find(r => r.type === 'finished' && r.publisherUsername === owner && r.styleCode === sc);
@@ -1064,7 +1073,7 @@ const MarketPage: React.FC = () => {
             processTypes: [], quotes: [], remark: '系统自动上架（在售成品）',
           }, ...out];
         } else {
-          out = out.map(r => (r.key === exist.key ? { ...r, shortName: p.shortName || r.shortName, targetPrice: Number(p.suggestedPrice) || r.targetPrice, image: resolvedImg || r.image, productKey: p.key || r.productKey, productColor: p.color || r.productColor, variantImages: (() => { const vi = collectVariantImages(owner, prods, sc, p.key); return vi.length ? vi : (r.variantImages || []); })(), variants: (() => { const vv = collectVariants(prods, sc); return vv.length ? vv : (r.variants || []); })() } : r));
+          out = out.map(r => (r.key === exist.key ? { ...r, delisted: false, delistedAt: undefined, shortName: p.shortName || r.shortName, targetPrice: Number(p.suggestedPrice) || r.targetPrice, image: resolvedImg || r.image, productKey: p.key || r.productKey, productColor: p.color || r.productColor, variantImages: (() => { const vi = collectVariantImages(owner, prods, sc, p.key); return vi.length ? vi : (r.variantImages || []); })(), variants: (() => { const vv = collectVariants(prods, sc); return vv.length ? vv : (r.variants || []); })() } : r));
         }
       });
     });
@@ -1208,7 +1217,7 @@ const MarketPage: React.FC = () => {
     styleCodes.forEach(sc => {
       // 检查是否已存在
       const exist = out.find((r: any) => r.type === 'finished' && r.publisherUsername === owner && r.styleCode === sc);
-      if (exist) return;
+      if (exist && !exist.delisted) return;
       // 找该款式的一个代表产品（优先取符合价格资格的：基础价≠0且大于成本价）
       const rep = manualPublishProducts.find((p: any) => p.styleCode === sc && isPricePublishable(p)) || manualPublishProducts.find((p: any) => p.styleCode === sc);
       if (!rep) return;
@@ -1219,6 +1228,18 @@ const MarketPage: React.FC = () => {
       if (!hasImage) return; // 无图片不发布
       // 图片嵌入卡片记录：prodImg_ 不参与服务器同步，不嵌入则其他账号看不到图片
       const resolvedImg = rep.image || localStorage.getItem(`prodImg_${owner}_${rep.key}`) || '';
+      // 已下架卡片重新发布：原位复活原记录（保留 key/id 与报价历史），清除墓碑标记
+      if (exist) {
+        out = out.map((r: any) => (r.key === exist.key ? {
+          ...r, delisted: false, delistedAt: undefined, auto: false, publishTime: new Date().toISOString(),
+          status: '待报价', shortName: rep.shortName || rep.productCode || sc, productCode: rep.productCode,
+          productKey: rep.key, unit: rep.unit || '件', quantity: Number(rep.actualStock) || 0, targetPrice: Number(rep.suggestedPrice) || 0,
+          image: resolvedImg, productColor: rep.color || '', variantImages: collectVariantImages(owner, manualPublishProducts, sc, rep.key),
+          variants: collectVariants(manualPublishProducts, sc), remark: '手动发布到成品市场',
+        } : r));
+        published++;
+        return;
+      }
       out = [{
         key: `mkt_fin_${owner}_${sc}`, id: nextMarketId(out), type: 'finished', auto: false,
         publisherUsername: owner, publisherCompany: u?.companyName || owner, publishTime: new Date().toISOString(),
@@ -2026,7 +2047,7 @@ const addToCart = useCallback((rec: any, qty?: number) => {
   }, [market, scope, fabScope, apKw, apStatus, username, isFactory, isPurchaser]);
 
   const finishedList = useMemo(() => {
-    let list = market.filter(r => r.type === 'finished');
+    let list = market.filter(r => r.type === 'finished' && !r.delisted);
     if (apKw.trim()) { const kw = apKw.trim().toLowerCase(); list = list.filter(r => `${r.id} ${r.styleCode} ${r.shortName} ${r.publisherCompany}`.toLowerCase().includes(kw)); }
     if (titleSearch.trim()) { const ts = titleSearch.trim().toLowerCase(); list = list.filter(r => (r.shortName || '').toLowerCase().includes(ts)); }
     // 图片搜索时按相似度降序排序（得分高的排前面）
@@ -2130,8 +2151,9 @@ const addToCart = useCallback((rec: any, qty?: number) => {
     const pjson = JSON.stringify(prods);
     safeSetItem(pkey, pjson);
     saveDataset(pkey, pjson);
+    // 墓碑式下架：记录保留并打 delisted 标记（全局键并集合并，物理删除会被其他账号 pull 合并复活并回传服务器），展示端按 delisted 统一过滤
     setMarket(prev => {
-      const next = prev.filter(r => !(r.type === 'finished' && r.publisherUsername === owner && r.styleCode === rec.styleCode));
+      const next = prev.map(r => (r.type === 'finished' && r.publisherUsername === owner && r.styleCode === rec.styleCode ? { ...r, delisted: true, delistedAt: new Date().toISOString() } : r));
       saveJson(MARKET_KEY, next);
       return next;
     });
@@ -2148,7 +2170,7 @@ const addToCart = useCallback((rec: any, qty?: number) => {
         title={<span><ShopOutlined style={{ color: PRIMARY, marginRight: 8 }} />商机市场</span>}
         extra={tab === 'finished' && !isFactory ? (
           <Space>
-            <Button size="small" icon={<StarOutlined style={{ color: favorites.length > 0 ? '#fa8c16' : undefined }} />} onClick={() => setFavVisible(true)}>收藏夹({favorites.length})</Button>
+            <Button size="small" icon={<StarOutlined style={{ color: favorites.length > 0 ? '#fa8c16' : undefined }} />} onClick={() => setFavVisible(true)}>收藏夹({liveFavorites.length})</Button>
             <Button size="small" icon={<ShoppingCartOutlined style={{ color: cart.length > 0 ? '#fff' : undefined }} />} onClick={() => setCartVisible(true)} style={cart.length > 0 ? { background: '#fa8c16', borderColor: '#fa8c16', color: '#fff' } : undefined}>购物车({cart.length})</Button>
             <Button size="small" icon={<SwapOutlined />} onClick={() => { setCompareCode(styleCodes[0] || ''); setCompareVisible(true); }}>比价</Button>
             {!isPurchaser && (
@@ -3254,8 +3276,8 @@ const addToCart = useCallback((rec: any, qty?: number) => {
       </Modal>
 
       {/* 收藏夹抽屉 */}
-      <Drawer title={`收藏夹（${favorites.length}）`} open={favVisible} onClose={() => setFavVisible(false)} width={420}>
-        {favorites.length === 0 ? <Empty description="暂无收藏" /> : favorites.map(f => {
+      <Drawer title={`收藏夹（${liveFavorites.length}）`} open={favVisible} onClose={() => setFavVisible(false)} width={420}>
+        {liveFavorites.length === 0 ? <Empty description="暂无收藏" /> : liveFavorites.map(f => {
           const rec = market.find(r => r.key === f.cardKey);
           const img = rec ? (rec.image || imgOf(rec.publisherUsername, { key: rec.productKey })) : '';
           return (

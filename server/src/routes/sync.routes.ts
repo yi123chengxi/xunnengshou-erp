@@ -179,9 +179,18 @@ function mergeArrayDatasets(existingJson: string, incomingJson: string): string 
     const idOf = (r: any) => (r && (r.key || r.id)) ? String(r.key || r.id) : null;
     const bIds = new Set(b.map(idOf));
     if (bIds.has(null)) return null; // 存在无 key/id 的记录，无法安全合并
+    // 墓碑优先：服务端持有同 id 的 delisted 版本时，incoming 的存活版本不得复活它（成品市场等下架语义键）
+    const aById = new Map<string, any>();
+    a.forEach((r: any) => { const id = idOf(r); if (id) aById.set(id, r); });
+    const bFixed = b.map((r: any) => {
+      const id = idOf(r);
+      const av = id ? aById.get(id) : null;
+      if (av && av.delisted === true && r.delisted !== true) return { ...r, delisted: true, delistedAt: av.delistedAt };
+      return r;
+    });
     const aOnly = a.filter((r: any) => !bIds.has(idOf(r)));
-    if (aOnly.length === 0) return incomingJson;
-    return JSON.stringify([...b, ...aOnly]);
+    if (aOnly.length === 0) return JSON.stringify(bFixed);
+    return JSON.stringify([...bFixed, ...aOnly]);
   } catch { return null; }
 }
 
