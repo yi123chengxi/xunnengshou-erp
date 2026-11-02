@@ -443,6 +443,17 @@ const hasPendingPurchaserTerminate = (bp: any): boolean => {
   } catch { return false; }
 };
 
+// 解析采购商注册账号（企业信息真源）：采购商后台「企业信息」维护的详细地址/经营地址
+// 存于 registeredUsers.addressDetail / businessAddress，供应商侧须关联读取，否则详情与列表地址为空
+const findPurchaserAccount = (bp: any): any => {
+  try {
+    const users = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+    return users.find((x: any) =>
+      (bp?.purchaserUsername && x.username === bp.purchaserUsername) ||
+      (bp?.purchaserName && (x.companyName || '').trim() === String(bp.purchaserName).trim())) || null;
+  } catch { return null; }
+};
+
 // 合并直接客户和已绑定采购商（与客户列表页展示逻辑保持一致）
 export const loadAllCustomersFromStorage = (): CustomerRecord[] => {
   const customers = loadCustomersFromStorage();
@@ -453,6 +464,7 @@ export const loadAllCustomersFromStorage = (): CustomerRecord[] => {
   const directCustomers = customers.filter(c => !associatedCustomerIds.has(c.id));
   const purchaserCustomers: CustomerRecord[] = boundPurchasers.map((bp, i) => {
     const linkedDirect = resolveLinkedDirectCustomer(bp, customers);
+    const pAcc = findPurchaserAccount(bp);
     const isTerminated = bp.status === 'terminated';
     const isTerminating = bp.status === 'terminating' || hasPendingPurchaserTerminate(bp);
     const rowName = bp.purchaserName;
@@ -477,12 +489,12 @@ export const loadAllCustomersFromStorage = (): CustomerRecord[] => {
       purchaserUsername: bp.purchaserUsername || '',
       legalPerson: bp.legalPerson || '',
       wechatQr: bp.wechatQr || '',
-      businessAddress: bp.businessAddress || '',
+      businessAddress: pAcc?.businessAddress || bp.businessAddress || '',
       email: bp.email || '',
       province: bp.province || linkedDirect?.province || '',
       city: bp.city || linkedDirect?.city || '',
       district: bp.district || linkedDirect?.district || '',
-      detailAddress: bp.detailAddress || linkedDirect?.detailAddress || '',
+      detailAddress: pAcc?.addressDetail || pAcc?.detailAddress || bp.detailAddress || linkedDirect?.detailAddress || '',
     };
   });
   return [...directCustomers, ...purchaserCustomers];
@@ -567,6 +579,8 @@ export const showCustomerDetail = (record: CustomerRecord) => {
   const legalPerson = accountInfo?.legalPerson || record.legalPerson || '';
   const wechatQr = accountInfo?.wechatQr || record.wechatQr || '';
   const businessAddress = accountInfo?.businessAddress || record.businessAddress || '';
+  // 详细地址关联采购商后台「企业信息」维护的 addressDetail（注册字段 detailAddress 兼容）
+  const detailAddress = accountInfo?.addressDetail || accountInfo?.detailAddress || record.detailAddress || '';
   const email = accountInfo?.email || record.email || '';
   const contactPerson = record.contact || accountInfo?.contactPerson || '';
   const contactPhone = record.phone || accountInfo?.phone || '';
@@ -589,7 +603,7 @@ export const showCustomerDetail = (record: CustomerRecord) => {
         <Descriptions.Item label="电子邮箱">{email || '-'}</Descriptions.Item>
         <Descriptions.Item label="经营地址" span={2}>{businessAddress || '-'}</Descriptions.Item>
         <Descriptions.Item label="客户地址" span={2}>{[record.province, record.city, record.district].filter(Boolean).join('') || '-'}</Descriptions.Item>
-        <Descriptions.Item label="详细地址" span={2}>{record.detailAddress || '-'}</Descriptions.Item>
+        <Descriptions.Item label="详细地址" span={2}>{detailAddress || '-'}</Descriptions.Item>
         <Descriptions.Item label="微信二维码" span={2}>
           {wechatQr ? (
             <img src={wechatQr} alt="微信二维码" style={{ maxWidth: 120, maxHeight: 120, borderRadius: 6, border: '1px solid #eee' }} />
@@ -966,6 +980,7 @@ const CustomerInfo: React.FC = () => {
     // 合作采购商列表：优先使用采购商真实信息，若关联了直接客户则补充地区/等级等字段
     const purchaserCustomers: CustomerRecord[] = boundPurchasers.map((bp, i) => {
       const linkedDirect = resolveLinkedDirectCustomer(bp, customers);
+      const pAcc = findPurchaserAccount(bp);
       const isTerminated = bp.status === 'terminated';
       const isTerminating = bp.status === 'terminating' || hasPendingPurchaserTerminate(bp);
       const rowName = bp.purchaserName;
@@ -994,12 +1009,12 @@ const CustomerInfo: React.FC = () => {
         remark: (bp as any).remark || linkedDirect?.remark || '',
         legalPerson: bp.legalPerson || '',
         wechatQr: bp.wechatQr || '',
-        businessAddress: bp.businessAddress || '',
+        businessAddress: pAcc?.businessAddress || bp.businessAddress || '',
         email: bp.email || '',
         province: bp.province || linkedDirect?.province || '',
         city: bp.city || linkedDirect?.city || '',
         district: bp.district || linkedDirect?.district || '',
-        detailAddress: bp.detailAddress || linkedDirect?.detailAddress || '',
+        detailAddress: pAcc?.addressDetail || pAcc?.detailAddress || bp.detailAddress || linkedDirect?.detailAddress || '',
         totalPurchase: purchaseOf(bp.purchaserName) + (extraName ? purchaseOf(extraName) : 0),
         receivedPayment: receivedOf(bp.purchaserName) + (extraName ? receivedOf(extraName) : 0),
         orderOccupied: occupiedOf(bp.purchaserName) + (extraName ? occupiedOf(extraName) : 0),
