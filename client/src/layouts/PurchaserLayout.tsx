@@ -989,7 +989,7 @@ const PurchaserLayout: React.FC = () => {
                     disabled={STORAGE_SUBSCRIBE_DISABLED}
                     icon={<ShoppingCartOutlined />}
                     onClick={() => navigate('/purchaser/storage-pricing')}
-                    title={STORAGE_SUBSCRIBE_DISABLED ? '暂不支持订购：免费期内所有租户默认赠送 10G 空间' : undefined}
+                    title={STORAGE_SUBSCRIBE_DISABLED ? '暂不支持订购：默认 2G 空间，企业认证通过可领取 10G 永久空间' : undefined}
                     style={{
                       height: 36,
                       fontWeight: 700,

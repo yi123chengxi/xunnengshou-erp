@@ -9,7 +9,27 @@ export interface UserQuota {
   [username: string]: number; // 单位：KB，内部存储始终为KB
 }
 
-const DEFAULT_QUOTA_KB = 10 * 1024 * 1024; // 免费期默认赠送 10GB = 10485760KB（见 utils/billingPolicy）
+const BASE_QUOTA_KB = 2 * 1024 * 1024;      // 新注册账号默认 2GB
+const CERTIFIED_QUOTA_KB = 10 * 1024 * 1024; // 企业认证（三要素+法人刷脸）通过后领取 10GB 永久空间
+
+// 认证状态同步缓存：getUserQuota 为同步调用，而认证结果由服务端异步返回，
+// 故在 fetchCertStatus/fetchCertBatch 拿到结果后写入此缓存供同步读取
+const CERT_CACHE_KEY = 'cert_status_cache';
+export function cacheCertStatus(username: string, status: string): void {
+  if (!username) return;
+  try {
+    const m = JSON.parse(localStorage.getItem(CERT_CACHE_KEY) || '{}');
+    m[username] = { status: status || '', ts: Date.now() };
+    localStorage.setItem(CERT_CACHE_KEY, JSON.stringify(m));
+  } catch { /* ignore */ }
+}
+export function isCertifiedCached(username: string): boolean {
+  if (!username) return false;
+  try {
+    const m = JSON.parse(localStorage.getItem(CERT_CACHE_KEY) || '{}');
+    return m[username]?.status === 'certified';
+  } catch { return false; }
+}
 
 /**
  * 获取所有用户的空间配额
@@ -27,8 +47,9 @@ export function getAllQuotas(): UserQuota {
  */
 export function getUserQuota(username: string): number {
   const quotas = getAllQuotas();
-  // 免费期所有租户至少赠送 10G；已购更大配额不受影响
-  return Math.max(quotas[username] || 0, DEFAULT_QUOTA_KB);
+  // 默认 2GB；企业认证通过领取 10GB；已购/已分配更大配额不受影响
+  const base = isCertifiedCached(username) ? CERTIFIED_QUOTA_KB : BASE_QUOTA_KB;
+  return Math.max(quotas[username] || 0, base);
 }
 
 /**

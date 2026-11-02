@@ -12,6 +12,7 @@ import { Modal, Form, Input, Button, Tag, Tooltip, Descriptions, message, Space,
 import { SafetyCertificateOutlined, ReloadOutlined, EditOutlined, ArrowLeftOutlined, LockOutlined, QrcodeOutlined } from '@ant-design/icons';
 
 import { API_BASE } from '../utils/apiBase';
+import { cacheCertStatus } from '../utils/storageQuota';
 export const ENTERPRISE_API_BASE = API_BASE;
 
 /** 加载阿里云实人认证 H5 SDK 并获取 MetaInfo（官方要求：不传真实 MetaInfo 则 InitFaceVerify 不返回 CertifyUrl） */
@@ -103,7 +104,10 @@ export async function fetchCertBatch(usernames: string[]): Promise<Record<string
       body: JSON.stringify({ usernames: list }),
     });
     const j = await res.json();
-    return (j.code === 0 && j.data?.map) ? j.data.map : {};
+    const map = (j.code === 0 && j.data?.map) ? j.data.map : {};
+    // 写入认证状态同步缓存（供存储配额等同步读取）
+    Object.entries(map).forEach(([u, info]) => cacheCertStatus(u, (info as CertInfo)?.status || ''));
+    return map;
   } catch { return {}; }
 }
 
@@ -112,7 +116,10 @@ export async function fetchCertStatus(username: string): Promise<CertInfo | null
   try {
     const res = await fetch(`${ENTERPRISE_API_BASE}/enterprise/status?username=${encodeURIComponent(username)}`);
     const j = await res.json();
-    return j.code === 0 ? (j.data || null) : null;
+    const info = j.code === 0 ? (j.data || null) : null;
+    // 写入认证状态同步缓存（无记录记为空状态=未认证）
+    cacheCertStatus(username, info?.status || '');
+    return info;
   } catch { return null; }
 }
 
