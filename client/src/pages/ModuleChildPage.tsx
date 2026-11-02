@@ -95,6 +95,7 @@ import { productionPages, purchasePages, inventoryPages, financePages, dashboard
 import type { ChildPageConfig, RecordStatus } from '../config/pageConfig';
 import type { ColumnsType } from 'antd/es/table';
 import * as XLSX from 'xlsx-js-style';
+import { unzipSync, zipSync } from 'fflate';
 import { getFullImage, saveFullImage, deleteFullImage, batchDeleteFullImages } from '../utils/imageStore';
 import BatchAddProductModal from '../components/BatchAddProductModal';
 import ScheduleBoard from '../components/ScheduleBoard';
@@ -2459,7 +2460,14 @@ const ModuleChildPage: React.FC = () => {
     reader.onload = (e) => {
       try {
         const data = new Uint8Array(e.target?.result as ArrayBuffer);
-        const wb = XLSX.read(data, { type: 'array' });
+        // 部分旧系统导出的 xlsx 为 zip64 容器，SheetJS 内置解压不支持（抛超长字符串异常），
+        // 回退：fflate 解包后以 store 模式重打包为标准 zip 再交给 SheetJS 解析
+        let wb: XLSX.WorkBook;
+        try {
+          wb = XLSX.read(data, { type: 'array' });
+        } catch {
+          wb = XLSX.read(zipSync(unzipSync(data), { level: 0 }), { type: 'array' });
+        }
         const ws = wb.Sheets[wb.SheetNames[0]];
         const jsonData = XLSX.utils.sheet_to_json<Record<string, any>>(ws, { defval: '' });
 
@@ -2476,6 +2484,10 @@ const ModuleChildPage: React.FC = () => {
         // 额外添加一些常用别名
         titleToKey['产品名称'] = 'name';
         titleToKey['产品编码'] = 'id';
+        // 兼容旧系统导出的表头（商品资料导出文件）
+        titleToKey['基本售价'] = 'suggestedPrice';
+        titleToKey['订单占有数'] = 'orderReserved';
+        titleToKey['商品属性'] = 'productType';
         // 兼容模板表头：剥离“（必填）”后缀后再匹配（模板下载的必填列带此后缀）
         const resolveHeaderKey = (h: string) => {
           const t = String(h).trim();
@@ -2548,8 +2560,10 @@ const ModuleChildPage: React.FC = () => {
 
           // 布尔字段转换
           if (mapped.stockSync !== undefined) {
-            mapped.stockSync = mapped.stockSync === '已同步' || mapped.stockSync === true || mapped.stockSync === 1;
+            mapped.stockSync = mapped.stockSync === '已同步' || mapped.stockSync === '开启' || mapped.stockSync === true || mapped.stockSync === 1;
           }
+          // 旧系统导出的商品状态取值归一化
+          if (mapped.productStatus === '启用') mapped.productStatus = '在售';
 
           // 设置默认值
           if (!mapped.productStatus) mapped.productStatus = '在售';
@@ -5200,6 +5214,17 @@ const ModuleChildPage: React.FC = () => {
         let cur: string | null = null;
         try { cur = localStorage.getItem(sharedDataKey); } catch { /* ignore */ }
         if (cur === json) return;
+        // 超大数据集（如导入 5 万+行后 json >4MB）：跳过 localStorage 写入，
+        // 避免 safeSetItem 配额溢出触发 emergencyFreeSpace 误删其他数据键；
+        // 仅写 IndexedDB（可信存储）并上传服务端，刷新后由 IDB 恢复逻辑回灌
+        if (json.length > 4 * 1024 * 1024) {
+          try { localStorage.removeItem(sharedDataKey); } catch { /* ignore */ }
+          try { localStorage.removeItem(`${sharedDataKey}_ts`); } catch { /* ignore */ }
+          saveDataset(sharedDataKey, json);
+          flushDatasetUploadAsync(sharedDataKey, json).catch(() => false);
+          loadedIdsRef.current = new Set(outList.map((r: any) => String(r?.id || r?.key || '')).filter(Boolean));
+          return;
+        }
         const writeTs = Date.now();
         const writeOk = safeSetItem(sharedDataKey, json);
         if (writeOk) {
