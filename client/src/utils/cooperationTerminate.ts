@@ -20,14 +20,15 @@ export interface TerminationParties {
 
 /** 单方发起终止：双方存储同时置 terminating 并记录生效时间（宽限 7 天到期自动完成） */
 export const startCooperationTermination = (o: TerminationParties): number => {
-  const terminateAt = Date.now() + TERMINATE_GRACE_MS;
+  const statusTs = Date.now();
+  const terminateAt = statusTs + TERMINATE_GRACE_MS;
   // 供应商侧：boundPurchasers_<供应商账号>
   try {
     const bKey = 'boundPurchasers_' + o.supplierUsername;
     const bound: any[] = JSON.parse(localStorage.getItem(bKey) || '[]');
     const up = bound.map((bp: any) => (
       (bp.purchaserUsername && bp.purchaserUsername === o.purchaserUsername) || bp.purchaserName === o.purchaserCompany
-        ? { ...bp, status: 'terminating', terminateAt, terminateBy: o.initiator }
+        ? { ...bp, status: 'terminating', terminateAt, terminateBy: o.initiator, statusTs }
         : bp
     ));
     localStorage.setItem(bKey, JSON.stringify(up));
@@ -38,7 +39,7 @@ export const startCooperationTermination = (o: TerminationParties): number => {
     const list: any[] = JSON.parse(localStorage.getItem(pKey) || '[]');
     const up = list.map((s: any) => (
       (s.supplierUsername && s.supplierUsername === o.supplierUsername) || s.supplierName === o.supplierCompany
-        ? { ...s, cooperationStatus: 'terminating', terminateAt, terminateBy: o.initiator }
+        ? { ...s, cooperationStatus: 'terminating', terminateAt, terminateBy: o.initiator, statusTs }
         : s
     ));
     localStorage.setItem(pKey, JSON.stringify(up));
@@ -48,12 +49,13 @@ export const startCooperationTermination = (o: TerminationParties): number => {
 
 /** 撤回终止：双方存储回退 approved 并清除终止字段 */
 export const cancelCooperationTermination = (o: TerminationParties): void => {
+  const statusTs = Date.now();
   try {
     const bKey = 'boundPurchasers_' + o.supplierUsername;
     const bound: any[] = JSON.parse(localStorage.getItem(bKey) || '[]');
     const up = bound.map((bp: any) => (
       bp.status === 'terminating' && ((bp.purchaserUsername && bp.purchaserUsername === o.purchaserUsername) || bp.purchaserName === o.purchaserCompany)
-        ? { ...bp, status: 'approved', terminateAt: undefined, terminateBy: undefined }
+        ? { ...bp, status: 'approved', terminateAt: undefined, terminateBy: undefined, statusTs }
         : bp
     ));
     localStorage.setItem(bKey, JSON.stringify(up));
@@ -63,7 +65,7 @@ export const cancelCooperationTermination = (o: TerminationParties): void => {
     const list: any[] = JSON.parse(localStorage.getItem(pKey) || '[]');
     const up = list.map((s: any) => (
       s.cooperationStatus === 'terminating' && ((s.supplierUsername && s.supplierUsername === o.supplierUsername) || s.supplierName === o.supplierCompany)
-        ? { ...s, cooperationStatus: 'approved', terminateAt: undefined, terminateBy: undefined }
+        ? { ...s, cooperationStatus: 'approved', terminateAt: undefined, terminateBy: undefined, statusTs }
         : s
     ));
     localStorage.setItem(pKey, JSON.stringify(up));

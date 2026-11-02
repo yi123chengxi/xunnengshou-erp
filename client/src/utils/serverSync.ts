@@ -306,8 +306,6 @@ function mergeRegisteredUsers(serverJson: string): any[] | null {
 export async function pullAllDatasets(): Promise<number> {
   // 合作存量数据修复：采购商侧供应商名称统一为已认证公司全称（轻量，随同步轮询执行）
   try { repairPurchaserSupplierNames(); } catch { /* ignore */ }
-  // 合作状态闭环：同一公司对双向镜像状态对齐（终止/终止中/已合作取最进阶），保证两公司后台显示一致
-  try { reconcileCooperationPairs(); } catch { /* ignore */ }
   if (!(await serverAvailable())) return 0;
   let meta: Record<string, number> = {};
   try {

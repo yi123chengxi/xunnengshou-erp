@@ -22,6 +22,20 @@ registerSetItemHook((key, value) => scheduleDatasetUpload(key, value));
 // 残留演示账号与遗留登录会话清理：测试期遗留的 admin 等会话在启动时即清除，回退登录页
 cleanupDemoAccountsAndSession();
 
+// 浏览器会话级登录态：sessionStorage 随浏览器关闭而清空，
+// 重启浏览器后再打开网址视为"未登入"——清除上次残留的登录会话并回退登录页，
+// 同一浏览器会话内刷新/新开标签页仍保持登录（不影响正常使用）
+(() => {
+  try {
+    const hasSession = !!localStorage.getItem('username');
+    const alive = sessionStorage.getItem('erpSessionAlive');
+    if (hasSession && alive !== '1') {
+      ['userRole', 'username', 'isViewOnly', 'isSubAccount', 'parentAccount', 'userRoles', 'userCustomPermissions'].forEach(k => localStorage.removeItem(k));
+    }
+    sessionStorage.setItem('erpSessionAlive', '1');
+  } catch { /* ignore */ }
+})();
+
 // 登录鉴权守卫：未登录（无 username 会话）直接打开后台路由时统一重定向到登录页；
 // 公开链接（合作确认/货盘分享/品牌公开页/邀约落地页）与开发者入口（自有 devLoggedIn 守卫）除外
 (() => {

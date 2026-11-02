@@ -9,12 +9,29 @@
 
 const STATUS_RANK: Record<string, number> = { approved: 1, terminating: 2, terminated: 3 };
 
+const parseTs = (v: any): number => {
+  if (!v) return 0;
+  const t = Date.parse(String(v).replace(/-/g, '/'));
+  return Number.isFinite(t) ? t : 0;
+};
+
+/** 记录的状态事件时间：优先显式 statusTs；存量数据回退 terminateAt / 业务日期 */
+const recTs = (status: string, e: any): number => {
+  const explicit = Number(e.statusTs) || 0;
+  if (explicit) return explicit;
+  if (status === 'terminated' || status === 'terminating') {
+    return Number(e.terminateAt) || parseTs(e.addedDate || e.cooperationDate);
+  }
+  return parseTs(e.cooperationDate || e.addedDate || e.bindDate);
+};
+
 interface Rec {
   s: string;
   p: string;
   status: string;
   terminateAt: number;
   terminateBy: string;
+  ts: number;
   key: string;
   idx: number;
   /** bound=boundPurchasers 正确位置采购商卡片；ps=purchaser_suppliers 正确位置供应商卡片；misplaced=误放 boundPurchasers 的供应商卡片（待清理） */
@@ -44,12 +61,13 @@ export function reconcileCooperationPairs(): void {
       list.forEach((e: any, idx: number) => {
         if (!e || typeof e !== 'object') return;
         if (e.purchaserUsername) {
-          recs.push({ s: owner, p: String(e.purchaserUsername), status: e.status || '', terminateAt: Number(e.terminateAt) || 0, terminateBy: e.terminateBy || '', key, idx, shape: 'bound' });
+          recs.push({ s: owner, p: String(e.purchaserUsername), status: e.status || '', terminateAt: Number(e.terminateAt) || 0, terminateBy: e.terminateBy || '', ts: recTs(e.status || '', e), key, idx, shape: 'bound' });
         } else if (e.supplierUsername) {
           // 供应商卡片误混入 boundPurchasers：实为（供应商=该供应商，采购商=本键 owner）方向镜像，补全正确位置后清理
           const s = String(e.supplierUsername);
           if (s === owner) { dropMarks.push({ key, idx }); return; } // 自引用脏数据，直接丢弃
-          recs.push({ s, p: owner, status: e.cooperationStatus || e.status || '', terminateAt: Number(e.terminateAt) || 0, terminateBy: e.terminateBy || '', key, idx, shape: 'misplaced' });
+          const st = e.cooperationStatus || e.status || '';
+          recs.push({ s, p: owner, status: st, terminateAt: Number(e.terminateAt) || 0, terminateBy: e.terminateBy || '', ts: recTs(st, e), key, idx, shape: 'misplaced' });
           dropMarks.push({ key, idx });
         }
       });
@@ -57,21 +75,19 @@ export function reconcileCooperationPairs(): void {
     psKeys.forEach(({ key, owner, list }) => {
       list.forEach((e: any, idx: number) => {
         if (!e || typeof e !== 'object' || !e.supplierUsername) return;
-        recs.push({ s: String(e.supplierUsername), p: owner, status: e.cooperationStatus || '', terminateAt: Number(e.terminateAt) || 0, terminateBy: e.terminateBy || '', key, idx, shape: 'ps' });
+        recs.push({ s: String(e.supplierUsername), p: owner, status: e.cooperationStatus || '', terminateAt: Number(e.terminateAt) || 0, terminateBy: e.terminateBy || '', ts: recTs(e.cooperationStatus || '', e), key, idx, shape: 'ps' });
       });
     });
 
-    // 公司对规范状态：取最进阶（terminated > terminating > approved）；同阶 terminating 取最早到期时间
-    const canon = new Map<string, { status: string; terminateAt: number; terminateBy: string }>();
+    // 公司对规范状态：取最近一次状态事件（statusTs/业务时间），同时间再取最进阶（terminated > terminating > approved）
+    const canon = new Map<string, { status: string; terminateAt: number; terminateBy: string; ts: number }>();
     recs.forEach(r => {
       if (!STATUS_RANK[r.status] || r.s === r.p) return;
       const pk = pairKey(r.s, r.p);
       const cur = canon.get(pk);
       const rank = STATUS_RANK[r.status];
-      if (!cur || rank > STATUS_RANK[cur.status]) {
-        canon.set(pk, { status: r.status, terminateAt: r.terminateAt, terminateBy: r.terminateBy });
-      } else if (rank === STATUS_RANK[cur.status] && r.terminateAt && (!cur.terminateAt || r.terminateAt < cur.terminateAt)) {
-        canon.set(pk, { status: r.status, terminateAt: r.terminateAt, terminateBy: r.terminateBy || cur.terminateBy });
+      if (!cur || r.ts > cur.ts || (r.ts === cur.ts && rank > STATUS_RANK[cur.status])) {
+        canon.set(pk, { status: r.status, terminateAt: r.terminateAt, terminateBy: r.terminateBy, ts: r.ts });
       }
     });
     if (canon.size === 0 && dropMarks.length === 0) return;
@@ -89,10 +105,12 @@ export function reconcileCooperationPairs(): void {
       if (!e) return;
       const field = r.shape === 'bound' ? 'status' : 'cooperationStatus';
       const oldAt = Number(e.terminateAt) || 0;
-      if (e[field] === c.status && (c.status === 'approved' ? oldAt === 0 : oldAt === c.terminateAt)) return;
+      const oldTs = Number(e.statusTs) || 0;
+      if (e[field] === c.status && (c.status === 'approved' ? oldAt === 0 : oldAt === c.terminateAt) && oldTs === (c.ts || 0)) return;
       e[field] = c.status;
       if (c.status === 'approved') { delete e.terminateAt; delete e.terminateBy; }
       else { if (c.terminateAt) e.terminateAt = c.terminateAt; if (c.terminateBy) e.terminateBy = c.terminateBy; }
+      if (c.ts) e.statusTs = c.ts;
       changed.add(r.key);
     });
 
@@ -126,6 +144,7 @@ export function reconcileCooperationPairs(): void {
           detailAddress: pRec?.detailAddress || '',
         };
         if (c.status !== 'approved') { if (c.terminateAt) card.terminateAt = c.terminateAt; if (c.terminateBy) card.terminateBy = c.terminateBy; }
+        if (c.ts) card.statusTs = c.ts;
         if (!bHolder) { bHolder = { key: bKey, owner: s, list: [] }; boundKeys.push(bHolder); }
         bHolder.list.push(card);
         changed.add(bKey);
@@ -151,6 +170,7 @@ export function reconcileCooperationPairs(): void {
           orderPrefix: base.orderPrefix || '',
         };
         if (c.status !== 'approved') { if (c.terminateAt) card.terminateAt = c.terminateAt; if (c.terminateBy) card.terminateBy = c.terminateBy; }
+        if (c.ts) card.statusTs = c.ts;
         if (!pHolder) { pHolder = { key: pKey, owner: p, list: [] }; psKeys.push(pHolder); }
         pHolder.list.push(card);
         changed.add(pKey);
