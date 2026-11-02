@@ -74,6 +74,7 @@ const SimpleLedgerPage = React.lazy(() => import('./pages/SimpleLedgerPage'));
 const PurchaseReceivingPage = React.lazy(() => import('./pages/inventory/PurchaseReceivingPage'));
 const InventoryCheckPage = React.lazy(() => import('./pages/inventory/InventoryCheckPage'));
 const InventoryOutboundPage = React.lazy(() => import('./pages/inventory/InventoryOutboundPage'));
+const ProdInboundStatsPage = React.lazy(() => import('./pages/inventory/ProdInboundStatsPage'));
 const OrderProfitPage = React.lazy(() => import('./pages/OrderProfitPage'));
 const WarehouseStatsPage = React.lazy(() => import('./pages/WarehouseStatsPage'));
 const MoldPage = React.lazy(() => import('./pages/MoldPage'));
@@ -226,6 +227,8 @@ function App() {
           <Route path="inventory/purchase-receiving" element={<PurchaseReceivingPage />} />
           <Route path="inventory/inventory-check" element={<InventoryCheckPage />} />
           <Route path="inventory/inventory-outbound" element={<InventoryOutboundPage />} />
+          {/* 库存管理 - 生产入库统计（独立统计页，读取生产完工联动数据） */}
+          <Route path="inventory/prod-in-stats" element={<ProdInboundStatsPage />} />
           {/* 模具管理 */}
           <Route path="basic-data/mold" element={<MoldPage />} />
           {/* 各模块的子功能页面 */}
