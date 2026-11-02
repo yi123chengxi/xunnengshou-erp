@@ -10,7 +10,7 @@ import { createRoot } from 'react-dom/client';
 declare global {
   interface Window {
     printAPI: {
-      login(url: string, user: string, pass: string): Promise<{ ok: boolean; message?: string; username?: string; name?: string }>;
+      login(user: string, pass: string): Promise<{ ok: boolean; message?: string; username?: string; name?: string }>;
       getPrinters(): Promise<{ name: string; isDefault: boolean }[]>;
       getStatus(): Promise<{ connected: boolean; username: string; serverUrl: string }>;
       getJobLogs(): Promise<any[]>;
@@ -35,20 +35,19 @@ const SHARED_KEY = 'printclient_shared_printers';
 
 // ============ 登录页 ============
 function LoginPage({ onLogin }: { onLogin: () => void }) {
-  const [url, setUrl] = useState('http://localhost:3000');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
   const handleLogin = async () => {
-    if (!url || !username || !password) {
+    if (!username || !password) {
       setError('请填写所有字段');
       return;
     }
     setLoading(true);
     setError('');
-    const result = await api.login(url, username, password);
+    const result = await api.login(username, password);
     setLoading(false);
     if (result.ok) {
       onLogin();
@@ -61,11 +60,6 @@ function LoginPage({ onLogin }: { onLogin: () => void }) {
     <div className="login-container">
       <div className="login-card">
         <div className="login-title">讯能手打印客户端</div>
-        <div className="login-field">
-          <label>服务器地址</label>
-          <input value={url} onChange={e => setUrl(e.target.value)} placeholder="http://localhost:3000" />
-          <div style={{ fontSize: 11, color: '#8c9bab', marginTop: 4 }}>请填写 API 服务地址（端口默认 3000）；误填网页端口时会自动尝试 3000</div>
-        </div>
         <div className="login-field">
           <label>用户名</label>
           <input value={username} onChange={e => setUsername(e.target.value)} placeholder="登录账号" />

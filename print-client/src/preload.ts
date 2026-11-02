@@ -6,7 +6,7 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
 export interface PrintAPI {
-  login(serverUrl: string, username: string, password: string): Promise<{ ok: boolean; message?: string; username?: string; name?: string }>;
+  login(username: string, password: string): Promise<{ ok: boolean; message?: string; username?: string; name?: string }>;
   getPrinters(): Promise<{ name: string; isDefault: boolean }[]>;
   getStatus(): Promise<{ connected: boolean; username: string; serverUrl: string }>;
   getJobLogs(): Promise<any[]>;
@@ -23,7 +23,7 @@ export interface PrintAPI {
 }
 
 contextBridge.exposeInMainWorld('printAPI', {
-  login: (url: string, user: string, pass: string) => ipcRenderer.invoke('login', url, user, pass),
+  login: (user: string, pass: string) => ipcRenderer.invoke('login', user, pass),
   getPrinters: () => ipcRenderer.invoke('get-printers'),
   getStatus: () => ipcRenderer.invoke('get-status'),
   getJobLogs: () => ipcRenderer.invoke('get-job-logs'),

@@ -171,13 +171,13 @@ async function attemptLogin(base: string, user: string, password: string): Promi
     });
     const ct = resp.headers.get('content-type') || '';
     if (!ct.includes('application/json')) {
-      return { ok: false, notApi: true, message: '该地址不是 API 服务器（返回了网页内容），请填写服务端 API 地址（端口默认 3000）' };
+      return { ok: false, notApi: true, message: '服务器响应异常（返回了网页内容），请稍后重试或联系管理员' };
     }
     const data = await resp.json();
     if (data.code !== 200 || !data.data?.token) return { ok: false, message: data.message || '登录失败' };
     return { ok: true, token: data.data.token, name: data.data.user?.name || user };
   } catch (err: any) {
-    return { ok: false, notApi: true, message: `无法连接服务器（${err.message}），请检查地址与端口（API 服务默认端口 3000，非网页端口）` };
+    return { ok: false, notApi: true, message: `无法连接服务器（${err.message}），请检查网络后重试` };
   }
 }
 
