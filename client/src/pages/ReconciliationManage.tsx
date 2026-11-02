@@ -467,16 +467,19 @@ const ReconciliationManage: React.FC = () => {
     let changed = false;
     // 逐键更新映射：最终用函数式 setDataSource 应用，避免同提交内自动对账删除的记录被直接值覆盖复活
     const updMap = new Map<string, ReconRecord>();
-    const next = dataSource.map(r => {
+    dataSource.forEach(r => {
       const mineByUser = r.customerUsername === owner;
       const mineByCompany = !r.customerUsername && !!myCompanyName && r.counterparty === myCompanyName;
       if ((!mineByUser && !mineByCompany) || r.source !== 'bill') return r;
       // 采购商发起的对账请求：供方数据未回填前不参与本方自动核对
       if (r.initiator === 'purchaser' && (Number(r.ourAmount) || 0) === 0) return r;
-      // 匹配采购账单：优先 matchedBillKey，其次单据编号 outboundNo，再次辅助单据号 auxDocNo
-      const bill = (r.matchedBillKey ? bills.find(b => b.key === r.matchedBillKey) : undefined)
-        || bills.find(b => b.outboundNo && String(b.outboundNo).trim() === String(r.docNo || '').trim())
-        || bills.find(b => b.auxDocNo && String(b.auxDocNo).trim() === String(r.docNo || '').trim());
+      // 对方校验：采购账单的供应商须与本对账记录的供应商一致，避免同号跨供应商误匹配
+      const cpSupplier = String(r.supplierName || (r.initiator === 'purchaser' ? r.counterparty : '') || '').trim();
+      const sameCp = (b: any) => !cpSupplier || String(b.supplier || '').trim() === cpSupplier;
+      // 匹配采购账单：优先 matchedBillKey，其次单据编号 outboundNo，再次辅助单据号 auxDocNo（均需通过对方校验）
+      const bill = (r.matchedBillKey ? bills.find(b => b.key === r.matchedBillKey && sameCp(b)) : undefined)
+        || bills.find(b => sameCp(b) && b.outboundNo && String(b.outboundNo).trim() === String(r.docNo || '').trim())
+        || bills.find(b => sameCp(b) && b.auxDocNo && String(b.auxDocNo).trim() === String(r.docNo || '').trim());
       if (!bill) {
         const upd: ReconRecord = { ...r, customerUsername: r.customerUsername || owner, matchedBillKey: undefined, theirAmount: 0, theirEntryDate: '-', reconResult: 'pending', diffDesc: '未匹配到采购账单，可手动关联单据' };
         if (JSON.stringify(upd) !== JSON.stringify(r)) { changed = true; return upd; }
@@ -564,11 +567,14 @@ const ReconciliationManage: React.FC = () => {
     let changed = false;
     // 逐键更新映射：函数式应用，保留同提交内自动对账的删除结果
     const updMap = new Map<string, ReconRecord>();
-    const next = dataSource.map(r => {
+    dataSource.forEach(r => {
       if (r.initiator !== 'purchaser' || r.supplierUsername !== owner) return r;
-      // 匹配供应商账单明细：优先 orderNo/id，其次 outboundNo/docNo，再次辅助单据号 auxDocNo
-      const row = rows.find(x => (!!r.orderNo && x.id === r.orderNo) || (!!x.outboundNo && String(x.outboundNo).trim() === String(r.docNo || '').trim()))
-        || rows.find(x => x.auxDocNo && String(x.auxDocNo).trim() === String(r.docNo || '').trim());
+      // 对方校验：供应商账单明细的采购商须与本对账记录的采购商一致，避免同号跨采购商误匹配
+      const cpCustomer = String(r.customerName || '').trim();
+      const sameCp = (x: any) => !cpCustomer || String(x.customerName || '').trim() === cpCustomer;
+      // 匹配供应商账单明细：优先 orderNo/id，其次 outboundNo/docNo，再次辅助单据号 auxDocNo（均需通过对方校验）
+      const row = rows.find(x => sameCp(x) && ((!!r.orderNo && x.id === r.orderNo) || (!!x.outboundNo && String(x.outboundNo).trim() === String(r.docNo || '').trim())))
+        || rows.find(x => sameCp(x) && x.auxDocNo && String(x.auxDocNo).trim() === String(r.docNo || '').trim());
       if (!row) return r;
       const rowItems: any[] = Array.isArray(row.items) ? row.items : [];
       const ourByCode = new Map<string, { qty: number; price: number }>();
@@ -1122,11 +1128,17 @@ const ReconciliationManage: React.FC = () => {
       if (!Array.isArray(bills)) bills = [];
       // 已对账完成的账单（已对账/按供方入账）不显示在手动关联窗口中
       bills = bills.filter(b => !['已对账', '按供方入账', '已发起对账'].includes(String(b.reconcileResult || '')));
+      // 对方校验：仅显示供应商与本对账记录一致的采购账单，避免手动关联到其它供应商的账单
+      const cpSupplier = String(record.supplierName || (record.initiator === 'purchaser' ? record.counterparty : '') || '').trim();
+      if (cpSupplier) bills = bills.filter(b => String(b.supplier || '').trim() === cpSupplier);
     } else {
       try { bills = JSON.parse(localStorage.getItem(`pageData_customer_bill-detail_${getOwner()}`) || '[]'); } catch { /* ignore */ }
       if (!Array.isArray(bills)) bills = [];
       // 仅显示未完成对账的供应商账单
       bills = bills.filter(b => !['对账完成', '按采方入账'].includes(String(b.reconResult || '')));
+      // 对方校验：仅显示采购商与本对账记录一致的供应商账单明细，避免手动关联到其它采购商的账单
+      const cpCustomer = String(record.customerName || '').trim();
+      if (cpCustomer) bills = bills.filter(b => String(b.customerName || '').trim() === cpCustomer);
     }
     setLinkBills(bills);
     setLinkSearch({ ...emptyLinkSearch });
