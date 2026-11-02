@@ -1636,7 +1636,14 @@ const ReconciliationManage: React.FC = () => {
           </Col>
           <Col xs={24} sm={4}>
             <Space>
-              <Button type="primary" icon={<SearchOutlined />}>查询</Button>
+              <Button type="primary" icon={<SearchOutlined />} onClick={() => {
+                // 查询时自动刷新表单数据（重读对账记录共享存储）
+                try {
+                  const raw = localStorage.getItem('recon_records');
+                  const arr = raw ? JSON.parse(raw) : null;
+                  if (Array.isArray(arr)) setDataSource(arr as ReconRecord[]);
+                } catch { /* ignore */ }
+              }}>查询</Button>
               <Button icon={<ReloadOutlined />} onClick={handleReset}>重置</Button>
             </Space>
           </Col>

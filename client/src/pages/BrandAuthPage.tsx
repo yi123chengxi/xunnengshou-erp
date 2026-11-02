@@ -61,7 +61,7 @@ const BrandAuthPage: React.FC<{ embedded?: boolean }> = ({ embedded }) => {
   const EMPTY_BSEARCH = { brand: '', company: '', shop: '', salesperson: '', phone: '', platform: '' };
   const [bInput, setBInput] = useState({ ...EMPTY_BSEARCH });
   const [bApplied, setBApplied] = useState({ ...EMPTY_BSEARCH });
-  const applySearch = () => setBApplied({ ...bInput });
+  const applySearch = () => { reload(); setBApplied({ ...bInput }); };
   const resetSearch = () => {
     setBInput({ ...EMPTY_BSEARCH }); setBApplied({ ...EMPTY_BSEARCH });
     setFStatus(''); setFDepositTo(''); setFDepStatus(''); setFShopType('');

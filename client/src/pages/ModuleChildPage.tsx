@@ -12626,7 +12626,17 @@ const handleBatchAttrsConfirm = () => {
                       {fsInput('amountMax', '金额最大', 85)}
                     </>);
                   })()}
-                  <Button size="small" type="primary" icon={<FilterOutlined />} onClick={() => setBankFlowApplied(bankFlowSearch)}>查询</Button>
+                  <Button size="small" type="primary" icon={<FilterOutlined />} onClick={() => {
+                                        // 查询时自动刷新表单数据：重读存储后再应用筛选
+                                        try {
+                                          const stored = localStorage.getItem(sharedDataKey);
+                                          if (stored) {
+                                            const parsed = JSON.parse(stored);
+                                            if (Array.isArray(parsed)) setDataSource(parsed);
+                                          }
+                                        } catch { /* ignore */ }
+                                        setBankFlowApplied(bankFlowSearch);
+                                      }}>查询</Button>
                   <Button size="small" icon={<ReloadOutlined />} onClick={() => { setBankFlowSearch(BANK_FLOW_SEARCH_EMPTY); setBankFlowApplied(BANK_FLOW_SEARCH_EMPTY); }}>重置</Button>
                   <Space style={{ marginLeft: 'auto' }}>
                     <Select size="small" style={{ width: 110 }} value={bankFlowFilter}

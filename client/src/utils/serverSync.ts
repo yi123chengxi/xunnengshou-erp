@@ -9,6 +9,7 @@
 import { saveDataset, loadDataset } from './dataStore';
 import { getOriginalSetItem, safeSetItem, emergencyFreeSpace } from './storageQuota';
 import { API_BASE } from './apiBase';
+import { repairPurchaserSupplierNames } from './cooperationTerminate';
 
 // 需要同步的业务数据 key 前缀/精确名
 const SYNC_PREFIXES = ['pageData_', 'custom_', 'warehouses_', 'purchaser_suppliers_', 'accounts_', 'shop_info_', 'shop_profit_', 'month_end_check_', 'withdrawal_record_', 'dev_', 'hr_', 'newstyle_', 'brandauth_', 'molds_', 'credit_adjustments_', 'published_credit_', 'payment_requests_', 'payment_request_managers_', 'notification_settings_', 'print_template_', 'price_strategy_'];
@@ -302,6 +303,8 @@ function mergeRegisteredUsers(serverJson: string): any[] | null {
  * 4. 拉取完成后派发 sync-data-updated 事件通知已挂载页面刷新
  */
 export async function pullAllDatasets(): Promise<number> {
+  // 合作存量数据修复：采购商侧供应商名称统一为已认证公司全称（轻量，随同步轮询执行）
+  try { repairPurchaserSupplierNames(); } catch { /* ignore */ }
   if (!(await serverAvailable())) return 0;
   let meta: Record<string, number> = {};
   try {

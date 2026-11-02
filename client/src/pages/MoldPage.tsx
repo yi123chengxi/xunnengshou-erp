@@ -132,7 +132,11 @@ const MoldPage: React.FC = () => {
   // ===================== 多字段搜索 =====================
   const [searchFields, setSearchFields] = useState({ moldCode: '', moldName: '', spec: '', status: '', creator: '' });
   const [appliedSearch, setAppliedSearch] = useState({ moldCode: '', moldName: '', spec: '', status: '', creator: '' });
-  const handleSearch = useCallback(() => { setAppliedSearch({ ...searchFields }); }, [searchFields]);
+  const handleSearch = useCallback(() => {
+    // 查询时自动刷新表单数据
+    try { setRecords(JSON.parse(localStorage.getItem(storageKey) || '[]')); } catch { /* ignore */ }
+    setAppliedSearch({ ...searchFields });
+  }, [searchFields, storageKey]);
   const handleReset = useCallback(() => {
     const empty = { moldCode: '', moldName: '', spec: '', status: '', creator: '' };
     setSearchFields(empty); setAppliedSearch(empty);

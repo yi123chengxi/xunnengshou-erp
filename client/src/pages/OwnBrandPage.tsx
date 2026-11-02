@@ -115,7 +115,7 @@ const OwnBrandPage: React.FC<{ embedded?: boolean }> = ({ embedded }) => {
   const EMPTY_FSEARCH = { appNo: '', company: '', person: '', phone: '', tax: '', platform: '', authNo: '', shopType: '' };
   const [fInput, setFInput] = useState({ ...EMPTY_FSEARCH });
   const [fApplied, setFApplied] = useState({ ...EMPTY_FSEARCH });
-  const applySearch = () => setFApplied({ ...fInput });
+  const applySearch = () => { reload(); setFApplied({ ...fInput }); };
   const resetSearch = () => { setFInput({ ...EMPTY_FSEARCH }); setFApplied({ ...EMPTY_FSEARCH }); };
 
   // 弹窗

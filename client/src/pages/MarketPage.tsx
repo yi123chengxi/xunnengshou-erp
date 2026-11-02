@@ -2172,7 +2172,7 @@ const addToCart = useCallback((rec: any, qty?: number) => {
               )}
               <Input placeholder="搜索发布单号/商品简称/款式编码/发布方" allowClear style={{ width: 260 }} value={sKw} onChange={e => setSKw(e.target.value)} onPressEnter={() => setApKw(sKw)} />
               <Select style={{ width: 120 }} value={sStatus} onChange={setSStatus} options={[{ value: 'all', label: '全部状态' }, { value: '待报价', label: '待报价' }, { value: '报价中', label: '报价中' }, { value: '已中标', label: '已中标' }, { value: '已关闭', label: '已关闭' }]} />
-              <Button type="primary" icon={<SearchOutlined />} onClick={() => { setApKw(sKw); setApStatus(sStatus); }}>查询</Button>
+              <Button type="primary" icon={<SearchOutlined />} onClick={() => { reload(); setApKw(sKw); setApStatus(sStatus); }}>查询</Button>
               <Button icon={<ReloadOutlined />} onClick={() => { setSKw(''); setApKw(''); setSStatus('all'); setApStatus('all'); }}>重置</Button>
               {!isFactory && !isPurchaser && (
                 <Button type="primary" icon={<PlusOutlined />} style={{ marginLeft: 'auto' }} onClick={() => { setPubEdit(null); pubForm.resetFields(); setPubImage(''); setPubVisible(true); }}>发布发包订单</Button>
@@ -2343,7 +2343,7 @@ const addToCart = useCallback((rec: any, qty?: number) => {
                   <Button type="text" icon={<CloseOutlined />} size="small" onClick={() => setImageSearchUrl('')} />
                 </Tooltip>
               )}
-              <Button type="primary" icon={<SearchOutlined />} onClick={() => { setApKw(sKw); setTitleSearch(titleSearchInput); }}>查询</Button>
+              <Button type="primary" icon={<SearchOutlined />} onClick={() => { reload(); setApKw(sKw); setTitleSearch(titleSearchInput); }}>查询</Button>
               <Button icon={<ReloadOutlined />} onClick={() => { setSKw(''); setApKw(''); setTitleSearchInput(''); setTitleSearch(''); setImageSearchUrl(''); }}>重置</Button>
             </div>
             {/* 图片搜索参考区 */}

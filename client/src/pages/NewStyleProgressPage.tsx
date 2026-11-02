@@ -969,7 +969,7 @@ const NewStyleProgressPage: React.FC<{ photoOnly?: boolean }> = ({ photoOnly = f
   const emptyF = { code: '', cost: '', color: '', size: '', factory: '', brand: '', place: '', recv: '', platform: '', range: null as [string, string] | null };
   const [fIn, setFIn] = useState(emptyF);
   const [fAp, setFAp] = useState(emptyF);
-  const applySearch = () => setFAp({ ...fIn });
+  const applySearch = () => { reload(); setFAp({ ...fIn }); };
   const [onlyOverdue, setOnlyOverdue] = useState(false);
   // 上架逾期点击筛选：限定货号集合（null=不限制）
   const [focusCodes, setFocusCodes] = useState<string[] | null>(null);

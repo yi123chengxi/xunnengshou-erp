@@ -683,7 +683,12 @@ const MoldMarketTab: React.FC<{ onContact?: (username: string, subject: string) 
               <Button type="text" icon={<CloseOutlined />} size="small" onClick={() => setImageSearchUrl('')} />
             </Tooltip>
           )}
-          <Button type="primary" icon={<SearchOutlined />} onClick={() => setAppliedSearch(searchInput)}>查询</Button>
+          <Button type="primary" icon={<SearchOutlined />} onClick={() => {
+                        // 查询时自动刷新表单数据
+                        try { setMolds(JSON.parse(localStorage.getItem(`molds_${owner}`) || '[]')); } catch { /* ignore */ }
+                        try { const raw: MoldListing[] = JSON.parse(localStorage.getItem(STORAGE_KEY()) || '[]'); setListings(raw.map(resolveImageKeys)); } catch { /* ignore */ }
+                        setAppliedSearch(searchInput);
+                      }}>查询</Button>
           <Button icon={<ReloadOutlined />} onClick={() => { setSearchInput(''); setAppliedSearch(''); setModeFilter(''); setImageSearchUrl(''); }}>重置</Button>
         </div>
       )}

@@ -397,6 +397,7 @@ const StockTab: React.FC = () => {
   }, [wageRates, records]);
 
   const handleQuery = () => {
+    reload(); // 查询时自动刷新表单数据
     setAppliedSearch(search.trim());
     setAppliedDateRange(dateRange);
     setAppliedFMonth(fMonth);
@@ -1083,7 +1084,7 @@ const UrgentTab: React.FC = () => {
     records.forEach(r => { if (r.material) s.add(r.material); });
     return Array.from(s);
   }, [wageRates, records]);
-  const handleQuery = () => { setAppliedSearch(search.trim()); setAppliedDateRange(dateRange); setAppliedFMonth(fMonth); setAppliedFInspector(fInspector); setAppliedFMaterial(fMaterial); };
+  const handleQuery = () => { reload(); setAppliedSearch(search.trim()); setAppliedDateRange(dateRange); setAppliedFMonth(fMonth); setAppliedFInspector(fInspector); setAppliedFMaterial(fMaterial); };
   // 负责人权限判定
   const canViewAll = useMemo(() => { if (isAdmin) return true; if (viewManagers.length === 0 && editManagers.length === 0) return true; return viewManagers.includes(curUsername) || editManagers.includes(curUsername); }, [viewManagers, editManagers]);
   const canEditAll = useMemo(() => { if (isAdmin) return true; return editManagers.includes(curUsername); }, [editManagers]);
@@ -1860,6 +1861,7 @@ const OrderLabelTab: React.FC = () => {
   };
   // 查询按钮处理
   const handleQuery = () => {
+    setRecords(readOLSync(owner)); // 查询时自动刷新表单数据
     setAppliedOrderNo(searchOrderNo.trim());
     setAppliedLabel(searchLabel.trim());
     setAppliedStyleNo(searchStyleNo.trim());

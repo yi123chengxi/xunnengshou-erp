@@ -47,6 +47,7 @@ import { canFn, usePermTick } from '../utils/perm';
 import { compressImageFile } from '../utils/imageCompress';
 import { getCurrentUserDisplayName } from '../utils/billLog';
 import { buildInviteLink } from '../utils/cooperationInvite';
+import { startCooperationTermination, cancelCooperationTermination, TERMINATE_GRACE_MS } from '../utils/cooperationTerminate';
 import { copyText } from '../utils/clipboard';
 
 const { Text } = Typography;
@@ -151,6 +152,8 @@ interface CustomerRecord {
   type: 'direct' | 'purchaser'; // 直接客户或已合作的采购商
   bindStatus?: string; // 合作状态
   bindDate?: string; // 合作日期（可选）
+  terminateAt?: number; // 终止合作生效时间戳（宽限期到期自动完成）
+  terminateBy?: string; // 终止发起方：supplier/purchaser
   salesman?: string; // 业务员
   totalPurchase?: number; // 采购总额(元)：账单明细商品总额合计自动统计
   receivedPayment?: number; // 已收货款(元)：仅手工登记收款合计
@@ -361,6 +364,70 @@ export const loadBoundPurchasersFromStorage = (): BoundPurchaser[] => {
       });
     }
   } catch { /* ignore */ }
+  // 采购商发起的终止申请（旧双向确认模式）：供应商侧不再手动确认，
+  // 按 7 天宽限期进入 terminating 并到期自动完成；申请被撤回/拒绝时回退已合作
+  try {
+    const ownerT = getDataOwner();
+    let myCompanyT = ownerT;
+    try {
+      const usT = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+      myCompanyT = usT.find((u: any) => u.username === ownerT)?.companyName || ownerT;
+    } catch { /* ignore */ }
+    const appsT: any[] = JSON.parse(localStorage.getItem(COOPERATION_APPLICATIONS_KEY) || '[]');
+    const pendingOf = (bp: any) => appsT.find((a: any) =>
+      a.type === 'terminate' && a.status === 'pending' && !a.superseded && a.supplierInitiated !== true &&
+      (a.purchaserCompanyName === bp.purchaserName || (bp.purchaserUsername && a.purchaserUsername === bp.purchaserUsername)) &&
+      (!a.targetSupplierName || a.targetSupplierName === myCompanyT || a.supplierUsername === ownerT));
+    let chT = false;
+    bound = bound.map((bp: any) => {
+      if (bp.status === 'approved') {
+        const app = pendingOf(bp);
+        if (app) {
+          chT = true;
+          const applyTs = Date.parse(String(app.applyDate || '').replace(/-/g, '/')) || Date.now();
+          return { ...bp, status: 'terminating', terminateAt: Number(app.terminateAt || 0) || (applyTs + TERMINATE_GRACE_MS), terminateBy: 'purchaser' };
+        }
+      } else if (bp.status === 'terminating' && bp.terminateBy === 'purchaser') {
+        const app = pendingOf(bp);
+        if (app) {
+          if (!bp.terminateAt) {
+            const applyTs = Date.parse(String(app.applyDate || '').replace(/-/g, '/')) || Date.now();
+            chT = true;
+            return { ...bp, terminateAt: Number(app.terminateAt || 0) || (applyTs + TERMINATE_GRACE_MS) };
+          }
+          return bp;
+        }
+        chT = true;
+        return { ...bp, status: 'approved', terminateAt: undefined, terminateBy: undefined };
+      }
+      return bp;
+    });
+    if (chT) localStorage.setItem('boundPurchasers_' + ownerT, JSON.stringify(bound));
+  } catch { /* ignore */ }
+  // 终止宽限期到期自动完成终止（本侧键落盘），并同步批准对应终止申请供对方现有逻辑同步完成
+  try {
+    const nowTs = Date.now();
+    const expired = bound.filter((bp: any) => bp.status === 'terminating' && bp.terminateAt && nowTs >= Number(bp.terminateAt));
+    if (expired.length > 0) {
+      bound = bound.map((bp: any) => (
+        bp.status === 'terminating' && bp.terminateAt && nowTs >= Number(bp.terminateAt)
+          ? { ...bp, status: 'terminated' } : bp
+      ));
+      localStorage.setItem('boundPurchasers_' + getDataOwner(), JSON.stringify(bound));
+      try {
+        const appsF: any[] = JSON.parse(localStorage.getItem(COOPERATION_APPLICATIONS_KEY) || '[]');
+        let chF = false;
+        const upF = appsF.map((a: any) => {
+          if (a.type !== 'terminate' || a.status !== 'pending' || a.superseded) return a;
+          const hit = expired.some((bp: any) => a.purchaserCompanyName === bp.purchaserName || (bp.purchaserUsername && a.purchaserUsername === bp.purchaserUsername));
+          if (!hit) return a;
+          chF = true;
+          return { ...a, status: 'approved', approveDate: new Date().toISOString() };
+        });
+        if (chF) localStorage.setItem(COOPERATION_APPLICATIONS_KEY, JSON.stringify(upF));
+      } catch { /* ignore */ }
+    }
+  } catch { /* ignore */ }
   if (bound.length > 0) return bound;
   return initialBoundPurchasers; // 无真实数据时用 demo
 };
@@ -380,17 +447,18 @@ export const loadAllCustomersFromStorage = (): CustomerRecord[] => {
   const customers = loadCustomersFromStorage();
   const boundPurchasers = loadBoundPurchasersFromStorage();
   const associatedCustomerIds = new Set(
-    boundPurchasers.filter(bp => bp.customerId).map(bp => bp.customerId!)
+    boundPurchasers.map(bp => resolveLinkedDirectCustomer(bp, customers)?.id).filter(Boolean) as string[]
   );
   const directCustomers = customers.filter(c => !associatedCustomerIds.has(c.id));
   const purchaserCustomers: CustomerRecord[] = boundPurchasers.map((bp, i) => {
-    const linkedDirect = bp.customerId ? customers.find(c => c.id === bp.customerId) : null;
+    const linkedDirect = resolveLinkedDirectCustomer(bp, customers);
     const isTerminated = bp.status === 'terminated';
     const isTerminating = bp.status === 'terminating' || hasPendingPurchaserTerminate(bp);
+    const rowName = bp.purchaserName;
     return {
       key: bp.key || bp.id || `purchaser-key-${i}`,
-      id: bp.id,
-      name: bp.purchaserName,
+      id: linkedDirect?.id || bp.id,
+      name: rowName,
       level: (bp as any).level || linkedDirect?.level || 'B',
       contact: bp.purchaserContact || linkedDirect?.contact || '',
       phone: bp.purchaserPhone || linkedDirect?.phone || '',
@@ -399,8 +467,11 @@ export const loadAllCustomersFromStorage = (): CustomerRecord[] => {
       status: isTerminated ? 'terminated' : isTerminating ? 'terminating' : 'completed',
       date: bp.bindDate,
       type: 'purchaser' as const,
-      bindStatus: isTerminated ? '已解除合作' : isTerminating ? '解除合作申请中' : '已合作',
+      bindStatus: isTerminated ? '已解除合作' : isTerminating ? '终止中' : '已合作',
       bindDate: bp.bindDate,
+      terminateAt: (bp as any).terminateAt,
+      terminateBy: (bp as any).terminateBy,
+      purchaserNo: linkedDirect?.purchaserNo || (bp as any).purchaserNo || '',
       salesman: (bp as any).salesman || linkedDirect?.salesman || '',
       purchaserUsername: bp.purchaserUsername || '',
       legalPerson: bp.legalPerson || '',
@@ -426,6 +497,28 @@ const resolvePurchaserNo = (record: CustomerRecord): string => {
     if (u?.companyShortName) return String(u.companyShortName);
   } catch { /* ignore */ }
   return '';
+};
+
+// 解析绑定采购商关联的直接客户档案：customerId 直连 > 采购商编号命中 > 同名命中
+// （客户列表已存在对应采购商编号的直接客户时，合作建立后应更新该客户而非新建重复行）
+const resolveLinkedDirectCustomer = (bp: any, customers: CustomerRecord[]): CustomerRecord | null => {
+  if (bp.customerId) {
+    const hit = customers.find(c => c.id === bp.customerId);
+    if (hit) return hit;
+  }
+  const pname = String(bp.purchaserName || '').trim();
+  if (!pname) return null;
+  let no = '';
+  try {
+    const users = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+    const u = users.find((x: any) => (bp.purchaserUsername && x.username === bp.purchaserUsername) || (x.companyName || '').trim() === pname);
+    no = String(u?.companyNo || '').trim();
+  } catch { /* ignore */ }
+  if (no) {
+    const byNo = customers.find(c => String((c as any).purchaserNo || '').trim() === no);
+    if (byNo) return byNo;
+  }
+  return customers.find(c => String(c.name || '').trim() === pname) || null;
 };
 
 // 直接客户 localStorage 持久化 key（按数据归属账号隔离）
@@ -858,9 +951,9 @@ const CustomerInfo: React.FC = () => {
     const occupiedMap = buildOrderOccupiedAmountMap(getDataOwner());
     const occupiedOf = (name: string) => occupiedMap[String(name || '').trim()] || 0;
 
-    // 收集所有已绑定采购商关联的 customerId
+    // 收集所有已绑定采购商关联的直接客户档案（customerId 直连/采购商编号/同名匹配）
     const associatedCustomerIds = new Set(
-      boundPurchasers.filter(bp => bp.customerId).map(bp => bp.customerId!)
+      boundPurchasers.map(bp => resolveLinkedDirectCustomer(bp, customers)?.id).filter(Boolean) as string[]
     );
 
     // 直接客户列表：过滤掉已升级为合作采购商的条目；采购总额/已收货款按账单明细自动统计；信用额度从独立数据库计算
@@ -870,13 +963,16 @@ const CustomerInfo: React.FC = () => {
 
     // 合作采购商列表：优先使用采购商真实信息，若关联了直接客户则补充地区/等级等字段
     const purchaserCustomers: CustomerRecord[] = boundPurchasers.map((bp, i) => {
-      const linkedDirect = bp.customerId ? customers.find(c => c.id === bp.customerId) : null;
+      const linkedDirect = resolveLinkedDirectCustomer(bp, customers);
       const isTerminated = bp.status === 'terminated';
       const isTerminating = bp.status === 'terminating' || hasPendingPurchaserTerminate(bp);
+      const rowName = bp.purchaserName;
+      // 合并行债务口径：直接客户旧名下的历史订单/收款一并计入
+      const extraName = linkedDirect && linkedDirect.name !== rowName ? linkedDirect.name : '';
       return {
         key: bp.key || bp.id || `purchaser-key-${i}`,
-        id: bp.id,
-        name: bp.purchaserName,
+        id: linkedDirect?.id || bp.id,
+        name: rowName,
         level: (bp as any).level || linkedDirect?.level || 'B',
         contact: bp.purchaserContact || linkedDirect?.contact || '',
         phone: bp.purchaserPhone || linkedDirect?.phone || '',
@@ -886,8 +982,11 @@ const CustomerInfo: React.FC = () => {
         status: isTerminated ? 'terminated' : isTerminating ? 'terminating' : 'completed',
         date: bp.bindDate,
         type: 'purchaser' as const,
-        bindStatus: isTerminated ? '已解除合作' : isTerminating ? '解除合作申请中' : '已合作',
+        bindStatus: isTerminated ? '已解除合作' : isTerminating ? '终止中' : '已合作',
         bindDate: bp.bindDate,
+        terminateAt: (bp as any).terminateAt,
+        terminateBy: (bp as any).terminateBy,
+        purchaserNo: linkedDirect?.purchaserNo || (bp as any).purchaserNo || '',
         salesman: (bp as any).salesman || linkedDirect?.salesman || '',
         purchaserUsername: bp.purchaserUsername || '',
         remark: (bp as any).remark || linkedDirect?.remark || '',
@@ -899,9 +998,9 @@ const CustomerInfo: React.FC = () => {
         city: bp.city || linkedDirect?.city || '',
         district: bp.district || linkedDirect?.district || '',
         detailAddress: bp.detailAddress || linkedDirect?.detailAddress || '',
-        totalPurchase: purchaseOf(bp.purchaserName),
-        receivedPayment: receivedOf(bp.purchaserName),
-        orderOccupied: occupiedOf(bp.purchaserName),
+        totalPurchase: purchaseOf(bp.purchaserName) + (extraName ? purchaseOf(extraName) : 0),
+        receivedPayment: receivedOf(bp.purchaserName) + (extraName ? receivedOf(extraName) : 0),
+        orderOccupied: occupiedOf(bp.purchaserName) + (extraName ? occupiedOf(extraName) : 0),
       };
     });
     return [...directCustomers, ...purchaserCustomers];
@@ -990,9 +1089,8 @@ const CustomerInfo: React.FC = () => {
     const supplierUsername = localStorage.getItem('username') || '';
     const registeredUsers = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
     const currentSupplier = registeredUsers.find((u: any) => u.username === supplierUsername);
-    const now = dayjs().format('YYYY-MM-DD HH:mm:ss');
 
-    // 1. 查找该采购商的登录用户名（从合作申请记录中反查）
+    // 1. 查找该采购商的登录用户名（记录优先，其次合作申请记录反查）
     const apps: any[] = JSON.parse(
       localStorage.getItem(COOPERATION_APPLICATIONS_KEY) || '[]'
     );
@@ -1000,37 +1098,48 @@ const CustomerInfo: React.FC = () => {
       (app: any) =>
         app.type === 'cooperation' &&
         app.status === 'approved' &&
-        app.targetSupplierName === currentSupplier?.companyName &&
-        (app.purchaserCompanyName === terminatingCustomer.name || app.purchaserUsername === terminatingCustomer.id)
+        (app.purchaserCompanyName === terminatingCustomer.name || app.purchaserUsername === terminatingCustomer.purchaserUsername || app.purchaserUsername === terminatingCustomer.id)
     );
-    const purchaserUsername = cooperationApp?.purchaserUsername || '';
+    const purchaserUsername = terminatingCustomer.purchaserUsername || cooperationApp?.purchaserUsername || '';
 
-    // 2. 创建解除合作申请（需采购商同意）
-    const terminateApp = {
-      applicationId: `TERM-${Date.now()}`,
+    // 2. 单方发起终止：双方存储置 terminating + 7 天宽限期（到期自动完成终止，无需对方确认）
+    const terminateAt = startCooperationTermination({
+      initiator: 'supplier',
+      supplierUsername,
       purchaserUsername,
-      purchaserCompanyName: terminatingCustomer.name,
-      purchaserCompanyId: terminatingCustomer.id,
-      purchaserContact: terminatingCustomer.contact || '',
-      purchaserPhone: terminatingCustomer.phone || '',
-      targetSupplierName: currentSupplier?.companyName || supplierUsername,
-      targetSupplierId: supplierUsername,
-      canDirectApprove: false,
-      applyDate: now,
-      status: 'pending',
-      remark: `供应商「${currentSupplier?.companyName || supplierUsername}」申请解除与采购商「${terminatingCustomer.name}」的合作`,
-      type: 'terminate' as const,
-      supplierInitiated: true,
-    };
-    apps.push(terminateApp);
-    localStorage.setItem(COOPERATION_APPLICATIONS_KEY, JSON.stringify(apps));
+      supplierCompany: currentSupplier?.companyName || supplierUsername,
+      purchaserCompany: terminatingCustomer.name,
+    });
 
-    // 3. 更新供应商侧 boundPurchasers 状态为 "解除申请中"
+    // 3. 终止申请记录（pending，供应商发起）：宽限期到期后本侧自动批准，对方现有逻辑同步完成终止
+    try {
+      const updatedApps = apps.map((a: any) => (
+        a.type === 'terminate' && a.status === 'pending' && !a.superseded &&
+        (a.purchaserCompanyName === terminatingCustomer.name || (purchaserUsername && a.purchaserUsername === purchaserUsername))
+          ? { ...a, superseded: true } : a
+      ));
+      updatedApps.push({
+        applicationId: `TERM-${Date.now()}`,
+        purchaserUsername,
+        purchaserCompanyName: terminatingCustomer.name,
+        targetSupplierName: currentSupplier?.companyName || supplierUsername,
+        targetSupplierId: supplierUsername,
+        applyDate: dayjs().format('YYYY-MM-DD HH:mm:ss'),
+        status: 'pending',
+        terminateAt,
+        type: 'terminate' as const,
+        supplierInitiated: true,
+        remark: `供应商「${currentSupplier?.companyName || supplierUsername}」发起终止与采购商「${terminatingCustomer.name}」的合作，7 天宽限后自动完成`,
+      });
+      localStorage.setItem(COOPERATION_APPLICATIONS_KEY, JSON.stringify(updatedApps));
+    } catch { /* ignore */ }
+
+    // 4. 刷新本侧绑定状态
     try {
       const boundData: any[] = JSON.parse(localStorage.getItem(storageKey) || '[]');
       const updated = boundData.map((bp) =>
         bp.purchaserName === terminatingCustomer.name
-          ? { ...bp, status: 'terminating' as const }
+          ? { ...bp, status: 'terminating' as const, terminateAt, terminateBy: 'supplier' }
           : bp
       );
       localStorage.setItem(storageKey, JSON.stringify(updated));
@@ -1042,7 +1151,7 @@ const CustomerInfo: React.FC = () => {
 
     setTerminateModalVisible(false);
     setTerminatingCustomer(null);
-    message.success(`已向采购商「${terminatingCustomer.name}」发送解除合作申请，等待对方确认`);
+    message.success(`已发起终止合作，采购商侧已显示终止中，将于 ${dayjs(terminateAt).format('YYYY-MM-DD')} 自动完成终止`);
   };
 
   // 撤回解除合作申请（供应商发起方）：申请置 rejected + 本侧 boundPurchasers 回退已合作
@@ -1053,23 +1162,34 @@ const CustomerInfo: React.FC = () => {
       okText: '确认撤回',
       cancelText: '取消',
       onOk: () => {
-        const apps: any[] = JSON.parse(localStorage.getItem('cooperation_applications') || '[]');
-        const updated = apps.map((a: any) => (
-          a.type === 'terminate' && a.status === 'pending' && !a.superseded && a.supplierInitiated === true &&
-          (a.purchaserCompanyName === record.name || (record.purchaserUsername && a.purchaserUsername === record.purchaserUsername))
-            ? { ...a, status: 'rejected', remark: `发起方撤回：${a.remark || ''}` }
-            : a
-        ));
-        localStorage.setItem('cooperation_applications', JSON.stringify(updated));
-        const storageKey = getStorageKey();
+        const supplierUsername = localStorage.getItem('username') || '';
+        let supplierCompany = supplierUsername;
         try {
-          const bound: any[] = JSON.parse(localStorage.getItem(storageKey) || '[]');
-          const up = bound.map((bp: any) => (bp.purchaserName === record.name && bp.status === 'terminating' ? { ...bp, status: 'approved' } : bp));
-          localStorage.setItem(storageKey, JSON.stringify(up));
-          setBoundPurchasers(up);
+          const users = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+          supplierCompany = users.find((u: any) => u.username === supplierUsername)?.companyName || supplierUsername;
         } catch { /* ignore */ }
+        // 双方存储回退已合作并清除终止字段
+        cancelCooperationTermination({
+          initiator: 'supplier',
+          supplierUsername,
+          purchaserUsername: record.purchaserUsername || '',
+          supplierCompany,
+          purchaserCompany: record.name,
+        });
+        // 作废旧的在途终止申请
+        try {
+          const apps: any[] = JSON.parse(localStorage.getItem('cooperation_applications') || '[]');
+          const updated = apps.map((a: any) => (
+            a.type === 'terminate' && a.status === 'pending' && !a.superseded &&
+            (a.purchaserCompanyName === record.name || (record.purchaserUsername && a.purchaserUsername === record.purchaserUsername))
+              ? { ...a, status: 'rejected', superseded: true, remark: `发起方撤回：${a.remark || ''}` }
+              : a
+          ));
+          localStorage.setItem('cooperation_applications', JSON.stringify(updated));
+        } catch { /* ignore */ }
+        syncBoundPurchasers();
         window.dispatchEvent(new Event('cooperation-applications-changed'));
-        message.success('已撤回终止合作申请，合作关系恢复为已合作');
+        message.success('已撤回终止合作，合作关系恢复为已合作');
       },
     });
   };
@@ -1081,6 +1201,11 @@ const CustomerInfo: React.FC = () => {
   // 删除客户
   const handleDeleteCustomer = (record: CustomerRecord) => {
     if (!fnOk('delete')) { message.warning('无删除权限'); return; }
+    // 合作关系存续期间（已合作/终止中）禁止删除，只能走终止合作流程
+    if (record.type === 'purchaser' && record.bindStatus && record.bindStatus !== '已解除合作') {
+      message.error(`客户「${record.name}」合作关系存续期间不能删除，如需停止合作请使用“终止合作”`);
+      return;
+    }
     // 应收欠款不为 0 禁止删除（操作列已隐藏删除键，此处为深度防护）
     const debtNow = Math.round(((Number(record.totalPurchase) || 0) - (Number(record.receivedPayment) || 0)) * 100) / 100;
     if (Math.abs(debtNow) > 0.001) {
@@ -1833,6 +1958,9 @@ const CustomerInfo: React.FC = () => {
         if (record.bindStatus === '已解除合作') {
           return <Tag color="orange">合作过</Tag>;
         }
+        if (record.bindStatus === '终止中') {
+          return <Tag color="orange">终止中</Tag>;
+        }
         return <Tag color="green">已合作采购商</Tag>;
       },
     },
@@ -1985,7 +2113,9 @@ const CustomerInfo: React.FC = () => {
       render: (_: string, record) => {
         if (record.type === 'purchaser') {
           if (record.bindStatus === '已解除合作') return <Badge status="warning" text="已解除合作" />;
-          if (record.bindStatus === '解除合作申请中') return <Badge status="processing" text="解除申请中" />;
+          if (record.bindStatus === '终止中' || record.bindStatus === '解除合作申请中') {
+            return <Badge status="processing" text={`终止中${record.terminateAt ? `（${dayjs(record.terminateAt).format('YYYY-MM-DD')}自动完成）` : ''}`} />;
+          }
           return <Badge status="success" text="已合作" />;
         }
         return <Badge status="success" text="合作中" />;
@@ -2060,11 +2190,11 @@ const CustomerInfo: React.FC = () => {
               解除合作
             </Button>
           )}
-          {record.type === 'purchaser' && record.bindStatus === '解除合作申请中' && (
+          {record.type === 'purchaser' && (record.bindStatus === '终止中' || record.bindStatus === '解除合作申请中') && (
             <>
-              <Button type="link" size="small" disabled icon={<DisconnectOutlined />}>解除申请中</Button>
-              {!hasPendingPurchaserTerminate(record) && (
-                <Button type="link" size="small" style={{ color: '#faad14' }} onClick={() => handleWithdrawTerminate(record)}>撤回解除申请</Button>
+              <Button type="link" size="small" disabled icon={<DisconnectOutlined />}>终止中</Button>
+              {!hasPendingPurchaserTerminate(record) && record.terminateBy !== 'purchaser' && (
+                <Button type="link" size="small" style={{ color: '#faad14' }} onClick={() => handleWithdrawTerminate(record)}>撤回终止</Button>
               )}
             </>
           )}
@@ -2079,8 +2209,8 @@ const CustomerInfo: React.FC = () => {
               重新合作
             </Button>
           )}
-          {/* 应收欠款不为 0 或未解除合作的采购商不允许删除 */}
-          {hasDebt ? null : record.type === 'purchaser' && (record.bindStatus === '已合作' || record.bindStatus === '解除合作申请中') ? null : (
+          {/* 应收欠款不为 0 或合作存续/终止中的采购商不允许删除 */}
+          {hasDebt ? null : record.type === 'purchaser' && (record.bindStatus === '已合作' || record.bindStatus === '终止中' || record.bindStatus === '解除合作申请中') ? null : (
             <Popconfirm
               title="确定删除该客户？"
               description="删除后该客户将从列表中移除，历史账单不受影响。"
@@ -2188,7 +2318,7 @@ const CustomerInfo: React.FC = () => {
               <Option value="purchaser">已绑定采购商</Option>
             </Select>
             <Space size={8} wrap>
-              <Button type="primary" icon={<SearchOutlined />} onClick={() => { setSearchText(searchInput.trim()); setCodeSearchText(codeSearchInput.trim()); setAddressSearchText(addressSearchInput.trim()); }}>查询</Button>
+              <Button type="primary" icon={<SearchOutlined />} onClick={() => { setCustomers(loadCustomersFromStorage()); syncBoundPurchasers(); setCustSummary(loadCustomerSummary(getDataOwner())); setDataRefreshKey(k => k + 1); setSearchText(searchInput.trim()); setCodeSearchText(codeSearchInput.trim()); setAddressSearchText(addressSearchInput.trim()); }}>查询</Button>
               <Button icon={<ReloadOutlined />} onClick={() => { setSearchInput(''); setSearchText(''); setCodeSearchInput(''); setCodeSearchText(''); setAddressSearchInput(''); setAddressSearchText(''); setLevelFilter(''); setTypeFilter(''); setSalesmanFilter(''); }}>
                 重置
               </Button>
