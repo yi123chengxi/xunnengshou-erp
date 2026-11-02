@@ -14,6 +14,8 @@ import { installStorageQuotaGuard, registerSetItemHook, proactiveQuotaCleanup } 
 import { scheduleDatasetUpload } from './utils/serverSync';
 import { initPushNotifications } from './utils/pushNotification';
 import { cleanupDemoAccountsAndSession } from './utils/demoAccountCleanup';
+import { startBankSyncWatcher } from './utils/supplierBankSync';
+import { startInviteConsumeWatcher } from './utils/inviteRegistry';
 
 // 全局 localStorage 配额防护：任何 setItem 配额溢出时自动清理重试，杜绝未捕获 QuotaExceededError 崩溃
 installStorageQuotaGuard();
@@ -21,6 +23,11 @@ installStorageQuotaGuard();
 registerSetItemHook((key, value) => scheduleDatasetUpload(key, value));
 // 残留演示账号与遗留登录会话清理：测试期遗留的 admin 等会话在启动时即清除，回退登录页
 cleanupDemoAccountsAndSession();
+// 供应商银行信息自动同步监听：采购商侧供应商条目银行四字段默认同步供应商企业信息，
+// 供应商改动时（服务器同步落地/页面恢复/跨标签变更）自动触发一次更新同步
+startBankSyncWatcher();
+// 一次性邀约链接消耗监听：采购商同意/拒绝合作完成时自动消耗会话内的邀约码使链接失效
+startInviteConsumeWatcher();
 
 // 浏览器会话级登录态：sessionStorage 随浏览器关闭而清空，
 // 重启浏览器后再打开网址视为"未登入"——清除上次残留的登录会话并回退登录页，

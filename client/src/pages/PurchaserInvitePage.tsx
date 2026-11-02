@@ -1,10 +1,12 @@
-import React, { useEffect, useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Button, Card, Descriptions, Result, Space, Typography } from 'antd';
 import { LinkOutlined, ShopOutlined } from '@ant-design/icons';
 import {
   decodeInviteToken, savePendingInvite, resolveUserByCompanyNo,
 } from '../utils/cooperationInvite';
+import { INVITE_REGISTRY_KEY, findInviteRecord, rememberActiveInviteCode } from '../utils/inviteRegistry';
+import { mergeDatasetFromServer } from '../utils/serverSync';
 
 const { Title, Paragraph, Text } = Typography;
 
@@ -20,19 +22,43 @@ const PurchaserInvitePage: React.FC = () => {
   const payload = useMemo(() => decodeInviteToken(token || ''), [token]);
   const supplier = useMemo(() => (payload ? resolveUserByCompanyNo(payload.no) : null), [payload]);
   const logged = !!localStorage.getItem('username');
+  // 一次性邀约链接失效态：登记簿中该邀约码已被使用（同意/拒绝）
+  const [expired, setExpired] = useState(false);
 
   useEffect(() => {
     if (!payload) return;
-    savePendingInvite(payload);
-    if (localStorage.getItem('username')) {
-      navigate('/purchaser/suppliers/list', { replace: true });
-    }
+    let alive = true;
+    (async () => {
+      const code = (payload as any).code as string | undefined;
+      if (code) {
+        // 拉取最新登记簿（全局同步键）校验一次性邀约码是否已被消耗
+        try { await mergeDatasetFromServer(INVITE_REGISTRY_KEY); } catch { /* ignore */ }
+        const rec = findInviteRecord(code);
+        if (!alive) return;
+        if (rec?.usedAt) { setExpired(true); return; }
+      }
+      // 记住当前邀约码（会话级）：受理完成事件据此消耗一次性链接
+      rememberActiveInviteCode((payload as any).code);
+      savePendingInvite(payload);
+      if (localStorage.getItem('username')) {
+        navigate('/purchaser/suppliers/list', { replace: true });
+      }
+    })();
+    return () => { alive = false; };
   }, [payload, navigate]);
 
   if (!payload) {
     return (
       <div style={{ minHeight: '100vh', background: '#f0f2f5', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <Result status="warning" title="邀约链接无效" subTitle="链接可能已损坏，请联系供应商重新发送邀约链接" />
+      </div>
+    );
+  }
+
+  if (expired) {
+    return (
+      <div style={{ minHeight: '100vh', background: '#f0f2f5', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <Result status="warning" title="邀约链接已失效" subTitle="该邀约链接为一次性链接，已被使用（合作已建立或已拒绝）；如需再次合作请联系供应商重新生成邀约链接" />
       </div>
     );
   }

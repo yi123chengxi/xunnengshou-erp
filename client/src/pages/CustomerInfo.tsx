@@ -47,6 +47,8 @@ import { canFn, usePermTick } from '../utils/perm';
 import { compressImageFile } from '../utils/imageCompress';
 import { getCurrentUserDisplayName } from '../utils/billLog';
 import { buildInviteLink } from '../utils/cooperationInvite';
+import { createInviteRecord, findUnusedInviteForCustomer, findInviteRecord, buildCustomerInviteLink } from '../utils/inviteRegistry';
+import type { InviteRecord } from '../utils/inviteRegistry';
 import { startCooperationTermination, cancelCooperationTermination, TERMINATE_GRACE_MS } from '../utils/cooperationTerminate';
 import { reconcileCooperationPairs } from '../utils/cooperationReconcile';
 import { copyText } from '../utils/clipboard';
@@ -691,6 +693,9 @@ const CustomerInfo: React.FC = () => {
   // 邀约合作弹窗（生成邀约链接：仅携带公司编号，可勾选绑定负责人）
   const [inviteModalVisible, setInviteModalVisible] = useState(false);
   const [inviteBind, setInviteBind] = useState(false);
+  // 客户行级一次性邀约：目标客户+邀约码（空目标=工具栏通用链接）
+  const [inviteTarget, setInviteTarget] = useState<{ id: string; name: string; code: string } | null>(null);
+  const [inviteRegistryTick, setInviteRegistryTick] = useState(0);
   const inviteCompanyNo = useMemo(() => {
     try {
       const users = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
@@ -699,6 +704,21 @@ const CustomerInfo: React.FC = () => {
   }, []);
   const inviteLink = useMemo(() => {
     if (!inviteModalVisible || !inviteCompanyNo) return '';
+    // 客户行级邀约：携带一次性邀约码与客户标识的定向链接
+    if (inviteTarget) {
+      return buildCustomerInviteLink({
+        v: 1,
+        no: inviteCompanyNo,
+        bind: inviteBind ? 1 : 0,
+        salesman: localStorage.getItem('username') || '',
+        salesmanName: getCurrentUserDisplayName(),
+        ts: Date.now(),
+        r: Math.random().toString(36).slice(2, 8),
+        code: inviteTarget.code,
+        customerId: inviteTarget.id,
+        customerName: inviteTarget.name,
+      });
+    }
     return buildInviteLink({
       v: 1,
       no: inviteCompanyNo,
@@ -708,7 +728,19 @@ const CustomerInfo: React.FC = () => {
       ts: Date.now(),
       r: Math.random().toString(36).slice(2, 8),
     });
-  }, [inviteModalVisible, inviteBind, inviteCompanyNo]);
+  }, [inviteModalVisible, inviteBind, inviteCompanyNo, inviteTarget]);
+  // 邀约码使用状态（登记簿同步落地后实时展示失效）
+  const inviteUsed = useMemo<InviteRecord | null>(
+    () => (inviteTarget ? findInviteRecord(inviteTarget.code) : null),
+    // eslint-disable-next-line
+    [inviteTarget, inviteRegistryTick, inviteModalVisible]
+  );
+  useEffect(() => {
+    const bump = () => setInviteRegistryTick(t => t + 1);
+    window.addEventListener('sync-data-updated', bump);
+    window.addEventListener('storage', bump);
+    return () => { window.removeEventListener('sync-data-updated', bump); window.removeEventListener('storage', bump); };
+  }, []);
   const watchCredit = Form.useWatch('credit', addForm);
   const watchTotalPurchase = Form.useWatch('totalPurchase', addForm);
   const watchReceivedPayment = Form.useWatch('receivedPayment', addForm);
@@ -1760,19 +1792,23 @@ const CustomerInfo: React.FC = () => {
     setAddModalVisible(true);
   };
 
-  // 邀约合作：弹窗提示（向采购商索要公司编号，填入采购商编号即可申请合作）
+  // 邀约合作：客户行级一次性邀约链接（采购商同意后建立合作并自动更新本客户，链接随即失效）
   const handleInviteCooperation = (record: CustomerRecord) => {
-    Modal.info({
-      title: '邀约合作说明',
-      width: 520,
-      okText: '知道了',
-      content: (
-        <div style={{ fontSize: 13, lineHeight: '24px' }}>
-          <p>可向采购商「{record.name}」索要其<Text strong>公司编号</Text>，在本客户的编辑窗口中填写到<Text strong>「采购商编号」</Text>字段，保存后将自动向该采购商发起合作申请。</p>
-          <p>采购商在采购平台「供应商-合作申请」中点击<Text strong>「同意合作」</Text>后，即可建立合作，采购商将自动添加到客户列表中。</p>
-        </div>
-      ),
-    });
+    if (!inviteCompanyNo) { message.warning('当前账户未设置公司编号，无法生成邀约链接'); return; }
+    let rec = findUnusedInviteForCustomer(getDataOwner(), record.id);
+    if (!rec) rec = createInviteRecord(getDataOwner(), record.id, record.name);
+    setInviteTarget({ id: record.id, name: record.name, code: rec.code });
+    setInviteBind(false);
+    setInviteModalVisible(true);
+  };
+
+  // 重新生成客户邀约链接（旧码作废，签发新的一次性邀约码）
+  const handleRegenerateInvite = () => {
+    if (!inviteTarget) return;
+    const rec = createInviteRecord(getDataOwner(), inviteTarget.id, inviteTarget.name);
+    setInviteTarget({ id: inviteTarget.id, name: inviteTarget.name, code: rec.code });
+    setInviteRegistryTick(t => t + 1);
+    message.success('已生成新邀约链接，旧链接已作废');
   };
 
   // 复制邀约链接
@@ -2352,7 +2388,7 @@ const CustomerInfo: React.FC = () => {
               >
                 新增客户
               </Button>
-              <Button icon={<LinkOutlined />} onClick={() => { setInviteBind(false); setInviteModalVisible(true); }}>
+              <Button icon={<LinkOutlined />} onClick={() => { setInviteTarget(null); setInviteBind(false); setInviteModalVisible(true); }}>
                 邀约合作
               </Button>
             </Space>
@@ -2378,18 +2414,21 @@ const CustomerInfo: React.FC = () => {
         />
       </Card>
 
-      {/* 邀约合作弹窗（生成邀约链接：仅携带公司编号，可勾选绑定负责人） */}
+      {/* 邀约合作弹窗（生成邀约链接：仅携带公司编号，可勾选绑定负责人；客户行级为一次性链接） */}
       <Modal
-        title={<span><LinkOutlined style={{ marginRight: 8, color: '#1890ff' }} />邀约采购商合作</span>}
+        title={<span><LinkOutlined style={{ marginRight: 8, color: '#1890ff' }} />邀约采购商合作{inviteTarget ? ` — 客户「${inviteTarget.name}」` : ''}</span>}
         open={inviteModalVisible}
         onCancel={() => setInviteModalVisible(false)}
         footer={[
           <Button key="close" onClick={() => setInviteModalVisible(false)}>关闭</Button>,
+          inviteTarget ? (
+            <Button key="regen" icon={<ReloadOutlined />} onClick={handleRegenerateInvite}>重新生成链接</Button>
+          ) : null,
           <Button
             key="copy"
             type="primary"
             icon={<CopyOutlined />}
-            disabled={!inviteLink}
+            disabled={!inviteLink || !!inviteUsed?.usedAt}
             onClick={() => {
               copyText(inviteLink).then(ok => (ok
                 ? message.success('邀约链接已复制到剪贴板')
@@ -2410,11 +2449,22 @@ const CustomerInfo: React.FC = () => {
             showIcon
             message={
               inviteLink
-                ? `链接仅携带本公司编号「${inviteCompanyNo}」，不携带公司账户；采购商打开后进入供应商列表页，确认邀约信息并点击「同意合作」即立即建立合作。`
+                ? `链接仅携带本公司编号「${inviteCompanyNo}」，不携带公司账户；采购商打开后进入供应商列表页，确认邀约信息并点击「同意合作」即立即建立合作${inviteTarget ? '，客户列表中该客户自动更新为合作采购商' : ''}。`
                 : '当前账户未设置公司编号，无法生成邀约链接，请先在注册信息中完善公司编号'
             }
           />
-          <Input.TextArea readOnly value={inviteLink} rows={3} style={{ fontSize: 12 }} />
+          {inviteTarget && (
+            <Alert
+              type={inviteUsed?.usedAt ? 'warning' : 'success'}
+              showIcon
+              message={
+                inviteUsed?.usedAt
+                  ? `链接已失效：${inviteUsed.usedAt} 采购商「${inviteUsed.usedByCompany || inviteUsed.usedBy}」已使用该链接（${inviteUsed.usedResult === 'approved' ? '已建立合作' : '已拒绝合作'}）；一次性链接需点击「重新生成链接」后再次邀约`
+                  : '本链接为一次性邀约链接：采购商点击「同意合作」或「拒绝」后链接自动失效，不可重复使用'
+              }
+            />
+          )}
+          <Input.TextArea readOnly value={inviteUsed?.usedAt ? '' : inviteLink} rows={3} style={{ fontSize: 12 }} />
         </Space>
       </Modal>
 
