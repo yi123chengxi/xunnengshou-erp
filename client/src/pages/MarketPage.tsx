@@ -383,6 +383,16 @@ const collectVariantImages = (ownerKey: string, prods: any[], styleCode: string,
   });
   return out;
 };
+
+// 收集款式下各 SKU 的规格明细行（颜色/尺码/SKU编码/供货价/库存/状态）嵌入卡片记录随 market_publish_orders 同步：
+// 其他账号浏览器没有发布方产品列表键（pageData_ 仅同步当前账号自己的数据集），不嵌入则跨账号查看规格明细为空
+const collectVariants = (prods: any[], styleCode: string): any[] => {
+  return (prods || []).filter((p: any) => p && p.styleCode === styleCode && p.key).map((p: any) => ({
+    key: p.key, color: p.color || '', spec: p.spec || '', productCode: p.productCode || '',
+    unit: p.unit || '件', suggestedPrice: Number(p.suggestedPrice) || 0, actualStock: Number(p.actualStock) || 0,
+    productStatus: p.productStatus || '', shortName: p.shortName || '',
+  }));
+};
 // 跨账号颜色图解析：本地存储（发布方本机）优先，回退卡片内嵌图（productColor→image / variantImages）
 const embeddedSrcOf = (rec: any, color: string): string => {
   if (!rec) return '';
@@ -913,7 +923,9 @@ const MarketPage: React.FC = () => {
     setDetailRec(rec); setWonQuoteKey(''); setSkuQty({}); setDetailThumbs([]); setDetailImg('');
     if (rec && rec.type === 'finished') {
       const prods: any[] = loadJson(`pageData_basic-data_product-list_${rec.publisherUsername}`, []);
-      const vars = prods.filter(p => p.styleCode === rec.styleCode);
+      const localVars = prods.filter(p => p.styleCode === rec.styleCode);
+      // 跨账号回退：查看方本地无发布方产品列表键时，用卡片内嵌的 SKU 规格明细
+      const vars: any[] = localVars.length ? localVars : (Array.isArray(rec.variants) ? rec.variants : []);
       setDetailVariants(vars);
       setDetailColor('');
       // 缩略图组合：①每个颜色的主图 ②任一颜色存在的六面图（跳过缺失）
@@ -1048,10 +1060,11 @@ const MarketPage: React.FC = () => {
             status: '待报价', styleCode: sc, shortName: p.shortName || p.productCode || sc, productCode: p.productCode,
             productKey: p.key, unit: p.unit || '件', quantity: Number(p.actualStock) || 0, targetPrice: Number(p.suggestedPrice) || 0,
             image: resolvedImg, productColor: p.color || '', variantImages: collectVariantImages(owner, prods, sc, p.key),
+            variants: collectVariants(prods, sc),
             processTypes: [], quotes: [], remark: '系统自动上架（在售成品）',
           }, ...out];
         } else {
-          out = out.map(r => (r.key === exist.key ? { ...r, shortName: p.shortName || r.shortName, targetPrice: Number(p.suggestedPrice) || r.targetPrice, image: resolvedImg || r.image, productKey: p.key || r.productKey, productColor: p.color || r.productColor, variantImages: (() => { const vi = collectVariantImages(owner, prods, sc, p.key); return vi.length ? vi : (r.variantImages || []); })() } : r));
+          out = out.map(r => (r.key === exist.key ? { ...r, shortName: p.shortName || r.shortName, targetPrice: Number(p.suggestedPrice) || r.targetPrice, image: resolvedImg || r.image, productKey: p.key || r.productKey, productColor: p.color || r.productColor, variantImages: (() => { const vi = collectVariantImages(owner, prods, sc, p.key); return vi.length ? vi : (r.variantImages || []); })(), variants: (() => { const vv = collectVariants(prods, sc); return vv.length ? vv : (r.variants || []); })() } : r));
         }
       });
     });
@@ -1132,6 +1145,11 @@ const MarketPage: React.FC = () => {
           }
           if (vi.length) next = { ...next, variantImages: vi };
         }
+        // 存量卡片补嵌 SKU 规格明细：历史卡片无 variants 字段时回填，保证跨账号查看立即有明细
+        if ((!Array.isArray(next.variants) || next.variants.length === 0) && next.styleCode) {
+          const vv = collectVariants(prods, next.styleCode);
+          if (vv.length) next = { ...next, variants: vv };
+        }
         if (next !== r) changed = true;
         updated.push(next);
       }
@@ -1207,6 +1225,7 @@ const MarketPage: React.FC = () => {
         status: '待报价', styleCode: sc, shortName: rep.shortName || rep.productCode || sc, productCode: rep.productCode,
         productKey: rep.key, unit: rep.unit || '件', quantity: Number(rep.actualStock) || 0, targetPrice: Number(rep.suggestedPrice) || 0,
         image: resolvedImg, productColor: rep.color || '', variantImages: collectVariantImages(owner, manualPublishProducts, sc, rep.key),
+        variants: collectVariants(manualPublishProducts, sc),
         processTypes: [], quotes: [], remark: '手动发布到成品市场',
       }, ...out];
       published++;
@@ -1700,7 +1719,9 @@ const addToCart = useCallback((rec: any, qty?: number) => {
       setAddToCartSkuQty({});
       setAddToCartImg(rec.image || imgOf(rec.publisherUsername, { key: rec.productKey }));
       const prods: any[] = loadJson(`pageData_basic-data_product-list_${rec.publisherUsername}`, []);
-      const vars = prods.filter(p => p.styleCode === rec.styleCode);
+      const localVars = prods.filter(p => p.styleCode === rec.styleCode);
+      // 跨账号回退：查看方本地无发布方产品列表键时，用卡片内嵌的 SKU 规格明细
+      const vars: any[] = localVars.length ? localVars : (Array.isArray(rec.variants) ? rec.variants : []);
       setAddToCartVariants(vars);
       return;
     }
