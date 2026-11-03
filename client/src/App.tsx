@@ -57,6 +57,7 @@ const DevOrdersPage = React.lazy(() => import('./pages/dev/DevOrdersPage'));
 const DevRolesPage = React.lazy(() => import('./pages/dev/DevRolesPage'));
 const DevPointsRewardsPage = React.lazy(() => import('./pages/dev/DevPointsRewardsPage'));
 const DevFeedbackPage = React.lazy(() => import('./pages/dev/DevFeedbackPage'));
+const DevIntegrationSettings = React.lazy(() => import('./pages/dev/DevIntegrationSettings'));
 const DevCustomerStats = React.lazy(() => import('./pages/dev/DevStatsPages').then(m => ({ default: m.DevCustomerStats })));
 const DevStaffPaymentPage = React.lazy(() => import('./pages/dev/DevPaymentPages').then(m => ({ default: m.DevStaffPaymentPage })));
 const DevGroupStatsPage = React.lazy(() => import('./pages/dev/DevGroupStatsPage'));
@@ -341,10 +342,10 @@ function App() {
         <Route path="/purchaser-invite/:token" element={<PurchaserInvitePage />} />
 
         {/* 开发者后台（独立布局：客户管理/业绩分析/系统设置）；登录地址后缀混淆，不对外公开 */}
-        <Route path="/dev/entry-7x2qf9" element={<DevLogin />} />
-        <Route path="/dev/dashboard" element={<Navigate to="/dev/customers/all" replace />} />
-        <Route path="/dev" element={<DevLayout />}>
-          <Route index element={<Navigate to="/dev/customers/all" replace />} />
+        <Route path="/xunnengs/entry-7x2qf9" element={<DevLogin />} />
+        <Route path="/xunnengs/dashboard" element={<Navigate to="/xunnengs/customers/all" replace />} />
+        <Route path="/xunnengs" element={<DevLayout />}>
+          <Route index element={<Navigate to="/xunnengs/customers/all" replace />} />
           {/* 客户管理：现有注册客户列表即客户列表 */}
           <Route path="customers/all" element={<DevDashboard />} />
           <Route path="customers/orders" element={<DevOrdersPage />} />
@@ -362,6 +363,7 @@ function App() {
           <Route path="settings/roles" element={<DevRolesPage />} />
           <Route path="settings/points" element={<DevPointsRewardsPage />} />
           <Route path="settings/feedback" element={<DevFeedbackPage />} />
+          <Route path="settings/integration" element={<DevIntegrationSettings />} />
         </Route>
       </Routes>
       </SyncGate>

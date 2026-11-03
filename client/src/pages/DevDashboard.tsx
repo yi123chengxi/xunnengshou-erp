@@ -384,7 +384,7 @@ const DevDashboard: React.FC = () => {
   useEffect(() => {
     const devLoggedIn = localStorage.getItem('devLoggedIn');
     if (!devLoggedIn) {
-      navigate('/dev/entry-7x2qf9');
+      navigate('/xunnengs/entry-7x2qf9');
     }
   }, [navigate]);
 
@@ -571,7 +571,7 @@ const DevDashboard: React.FC = () => {
   // 退出登录
   const handleLogout = () => {
     localStorage.removeItem('devLoggedIn');
-    navigate('/dev/entry-7x2qf9');
+    navigate('/xunnengs/entry-7x2qf9');
   };
 
   // 角色标签颜色

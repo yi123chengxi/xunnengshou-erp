@@ -31,7 +31,7 @@ const DevLogin: React.FC = () => {
           localStorage.setItem('devUserName', '主开发者');
           localStorage.removeItem('devIsSub');
           localStorage.setItem('devParent', 'dev');
-          navigate('/dev/customers/all');
+          navigate('/xunnengs/customers/all');
         } else {
           // 开发者子账号登录（系统设置-账号管理中创建）
           const sub = loadDevSubAccounts().find(s => s.username === username && s.password === password);
@@ -42,7 +42,7 @@ const DevLogin: React.FC = () => {
             localStorage.setItem('devUserName', sub.displayName);
             localStorage.setItem('devIsSub', 'true');
             localStorage.setItem('devParent', sub.parentDev || 'dev');
-            navigate('/dev/customers/all');
+            navigate('/xunnengs/customers/all');
           } else if (sub) {
             message.error('该子账号已被禁用，请联系主开发者');
           } else {

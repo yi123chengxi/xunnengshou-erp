@@ -67,7 +67,7 @@ startInviteConsumeWatcher();
 // 公开链接（合作确认/货盘分享/品牌公开页/邀约落地页）与开发者入口（自有 devLoggedIn 守卫）除外
 (() => {
   const path = window.location.pathname;
-  const publicPrefix = /^\/(login|register|cooperation-confirm\/|shared\/|brand-apply\/|brand-cert\/|purchaser-cooperation-confirm\/|purchaser-invite\/|dev\/)/;
+  const publicPrefix = /^\/(login|register|cooperation-confirm\/|shared\/|brand-apply\/|brand-cert\/|purchaser-cooperation-confirm\/|purchaser-invite\/|xunnengs\/)/;
   try {
     if (!localStorage.getItem('username') && !publicPrefix.test(path)) {
       window.location.replace('/login');

@@ -52,6 +52,7 @@ const devMenus = [
       { key: 'roles', label: '角色权限' },
       { key: 'points', label: '积分兑换奖品' },
       { key: 'feedback', label: '意见反馈' },
+      { key: 'integration', label: '接口配置' },
     ],
   },
 ];
@@ -64,7 +65,7 @@ const DevLayout: React.FC = () => {
 
   // 登录守卫
   useEffect(() => {
-    if (localStorage.getItem('devLoggedIn') !== 'true') navigate('/dev/entry-7x2qf9');
+    if (localStorage.getItem('devLoggedIn') !== 'true') navigate('/xunnengs/entry-7x2qf9');
   }, [navigate]);
 
   const identity = useMemo(() => getDevIdentity(), []);
@@ -77,7 +78,7 @@ const DevLayout: React.FC = () => {
   })).filter(m => m.children.length > 0), [permTick]);
 
   const activeMenu = useMemo(() => {
-    const path = location.pathname.replace(/^\/dev\/?/, '');
+    const path = location.pathname.replace(/^\/xunnengs\/?/, '');
     return path || 'customers/all';
   }, [location.pathname]);
 
@@ -89,7 +90,7 @@ const DevLayout: React.FC = () => {
   })), [visibleMenus]);
 
   const onMenuClick: MenuProps['onClick'] = useCallback(({ key }: { key: string }) => {
-    navigate(`/dev/${key}`);
+    navigate(`/xunnengs/${key}`);
   }, [navigate]);
 
   const userMenuItems: MenuProps['items'] = [
@@ -115,7 +116,7 @@ const DevLayout: React.FC = () => {
       localStorage.removeItem('devUserName');
       localStorage.removeItem('devIsSub');
       localStorage.removeItem('devParent');
-      navigate('/dev/entry-7x2qf9');
+      navigate('/xunnengs/entry-7x2qf9');
     }
   }, [navigate]);
 
