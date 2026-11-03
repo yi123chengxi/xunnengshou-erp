@@ -42,6 +42,9 @@ interface JobLog {
 }
 const jobLogs: JobLog[] = [];
 
+// 待取消的任务 ID 集合（前端发起取消时加入，handlePrintJob 检查后移除）
+const cancelledJobs = new Set<string>();
+
 // 服务端推送的租户打印机快照（含归属电脑名，共享打印用）
 let sharedSnapshot: any[] = [];
 
@@ -263,6 +266,16 @@ function connectWebSocket() {
       case 'ping':
         ws?.send(JSON.stringify({ type: 'pong' }));
         break;
+
+      case 'cancel_job': {
+        // 前端发起取消：标记任务 ID，handlePrintJob 在关键节点检查并中止
+        const cancelId = String(msg.jobId || '');
+        if (cancelId) {
+          cancelledJobs.add(cancelId);
+          console.log(`[ws] 收到取消任务: ${cancelId}`);
+        }
+        break;
+      }
     }
   });
 
@@ -337,6 +350,10 @@ async function handlePrintJob(msg: {
   };
   pushLog(log);
 
+  // 取消标志：外部可通过 cancelledJobs Set 标记取消
+  let cancelled = false;
+  const checkCancelled = () => { if (cancelledJobs.has(msg.id)) cancelled = true; };
+
   try {
     // 更新状态为 printing
     log.status = 'printing';
@@ -349,43 +366,61 @@ async function handlePrintJob(msg: {
       webPreferences: { nodeIntegration: false },
     });
 
+    // 带超时的 loadURL/loadFile（15 秒）
+    const loadTimeout = 15_000;
     if (msg.jobType === 'url') {
-      await printWin.loadURL(msg.content);
+      await Promise.race([
+        printWin.loadURL(msg.content),
+        new Promise<void>((_, reject) => setTimeout(() => reject(new Error('加载打印内容超时（15s），请检查服务端是否可达')), loadTimeout)),
+      ]);
     } else {
-      // PDF: base64 写入临时文件
       const tmpFile = path.join(os.tmpdir(), `print-${uuid()}.pdf`);
       fs.writeFileSync(tmpFile, Buffer.from(msg.content, 'base64'));
-      await printWin.loadFile(tmpFile);
-      // 打印完成后删除临时文件
+      await Promise.race([
+        printWin.loadFile(tmpFile),
+        new Promise<void>((_, reject) => setTimeout(() => reject(new Error('加载 PDF 超时（15s）')), loadTimeout)),
+      ]);
       setTimeout(() => { try { fs.unlinkSync(tmpFile); } catch { /* ignore */ } }, 60_000);
     }
 
-    // 等待页面加载完成
-    await new Promise<void>((resolve) => {
-      if (printWin.webContents.isLoading()) {
-        printWin.webContents.once('did-finish-load', () => resolve());
-      } else {
-        resolve();
-      }
-    });
+    checkCancelled();
+    if (cancelled) { printWin.close(); throw new Error('任务已取消'); }
 
-    // 静默打印
-    await new Promise<void>((resolve, reject) => {
-      printWin.webContents.print(
-        {
-          silent: true,
-          deviceName: msg.printerName || undefined,
-          copies: msg.copies || 1,
-        },
-        (success: boolean, failureReason: string) => {
-          if (success) {
-            resolve();
-          } else {
-            reject(new Error(failureReason || '打印失败'));
-          }
+    // 等待页面加载完成（带超时）
+    await Promise.race([
+      new Promise<void>((resolve) => {
+        if (printWin.webContents.isLoading()) {
+          printWin.webContents.once('did-finish-load', () => resolve());
+        } else {
+          resolve();
         }
-      );
-    });
+      }),
+      new Promise<void>((_, reject) => setTimeout(() => reject(new Error('页面加载超时（15s）')), loadTimeout)),
+    ]);
+
+    checkCancelled();
+    if (cancelled) { printWin.close(); throw new Error('任务已取消'); }
+
+    // 静默打印（带超时 15 秒，打印机不存在时回调可能不触发）
+    await Promise.race([
+      new Promise<void>((resolve, reject) => {
+        printWin.webContents.print(
+          {
+            silent: true,
+            deviceName: msg.printerName || undefined,
+            copies: msg.copies || 1,
+          },
+          (success: boolean, failureReason: string) => {
+            if (success) {
+              resolve();
+            } else {
+              reject(new Error(failureReason || '打印失败'));
+            }
+          }
+        );
+      }),
+      new Promise<void>((_, reject) => setTimeout(() => reject(new Error(`打印超时（15s），打印机"${msg.printerName || '默认'}"可能不存在或无响应`)), loadTimeout)),
+    ]);
 
     // 关闭打印窗口
     printWin.close();

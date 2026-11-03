@@ -100,6 +100,19 @@ export function sendPrintJob(tenantId: string, job: PrintJob): boolean {
   return true;
 }
 
+/** 向执行打印任务的客户端发送取消指令 */
+export function cancelPrintJob(tenantId: string, jobId: string): boolean {
+  const clients = tenantConnections.get(tenantId);
+  if (!clients || clients.size === 0) return false;
+  for (const c of clients) {
+    if (c.ws.readyState === WebSocket.OPEN) {
+      c.ws.send(JSON.stringify({ type: 'cancel_job', jobId }));
+      return true;
+    }
+  }
+  return false;
+}
+
 /** 向租户内全部在线客户端广播打印机快照（按接收方分离：自己的全量 + 其他电脑手动共享的） */
 function snapshotFor(target: PrintClientMeta): PrinterInfo[] {
   const clients = tenantConnections.get(target.tenantId);

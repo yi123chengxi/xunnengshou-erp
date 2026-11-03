@@ -12,7 +12,7 @@ import { execFile } from 'child_process';
 import { v4 as uuidv4 } from 'uuid';
 import { verifyJWT, JWTPayload } from './auth.routes';
 import { createJob, getJob } from '../ws/print-job-store';
-import { sendPrintJob, getTenantPrinters, getTenantClientCount } from '../ws/print-ws';
+import { sendPrintJob, getTenantPrinters, getTenantClientCount, cancelPrintJob } from '../ws/print-ws';
 
 const router = Router();
 
@@ -162,6 +162,25 @@ router.post('/job', (req: Request, res: Response) => {
     data: { taskId: job.id, status: 'pending' },
     message: '打印任务已提交',
   });
+});
+
+/**
+ * POST /api/print/job/:id/cancel
+ * 取消打印任务（免鉴权）：向打印客户端发送取消指令
+ */
+router.post('/job/:id/cancel', (req: Request, res: Response) => {
+  const { username } = req.body;
+  const tenantId = String(username || '');
+  if (!tenantId) {
+    res.status(400).json({ code: 400, message: '缺少 username' });
+    return;
+  }
+  const sent = cancelPrintJob(tenantId, req.params.id);
+  if (sent) {
+    res.json({ code: 0, message: '取消指令已发送' });
+  } else {
+    res.status(503).json({ code: 503, message: '无在线打印客户端' });
+  }
 });
 
 // 其余打印接口都需要 JWT 认证

@@ -14,6 +14,7 @@ import {
 import {
   PrinterOutlined, SettingOutlined, PlusOutlined, DeleteOutlined, SaveOutlined,
   ClearOutlined, SearchOutlined, EditOutlined, EyeOutlined, FileTextOutlined,
+  CloseOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { getDataOwner } from '../utils/brandAuth';
@@ -197,6 +198,8 @@ const ProductPrintPage: React.FC = () => {
   }, []);
   useEffect(() => { reloadPrinters(); }, [reloadPrinters]);
   const [qty1, setQty1] = useState(1);
+  const [printTaskId, setPrintTaskId] = useState('');
+  const [printLoading, setPrintLoading] = useState(false);
   const [customContents, setCustomContents] = useState<any[]>([]);
   const [selCustom, setSelCustom] = useState('');
   const [customModal, setCustomModal] = useState(false);
@@ -454,9 +457,9 @@ const ProductPrintPage: React.FC = () => {
   const doPrintRow = async (type: TplType, copies: number) => {
     if (!selProduct) { message.warning('请先搜索并选择商品'); return; }
     const tpl = loadTpl(type, resolveTplId(type));
-    const tplName = tpl?.templateName || TPL_LABEL[type] + '模板';
     const pw = Number(tpl?.paperWidth) || TPL_PAPER[type].w;
     const ph = Number(tpl?.paperHeight) || TPL_PAPER[type].h;
+    setPrintLoading(true);
     try {
       // 1. 生成打印 HTML
       const pages = await buildPages(type, selProduct, copies);
@@ -464,12 +467,14 @@ const ProductPrintPage: React.FC = () => {
       // 2. 上传 HTML 到服务端，获取可访问 URL
       const renderRes = await request.post('/print/render', { html });
       const printUrl = renderRes?.data?.data?.url;
-      if (!printUrl) { message.error('打印内容生成失败'); return; }
+      if (!printUrl) { message.error('打印内容生成失败'); setPrintLoading(false); return; }
       // 3. 提交打印任务到打印客户端（静默打印，无弹窗）
       const printerName = printer === '默认使用模板设置的打印机' ? (tpl?.printerName || '') : printer;
       const username = localStorage.getItem('username') || '';
       const jobRes = await request.post('/print/job', { type: 'url', content: printUrl, printerName, copies, username });
       if (jobRes?.data?.code === 0) {
+        const taskId = jobRes?.data?.data?.taskId || '';
+        setPrintTaskId(taskId);
         message.success(`吊牌打印任务已提交（${copies} 份）`);
       } else {
         message.error(jobRes?.data?.message || '打印任务提交失败');
@@ -477,6 +482,21 @@ const ProductPrintPage: React.FC = () => {
     } catch (err: any) {
       const msg = err?.response?.data?.message || err?.message || '打印失败';
       message.error(msg);
+    } finally {
+      setPrintLoading(false);
+    }
+  };
+
+  // 取消当前打印任务
+  const doCancelPrint = async () => {
+    if (!printTaskId) { message.warning('没有正在进行的打印任务'); return; }
+    const username = localStorage.getItem('username') || '';
+    try {
+      await request.post(`/print/job/${printTaskId}/cancel`, { username });
+      message.success('取消指令已发送');
+      setPrintTaskId('');
+    } catch {
+      message.error('取消失败');
     }
   };
 
@@ -786,7 +806,8 @@ const ProductPrintPage: React.FC = () => {
                   options={[{ value: '默认使用模板设置的打印机', label: '默认使用模板设置的打印机' }, ...printerList.map((pl: any) => ({ value: pl.name, label: pl.name + (pl.isDefault ? '（系统默认）' : '') + (pl.clientName ? `（@${pl.clientName}）` : '') })), ...(printerList.length ? [] : [{ value: '__print_client_offline__', label: `（打印客户端未在线：请在接打印机的电脑启动讯能手打印客户端，并登录 ${window.location.origin}）`, disabled: true }])]} />
                 <Text style={{ fontSize: 15 }}>打印数量:</Text>
                 <InputNumber size="large" min={1} style={{ height: 48, width: 90 }} value={qty1} onChange={n => setQty1(Number(n) || 1)} />
-                <Button size="large" type="primary" icon={<PrinterOutlined />} style={{ height: 48, fontSize: 16, padding: '0 28px' }} disabled={!selProduct} onClick={() => doPrintRow('tag', qty1)}>打印吊牌</Button>
+                <Button size="large" type="primary" icon={<PrinterOutlined />} style={{ height: 48, fontSize: 16, padding: '0 28px' }} disabled={!selProduct || printLoading} loading={printLoading} onClick={() => doPrintRow('tag', qty1)}>打印吊牌</Button>
+                <Button size="large" icon={<CloseOutlined />} style={{ height: 48, fontSize: 15 }} disabled={!printTaskId} onClick={doCancelPrint}>取消任务</Button>
                 <Button size="large" icon={<EditOutlined />} style={{ height: 48, fontSize: 15 }} onClick={() => navigate('/settings/print-template?type=tag')}>编辑吊牌模板</Button>
                 <Button size="large" icon={<EyeOutlined />} style={{ height: 48, fontSize: 15 }} disabled={!selProduct} onClick={() => doPrintRow('tag', qty1)}>打印预览</Button>
               </div>
