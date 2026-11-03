@@ -24,6 +24,7 @@ import {
   HistoryOutlined,
   FileTextOutlined,
   CalendarOutlined,
+  SettingOutlined,
 } from '@ant-design/icons';
 import { Popconfirm } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
@@ -31,6 +32,7 @@ import dayjs from 'dayjs';
 import { saveDataset } from '../utils/dataStore';
 import AsOfDebtModal from '../components/AsOfDebtModal';
 import EnterpriseCertModal, { CertBadge, fetchCertStatus, fetchCertBatch } from '../components/EnterpriseCertModal';
+import FieldConfigModal from '../components/FieldConfigModal';
 import type { CertInfo } from '../components/EnterpriseCertModal';
 import { flushDatasetUpload, flushDatasetUploadAsync, ensureDatasetFromServer, mergeDatasetFromServer } from '../utils/serverSync';
 import { safeSetItem } from '../utils/storageQuota';
@@ -283,16 +285,27 @@ export const loadBoundPurchasersFromStorage = (): BoundPurchaser[] => {
     const myCompany = me?.companyName || owner;
     const apps: any[] = JSON.parse(localStorage.getItem(COOPERATION_APPLICATIONS_KEY) || '[]');
     if (Array.isArray(apps)) {
-      // 已批准解除申请对应的采购商名称
+      const tsOfApp = (a: any) => Date.parse(String(a.approveDate || a.applyDate || '').replace(/-/g, '/')) || 0;
+      const samePurchaserOf = (c: any, t: any) => (t.purchaserUsername && c.purchaserUsername === t.purchaserUsername) || (t.purchaserCompanyName && c.purchaserCompanyName === t.purchaserCompanyName);
+      const approvedTerminateApps = apps.filter((a: any) => a.type === 'terminate' && a.status === 'approved' && (a.targetSupplierName === myCompany || a.supplierUsername === owner));
+      const coopAppsOfMine = apps.filter((a: any) => (a.type || 'cooperation') === 'cooperation' && !a.superseded && (a.status === 'approved' || a.status === 'pending') && (a.targetSupplierName === myCompany || a.supplierUsername === owner));
+      // 已批准解除申请对应的采购商名称：解除后若存在更新的合作申请（重新合作），该终止申请不得再回滚状态
       const terminatedNames = new Set(
-        apps
-          .filter((a: any) => a.type === 'terminate' && a.status === 'approved' && (a.targetSupplierName === myCompany || a.supplierUsername === owner))
+        approvedTerminateApps
+          .filter((t: any) => !coopAppsOfMine.some((c: any) => samePurchaserOf(c, t) && tsOfApp(c) > tsOfApp(t)))
           .map((a: any) => a.purchaserCompanyName || a.purchaserUsername)
       );
       // 已有绑定记录同步解除状态
       bound = bound.map((bp: any) =>
         terminatedNames.has(bp.purchaserName) && bp.status !== 'terminated' ? { ...bp, status: 'terminated' } : bp
       );
+      // 自愈：条目为已解除但存在更新的已批准合作申请（历史回滚残留）→ 内存恢复已合作；存储由 reconcile 收敛落盘
+      bound = bound.map((bp: any) => {
+        if (bp.status !== 'terminated') return bp;
+        const tTs = Math.max(0, ...approvedTerminateApps.filter((t: any) => (t.purchaserUsername && t.purchaserUsername === bp.purchaserUsername) || (t.purchaserCompanyName && t.purchaserCompanyName === bp.purchaserName)).map(tsOfApp));
+        const newer = coopAppsOfMine.find((c: any) => c.status === 'approved' && ((c.purchaserUsername && c.purchaserUsername === bp.purchaserUsername) || (c.purchaserCompanyName && c.purchaserCompanyName === bp.purchaserName)) && tsOfApp(c) > tTs);
+        return newer ? { ...bp, status: 'approved', terminateAt: undefined, terminateBy: undefined } : bp;
+      });
       apps.forEach((a: any) => {
         if ((a.type || 'cooperation') !== 'cooperation' || a.status !== 'approved' || a.superseded) return;
         if (!(a.targetSupplierName === myCompany || a.supplierUsername === owner)) return;
@@ -347,6 +360,9 @@ export const loadBoundPurchasersFromStorage = (): BoundPurchaser[] => {
           // 采购商侧已解除/解除中时同步状态
           if (mappedStatus !== 'approved' && (bound[existIdx] as any).status === 'approved') {
             bound = bound.map((bp, bi) => (bi === existIdx ? { ...bp, status: mappedStatus } as BoundPurchaser : bp));
+          } else if (mappedStatus === 'approved' && (bound[existIdx] as any).status === 'terminated') {
+            // 采购商侧已重新建立合作：本地已解除残留升级为已合作
+            bound = bound.map((bp, bi) => (bi === existIdx ? { ...bp, status: 'approved' as const, terminateAt: undefined, terminateBy: undefined } as BoundPurchaser : bp));
           }
           return;
         }
@@ -1960,6 +1976,58 @@ const CustomerInfo: React.FC = () => {
   };
 
   // 表格列定义
+  // 显示字段控制
+  const [fieldConfigVisible, setFieldConfigVisible] = useState(false);
+  const ALL_FIELDS = [
+    { key: 'id', label: '客户编码' },
+    { key: 'name', label: '客户名称' },
+    { key: 'remark', label: '备注' },
+    { key: 'purchaserNo', label: '采购商编号' },
+    { key: 'type', label: '客户类型' },
+    { key: 'level', label: '客户等级' },
+    { key: 'contact', label: '联系人' },
+    { key: 'phone', label: '联系电话' },
+    { key: 'region', label: '所在地区' },
+    { key: 'customerAddress', label: '客户地址' },
+    { key: 'detailAddress', label: '详细地址' },
+    { key: 'credit', label: '信用额度(元)' },
+    { key: 'totalPurchase', label: '采购总额(元)' },
+    { key: 'receivedPayment', label: '已收货款(元)' },
+    { key: 'receivableDebt', label: '应收欠款(元)' },
+    { key: 'remainingCredit', label: '剩余额度(元)' },
+    { key: 'orderOccupied', label: '订单占用(元)' },
+    { key: 'salesman', label: '业务员' },
+    { key: 'status', label: '状态' },
+    { key: 'date', label: '创建日期' },
+  ];
+  const [fieldOrder, setFieldOrder] = useState<string[]>(() => {
+    let base: string[] | null = null;
+    try {
+      const saved = localStorage.getItem(`customerFieldOrder_${getDataOwner()}`);
+      if (saved) {
+        const arr = JSON.parse(saved);
+        if (Array.isArray(arr) && arr.length > 0) base = arr;
+      }
+    } catch { /* ignore */ }
+    const order = base || ALL_FIELDS.map(f => f.key);
+    // 旧保存配置缺少新增字段：追加到末尾并默认显示
+    ALL_FIELDS.forEach(f => { if (!order.includes(f.key)) order.push(f.key); });
+    return order;
+  });
+  const [fieldVisibility, setFieldVisibility] = useState<Record<string, boolean>>(() => {
+    const def: Record<string, boolean> = {};
+    ALL_FIELDS.forEach(f => { def[f.key] = true; });
+    try {
+      const saved = localStorage.getItem(`customerFieldVisibility_${getDataOwner()}`);
+      if (saved) return { ...def, ...JSON.parse(saved) };
+    } catch { /* ignore */ }
+    return def;
+  });
+  const saveFieldConfig = (order: string[] = fieldOrder, vis: Record<string, boolean> = fieldVisibility) => {
+    localStorage.setItem(`customerFieldOrder_${getDataOwner()}`, JSON.stringify(order));
+    localStorage.setItem(`customerFieldVisibility_${getDataOwner()}`, JSON.stringify(vis));
+  };
+
   const columns: ColumnsType<CustomerRecord> = [
     { title: '客户编码', dataIndex: 'id', key: 'id', width: 120 },
         {
@@ -2283,6 +2351,12 @@ const CustomerInfo: React.FC = () => {
     },
   ];
 
+  // 根据显示字段控制和排序构建最终列（操作列恒显固定最右）
+  const visibleColumns: ColumnsType<CustomerRecord> = [
+    ...fieldOrder.filter(k => fieldVisibility[k] !== false).map(k => columns.find(c => c.key === k)).filter(Boolean),
+    columns[columns.length - 1],
+  ] as ColumnsType<CustomerRecord>;
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
       {/* Tabs筛选 */}
@@ -2392,6 +2466,7 @@ const CustomerInfo: React.FC = () => {
               <Button icon={<LinkOutlined />} onClick={() => { setInviteTarget(null); setInviteBind(false); setInviteModalVisible(true); }}>
                 邀约合作
               </Button>
+              <Button icon={<SettingOutlined />} onClick={() => setFieldConfigVisible(true)}>显示字段</Button>
             </Space>
         </div>
       </Card>
@@ -2400,7 +2475,7 @@ const CustomerInfo: React.FC = () => {
       <Card ref={tableCardRef} bodyStyle={{ padding: '0 24px 24px', display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }} style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
         <Table
           bordered
-          columns={columns}
+          columns={visibleColumns}
           dataSource={filteredData}
           scroll={{ x: 1400, y: tableBodyHeight }}
           size="middle"
@@ -3041,6 +3116,16 @@ const CustomerInfo: React.FC = () => {
           amount: (r: any) => Number(r?.amount) || 0,
           no: (r: any) => r?.receiptNo || '',
         }}
+      />
+
+      {/* 显示字段控制弹窗（统一卡片式+拖动排序） */}
+      <FieldConfigModal
+        open={fieldConfigVisible}
+        fields={ALL_FIELDS}
+        order={fieldOrder}
+        visibility={fieldVisibility}
+        onCancel={() => setFieldConfigVisible(false)}
+        onSave={(o, v) => { setFieldOrder(o); setFieldVisibility(v); saveFieldConfig(o, v); setFieldConfigVisible(false); message.success('已保存'); }}
       />
     </div>
   );
