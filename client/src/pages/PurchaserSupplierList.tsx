@@ -365,6 +365,23 @@ const PurchaserSupplierList: React.FC = () => {
             };
           }
         }
+        // 1.5 自愈：已解除合作但存在比终止申请更新的已批准合作申请（如邀约链接受理后被历史终止申请回滚的残留）→ 恢复已合作
+        if (s.cooperationStatus === 'terminated') {
+          const termApp2 = apps.find((app: any) =>
+            app.purchaserUsername === username &&
+            (app.targetSupplierName === s.supplierName || app.targetSupplierId === s.id || app.purchaserSupplierEntryId === s.id) &&
+            app.type === 'terminate' && app.status === 'approved' && !app.superseded);
+          const coopApp2 = apps.find((app: any) =>
+            app.purchaserUsername === username &&
+            (app.purchaserSupplierEntryId === s.id || app.targetSupplierName === s.supplierName || app.targetSupplierId === s.id) &&
+            (app.type || 'cooperation') === 'cooperation' && app.status === 'approved' && !app.superseded);
+          const tTs2 = termApp2 ? (Date.parse(String(termApp2.approveDate || termApp2.applyDate || '').replace(/-/g, '/')) || 0) : 0;
+          const cTs2 = coopApp2 ? (Date.parse(String(coopApp2.approveDate || coopApp2.applyDate || '').replace(/-/g, '/')) || 0) : 0;
+          if (coopApp2 && cTs2 > tTs2) {
+            hasChange = true;
+            return { ...s, cooperationStatus: 'approved' as const, cooperationDate: (coopApp2.approveDate || coopApp2.applyDate || '').split(' ')[0] || s.cooperationDate, statusTs: Date.now(), terminateAt: undefined, terminateBy: undefined };
+          }
+        }
         // 2. 同步终止合作确认状态（采购商发起 → 供应商已同意，排除已作废的申请）
         if (s.cooperationStatus === 'terminating') {
           const terminateApp = apps.find(
