@@ -109,6 +109,10 @@ export const acceptCooperationInvite = (p: CooperationInvitePayload, purchaserOw
       supplierUsername: supplierUser.username,
       cooperationStatus: 'approved',
       cooperationDate: today,
+      // 刷新状态时间戳并清除终止残留，避免 reconcile/加载归一化按旧时间戳回滚为已解除
+      statusTs: Date.now(),
+      terminateAt: undefined,
+      terminateBy: undefined,
       supplierInitiated: false,
       remark: list[idx].remark || '通过供应商邀约链接建立合作',
     };
@@ -179,6 +183,9 @@ export const acceptCooperationInvite = (p: CooperationInvitePayload, purchaserOw
         ...bound[bi],
         status: 'approved',
         bindDate: today,
+        statusTs: Date.now(),
+        terminateAt: undefined,
+        terminateBy: undefined,
         salesman: p.bind === 1 ? (p.salesmanName || p.salesman) : (bound[bi].salesman || ''),
       };
     } else {

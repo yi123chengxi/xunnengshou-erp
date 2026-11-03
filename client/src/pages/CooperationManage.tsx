@@ -244,6 +244,9 @@ const CooperationManage: React.FC = () => {
               ...boundPurchasers[existingIdx],
               status: 'approved',
               bindDate: dayjs().format('YYYY-MM-DD'),
+              statusTs: Date.now(),
+              terminateAt: undefined,
+              terminateBy: undefined,
               ...purchaserInfo,
             };
           } else {
@@ -283,6 +286,9 @@ const CooperationManage: React.FC = () => {
                 ...suppliers[existingIdx],
                 cooperationStatus: 'approved',
                 cooperationDate: dayjs().format('YYYY-MM-DD'),
+                statusTs: Date.now(),
+                terminateAt: undefined,
+                terminateBy: undefined,
                 supplierUsername: suppliers[existingIdx].supplierUsername || (localStorage.getItem('username') || ''),
                 supplierName: record.supplierName || suppliers[existingIdx].supplierName,
               };

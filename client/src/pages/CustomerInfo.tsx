@@ -401,7 +401,7 @@ export const loadBoundPurchasersFromStorage = (): BoundPurchaser[] => {
           return bp;
         }
         chT = true;
-        return { ...bp, status: 'approved', terminateAt: undefined, terminateBy: undefined };
+        return { ...bp, status: 'approved', terminateAt: undefined, terminateBy: undefined, statusTs: Date.now() };
       }
       return bp;
     });

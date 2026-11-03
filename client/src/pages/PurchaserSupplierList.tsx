@@ -323,6 +323,17 @@ const PurchaserSupplierList: React.FC = () => {
     return {};
   };
 
+  // 解除后若已重新建立合作（存在比终止申请更新的合作申请），历史终止申请不得再把状态回滚为 terminated
+  const hasNewerCooperationApp = (apps: any[], s: SupplierEntry, termApp: any): boolean => {
+    const tTs = Date.parse(String(termApp.approveDate || termApp.applyDate || '').replace(/-/g, '/')) || 0;
+    return apps.some((c: any) =>
+      (c.type || 'cooperation') === 'cooperation' && !c.superseded &&
+      (c.status === 'approved' || c.status === 'pending') &&
+      c.purchaserUsername === username &&
+      (c.purchaserSupplierEntryId === s.id || c.targetSupplierName === s.supplierName || c.targetSupplierId === s.id) &&
+      ((Date.parse(String(c.approveDate || c.applyDate || '').replace(/-/g, '/')) || 0) > tTs));
+  };
+
   // 加载并同步数据
   const reloadData = useCallback(() => {
     try {
@@ -348,6 +359,9 @@ const PurchaserSupplierList: React.FC = () => {
               cooperationStatus: 'approved' as const,
               cooperationDate: approvedApp.applyDate?.split(' ')[0] || dayjs().format('YYYY-MM-DD'),
               supplierName: approvedApp.targetSupplierName || s.supplierName,
+              statusTs: Date.now(),
+              terminateAt: undefined,
+              terminateBy: undefined,
             };
           }
         }
@@ -361,7 +375,7 @@ const PurchaserSupplierList: React.FC = () => {
               app.status === 'approved' &&
               !app.superseded
           );
-          if (terminateApp) {
+          if (terminateApp && !hasNewerCooperationApp(apps, s, terminateApp)) {
             hasChange = true;
             return { ...s, cooperationStatus: 'terminated' as const, terminateApplyDate: undefined };
           }
@@ -409,7 +423,7 @@ const PurchaserSupplierList: React.FC = () => {
               app.status === 'approved' &&
               !app.superseded
           );
-          if (supplierTerminateApp) {
+          if (supplierTerminateApp && !hasNewerCooperationApp(apps, s, supplierTerminateApp)) {
             hasChange = true;
             return { ...s, cooperationStatus: 'terminated' as const };
           }
@@ -1313,7 +1327,7 @@ const PurchaserSupplierList: React.FC = () => {
     const allData: SupplierEntry[] = JSON.parse(localStorage.getItem(storageKey) || '[]');
     const updated = allData.map((s) =>
       s.id === record.id
-        ? { ...s, cooperationStatus: 'pending' as const, cooperationToken: token }
+        ? { ...s, cooperationStatus: 'pending' as const, cooperationToken: token, terminateAt: undefined, terminateBy: undefined, statusTs: Date.now() }
         : s
     );
     localStorage.setItem(storageKey, JSON.stringify(updated));

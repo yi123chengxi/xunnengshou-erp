@@ -347,7 +347,7 @@ const PurchaserCooperationManage: React.FC = () => {
       onOk: () => {
         const updatedSuppliers = dataSource.map((s) =>
           s.id === supplier.id
-            ? { ...s, cooperationStatus: 'approved' as const, cooperationDate: dayjs().format('YYYY-MM-DD'), supplierInitiated: false }
+            ? { ...s, cooperationStatus: 'approved' as const, cooperationDate: dayjs().format('YYYY-MM-DD'), supplierInitiated: false, statusTs: Date.now(), terminateAt: undefined, terminateBy: undefined }
             : s
         );
         saveData(updatedSuppliers);
@@ -384,8 +384,8 @@ const PurchaserCooperationManage: React.FC = () => {
             const bound: any[] = JSON.parse(localStorage.getItem(boundKey) || '[]');
             const existIdx = bound.findIndex((bp: any) => bp.purchaserName === purchaserCompanyName || bp.purchaserUsername === username);
             if (existIdx >= 0) {
-              // 曾终止合作后重新合作：回退已合作并刷新绑定日期
-              bound[existIdx] = { ...bound[existIdx], status: 'approved', bindDate: dayjs().format('YYYY-MM-DD') };
+              // 曾终止合作后重新合作：回退已合作并刷新绑定日期（刷新状态时间戳，避免 reconcile 按旧时间戳回滚）
+              bound[existIdx] = { ...bound[existIdx], status: 'approved', bindDate: dayjs().format('YYYY-MM-DD'), statusTs: Date.now(), terminateAt: undefined, terminateBy: undefined };
               localStorage.setItem(boundKey, JSON.stringify(bound));
             } else {
               bound.unshift({
