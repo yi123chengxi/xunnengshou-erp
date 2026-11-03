@@ -37,8 +37,8 @@ print-client/release/
 # 上传文件 & 下载包
 # ========================
 server/uploads/
-# server/downloads/*.exe  # 临时允许，用于 CI 部署安装包
-# client/public/downloads/*.exe  # 临时允许，用于 CI 部署安装包
+server/downloads/*.exe
+client/public/downloads/*.exe
 
 # ========================
 # 根目录截图和图片（开发过程产物）
