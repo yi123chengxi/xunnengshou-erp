@@ -948,7 +948,8 @@ const PurchaserSupplierList: React.FC = () => {
     if (!supplierUser) return 'notfound';
     const currentUser = users.find((u: any) => u.username === username);
     const apps: any[] = JSON.parse(localStorage.getItem(COOPERATION_APPLICATIONS_KEY) || '[]');
-    const exists = apps.some((a: any) => (a.type || 'cooperation') === 'cooperation' && !a.superseded && a.purchaserUsername === username && (a.purchaserSupplierEntryId === entryId || a.targetSupplierName === supplierUser.companyName) && a.status !== 'rejected');
+    // 在途申请仅指 pending；历史 approved（含已解除合作后遗留）不算在途，下方统一作废后重新发起
+    const exists = apps.some((a: any) => (a.type || 'cooperation') === 'cooperation' && !a.superseded && a.purchaserUsername === username && (a.purchaserSupplierEntryId === entryId || a.targetSupplierName === supplierUser.companyName) && a.status === 'pending');
     if (exists) return 'exists';
     // 作废旧的已批准合作申请（曾解除合作后重新申请）
     apps.forEach((a: any) => {
