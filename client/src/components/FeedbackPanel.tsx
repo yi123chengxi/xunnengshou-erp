@@ -40,6 +40,22 @@ const FeedbackPanel: React.FC = () => {
 
   const reset = () => { setContent(''); setPhone(''); setCategory(undefined); setImages([]); };
 
+  // 表单容器粘贴事件：支持 Ctrl+V 粘贴截图
+  const handlePaste = (e: React.ClipboardEvent) => {
+    const items = e.clipboardData.items;
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.type.startsWith('image/')) {
+        const file = item.getAsFile();
+        if (file) {
+          e.preventDefault();
+          handleUpload(file);
+        }
+        break;
+      }
+    }
+  };
+
   // 上传图片：仅限 PNG/JPG，经压缩管线转 dataURL，最多 4 张
   const handleUpload = (f: File) => {
     const t = (f.type || '').toLowerCase();
@@ -81,7 +97,7 @@ const FeedbackPanel: React.FC = () => {
           onClick={() => setCollapsed(c => !c)}>{collapsed ? '展开' : '收起'}</Button>
       }>
       {collapsed ? null : (
-        <div>
+        <div tabIndex={0} onPaste={handlePaste} style={{ outline: 'none' }}>
           <Input.TextArea rows={6} maxLength={200} value={content}
             onChange={e => setContent(e.target.value)}
             placeholder="请输入需求、改进建议，反馈程序缺陷及投诉、举报，200字以内" />
@@ -108,9 +124,6 @@ const FeedbackPanel: React.FC = () => {
             </Space>
           )}
           <Button block style={{ marginTop: 16 }} onClick={handleSubmit}>立即提交</Button>
-          <div style={{ marginTop: 12, textAlign: 'center' }}>
-            <Text style={{ fontSize: 13, color: '#7a8ea3' }}>热线电话：400-806-8666</Text>
-          </div>
         </div>
       )}
     </Card>
