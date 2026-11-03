@@ -467,7 +467,8 @@ const ProductPrintPage: React.FC = () => {
       if (!printUrl) { message.error('打印内容生成失败'); return; }
       // 3. 提交打印任务到打印客户端（静默打印，无弹窗）
       const printerName = printer === '默认使用模板设置的打印机' ? (tpl?.printerName || '') : printer;
-      const jobRes = await request.post('/print/job', { type: 'url', content: printUrl, printerName, copies });
+      const username = localStorage.getItem('username') || '';
+      const jobRes = await request.post('/print/job', { type: 'url', content: printUrl, printerName, copies, username });
       if (jobRes?.data?.code === 0) {
         message.success(`吊牌打印任务已提交（${copies} 份）`);
       } else {
@@ -498,7 +499,7 @@ const ProductPrintPage: React.FC = () => {
     if (!p) { message.warning('未匹配到商品，无法直接打印'); return; }
     setSelCode(p.productCode);
     setSelColor(String(p.color || '').trim()); setSelSpec(String(p.spec || '').trim());
-    setTimeout(() => openPreview('tag', [{ product: p, qty: qty1 }], `吊牌扫码直打 - ${p.productCode}`), 100);
+    setTimeout(() => doPrintRow('tag', qty1), 100);
   };
 
   // 编辑商品属性：回写商品档案（本地+服务端同步）
@@ -702,31 +703,31 @@ const ProductPrintPage: React.FC = () => {
               <Button size="small" type="link" icon={<SettingOutlined />} onClick={() => navigate('/settings/print-template?type=tag')}>吊牌条码打印设置</Button>
             </div>
             {/* 货号搜索：颜色/规格两行级联选择 */}
-            <div style={{ background: '#fafafa', border: '1px solid #e3e8ee', padding: '8px 12px', marginBottom: 12 }}>
+            <div style={{ background: '#fafafa', border: '1px solid #e3e8ee', padding: '12px 16px', marginBottom: 12 }}>
               <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
-                <Text type="secondary" style={{ fontSize: 12, whiteSpace: 'nowrap', lineHeight: '24px' }}>货号</Text>
+                <Text type="secondary" style={{ fontSize: 13, whiteSpace: 'nowrap', lineHeight: '28px', minWidth: 36 }}>货号</Text>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 6 }}>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
                     {colorOptions.length === 0 && <Text type="secondary" style={{ fontSize: 12 }}>（请先搜索，第一行选择颜色）</Text>}
                     {colorOptions.map(c => (
-                      <Tag key={c} color={selColor === c ? 'blue' : undefined} style={{ cursor: 'pointer', margin: 0 }}
+                      <Tag key={c} color={selColor === c ? 'blue' : undefined} style={{ cursor: 'pointer', margin: 0, fontSize: 13, padding: '3px 10px' }}
                         onClick={() => { setSelColor(c); setSelSpec(''); }}>{c}</Tag>
                     ))}
                   </div>
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
                     {selColor && specOptions.length === 0 && <Text type="secondary" style={{ fontSize: 12 }}>该颜色无规格可选</Text>}
                     {specOptions.map(s => (
-                      <Tag key={s || 'default'} color={selSpec === s ? 'green' : undefined} style={{ cursor: 'pointer', margin: 0 }}
+                      <Tag key={s || 'default'} color={selSpec === s ? 'green' : undefined} style={{ cursor: 'pointer', margin: 0, fontSize: 13, padding: '3px 10px' }}
                         onClick={() => {
                           setSelSpec(s);
                           const p = filteredProducts.find((x: any) => (x.color || '') === selColor && (x.spec || '') === s);
                           if (p) {
                             setSelCode(p.productCode);
-                            if (scanDirect) setTimeout(() => openPreview('tag', [{ product: p, qty: 1 }], `吊牌扫码直打 - ${p.productCode}`), 100);
+                            if (scanDirect) setTimeout(() => doPrintRow('tag', 1), 100);
                           }
                         }}>{s || '默认规格'}</Tag>
                     ))}
-                    {selCode && <Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>已选：{selCode}</Text>}
+                    {selCode && <Text type="secondary" style={{ fontSize: 13, marginLeft: 10 }}>已选：{selCode}</Text>}
                   </div>
                 </div>
                 <Text type="secondary" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>候选 {filteredProducts.length} 个商品</Text>

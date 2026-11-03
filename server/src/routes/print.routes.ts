@@ -100,16 +100,20 @@ router.get('/local-printers', (_req: Request, res: Response) => {
   });
 });
 
-// 其余打印接口都需要 JWT 认证
-router.use(verifyJWT);
-
 /**
  * POST /api/print/job
  * 提交打印任务，通过 WebSocket 转发给租户的打印客户端
+ * 免鉴权（Web 前端无 JWT）：从 body.username 取租户标识；打印客户端走 JWT 时由 verifyJWT 填充 req.user
  */
 router.post('/job', (req: Request, res: Response) => {
-  const user = (req as any).user as JWTPayload;
-  const { type, content, printerName, copies } = req.body;
+  const jwtUser = (req as any).user as JWTPayload | undefined;
+  const { type, content, printerName, copies, username } = req.body;
+  // Web 前端无 JWT，从 body 取 username；打印客户端走 JWT
+  const tenantId = jwtUser?.username || String(username || '');
+  if (!tenantId) {
+    res.status(400).json({ code: 400, message: '缺少租户标识（JWT 或 username）' });
+    return;
+  }
 
   // 参数校验
   if (!type || !['url', 'pdf'].includes(type)) {
@@ -122,7 +126,7 @@ router.post('/job', (req: Request, res: Response) => {
   }
 
   // 检查是否有在线客户端
-  const clientCount = getTenantClientCount(user.username);
+  const clientCount = getTenantClientCount(tenantId);
   if (clientCount === 0) {
     res.status(503).json({
       code: 503,
@@ -133,7 +137,7 @@ router.post('/job', (req: Request, res: Response) => {
 
   // 创建任务
   const job = createJob({
-    tenantId: user.username,
+    tenantId,
     type,
     content,
     printerName,
@@ -141,7 +145,7 @@ router.post('/job', (req: Request, res: Response) => {
   });
 
   // 通过 WebSocket 下发
-  const sent = sendPrintJob(user.username, job);
+  const sent = sendPrintJob(tenantId, job);
   if (!sent) {
     job.status = 'failed';
     job.error = 'WebSocket 发送失败';
@@ -159,6 +163,9 @@ router.post('/job', (req: Request, res: Response) => {
     message: '打印任务已提交',
   });
 });
+
+// 其余打印接口都需要 JWT 认证
+router.use(verifyJWT);
 
 /**
  * GET /api/print/job/:id
