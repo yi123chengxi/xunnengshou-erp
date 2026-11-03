@@ -7,7 +7,7 @@ import { Card, Row, Col, Table, Tag, Button, Tooltip, Typography, Space, message
 import {
   ReloadOutlined, DownloadOutlined, PrinterOutlined, ShoppingCartOutlined, DatabaseOutlined,
   TeamOutlined, DollarOutlined, InboxOutlined, ToolOutlined, FileTextOutlined, SettingOutlined,
-  RiseOutlined, WarningOutlined, FormOutlined,
+  RiseOutlined, WarningOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import ReactECharts from 'echarts-for-react';
@@ -16,8 +16,7 @@ import { getDataOwner } from '../utils/brandAuth';
 import { readProductListSync } from '../utils/dataStore';
 import { loadAllCustomersFromStorage } from './CustomerInfo';
 import { loadPoTemplates, poToWfOrder, poPlanQty, poNodesOf, poCurrentNodeOverdue } from '../utils/poWorkflow';
-import NewstyleBoardCard from '../components/NewstyleBoardCard';
-import FeedbackModal from '../components/FeedbackModal';
+import FeedbackAnnouncementRow from '../components/FeedbackAnnouncementRow';
 
 const { Text, Title } = Typography;
 const PRIMARY = '#1e4a7e';
@@ -111,8 +110,6 @@ const Dashboard: React.FC = () => {
   const [poListModal, setPoListModal] = useState<{ title: string; rows: any[] } | null>(null);
   // 今日经营统计明细弹窗（kind 决定列结构）
   const [todayModal, setTodayModal] = useState<{ title: string; kind: 'order' | 'receipt' | 'prod'; rows: any[] } | null>(null);
-  // 意见反馈窗口
-  const [fbVisible, setFbVisible] = useState(false);
   const poBoard = useMemo(() => {
     const clean = (stats.prodList || []).filter((r: any) => !/^JG-/i.test(String(r.id || '')));
     const rows = clean.map((rec: any) => {
@@ -212,9 +209,6 @@ const Dashboard: React.FC = () => {
           <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 12 }}>数据更新：{lastUpdate}</Text>
           <Tooltip title="刷新数据">
             <Button ghost size="small" icon={<ReloadOutlined spin={refreshing} />} onClick={handleRefresh}>刷新</Button>
-          </Tooltip>
-          <Tooltip title="向开发团队反馈问题或建议">
-            <Button ghost size="small" icon={<FormOutlined />} onClick={() => setFbVisible(true)}>意见反馈</Button>
           </Tooltip>
         </Space>
       </div>
@@ -421,9 +415,6 @@ const Dashboard: React.FC = () => {
         />
       </Modal>
 
-      {/* 新款进度看板 */}
-      <NewstyleBoardCard owner={owner} nonce={nonce} onMore={() => navigate('/ecommerce/progress')} />
-
       {/* 明细行：最近订单 + 缺货预警 + 快捷入口 */}
       <Row gutter={[12, 12]}>
         <Col xs={24} lg={12}>
@@ -465,7 +456,8 @@ const Dashboard: React.FC = () => {
           </Card>
         </Col>
       </Row>
-      <FeedbackModal open={fbVisible} onClose={() => setFbVisible(false)} />
+      {/* 意见反馈 + 公告模板（底部区） */}
+      <FeedbackAnnouncementRow />
     </div>
   );
 };

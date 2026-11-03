@@ -14,6 +14,7 @@ import { useNavigate } from 'react-router-dom';
 import { getDataOwner } from '../utils/brandAuth';
 import { readProductListSync } from '../utils/dataStore';
 import NewstyleBoardCard from './NewstyleBoardCard';
+import FeedbackAnnouncementRow from './FeedbackAnnouncementRow';
 
 const { Text, Title } = Typography;
 const PRIMARY = '#1e4a7e';
@@ -203,6 +204,9 @@ const PurchaserDashboard: React.FC = () => {
           </Card>
         </Col>
       </Row>
+
+      {/* 意见反馈 + 公告模板（底部区） */}
+      <FeedbackAnnouncementRow />
     </div>
   );
 };

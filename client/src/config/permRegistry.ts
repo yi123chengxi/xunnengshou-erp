@@ -225,6 +225,7 @@ export const PERM_MENUS: Record<PermScope, PermMenuGroup[]> = {
         { key: 'dev/settings/roles', label: '角色权限' },
         { key: 'dev/settings/points', label: '积分兑换奖品' },
         { key: 'dev/settings/feedback', label: '意见反馈' },
+        { key: 'dev/settings/announcement', label: '公告管理' },
         { key: 'dev/settings/integration', label: '接口配置' },
       ],
     },

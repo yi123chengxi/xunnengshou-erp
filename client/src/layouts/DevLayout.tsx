@@ -52,6 +52,7 @@ const devMenus = [
       { key: 'roles', label: '角色权限' },
       { key: 'points', label: '积分兑换奖品' },
       { key: 'feedback', label: '意见反馈' },
+      { key: 'announcement', label: '公告管理' },
       { key: 'integration', label: '接口配置' },
     ],
   },

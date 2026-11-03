@@ -57,6 +57,7 @@ const DevOrdersPage = React.lazy(() => import('./pages/dev/DevOrdersPage'));
 const DevRolesPage = React.lazy(() => import('./pages/dev/DevRolesPage'));
 const DevPointsRewardsPage = React.lazy(() => import('./pages/dev/DevPointsRewardsPage'));
 const DevFeedbackPage = React.lazy(() => import('./pages/dev/DevFeedbackPage'));
+const DevAnnouncementPage = React.lazy(() => import('./pages/dev/DevAnnouncementPage'));
 const DevIntegrationSettings = React.lazy(() => import('./pages/dev/DevIntegrationSettings'));
 const DevCustomerStats = React.lazy(() => import('./pages/dev/DevStatsPages').then(m => ({ default: m.DevCustomerStats })));
 const DevStaffPaymentPage = React.lazy(() => import('./pages/dev/DevPaymentPages').then(m => ({ default: m.DevStaffPaymentPage })));
@@ -363,6 +364,7 @@ function App() {
           <Route path="settings/roles" element={<DevRolesPage />} />
           <Route path="settings/points" element={<DevPointsRewardsPage />} />
           <Route path="settings/feedback" element={<DevFeedbackPage />} />
+          <Route path="settings/announcement" element={<DevAnnouncementPage />} />
           <Route path="settings/integration" element={<DevIntegrationSettings />} />
         </Route>
       </Routes>

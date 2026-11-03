@@ -5,7 +5,8 @@ import ImageSlot from '../../components/ImageSlot';
 import useResizableColumns from '../../hooks/useResizableColumns';
 import { getDevIdentity } from '../../utils/devStore';
 import { saveDataset } from '../../utils/dataStore';
-import { FEEDBACK_KEY_PREFIX, FeedbackEntry } from '../../components/FeedbackModal';
+import { FEEDBACK_KEY_PREFIX, FeedbackEntry } from '../../components/FeedbackPanel';
+import { addUserNotice } from '../../utils/userNotice';
 
 const { Text } = Typography;
 
@@ -22,7 +23,7 @@ interface FeedbackRow extends FeedbackEntry {
 }
 
 /**
- * 开发者后台 · 意见反馈：汇总所有租户在首页「意见反馈」窗口提交的内容与截图；
+ * 开发者后台 · 意见反馈：汇总所有租户在首页「意见反馈」面板提交的内容与截图；
  * 开发者可点「已处理」填写处理说明/截图，提交后列表显示处理完成状态、处理人与时间。
  * 表格带列边线，列宽可拖拽表头右边缘自由调整（按开发者账号持久化）。
  */
@@ -52,6 +53,8 @@ const DevFeedbackPage: React.FC = () => {
             platform: e.platform || '',
             content: String(e.content),
             images: Array.isArray(e.images) ? e.images.filter(Boolean) : [],
+            phone: e.phone || '',
+            category: e.category || '',
             createdAt: e.createdAt || '',
             handled: e.handled && typeof e.handled === 'object' ? e.handled : undefined,
           });
@@ -92,6 +95,12 @@ const DevFeedbackPage: React.FC = () => {
       localStorage.setItem(handleTarget.key, JSON.stringify(next));
       saveDataset(handleTarget.key, JSON.stringify(next));
     } catch { message.error('保存失败（存储空间不足），请减少截图后重试'); return; }
+    // 回复提醒：写入反馈提交账号的站内通知（顶栏铃铛消息中心，跨浏览器同步）
+    addUserNotice(handleTarget.username, {
+      title: '意见反馈已处理',
+      content: `您的反馈已由开发团队处理：${note}`,
+      feedbackKey: handleTarget.key,
+    });
     message.success('已标记处理完成');
     setHandleVisible(false);
     setHandleTarget(null);
@@ -103,6 +112,8 @@ const DevFeedbackPage: React.FC = () => {
     { title: '反馈账号', dataIndex: 'username', key: 'username', width: 140, render: (v: string) => v || '-' },
     { title: '公司名称', dataIndex: 'company', key: 'company', width: 200, render: (v: string) => v || '-' },
     { title: '平台', dataIndex: 'platform', key: 'platform', width: 100, render: (v: string) => <Tag color={v === '采购商平台' ? 'purple' : 'blue'}>{v || '-'}</Tag> },
+    { title: '分类', dataIndex: 'category', key: 'category', width: 90, render: (v: string) => v || '-' },
+    { title: '联系电话', dataIndex: 'phone', key: 'phone', width: 130, render: (v: string) => v || '-' },
     {
       title: '反馈内容', dataIndex: 'content', key: 'content', width: 360, ellipsis: { showTitle: false },
       render: (v: string) => <Tooltip title={v} placement="topLeft"><span style={{ whiteSpace: 'pre-wrap' }}>{v}</span></Tooltip>,
@@ -153,8 +164,8 @@ const DevFeedbackPage: React.FC = () => {
       <Card size="small" style={{ borderRadius: 10 }}
         title={<span style={{ fontSize: 15 }}><FormOutlined style={{ marginRight: 8, color: '#1677ff' }} />意见反馈</span>}
         extra={<Space><Text type="secondary" style={{ fontSize: 12 }}>共 {rows.length} 条</Text><Button size="small" icon={<ReloadOutlined />} onClick={load}>刷新</Button></Space>}>
-        <Text type="secondary" style={{ fontSize: 12 }}>各租户首页「意见反馈」窗口提交的内容与截图，按条汇总、提交时间倒序展示；图片点击可放大（同组可左右切换）；列宽可拖拽表头右边缘调整。</Text>
-        <Table size="small" bordered rowKey="key" columns={wrapColumns(columns)} dataSource={rows} scroll={{ x: 1870 }} style={{ marginTop: 10 }}
+        <Text type="secondary" style={{ fontSize: 12 }}>各租户首页「意见反馈」面板提交的内容与截图，按条汇总、提交时间倒序展示；图片点击可放大（同组可左右切换）；列宽可拖拽表头右边缘调整。</Text>
+        <Table size="small" bordered rowKey="key" columns={wrapColumns(columns)} dataSource={rows} scroll={{ x: 2090 }} style={{ marginTop: 10 }}
           pagination={{ pageSize: 20, showTotal: (t: number) => `共 ${t} 条` }} />
       </Card>
 

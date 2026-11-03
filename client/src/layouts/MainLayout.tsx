@@ -53,6 +53,7 @@ import { isPermAllowed, ECOM_KEY_MIGRATION } from '../utils/devPerms';
 import { getProvinceOptions, getCityOptions, getDistrictOptions } from '../utils/regions';
 import { fetchUnreadCount, onNewMessage as onChatNewMessage, onMarkRead } from '../utils/chatSocket';
 import { compressImageFile } from '../utils/imageCompress';
+import { loadUserNotices, markUserNoticeRead, markAllUserNoticesRead, clearUserNotices, USER_NOTICES_EVENT, UserNotice } from '../utils/userNotice';
 
 const { Header, Sider, Content } = Layout;
 const { Text } = Typography;
@@ -402,7 +403,7 @@ const MainLayout: React.FC = () => {
 
   // 通知相关状态
   const [notificationVisible, setNotificationVisible] = useState(false);
-  const [notificationCount, setNotificationCount] = useState(5);
+  const [notificationCount, setNotificationCount] = useState(0);
   // 空间用量：本地增量账本 + 服务端增量计数器合成，后台异步刷新
   const [spaceUsedKB, setSpaceUsedKB] = useState(0);
   useEffect(() => {
@@ -413,16 +414,25 @@ const MainLayout: React.FC = () => {
     window.addEventListener('storage-usage-updated', load);
     return () => { on = false; window.removeEventListener('storage-usage-updated', load); };
   }, []);
-  const [notifications, setNotifications] = useState([
-    { id: '1', type: 'warning', title: '库存预警', content: '原材料A库存低于安全库存线，请及时补货', time: '10分钟前', read: false },
-    { id: '2', type: 'error', title: '交期逾期', content: '工单WO-20240056 已超过承诺交期3天', time: '30分钟前', read: false },
-    { id: '3', type: 'warning', title: '成本波动', content: '供应商报价上涨超过5%，建议重新询价', time: '1小时前', read: false },
-    { id: '4', type: 'info', title: '客户跟进', content: '客户C003 跟进已超7天未更新', time: '2小时前', read: false },
-    { id: '5', type: 'error', title: '应收账款', content: '应收账款D-089 已逾期15天，请催收', time: '3小时前', read: false },
-    { id: '6', type: 'info', title: '系统通知', content: '系统将于本周日凌晨2:00-4:00进行维护升级', time: '5小时前', read: true },
-    { id: '7', type: 'warning', title: '采购提醒', content: '采购订单PO-24035 预计明天到货，请安排验收', time: '昨天', read: true },
-    { id: '8', type: 'info', title: '报表生成', content: '6月份月度经营报表已生成，请查看', time: '昨天', read: true },
-  ]);
+  // 顶栏消息通知：读取站内通知库（user_notice_<账号>_* 逐条键，含开发者反馈处理提醒）
+  const [notifications, setNotifications] = useState<UserNotice[]>([]);
+  const reloadNotifications = useCallback(() => {
+    const uname = localStorage.getItem('username') || '';
+    const list = loadUserNotices(uname);
+    setNotifications(list);
+    setNotificationCount(list.filter(n => !n.read).length);
+  }, []);
+  useEffect(() => {
+    reloadNotifications();
+    const onUpd = () => reloadNotifications();
+    const onStorage = (e: StorageEvent) => { if (!e.key || e.key.startsWith('user_notice_')) reloadNotifications(); };
+    window.addEventListener(USER_NOTICES_EVENT, onUpd);
+    window.addEventListener('storage', onStorage);
+    return () => {
+      window.removeEventListener(USER_NOTICES_EVENT, onUpd);
+      window.removeEventListener('storage', onStorage);
+    };
+  }, [reloadNotifications]);
 
   // 设置模态框
   const [settingsVisible, setSettingsVisible] = useState(false);
@@ -823,20 +833,15 @@ const MainLayout: React.FC = () => {
     { key: 'logout', icon: <LogoutOutlined />, label: '退出登录', danger: true },
   ];
 
-  // 通知点击处理
+  // 通知点击处理（标记已读并回写站内通知库）
   const handleNotificationClick = (id: string) => {
-    setNotifications(prev =>
-      prev.map(n => n.id === id ? { ...n, read: true } : n)
-    );
-    const unreadCount = notifications.filter(n => !n.read && n.id !== id).length;
-    setNotificationCount(unreadCount);
+    markUserNoticeRead(id);
     message.info('已标记为已读');
   };
 
   // 全部已读
   const handleMarkAllRead = () => {
-    setNotifications(prev => prev.map(n => ({ ...n, read: true })));
-    setNotificationCount(0);
+    markAllUserNoticesRead(localStorage.getItem('username') || '');
     message.success('已全部标记为已读');
   };
 
@@ -848,8 +853,7 @@ const MainLayout: React.FC = () => {
       okText: '确定',
       cancelText: '取消',
       onOk: () => {
-        setNotifications([]);
-        setNotificationCount(0);
+        clearUserNotices(localStorage.getItem('username') || '');
         message.success('已清除所有通知');
       },
     });
