@@ -1,17 +1,58 @@
 /**
  * 打印任务 REST API
  *
- * POST /api/print/job          — 提交打印任务
- * GET  /api/print/job/:id      — 查询任务状态
- * GET  /api/print/printers     — 获取当前租户在线打印机列表
+ * POST /api/print/render       — 存储打印 HTML，返回可访问 URL（免鉴权）
+ * GET  /api/print/render/:id   — 获取存储的打印 HTML（免鉴权）
+ * POST /api/print/job          — 提交打印任务（需 JWT）
+ * GET  /api/print/job/:id      — 查询任务状态（需 JWT）
+ * GET  /api/print/printers     — 获取当前租户在线打印机列表（需 JWT）
  */
 import { Router, Request, Response } from 'express';
 import { execFile } from 'child_process';
+import { v4 as uuidv4 } from 'uuid';
 import { verifyJWT, JWTPayload } from './auth.routes';
 import { createJob, getJob } from '../ws/print-job-store';
 import { sendPrintJob, getTenantPrinters, getTenantClientCount } from '../ws/print-ws';
 
 const router = Router();
+
+// ============ 打印 HTML 渲染存储（免鉴权，打印客户端加载用） ============
+const renderStore = new Map<string, { html: string; createdAt: number }>();
+// 每 10 分钟清理超过 30 分钟的条目
+setInterval(() => {
+  const cutoff = Date.now() - 30 * 60 * 1000;
+  for (const [k, v] of renderStore) { if (v.createdAt < cutoff) renderStore.delete(k); }
+}, 10 * 60 * 1000).unref?.();
+
+/**
+ * POST /api/print/render
+ * 免鉴权：接收打印 HTML 内容，存储并返回访问 URL（供打印客户端加载）
+ */
+router.post('/render', (req: Request, res: Response) => {
+  const { html } = req.body;
+  if (!html || typeof html !== 'string') {
+    res.status(400).json({ code: 400, message: 'html 不能为空' });
+    return;
+  }
+  const id = uuidv4();
+  renderStore.set(id, { html, createdAt: Date.now() });
+  const baseUrl = `${req.protocol}://${req.get('host')}`;
+  res.json({ code: 0, data: { id, url: `${baseUrl}/api/print/render/${id}` } });
+});
+
+/**
+ * GET /api/print/render/:id
+ * 免鉴权：返回存储的打印 HTML（打印客户端通过此 URL 加载内容）
+ */
+router.get('/render/:id', (req: Request, res: Response) => {
+  const entry = renderStore.get(req.params.id);
+  if (!entry) {
+    res.status(404).json({ code: 404, message: '打印内容已过期或不存在' });
+    return;
+  }
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(entry.html);
+});
 
 /**
  * GET /api/print/printers-public?owner=<租户名>

@@ -451,11 +451,32 @@ const ProductPrintPage: React.FC = () => {
     setPreviewVisible(true);
   }, [buildPages, resolveTplId]);
 
-  const doPrintRow = (type: TplType, copies: number) => {
+  const doPrintRow = async (type: TplType, copies: number) => {
     if (!selProduct) { message.warning('请先搜索并选择商品'); return; }
     const tpl = loadTpl(type, resolveTplId(type));
     const tplName = tpl?.templateName || TPL_LABEL[type] + '模板';
-    openPreview(type, [{ product: selProduct, qty: copies }], `${TPL_LABEL[type]}打印预览 - ${selProduct.productCode} [${tplName}]`);
+    const pw = Number(tpl?.paperWidth) || TPL_PAPER[type].w;
+    const ph = Number(tpl?.paperHeight) || TPL_PAPER[type].h;
+    try {
+      // 1. 生成打印 HTML
+      const pages = await buildPages(type, selProduct, copies);
+      const html = `<html><head><meta charset="utf-8"><style>@page{size:${pw}mm ${ph}mm;margin:0;}body{margin:0;background:#fff;font-family:'Microsoft YaHei',sans-serif;}.pg{position:relative;z-index:0;width:${pw}mm;height:${ph}mm;page-break-after:always;overflow:hidden;box-sizing:border-box;background:#fff;margin:0;}</style></head><body>${pages}</body></html>`;
+      // 2. 上传 HTML 到服务端，获取可访问 URL
+      const renderRes = await request.post('/print/render', { html });
+      const printUrl = renderRes?.data?.data?.url;
+      if (!printUrl) { message.error('打印内容生成失败'); return; }
+      // 3. 提交打印任务到打印客户端（静默打印，无弹窗）
+      const printerName = printer === '默认使用模板设置的打印机' ? (tpl?.printerName || '') : printer;
+      const jobRes = await request.post('/print/job', { type: 'url', content: printUrl, printerName, copies });
+      if (jobRes?.data?.code === 0) {
+        message.success(`吊牌打印任务已提交（${copies} 份）`);
+      } else {
+        message.error(jobRes?.data?.message || '打印任务提交失败');
+      }
+    } catch (err: any) {
+      const msg = err?.response?.data?.message || err?.message || '打印失败';
+      message.error(msg);
+    }
   };
 
   // 搜索：回车与搜索按钮共用
