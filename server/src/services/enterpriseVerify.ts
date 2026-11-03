@@ -10,6 +10,8 @@
  * 响应解析采用宽容模式：先识别外层信封 code，再在多层结构中查找匹配标志，
  * 兼容市面常见三要素接口返回形态；拿到正式接口文档后可在 parseMatch 中精确化。
  */
+import { stmtGetSetting } from '../database/sqlite';
+
 export interface VerifyInput { companyName: string; creditCode: string; legalPerson: string; }
 export interface VerifyResult {
   ok: boolean;            // 调用是否成功（网络/信封层）
@@ -19,8 +21,43 @@ export interface VerifyResult {
   devMode?: boolean;
 }
 
+/** 企业核验配置项（开发者后台可视化维护，存 system_settings；未设置时回退 server/.env） */
+export interface EnterpriseConfig { apiUrl: string; appCode: string; appKey: string; appSecret: string; source: 'db' | 'env' | 'none'; }
+
+const DEFAULT_API_URL = 'https://sys.81api.com/verifyCompany/';
+
+function readSetting(key: string): string {
+  try {
+    const row = stmtGetSetting.get(key) as { setting_value: string } | undefined;
+    return String(row?.setting_value || '').trim();
+  } catch { return ''; }
+}
+
+/**
+ * 解析生效配置：优先开发者后台写入的 system_settings，其次 server/.env。
+ * 这样重新订购/更换 AppCode 后在后台改一次即时生效，无需改 .env 重新部署。
+ */
+export function getEnterpriseConfig(): EnterpriseConfig {
+  const dbCode = readSetting('enterprise_appcode');
+  if (dbCode) {
+    return {
+      apiUrl: readSetting('enterprise_api_url') || process.env.ENTERPRISE_API_URL || DEFAULT_API_URL,
+      appCode: dbCode,
+      appKey: readSetting('enterprise_app_key'),
+      appSecret: readSetting('enterprise_app_secret'),
+      source: 'db',
+    };
+  }
+  const envCode = String(process.env.ENTERPRISE_APPCODE || '').trim();
+  if (envCode) {
+    return { apiUrl: String(process.env.ENTERPRISE_API_URL || '').trim() || DEFAULT_API_URL, appCode: envCode, appKey: '', appSecret: '', source: 'env' };
+  }
+  return { apiUrl: '', appCode: '', appKey: '', appSecret: '', source: 'none' };
+}
+
 export function isEnterpriseConfigured(): boolean {
-  return !!(process.env.ENTERPRISE_APPCODE && process.env.ENTERPRISE_API_URL);
+  const c = getEnterpriseConfig();
+  return !!(c.apiUrl && c.appCode);
 }
 
 /** 开发模式开关：仅 .env 显式 ENTERPRISE_DEV_MODE=1 时生效；生产未配置接口地址时必须拒绝核验而非假匹配 */
@@ -58,35 +95,85 @@ function envelopeOk(body: any): { ok: boolean; message?: string } {
   return { ok: false, message: String(body.message ?? body.msg ?? body.errorMsg ?? body.reason ?? code) };
 }
 
-/** 真实调用云市场三要素核验接口 */
-async function callRemote(input: VerifyInput): Promise<VerifyResult> {
-  const url = process.env.ENTERPRISE_API_URL as string;
-  const appCode = process.env.ENTERPRISE_APPCODE as string;
+/**
+ * 解析商品接口响应。实测两种形态：
+ *   一致：{"status": true,  "message": "查询完成", "result": "三者一致"}
+ *   不一致：{"status": false, "message": "查询完成", "reason": "法人姓名与其他二者不一致", "result": "不一致"}
+ * → status 即匹配布尔标志（true=三者一致）；message="查询完成" 仅代表本次查询成功执行；reason/result 为详情文案。
+ * status=false 且查询已完成 → 不匹配（拒绝认证，非服务异常）；无完成信号且无详情 → 视为服务异常。
+ * 兼容未知形态时回退通用信封/标志解析。
+ */
+function parseVerifyBody(body: any): VerifyResult {
+  if (!body || typeof body !== 'object') return { ok: false, reason: 'error', message: '接口返回格式异常' };
+  // 商品方标准形态：布尔 status + message/reason/result 文案
+  if ('status' in body && typeof body.status === 'boolean') {
+    const msg = String(body.message || '').trim();
+    const detail = String(body.reason || body.result || '').trim();
+    if (body.status === true) return { ok: true, matched: true, message: detail || msg || '三者一致' };
+    // status=false：查询已完成（message=查询完成 或带 reason/result 详情）→ 三要素不一致；否则视为服务异常
+    if (msg === '查询完成' || detail) return { ok: true, matched: false, reason: 'mismatch', message: detail || '三要素与工商登记信息不一致' };
+    return { ok: false, reason: 'error', message: msg || '核验服务异常' };
+  }
+  // 兼容：仅有 result 文案（无布尔 status）
+  if ('result' in body) {
+    const resultStr = String(body.result ?? '').trim();
+    if (resultStr.includes('不一致')) return { ok: true, matched: false, reason: 'mismatch', message: String(body.reason || resultStr) };
+    if (resultStr.includes('三者一致') || resultStr === '一致') return { ok: true, matched: true, message: resultStr };
+    if (resultStr) return { ok: true, matched: false, reason: 'mismatch', message: resultStr };
+  }
+  // 回退：通用信封 + 匹配标志解析（兼容商品方变更返回结构）
+  const env = envelopeOk(body);
+  if (!env.ok) return { ok: false, reason: 'error', message: env.message || '接口返回失败' };
+  const matched = pickMatchFlag(body?.data ?? body?.result ?? body);
+  if (matched === null) return { ok: false, reason: 'error', message: '接口返回中未识别到核验结果字段' };
+  return matched ? { ok: true, matched: true } : { ok: true, matched: false, reason: 'mismatch', message: '三要素与工商登记信息不一致' };
+}
+
+/** 拼接 GET 请求 URL（注意：商品方参数名 ComapnyName 为其接口拼写，非 CompanyName，必须原样传递） */
+function buildVerifyUrl(apiUrl: string, input: VerifyInput): string {
+  const params = new URLSearchParams({
+    ComapnyName: input.companyName,
+    CreditCode: input.creditCode,
+    LegalPersonName: input.legalPerson,
+  });
+  return `${apiUrl.replace(/\/+$/, '')}/?${params.toString()}`;
+}
+
+/** 真实调用云市场三要素核验接口（GET + Query：ComapnyName/CreditCode/LegalPersonName，APPCODE 头认证） */
+async function callRemote(input: VerifyInput, cfg?: EnterpriseConfig): Promise<VerifyResult> {
+  const c = cfg || getEnterpriseConfig();
+  if (!c.apiUrl || !c.appCode) return { ok: false, reason: 'not_configured', message: '企业三要素核验接口未配置' };
   try {
-    const params = new URLSearchParams({
-      companyName: input.companyName,
-      creditCode: input.creditCode,
-      legalPerson: input.legalPerson,
-    });
-    const resp = await fetch(url, {
-      method: 'POST',
-      headers: {
-        Authorization: `APPCODE ${appCode}`,
-        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-      },
-      body: params.toString(),
+    const resp = await fetch(buildVerifyUrl(c.apiUrl, input), {
+      method: 'GET',
+      headers: { Authorization: `APPCODE ${c.appCode}`, Accept: 'application/json' },
     });
     if (!resp.ok) return { ok: false, reason: 'error', message: `接口 HTTP ${resp.status}` };
     const body: any = await resp.json().catch(() => null);
-    const env = envelopeOk(body);
-    if (!env.ok) return { ok: false, reason: 'error', message: env.message || '接口返回失败' };
-    const matched = pickMatchFlag(body?.data ?? body?.result ?? body);
-    if (matched === null) return { ok: false, reason: 'error', message: '接口返回中未识别到核验结果字段' };
-    return matched
-      ? { ok: true, matched: true }
-      : { ok: true, matched: false, reason: 'mismatch', message: '三要素与工商登记信息不一致' };
+    return parseVerifyBody(body);
   } catch (e: any) {
     return { ok: false, reason: 'error', message: e?.message || '接口调用异常' };
+  }
+}
+
+/**
+ * 供开发者后台「测试连通」使用：用给定样例真实调用一次（消耗 1 次套餐配额），
+ * 返回解析结论 + 上游原始响应，便于确认 AppCode/接口地址是否正确。
+ */
+export async function testEnterpriseConfig(input: VerifyInput, cfg: EnterpriseConfig): Promise<{ result: VerifyResult; raw: any }> {
+  if (!cfg.apiUrl || !cfg.appCode) return { result: { ok: false, reason: 'not_configured', message: '请先填写接口地址与 AppCode' }, raw: null };
+  try {
+    const resp = await fetch(buildVerifyUrl(cfg.apiUrl, input), {
+      method: 'GET',
+      headers: { Authorization: `APPCODE ${cfg.appCode}`, Accept: 'application/json' },
+    });
+    const text = await resp.text();
+    let body: any = null;
+    try { body = JSON.parse(text); } catch { body = text; }
+    if (!resp.ok) return { result: { ok: false, reason: 'error', message: `接口 HTTP ${resp.status}` }, raw: body ?? text };
+    return { result: parseVerifyBody(body), raw: body };
+  } catch (e: any) {
+    return { result: { ok: false, reason: 'error', message: e?.message || '接口调用异常' }, raw: null };
   }
 }
 

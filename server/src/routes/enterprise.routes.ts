@@ -15,9 +15,9 @@
  *       face/init 10 分钟内复用同一 CertifyId（InitFaceVerify 按次计费，30 分钟有效期）；失败 3 次/天、间隔 60s。
  */
 import { Router, Request, Response } from 'express';
-import { verifyThreeElements } from '../services/enterpriseVerify';
+import { verifyThreeElements, getEnterpriseConfig, testEnterpriseConfig } from '../services/enterpriseVerify';
 import { initFaceVerify, describeFaceVerify } from '../services/aliyunFaceVerify';
-import { stmtGetCert, stmtUpsertCert, stmtUpdateCertStatus, stmtCertFacePass, stmtCertFaceFail } from '../database/sqlite';
+import { stmtGetCert, stmtUpsertCert, stmtUpdateCertStatus, stmtCertFacePass, stmtCertFaceFail, stmtSetSetting } from '../database/sqlite';
 
 const router = Router();
 
@@ -232,6 +232,65 @@ router.post('/face/describe', async (req: Request, res: Response) => {
       stmtCertFaceFail.run(r.message || '刷脸未通过', certifyId, username);
       res.json({ code: 0, data: { passed: false, subCode: r.subCode || '', message: r.message || '刷脸未通过' } });
     }
+  } catch (err: any) {
+    res.status(500).json({ code: 500, message: err.message });
+  }
+});
+
+// ============ 开发者后台：企业三要素核验接口配置（存 system_settings，保存后即时生效，无需重部署） ============
+
+const CFG_KEYS = {
+  apiUrl: 'enterprise_api_url',
+  appCode: 'enterprise_appcode',
+  appKey: 'enterprise_app_key',
+  appSecret: 'enterprise_app_secret',
+};
+
+/** 读取当前生效配置（优先后台写入，其次 .env） */
+router.get('/config', (_req: Request, res: Response) => {
+  try {
+    const c = getEnterpriseConfig();
+    res.json({ code: 0, data: { apiUrl: c.apiUrl, appCode: c.appCode, appKey: c.appKey, appSecret: c.appSecret, source: c.source, configured: !!(c.apiUrl && c.appCode) } });
+  } catch (err: any) {
+    res.status(500).json({ code: 500, message: err.message });
+  }
+});
+
+/** 保存配置（写入 system_settings；下一次核验即时读取新值） */
+router.put('/config', (req: Request, res: Response) => {
+  try {
+    const apiUrl = String(req.body?.apiUrl ?? '').trim();
+    const appCode = String(req.body?.appCode ?? '').trim();
+    const appKey = String(req.body?.appKey ?? '').trim();
+    const appSecret = String(req.body?.appSecret ?? '').trim();
+    if (appCode && !/^[a-f0-9]{16,64}$/i.test(appCode)) { res.json({ code: 400, message: 'AppCode 格式不正确（应为 16-64 位十六进制字符串）' }); return; }
+    if (apiUrl && !/^https?:\/\//i.test(apiUrl)) { res.json({ code: 400, message: '接口地址需以 http:// 或 https:// 开头' }); return; }
+    stmtSetSetting.run(CFG_KEYS.apiUrl, apiUrl);
+    stmtSetSetting.run(CFG_KEYS.appCode, appCode);
+    stmtSetSetting.run(CFG_KEYS.appKey, appKey);
+    stmtSetSetting.run(CFG_KEYS.appSecret, appSecret);
+    const c = getEnterpriseConfig();
+    res.json({ code: 0, message: c.appCode ? '配置已保存并即时生效' : '配置已保存（AppCode 为空，核验将回退未配置状态）', data: { configured: !!(c.apiUrl && c.appCode), source: c.source } });
+  } catch (err: any) {
+    res.status(500).json({ code: 500, message: err.message });
+  }
+});
+
+/** 测试连通：用样例真实调用一次（消耗 1 次套餐配额），返回解析结论 + 上游原始响应；支持用表单待保存值直接测 */
+router.post('/config/test', async (req: Request, res: Response) => {
+  try {
+    const companyName = String(req.body?.companyName ?? '').trim();
+    const creditCode = String(req.body?.creditCode ?? '').trim();
+    const legalPerson = String(req.body?.legalPerson ?? '').trim();
+    const cur = getEnterpriseConfig();
+    const cfg = {
+      apiUrl: String(req.body?.apiUrl ?? '').trim() || cur.apiUrl,
+      appCode: String(req.body?.appCode ?? '').trim() || cur.appCode,
+      appKey: '', appSecret: '', source: 'db' as const,
+    };
+    if (!companyName || !creditCode || !legalPerson) { res.json({ code: 400, message: '请填写企业名称、统一社会信用代码、法人姓名三项测试样例' }); return; }
+    const { result, raw } = await testEnterpriseConfig({ companyName, creditCode, legalPerson }, cfg);
+    res.json({ code: 0, data: { result, raw } });
   } catch (err: any) {
     res.status(500).json({ code: 500, message: err.message });
   }

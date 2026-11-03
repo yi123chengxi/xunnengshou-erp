@@ -65,6 +65,9 @@ client/public/downloads/*.exe
 # ========================
 /*.js
 !ecosystem.config.js
+# 部署临时产物（SFTP 上传用的打包 tar、临时脚本与输出）
+/*.tar.gz
+/deploy-stage/
 
 # ========================
 # 目录：验证截图 & 工作区
