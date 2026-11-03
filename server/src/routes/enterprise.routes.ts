@@ -32,6 +32,10 @@ interface CertRow {
 }
 
 const verifyThrottle = new Map<string, { last: number; day: string; fails: number }>();
+// 限频策略：连续失败达 COOLDOWN_AFTER_FAILS 次后才冷却 COOLDOWN_MS（此前可立即重试）；每日失败上限 DAILY_FAIL_MAX 作配额保护
+const COOLDOWN_AFTER_FAILS = 3;
+const COOLDOWN_MS = 60_000;
+const DAILY_FAIL_MAX = 10;
 
 function publicView(r: CertRow) {
   return {
@@ -68,12 +72,13 @@ router.post('/verify', async (req: Request, res: Response) => {
       return;
     }
 
-    // 限频：60s 间隔 + 每日 3 次失败上限
+    // 限频：前 3 次失败可立即重试；连续 3 次未通过后冷却 60 秒；每日失败上限作配额保护
     const day = new Date().toISOString().slice(0, 10);
     const now = Date.now();
     const th = verifyThrottle.get(username);
-    if (th && now - th.last < 60_000) { res.json({ code: 429, message: '操作过于频繁，请 60 秒后再试' }); return; }
-    if (th && th.day === day && th.fails >= 3) { res.json({ code: 429, message: '今日核验失败次数已达上限，请明天再试' }); return; }
+    const failsToday = th && th.day === day ? th.fails : 0;
+    if (th && failsToday >= COOLDOWN_AFTER_FAILS && now - th.last < COOLDOWN_MS) { res.json({ code: 429, message: `已连续 ${COOLDOWN_AFTER_FAILS} 次核验未通过，请 60 秒后再试` }); return; }
+    if (failsToday >= DAILY_FAIL_MAX) { res.json({ code: 429, message: '今日核验失败次数已达上限，请明天再试' }); return; }
 
     // 控费缓存：已认证且同三要素（含身份证）24h 内 → 直接返回，不重复调接口
     const exist = stmtGetCert.get(username) as CertRow | undefined;
@@ -84,7 +89,8 @@ router.post('/verify', async (req: Request, res: Response) => {
     }
 
     const r = await verifyThreeElements({ companyName, creditCode, legalPerson });
-    verifyThrottle.set(username, { last: now, day, fails: (th && th.day === day ? th.fails : 0) + (r.ok && r.matched ? 0 : 1) });
+    // 失败计数：核验通过则清零（恢复可立即重试）；未通过则累加（达 3 次触发 60 秒冷却）
+    verifyThrottle.set(username, { last: now, day, fails: r.ok && r.matched ? 0 : failsToday + 1 });
 
     if (r.ok && r.matched) {
       const ts = nowStr();
