@@ -68,10 +68,19 @@ jobs:
 
       - name: 打包部署物
         run: |
-          mkdir -p pkg/nginx pkg/client
+          mkdir -p pkg/nginx pkg/client pkg/server/downloads
           cp -r server pkg/server
           rm -rf pkg/server/node_modules pkg/server/data pkg/server/downloads pkg/server/uploads pkg/server/logs
           cp -r client/build pkg/client/build
+          # 打印客户端安装包：从 print-client/release/ 复制（若存在）
+          if [ -f print-client/release/xunnengshou-print-client-setup.exe ]; then
+            cp print-client/release/xunnengshou-print-client-setup.exe pkg/server/downloads/
+            cp print-client/release/latest.yml pkg/server/downloads/ 2>/dev/null || true
+            cp print-client/release/xunnengshou-print-client-setup.exe.blockmap pkg/server/downloads/ 2>/dev/null || true
+            echo "Print client installer included in deploy package"
+          else
+            echo "WARNING: print-client/release/ not found, skipping installer deployment"
+          fi
           cp ecosystem.config.js pkg/
           cp nginx/factory-management.conf pkg/nginx/
           cp server-update.sh pkg/
