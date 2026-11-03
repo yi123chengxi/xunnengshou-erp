@@ -32,6 +32,11 @@ const isPricePublishable = (p: any): boolean => {
   const cost = Number(p?.costPrice) || 0;
   return base !== 0 && base > cost;
 };
+// 商品标题生成：货号+鞋底材质+鞋面材质+码段+颜色（空字段自动跳过）
+const buildProductTitle = (p: any): string => {
+  const parts = [p?.productCode, p?.shoeSole, p?.shoeUpper, p?.spec, p?.color].filter(v => String(v || '').trim());
+  return parts.length ? parts.join('-') : (p?.shortName || p?.productCode || p?.styleCode || '');
+};
 const RATINGS_KEY = 'market_ratings';
 const TRADE_KEY = 'market_trade_orders';
 
@@ -1066,14 +1071,14 @@ const MarketPage: React.FC = () => {
           out = [{
             key: `mkt_fin_${owner}_${sc}`, id: nextMarketId(out), type: 'finished', auto: true,
             publisherUsername: owner, publisherCompany: u?.companyName || owner, publishTime: new Date().toISOString(),
-            status: '待报价', styleCode: sc, shortName: p.shortName || p.productCode || sc, productCode: p.productCode,
+            status: '待报价', styleCode: sc, shortName: buildProductTitle(p), productCode: p.productCode,
             productKey: p.key, unit: p.unit || '件', quantity: Number(p.actualStock) || 0, targetPrice: Number(p.suggestedPrice) || 0,
             image: resolvedImg, productColor: p.color || '', variantImages: collectVariantImages(owner, prods, sc, p.key),
             variants: collectVariants(prods, sc),
             processTypes: [], quotes: [], remark: '系统自动上架（在售成品）',
           }, ...out];
         } else {
-          out = out.map(r => (r.key === exist.key ? { ...r, delisted: false, delistedAt: undefined, shortName: p.shortName || r.shortName, targetPrice: Number(p.suggestedPrice) || r.targetPrice, image: resolvedImg || r.image, productKey: p.key || r.productKey, productColor: p.color || r.productColor, variantImages: (() => { const vi = collectVariantImages(owner, prods, sc, p.key); return vi.length ? vi : (r.variantImages || []); })(), variants: (() => { const vv = collectVariants(prods, sc); return vv.length ? vv : (r.variants || []); })() } : r));
+          out = out.map(r => (r.key === exist.key ? { ...r, delisted: false, delistedAt: undefined, shortName: buildProductTitle(p) || r.shortName, targetPrice: Number(p.suggestedPrice) || r.targetPrice, image: resolvedImg || r.image, productKey: p.key || r.productKey, productColor: p.color || r.productColor, variantImages: (() => { const vi = collectVariantImages(owner, prods, sc, p.key); return vi.length ? vi : (r.variantImages || []); })(), variants: (() => { const vv = collectVariants(prods, sc); return vv.length ? vv : (r.variants || []); })() } : r));
         }
       });
     });
@@ -1232,7 +1237,7 @@ const MarketPage: React.FC = () => {
       if (exist) {
         out = out.map((r: any) => (r.key === exist.key ? {
           ...r, delisted: false, delistedAt: undefined, auto: false, publishTime: new Date().toISOString(),
-          status: '待报价', shortName: rep.shortName || rep.productCode || sc, productCode: rep.productCode,
+          status: '待报价', shortName: buildProductTitle(rep), productCode: rep.productCode,
           productKey: rep.key, unit: rep.unit || '件', quantity: Number(rep.actualStock) || 0, targetPrice: Number(rep.suggestedPrice) || 0,
           image: resolvedImg, productColor: rep.color || '', variantImages: collectVariantImages(owner, manualPublishProducts, sc, rep.key),
           variants: collectVariants(manualPublishProducts, sc), remark: '手动发布到成品市场',
@@ -1243,7 +1248,7 @@ const MarketPage: React.FC = () => {
       out = [{
         key: `mkt_fin_${owner}_${sc}`, id: nextMarketId(out), type: 'finished', auto: false,
         publisherUsername: owner, publisherCompany: u?.companyName || owner, publishTime: new Date().toISOString(),
-        status: '待报价', styleCode: sc, shortName: rep.shortName || rep.productCode || sc, productCode: rep.productCode,
+        status: '待报价', styleCode: sc, shortName: buildProductTitle(rep), productCode: rep.productCode,
         productKey: rep.key, unit: rep.unit || '件', quantity: Number(rep.actualStock) || 0, targetPrice: Number(rep.suggestedPrice) || 0,
         image: resolvedImg, productColor: rep.color || '', variantImages: collectVariantImages(owner, manualPublishProducts, sc, rep.key),
         variants: collectVariants(manualPublishProducts, sc),
@@ -2176,7 +2181,21 @@ const addToCart = useCallback((rec: any, qty?: number) => {
             {!isPurchaser && (
               <>
                 <SettingOutlined />
-                <span style={{ marginRight: 4 }}>在售成品自动上架</span>
+                <Tooltip title={
+                  <div style={{ maxWidth: 320, lineHeight: 1.6 }}>
+                    <div style={{ fontWeight: 600, marginBottom: 4 }}>自动上架触发条件（须同时满足）：</div>
+                    <div>1. 账号未显式关闭「在售成品自动上架」（未设置默认开启）</div>
+                    <div>2. 产品种类 = 成品 且 产品状态 = 在售</div>
+                    <div>3. 款式编码非空 且 非半成品（排除 SEMI- 前缀）</div>
+                    <div>4. 基础售价 ≠ 0 且 基础售价 &gt; 成本价</div>
+                    <div style={{ marginTop: 6, fontWeight: 600 }}>触发时机：</div>
+                    <div>· 切换到成品市场标签页时</div>
+                    <div>· 产品图片上传/修改时</div>
+                    <div>· 产品研发完成、状态变更时</div>
+                  </div>
+                }>
+                  <span style={{ marginRight: 4, cursor: 'help' }}>在售成品自动上架</span>
+                </Tooltip>
                 <Switch checked={autoOn} onChange={toggleAuto} checkedChildren="开" unCheckedChildren="关" />
                 {!autoOn && <Button type="primary" size="small" icon={<PlusOutlined />} onClick={openManualPublish}>手动添加</Button>}
               </>
@@ -3564,8 +3583,8 @@ const addToCart = useCallback((rec: any, qty?: number) => {
           </Space>
         } width={480}>
         <Form autoComplete="off" form={editFinishedForm} layout="vertical" style={{ marginTop: 12 }}>
-          <Form.Item name="shortName" label="商品简称" rules={[{ required: true, message: '请输入商品简称' }]}>
-            <Input placeholder="请输入商品简称" />
+          <Form.Item name="shortName" label="标题" rules={[{ required: true, message: '请输入标题' }]}>
+            <Input placeholder="默认：货号-鞋底材质-鞋面材质-码段-颜色，可手动修改" />
           </Form.Item>
           <Form.Item name="targetPrice" label="供货价(元)" rules={[{ required: true, message: '请输入供货价' }]}>
             <InputNumber min={0} precision={2} style={{ width: '100%' }} placeholder="请输入供货价" />
