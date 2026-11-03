@@ -4,7 +4,7 @@ import isBetween from 'dayjs/plugin/isBetween';
 import isSameOrBefore from 'dayjs/plugin/isSameOrBefore';
 dayjs.extend(isBetween);
 dayjs.extend(isSameOrBefore);
-import { Card, Typography, Form, Input, Button, Tabs, message, Divider, Checkbox, Select, Steps, Result, Alert, Descriptions, Modal, Radio, Space } from 'antd';
+import { Card, Typography, Form, Input, Button, Tabs, message, Divider, Checkbox, Select, Steps, Result, Alert, Descriptions, Modal, Radio, Space, Row, Col } from 'antd';
 import { UserOutlined, LockOutlined, ShopOutlined, BankOutlined, PhoneOutlined, MailOutlined, UserAddOutlined, InfoCircleOutlined, SyncOutlined, SafetyCertificateOutlined, MobileOutlined, TagOutlined, EnvironmentOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import Logo from '../components/Logo';
@@ -578,7 +578,9 @@ const Auth: React.FC = () => {
     message.success(`登录成功！欢迎回来，${foundUser.name}`);
 
     // === 安全检查：新设备验证 ===
-    if (!isTrustedDevice(foundUser.username)) {
+    // 开发环境（本地预览）跳过设备验证，生产环境保持验证
+    const isProduction = process.env.NODE_ENV === 'production';
+    if (isProduction && !isTrustedDevice(foundUser.username)) {
       // 新设备，需要验证
       setPendingLoginUser(foundUser);
       setPendingIsViewOnly(isViewOnly);
@@ -1068,7 +1070,7 @@ const Auth: React.FC = () => {
   // 注册步骤1：填写基本信息
   const handleRegisterStep1 = async () => {
     try {
-      await form.validateFields(['companyName', 'companyNo', 'orderPrefix', 'contactPerson', 'phone', 'email', 'role', 'province', 'city', 'district', 'addressDetail']);
+      await form.validateFields(['companyName', 'contactPerson', 'phone', 'email', 'role', 'province', 'city', 'district', 'addressDetail']);
       setRegisterStep(1);
     } catch (error) {
       message.warning('请完善基本信息');
@@ -1102,36 +1104,24 @@ const Auth: React.FC = () => {
         trialEnd.setDate(trialEnd.getDate() + 30);
         const trialEndStr = trialEnd.toISOString().split('T')[0];
         
-        // 生成公司ID：公司编号 + '-' + 4位随机大写字母数字
+        // 生成公司 ID：公司编号 + '-' + 4 位随机大写字母数字
         const companyNo = String(form.getFieldValue('companyNo') || '');
         const randomSuffix = Math.random().toString(36).substring(2, 6).toUpperCase();
         const companyId = `${companyNo}-${randomSuffix}`;
         
-        // 最终重复检查：防止注册过程中其他用户抢占了同一公司编号
-        if (isCompanyNoTaken(companyNo)) {
-          message.error('该公司编号在您填写过程中已被其他用户占用，请重新生成后提交');
-          setLoading(false);
-          return;
-        }
-
-        // 订单号前缀最终重复检查：重复则提示点击随机重新生成
+        // 订单号前缀
         const orderPrefix = String(form.getFieldValue('orderPrefix') || '');
-        if (isOrderPrefixTaken(orderPrefix)) {
-          message.error('该订单号前缀已被其他用户占用，请点击随机重新生成后提交');
-          setLoading(false);
-          return;
-        }
-        
+                
         // 将注册信息保存到 localStorage（模拟数据库）
         const newUser = {
           username,
           password,
           role: Array.isArray(role) ? role.join(',') : role,
           companyName: form.getFieldValue('companyName'),
-          companyNo,                 // 公司编号（8位字母+数字，唯一）
+          companyNo,                 // 公司编号（8 位字母 + 数字，唯一）
           companyShortName: companyNo, // 兼容旧字段（公司英文简称→公司编号）
           orderPrefix,               // 订单号前缀（按注册顺序递增，唯一）
-          companyId,               // 公司唯一ID
+          companyId,               // 公司唯一 ID
           contactPerson: form.getFieldValue('contactPerson'),
           phone: form.getFieldValue('phone'),
           email: form.getFieldValue('email'),
@@ -1146,7 +1136,21 @@ const Auth: React.FC = () => {
           // 加工厂角色：保存注册时填写的工序类型
           ...((Array.isArray(role) ? role.includes('factory') : role === 'factory') ? { processTypes: form.getFieldValue('processTypes') || [] } : {}),
         };
+                
+        // 最终重复检查：若被抢占则静默重新生成
+        if (isCompanyNoTaken(companyNo)) {
+          const newNo = generateUniqueCompanyNo();
+          form.setFieldValue('companyNo', newNo);
+          Object.assign(newUser, { companyNo: newNo, companyShortName: newNo, companyId: `${newNo}-${Math.random().toString(36).substring(2, 6).toUpperCase()}` });
+        }
         
+        // 订单号前缀最终重复检查：若被抢占则静默重新生成
+        if (isOrderPrefixTaken(orderPrefix)) {
+          const newPrefix = generateNextOrderPrefix();
+          form.setFieldValue('orderPrefix', newPrefix);
+          newUser.orderPrefix = newPrefix;
+        }
+                
         // 读取已有用户数据
         const existingUsers = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
         // 检查用户名是否已存在
@@ -1359,126 +1363,59 @@ const Auth: React.FC = () => {
                 <Input prefix={<BankOutlined />} placeholder="请输入公司全称" />
               </Form.Item>
 
-              <Form.Item
-                name="companyNo"
-                label="公司编号"
-                rules={[
-                  { required: true, message: '请输入公司编号' },
-                  { pattern: /^(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9]{8}$/, message: '公司编号为8位字母+数字组合' },
-                  () => ({
-                    validator(_, value) {
-                      if (!value) return Promise.resolve();
-                      if (String(value).includes('4')) {
-                        return Promise.reject(new Error('公司编号不能包含数字“4”，请点击随机重新生成'));
-                      }
-                      if (isCompanyNoTaken(value)) {
-                        return Promise.reject(new Error('该公司编号已被其他公司占用，请点击随机重新生成'));
-                      }
-                      return Promise.resolve();
-                    },
-                  }),
-                ]}
-                extra="公司编号为8位字母+数字组合（不含“4”），不可重复，注册后不可修改"
-                validateTrigger={['onBlur', 'onChange']}
-              >
-                <Input
-                  prefix={<BankOutlined />}
-                  placeholder="如：AB12CD35"
-                  maxLength={8}
-                  suffix={
-                    <Button
-                      type="link"
-                      size="small"
-                      icon={<SyncOutlined />}
-                      onClick={handleRandomCompanyNo}
-                      style={{ padding: '0 4px', fontSize: 12, color: PRIMARY }}
-                      title="随机生成一个可用的公司编号"
-                    >
-                      随机
-                    </Button>
-                  }
-                  onChange={(e) => {
-                    // 只允许字母+数字输入，统一转大写
-                    const val = e.target.value.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
-                    form.setFieldValue('companyNo', val);
-                  }}
-                />
-              </Form.Item>
+              <Row gutter={16}>
+                <Col span={12}>
+                  <Form.Item
+                    name="companyNo"
+                    label="公司编号"
+                    extra="系统自动生成，注册后不可修改"
+                  >
+                    <Input prefix={<BankOutlined />} disabled />
+                  </Form.Item>
+                </Col>
+                <Col span={12}>
+                  <Form.Item
+                    name="orderPrefix"
+                    label="订单号前缀"
+                    extra="系统自动生成，每个用户不可重复"
+                  >
+                    <Input prefix={<TagOutlined />} disabled />
+                  </Form.Item>
+                </Col>
+              </Row>
 
-              <Form.Item
-                name="orderPrefix"
-                label="订单号前缀"
-                rules={[
-                  { required: true, message: '请输入订单号前缀' },
-                  { pattern: /^[A-Z]?\d{3,6}$/, message: '前缀为3~6位数字（超过6位后为1个字母+数字）' },
-                  () => ({
-                    validator(_, value) {
-                      if (!value) return Promise.resolve();
-                      if (String(value).includes('4')) {
-                        return Promise.reject(new Error('订单号前缀不能包含数字“4”，请点击随机重新生成'));
-                      }
-                      if (isOrderPrefixTaken(value)) {
-                        return Promise.reject(new Error('该前缀已被其他用户占用，请点击随机重新生成'));
-                      }
-                      return Promise.resolve();
-                    },
-                  }),
-                ]}
-                extra="默认按注册顺序递增生成（不含“4”），每个用户不可重复"
-                validateTrigger={['onBlur', 'onChange']}
-              >
-                <Input
-                  prefix={<TagOutlined />}
-                  placeholder="如：100"
-                  maxLength={7}
-                  suffix={
-                    <Button
-                      type="link"
-                      size="small"
-                      icon={<SyncOutlined />}
-                      onClick={handleRandomOrderPrefix}
-                      style={{ padding: '0 4px', fontSize: 12, color: PRIMARY }}
-                      title="重复时点击继续生成"
-                    >
-                      随机
-                    </Button>
-                  }
-                  onChange={(e) => {
-                    // 只允许字母+数字输入，统一转大写
-                    const val = e.target.value.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
-                    form.setFieldValue('orderPrefix', val);
-                  }}
-                />
-              </Form.Item>
-
-              <Form.Item
-                name="contactPerson"
-                label="联系人"
-                rules={[{ required: true, message: '请输入联系人姓名' }]}
-              >
-                <Input prefix={<UserAddOutlined />} placeholder="请输入联系人姓名" />
-              </Form.Item>
-
-              <Form.Item
-                name="phone"
-                label="联系电话"
-                rules={[
-                  { required: true, message: '请输入联系电话' },
-                  { pattern: /^1[3-9]\d{9}$/, message: '请输入正确的手机号' },
-                ]}
-              >
-                <Input prefix={<PhoneOutlined />} placeholder="请输入手机号码" />
-              </Form.Item>
+              <Row gutter={16}>
+                <Col span={12}>
+                  <Form.Item
+                    name="contactPerson"
+                    label="联系人"
+                    rules={[{ required: true, message: '请输入联系人姓名' }]}
+                  >
+                    <Input prefix={<UserAddOutlined />} placeholder="请输入联系人姓名" />
+                  </Form.Item>
+                </Col>
+                <Col span={12}>
+                  <Form.Item
+                    name="phone"
+                    label="联系电话"
+                    rules={[
+                      { required: true, message: '请输入联系电话' },
+                      { pattern: /^1[3-9]\d{9}$/, message: '请输入正确的手机号' },
+                    ]}
+                  >
+                    <Input prefix={<PhoneOutlined />} placeholder="请输入手机号码" />
+                  </Form.Item>
+                </Col>
+              </Row>
 
               <Form.Item
                 name="email"
                 label="电子邮箱"
                 rules={[
-                  { required: true, message: '请输入电子邮箱' },
                   { type: 'email', message: '请输入正确的邮箱格式' },
                 ]}
               >
-                <Input prefix={<MailOutlined />} placeholder="请输入电子邮箱" />
+                <Input prefix={<MailOutlined />} placeholder="请输入电子邮箱（选填）" />
               </Form.Item>
 
               <Space.Compact style={{ width: '100%' }}>
