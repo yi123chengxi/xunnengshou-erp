@@ -496,7 +496,8 @@ const Auth: React.FC = () => {
   };
 
   // 命中用户后的公共处理（账号密码登录与短信验证码登录共用）
-  const proceedWithUser = (foundUser: any) => {
+  // loginMethod: 'account' | 'sms'，短信验证码登录已验证手机号身份，跳过新设备验证
+  const proceedWithUser = (foundUser: any, loginMethod: 'account' | 'sms' = 'account') => {
     // 检查账号是否被禁用
     if (foundUser.accountStatus === 'disabled') {
       message.error('该账号已被禁用，请联系管理员');
@@ -578,9 +579,9 @@ const Auth: React.FC = () => {
     message.success(`登录成功！欢迎回来，${foundUser.name}`);
 
     // === 安全检查：新设备验证 ===
-    // 开发环境（本地预览）跳过设备验证，生产环境保持验证
+    // 短信验证码登录已验证手机号身份，跳过新设备验证；开发环境也跳过
     const isProduction = process.env.NODE_ENV === 'production';
-    if (isProduction && !isTrustedDevice(foundUser.username)) {
+    if (loginMethod !== 'sms' && isProduction && !isTrustedDevice(foundUser.username)) {
       // 新设备，需要验证
       setPendingLoginUser(foundUser);
       setPendingIsViewOnly(isViewOnly);
@@ -908,7 +909,7 @@ const Auth: React.FC = () => {
         needsPasswordChange: found.needsPasswordChange || false,
         accountStatus: found.accountStatus || 'normal',
       };
-      proceedWithUser(foundUser);
+      proceedWithUser(foundUser, 'sms');
     } catch {
       message.error('无法连接服务器，请检查服务是否启动');
     }
