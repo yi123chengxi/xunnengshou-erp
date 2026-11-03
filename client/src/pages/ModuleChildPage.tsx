@@ -1028,6 +1028,12 @@ const ModuleChildPage: React.FC = () => {
   const [productSelectAnchor, setProductSelectAnchor] = useState<number | null>(null);
   const [productSelectPage, setProductSelectPage] = useState(1);
   const [productSelectPageSize, setProductSelectPageSize] = useState(() => Number(localStorage.getItem(`productSelectPageSize_${localStorage.getItem('username') || 'admin'}`)) || 10);
+  // 选择产品弹窗：应用按字段搜索（「查询」按钮与各输入框回车共用）
+  const applyPsSearch = useCallback(() => {
+    setPsAppliedCode(psSearchCode); setPsAppliedName(psSearchName); setPsAppliedStyle(psSearchStyle);
+    setPsAppliedColor(psSearchColor); setPsAppliedSpec(psSearchSpec); setPsAppliedSupplier(psSearchSupplier); setPsAppliedTag(psSearchTag);
+    setProductSelectPage(1);
+  }, [psSearchCode, psSearchName, psSearchStyle, psSearchColor, psSearchSpec, psSearchSupplier, psSearchTag]);
   // 主表格分页状态
   const [mainTablePage, setMainTablePage] = useState(1);
   const [mainTablePageSize, setMainTablePageSize] = useState(() => {
@@ -21034,14 +21040,14 @@ tr:nth-child(even) { background: #f5f9ff; }
         </div>
         {/* 按字段搜索 */}
         <div style={{ marginBottom: 12, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-          <Space size={4}><Text style={{ fontSize: 12 }}>商品编码</Text><Input size="small" placeholder="编码" value={psSearchCode} onChange={e => setPsSearchCode(e.target.value)} style={{ width: 120 }} allowClear /></Space>
-          <Space size={4}><Text style={{ fontSize: 12 }}>商品名称</Text><Input size="small" placeholder="名称" value={psSearchName} onChange={e => setPsSearchName(e.target.value)} style={{ width: 120 }} allowClear /></Space>
-          <Space size={4}><Text style={{ fontSize: 12 }}>款式编码</Text><Input size="small" placeholder="款式" value={psSearchStyle} onChange={e => setPsSearchStyle(e.target.value)} style={{ width: 100 }} allowClear /></Space>
-          <Space size={4}><Text style={{ fontSize: 12 }}>颜色</Text><Input size="small" placeholder="颜色" value={psSearchColor} onChange={e => setPsSearchColor(e.target.value)} style={{ width: 80 }} allowClear /></Space>
-          <Space size={4}><Text style={{ fontSize: 12 }}>规格</Text><Input size="small" placeholder="规格" value={psSearchSpec} onChange={e => setPsSearchSpec(e.target.value)} style={{ width: 80 }} allowClear /></Space>
-          <Space size={4}><Text style={{ fontSize: 12 }}>供应商</Text><Input size="small" placeholder="供应商" value={psSearchSupplier} onChange={e => setPsSearchSupplier(e.target.value)} style={{ width: 100 }} allowClear /></Space>
-          <Space size={4}><Text style={{ fontSize: 12 }}>商品标签</Text><Input size="small" placeholder="标签" value={psSearchTag} onChange={e => setPsSearchTag(e.target.value)} style={{ width: 80 }} allowClear /></Space>
-          <Button size="small" type="primary" onClick={() => { setPsAppliedCode(psSearchCode); setPsAppliedName(psSearchName); setPsAppliedStyle(psSearchStyle); setPsAppliedColor(psSearchColor); setPsAppliedSpec(psSearchSpec); setPsAppliedSupplier(psSearchSupplier); setPsAppliedTag(psSearchTag); setProductSelectPage(1); }}>查询</Button>
+          <Space size={4}><Text style={{ fontSize: 12 }}>商品编码</Text><Input size="small" placeholder="编码" value={psSearchCode} onChange={e => setPsSearchCode(e.target.value)} onPressEnter={applyPsSearch} style={{ width: 120 }} allowClear /></Space>
+          <Space size={4}><Text style={{ fontSize: 12 }}>商品名称</Text><Input size="small" placeholder="名称" value={psSearchName} onChange={e => setPsSearchName(e.target.value)} onPressEnter={applyPsSearch} style={{ width: 120 }} allowClear /></Space>
+          <Space size={4}><Text style={{ fontSize: 12 }}>款式编码</Text><Input size="small" placeholder="款式" value={psSearchStyle} onChange={e => setPsSearchStyle(e.target.value)} onPressEnter={applyPsSearch} style={{ width: 100 }} allowClear /></Space>
+          <Space size={4}><Text style={{ fontSize: 12 }}>颜色</Text><Input size="small" placeholder="颜色" value={psSearchColor} onChange={e => setPsSearchColor(e.target.value)} onPressEnter={applyPsSearch} style={{ width: 80 }} allowClear /></Space>
+          <Space size={4}><Text style={{ fontSize: 12 }}>规格</Text><Input size="small" placeholder="规格" value={psSearchSpec} onChange={e => setPsSearchSpec(e.target.value)} onPressEnter={applyPsSearch} style={{ width: 80 }} allowClear /></Space>
+          <Space size={4}><Text style={{ fontSize: 12 }}>供应商</Text><Input size="small" placeholder="供应商" value={psSearchSupplier} onChange={e => setPsSearchSupplier(e.target.value)} onPressEnter={applyPsSearch} style={{ width: 100 }} allowClear /></Space>
+          <Space size={4}><Text style={{ fontSize: 12 }}>商品标签</Text><Input size="small" placeholder="标签" value={psSearchTag} onChange={e => setPsSearchTag(e.target.value)} onPressEnter={applyPsSearch} style={{ width: 80 }} allowClear /></Space>
+          <Button size="small" type="primary" onClick={applyPsSearch}>查询</Button>
           <Button size="small" onClick={() => { setPsSearchCode(''); setPsSearchName(''); setPsSearchStyle(''); setPsSearchColor(''); setPsSearchSpec(''); setPsSearchSupplier(''); setPsSearchTag(''); setPsAppliedCode(''); setPsAppliedName(''); setPsAppliedStyle(''); setPsAppliedColor(''); setPsAppliedSpec(''); setPsAppliedSupplier(''); setPsAppliedTag(''); setProductSelectPage(1); }}>重置</Button>
         </div>
         {/* 产品列表（分页，默认每页10行，每页行数可调并自动记住） */}
