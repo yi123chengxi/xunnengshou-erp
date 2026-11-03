@@ -1,0 +1,4 @@
+server/downloads/*.exe filter=lfs diff=lfs merge=lfs -text
+server/downloads/*.blockmap filter=lfs diff=lfs merge=lfs -text
+client/public/downloads/*.exe filter=lfs diff=lfs merge=lfs -text
+client/public/downloads/*.blockmap filter=lfs diff=lfs merge=lfs -text
