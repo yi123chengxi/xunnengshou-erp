@@ -149,6 +149,20 @@ function createTray() {
       label: '显示窗口',
       click: () => mainWindow?.show(),
     },
+    {
+      label: '切换账户',
+      click: () => {
+        // 登出当前账户并通知渲染进程显示登录页
+        if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+        if (ws) { ws.close(); ws = null; }
+        jwtToken = ''; username = ''; isAuthenticated = false;
+        sendStatusChange('logged_out');
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('switch-account');
+          mainWindow.show();
+        }
+      },
+    },
     { type: 'separator' },
     {
       label: '退出',

@@ -17,6 +17,7 @@ export interface PrintAPI {
   getSharedPrinters(): Promise<any[]>;
   onSharedPrinters(callback: (printers: any[]) => void): () => void;
   onUpdateEvent(callback: (e: any) => void): () => void;
+  onSwitchAccount(callback: () => void): () => void;
   checkUpdate(): Promise<{ ok: boolean }>;
   installUpdate(): Promise<{ ok: boolean; message?: string }>;
   setSharedPrinters(names: string[]): Promise<{ ok: boolean }>;
@@ -59,6 +60,12 @@ contextBridge.exposeInMainWorld('printAPI', {
     const handler = (_event: any, payload: any) => callback(payload);
     ipcRenderer.on('update-event', handler);
     return () => ipcRenderer.removeListener('update-event', handler);
+  },
+
+  onSwitchAccount: (callback: () => void) => {
+    const handler = () => callback();
+    ipcRenderer.on('switch-account', handler);
+    return () => ipcRenderer.removeListener('switch-account', handler);
   },
 
   checkUpdate: () => ipcRenderer.invoke('check-update'),

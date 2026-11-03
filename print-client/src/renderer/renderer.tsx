@@ -21,6 +21,7 @@ declare global {
       getSharedPrinters(): Promise<any[]>;
       onSharedPrinters(cb: (p: any[]) => void): () => void;
       onUpdateEvent(cb: (e: any) => void): () => void;
+      onSwitchAccount(cb: () => void): () => void;
       checkUpdate(): Promise<{ ok: boolean }>;
       installUpdate(): Promise<{ ok: boolean; message?: string }>;
       setSharedPrinters(names: string[]): Promise<{ ok: boolean }>;
@@ -32,13 +33,37 @@ const api = window.printAPI;
 
 // 本机共享标记持久化键（手动添加的共享打印机名单）
 const SHARED_KEY = 'printclient_shared_printers';
+// 记住密码持久化键（base64 编码，非加密，仅防窥屏）
+const REMEMBER_KEY = 'printclient_remember';
 
 // ============ 登录页 ============
 function LoginPage({ onLogin }: { onLogin: () => void }) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [remember, setRemember] = useState(false);
+  const [autoLogin, setAutoLogin] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+
+  // 启动时恢复记住的凭据
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(REMEMBER_KEY) || 'null');
+      if (saved && saved.username && saved.password) {
+        setUsername(saved.username);
+        setPassword(atob(saved.password));
+        setRemember(true);
+        setAutoLogin(!!saved.autoLogin);
+      }
+    } catch { /* ignore */ }
+  }, []);
+
+  // 凭据就绪且勾选自动登录时，自动触发登录
+  useEffect(() => {
+    if (autoLogin && username && password && !loading) {
+      handleLogin();
+    }
+  }, []);
 
   const handleLogin = async () => {
     if (!username || !password) {
@@ -47,6 +72,14 @@ function LoginPage({ onLogin }: { onLogin: () => void }) {
     }
     setLoading(true);
     setError('');
+    // 持久化记住密码
+    try {
+      if (remember) {
+        localStorage.setItem(REMEMBER_KEY, JSON.stringify({ username, password: btoa(password), autoLogin }));
+      } else {
+        localStorage.removeItem(REMEMBER_KEY);
+      }
+    } catch { /* ignore */ }
     const result = await api.login(username, password);
     setLoading(false);
     if (result.ok) {
@@ -68,6 +101,14 @@ function LoginPage({ onLogin }: { onLogin: () => void }) {
           <label>密码</label>
           <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="登录密码"
             onKeyDown={e => e.key === 'Enter' && handleLogin()} />
+        </div>
+        <div style={{ display: 'flex', gap: 16, marginBottom: 12, fontSize: 12, color: '#555' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
+            <input type="checkbox" checked={remember} onChange={e => setRemember(e.target.checked)} /> 记住密码
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
+            <input type="checkbox" checked={autoLogin} onChange={e => { setAutoLogin(e.target.checked); if (e.target.checked) setRemember(true); }} /> 自动登录
+          </label>
         </div>
         <button className="login-btn" onClick={handleLogin} disabled={loading}>
           {loading ? '登录中...' : '登 录'}
@@ -264,6 +305,11 @@ function App() {
       setLoggedIn(s.connected);
       setChecking(false);
     });
+    // 监听托盘“切换账户”：强制回到登录页
+    const unsubSwitch = api.onSwitchAccount(() => {
+      setLoggedIn(false);
+    });
+    return () => { unsubSwitch(); };
   }, []);
 
   if (checking) return null;

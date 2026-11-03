@@ -36,7 +36,8 @@ router.post('/render', (req: Request, res: Response) => {
   }
   const id = uuidv4();
   renderStore.set(id, { html, createdAt: Date.now() });
-  const baseUrl = `${req.protocol}://${req.get('host')}`;
+  // 使用 SERVER_PUBLIC_URL 确保打印客户端能访问（而非浏览器请求的 host，后者可能是 localhost）
+  const baseUrl = process.env.SERVER_PUBLIC_URL || `${req.protocol}://${req.get('host')}`;
   res.json({ code: 0, data: { id, url: `${baseUrl}/api/print/render/${id}` } });
 });
 
