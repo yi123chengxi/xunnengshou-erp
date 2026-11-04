@@ -31,12 +31,16 @@ startInviteConsumeWatcher();
 
 // 浏览器会话级登录态：sessionStorage 随浏览器关闭而清空，
 // 重启浏览器后再打开网址视为"未登入"——清除上次残留的登录会话并回退登录页，
-// 同一浏览器会话内刷新/新开标签页仍保持登录（不影响正常使用）
+// 同一浏览器会话内刷新/新开标签页仍保持登录（不影响正常使用）。
+// 判定新浏览器会话须同时满足：本标签 sessionStorage 无标记 且 心跳陈旧（>20s）——
+// 心跳新鲜说明同浏览器另有存活标签（如已登录的后台标签），手动新开标签不得误杀其会话。
 (() => {
   try {
     const hasSession = !!localStorage.getItem('username');
     const alive = sessionStorage.getItem('erpSessionAlive');
-    if (hasSession && alive !== '1') {
+    const lastBeat = Number(localStorage.getItem('erpHeartbeat') || 0);
+    const heartbeatFresh = lastBeat > 0 && Date.now() - lastBeat <= 20000;
+    if (hasSession && alive !== '1' && !heartbeatFresh) {
       ['userRole', 'username', 'isViewOnly', 'isSubAccount', 'parentAccount', 'userRoles', 'userCustomPermissions'].forEach(k => localStorage.removeItem(k));
     }
     sessionStorage.setItem('erpSessionAlive', '1');

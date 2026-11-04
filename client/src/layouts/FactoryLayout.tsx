@@ -53,11 +53,14 @@ const factoryMenus = [
 
 const FactoryLayout: React.FC = () => {
   const navigate = useNavigate();
-  // 登录守卫：未登录直接访问后台路由时回登录页（避免无会话时渲染回退身份）
+  // 登录守卫：未登录直接访问后台路由时回登录页（避免无会话时渲染回退身份）；
+  // 响应式：他标签清除会话（storage 事件）或切回本标签（visibilitychange）时即刻跳转
   useEffect(() => {
-    if (!localStorage.getItem('username')) {
-      window.location.replace('/login');
-    }
+    const check = () => { if (!localStorage.getItem('username')) window.location.replace('/login'); };
+    check();
+    window.addEventListener('storage', check);
+    document.addEventListener('visibilitychange', check);
+    return () => { window.removeEventListener('storage', check); document.removeEventListener('visibilitychange', check); };
   }, []);
   const location = useLocation();
   const [collapsed, setCollapsed] = useState(false);

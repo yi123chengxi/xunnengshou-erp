@@ -17,6 +17,7 @@ import { readProductListSync } from '../utils/dataStore';
 import useResizableColumns from '../hooks/useResizableColumns';
 import { loadSupplierSummary, ensureSupplierSummaryBuilt, loadCustomerSummary, ensureCustomerSummaryBuilt, toYuan } from '../utils/paySummary';
 import { safeSetItem } from '../utils/storageQuota';
+import { copyText } from '../utils/clipboard';
 
 const { Text, Title } = Typography;
 const { RangePicker } = DatePicker;
@@ -930,7 +931,7 @@ const GeneralLedgerPage: React.FC<{ simple?: boolean }> = ({ simple = false }) =
           <a onClick={(e) => { e.stopPropagation(); openVoucherView(v); }}
             style={{ color: PRIMARY, fontWeight: 500 }}>{v}</a>
           <CopyOutlined style={{ color: '#8c8c8c', cursor: 'pointer', fontSize: 13 }}
-            onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(v).then(() => message.success('已复制凭证号')); }} />
+            onClick={(e) => { e.stopPropagation(); copyText(v).then(ok => (ok ? message.success('已复制凭证号') : message.error('复制失败，请手动复制'))); }} />
         </span>
       ) : <Text type="secondary">—</Text> },
     { title: '摘要', dataIndex: 'description', key: 'description', width: 180, ellipsis: true },

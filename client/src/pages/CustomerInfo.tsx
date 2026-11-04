@@ -1830,9 +1830,8 @@ const CustomerInfo: React.FC = () => {
 
   // 复制邀约链接
   const copyInviteLink = () => {
-    navigator.clipboard.writeText(inviteLink).then(
-      () => message.success('链接已复制到剪贴板'),
-      () => message.error('复制失败，请手动复制')
+    copyText(inviteLink).then(
+      ok => (ok ? message.success('链接已复制到剪贴板') : message.error('复制失败，请手动复制'))
     );
   };
 

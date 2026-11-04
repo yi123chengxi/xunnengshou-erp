@@ -48,6 +48,7 @@ import { findInviteRecord, markInviteUsed } from '../utils/inviteRegistry';
 import { isAccountingMode, writeAutoEntries, loadSubjectOptions, subjectFilterOption } from '../utils/accountingBridge';
 import { getCurrentUserDisplayName } from '../utils/billLog';
 import { compressImageFile } from '../utils/imageCompress';
+import { copyText } from '../utils/clipboard';
 
 const { Text, Title } = Typography;
 const { Option } = Select;
@@ -1065,9 +1066,8 @@ const PurchaserSupplierList: React.FC = () => {
 
   // 复制链接
   const copyLink = () => {
-    navigator.clipboard.writeText(generatedLink).then(
-      () => message.success('链接已复制到剪贴板'),
-      () => message.error('复制失败，请手动复制')
+    copyText(generatedLink).then(
+      ok => (ok ? message.success('链接已复制到剪贴板') : message.error('复制失败，请手动复制'))
     );
   };
 

@@ -196,6 +196,14 @@ const savePinnedTabs = (tabs: TabItem[]) => {
 const PurchaserLayout: React.FC = () => {
   const [collapsed, setCollapsed] = useState(false);
   const [activeMenu, setActiveMenu] = useState('dashboard');
+  // 登录守卫（响应式）：未登录/会话被他标签清除时即刻回登录页，杜绝无会话渲染后台
+  useEffect(() => {
+    const check = () => { if (!localStorage.getItem('username')) window.location.replace('/login'); };
+    check();
+    window.addEventListener('storage', check);
+    document.addEventListener('visibilitychange', check);
+    return () => { window.removeEventListener('storage', check); document.removeEventListener('visibilitychange', check); };
+  }, []);
   const allOpenKeys = ['ecommerce', 'suppliers', 'product-data', 'finance', 'settings'];
   const [openKeys, setOpenKeys] = useState<string[]>(allOpenKeys);
   const navigate = useNavigate();

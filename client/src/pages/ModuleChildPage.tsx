@@ -10750,10 +10750,7 @@ const handleBatchAttrsConfirm = () => {
                   <CopyOutlined
                     onClick={(e) => {
                       e.stopPropagation();
-                      navigator.clipboard.writeText(val).then(() => message.success(`已复制商品编码 ${val}`)).catch(() => {
-                        const ta = document.createElement('textarea'); ta.value = val; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
-                        message.success(`已复制商品编码 ${val}`);
-                      });
+                      copyText(val).then(ok => (ok ? message.success(`已复制商品编码 ${val}`) : message.error('复制失败，请手动复制')));
                     }}
                     style={{ fontSize: 12, color: PRIMARY, cursor: 'pointer', flexShrink: 0 }}
                   />
@@ -10808,10 +10805,7 @@ const handleBatchAttrsConfirm = () => {
                   <CopyOutlined
                     onClick={(e) => {
                       e.stopPropagation();
-                      navigator.clipboard.writeText(val).then(() => message.success(`已复制订单编号 ${val}`)).catch(() => {
-                        const ta = document.createElement('textarea'); ta.value = val; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
-                        message.success(`已复制订单编号 ${val}`);
-                      });
+                      copyText(val).then(ok => (ok ? message.success(`已复制订单编号 ${val}`) : message.error('复制失败，请手动复制')));
                     }}
                     style={{ fontSize: 12, color: PRIMARY, cursor: 'pointer', flexShrink: 0 }}
                   />
@@ -10831,10 +10825,7 @@ const handleBatchAttrsConfirm = () => {
                 <CopyOutlined
                   onClick={(e) => {
                     e.stopPropagation();
-                    navigator.clipboard.writeText(val).then(() => message.success(`已复制生产单号 ${val}`)).catch(() => {
-                      const ta = document.createElement('textarea'); ta.value = val; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
-                      message.success(`已复制生产单号 ${val}`);
-                    });
+                    copyText(val).then(ok => (ok ? message.success(`已复制生产单号 ${val}`) : message.error('复制失败，请手动复制')));
                   }}
                   style={{ fontSize: 12, color: PRIMARY, cursor: 'pointer', flexShrink: 0 }}
                 />
@@ -10869,10 +10860,7 @@ const handleBatchAttrsConfirm = () => {
                 <CopyOutlined
                   onClick={(e) => {
                     e.stopPropagation();
-                    navigator.clipboard.writeText(val).then(() => message.success(`已复制加工单号 ${val}`)).catch(() => {
-                      const ta = document.createElement('textarea'); ta.value = val; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
-                      message.success(`已复制加工单号 ${val}`);
-                    });
+                    copyText(val).then(ok => (ok ? message.success(`已复制加工单号 ${val}`) : message.error('复制失败，请手动复制')));
                   }}
                   style={{ fontSize: 12, color: PRIMARY, cursor: 'pointer', flexShrink: 0 }}
                 />
@@ -10907,10 +10895,7 @@ const handleBatchAttrsConfirm = () => {
                 <CopyOutlined
                   onClick={(e) => {
                     e.stopPropagation();
-                    navigator.clipboard.writeText(val).then(() => message.success(`已复制关联销售单号 ${val}`)).catch(() => {
-                      const ta = document.createElement('textarea'); ta.value = val; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
-                      message.success(`已复制关联销售单号 ${val}`);
-                    });
+                    copyText(val).then(ok => (ok ? message.success(`已复制关联销售单号 ${val}`) : message.error('复制失败，请手动复制')));
                   }}
                   style={{ fontSize: 12, color: PRIMARY, cursor: 'pointer', flexShrink: 0 }}
                 />
@@ -10950,10 +10935,7 @@ const handleBatchAttrsConfirm = () => {
                 <CopyOutlined
                   onClick={(e) => {
                     e.stopPropagation();
-                    navigator.clipboard.writeText(val).then(() => message.success(`已复制${copyLabel} ${val}`)).catch(() => {
-                      const ta = document.createElement('textarea'); ta.value = val; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
-                      message.success(`已复制${copyLabel} ${val}`);
-                    });
+                    copyText(val).then(ok => (ok ? message.success(`已复制${copyLabel} ${val}`) : message.error('复制失败，请手动复制')));
                   }}
                   style={{ fontSize: 12, color: PRIMARY, cursor: 'pointer', flexShrink: 0 }}
                 />
@@ -14169,7 +14151,7 @@ const handleBatchAttrsConfirm = () => {
                               <Input size="small" disabled style={{ color: '#000' }} suffix={
                                 <CopyOutlined style={{ color: PRIMARY, cursor: 'pointer' }} onClick={() => {
                                   const val = editForm.getFieldValue('id') || '';
-                                  if (val) { navigator.clipboard.writeText(val).then(() => message.success('已复制订单编号')); }
+                                  if (val) { copyText(val).then(ok => (ok ? message.success('已复制订单编号') : message.error('复制失败，请手动复制'))); }
                                 }} />
                               } />
                             </Form.Item>

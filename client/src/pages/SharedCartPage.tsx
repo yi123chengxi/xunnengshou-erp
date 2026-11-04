@@ -8,6 +8,7 @@ import {
 } from '@ant-design/icons';
 import { loadDataset, saveDataset } from '../utils/dataStore';
 import { pullAllDatasets } from '../utils/serverSync';
+import { copyText as copyToClipboard } from '../utils/clipboard';
 
 const PRIMARY = '#1e4a7e';
 const SHARED_INVENTORY_KEY = 'market_shared_inventories';
@@ -179,7 +180,7 @@ const SharedCartPage: React.FC = () => {
     const lines = shareRec.items.map((i) => `${i.shortName || ''} (款号:${i.styleCode || '-'}) × ${i.qty}${i.unit || ''} = ¥${(Number(i.price) * Number(i.qty)).toFixed(2)}`);
     const text = `客户：${shareRec.buyerLabel || '未登录访客'}\n货盘：${inv?.name || '-'}\n订单编号：${genPoCode()}\n\n商品明细：\n${lines.join('\n')}\n\n合计：${totalQty} 件 / ¥${totalAmount.toFixed(2)}`;
     setCopyText(text);
-    try { navigator.clipboard.writeText(text); message.success('已复制订单文本到剪贴板'); } catch { /* ignore */ }
+    copyToClipboard(text).then(ok => (ok ? message.success('已复制订单文本到剪贴板') : message.error('复制失败，请手动复制')));
   };
 
   // 一键生成订单

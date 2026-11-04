@@ -19,6 +19,7 @@ import MoldMarketTab from './MoldMarketTab';
 import ChatPage from './ChatPage';
 import { triggerOpenChat, fetchUnreadCount, onNewMessage as onChatNewMessage } from '../utils/chatSocket';
 import { getDataOwner } from '../utils/brandAuth';
+import { copyText } from '../utils/clipboard';
 
 const { Text, Paragraph } = Typography;
 const PRIMARY = '#1e4a7e';
@@ -2808,8 +2809,7 @@ const addToCart = useCallback((rec: any, qty?: number) => {
                       size="small"
                       icon={<CopyOutlined />}
                       onClick={() => {
-                        navigator.clipboard.writeText(allLink);
-                        message.success('分享链接已复制到剪贴板');
+                        copyText(allLink).then(ok => (ok ? message.success('分享链接已复制到剪贴板') : message.error('复制失败，请手动选择链接复制')));
                       }}
                     >复制</Button>
                   </div>
@@ -2837,8 +2837,7 @@ const addToCart = useCallback((rec: any, qty?: number) => {
                     size="small"
                     icon={<CopyOutlined />}
                     onClick={() => {
-                      navigator.clipboard.writeText(shareLink);
-                      message.success('分享链接已复制到剪贴板');
+                      copyText(shareLink).then(ok => (ok ? message.success('分享链接已复制到剪贴板') : message.error('复制失败，请手动选择链接复制')));
                     }}
                   >复制</Button>
                 </div>
@@ -2854,8 +2853,7 @@ const addToCart = useCallback((rec: any, qty?: number) => {
                   size="small"
                   icon={<CopyOutlined />}
                   onClick={() => {
-                    navigator.clipboard.writeText(currentShareList.shareCode);
-                    message.success('分享码已复制到剪贴板');
+                    copyText(currentShareList.shareCode).then(ok => (ok ? message.success('分享码已复制到剪贴板') : message.error('复制失败，请手动选择分享码复制')));
                   }}
                 >复制</Button>
                 <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>采购商也可在“我的货盘”页面手动输入分享码查看</div>
@@ -3016,7 +3014,7 @@ const addToCart = useCallback((rec: any, qty?: number) => {
                 onClick={() => {
                   const tabKey = detailRec.type === 'finished' ? 'finished' : detailRec.type === 'mold' ? 'mold-market' : 'semi';
                   const link = `${window.location.origin}/market/opportunity?tab=${tabKey}&productId=${detailRec.id}`;
-                  navigator.clipboard.writeText(link).then(() => message.success('链接已复制'));
+                  copyText(link).then(ok => (ok ? message.success('链接已复制') : message.error('复制失败，请手动复制链接')));
                 }}
               >
                 复制链接

@@ -11,6 +11,7 @@ import { safeSetItem } from '../utils/storageQuota';
 import { flushDatasetUpload } from '../utils/serverSync';
 import { computeSubjectFeatures, subjectSimilarity } from '../utils/imageSimilarity';
 import { triggerOpenChat } from '../utils/chatSocket';
+import { copyText } from '../utils/clipboard';
 import type { MoldRecord, MoldSpec } from './MoldPage';
 
 const PRIMARY = '#1e4a7e';
@@ -968,7 +969,7 @@ const MoldMarketTab: React.FC<{ onContact?: (username: string, subject: string) 
                 type="primary"
                 onClick={() => {
                   const link = `${window.location.origin}/market/opportunity?tab=mold-market&productId=${detailRecord.id}`;
-                  navigator.clipboard.writeText(link).then(() => message.success('链接已复制'));
+                  copyText(link).then(ok => (ok ? message.success('链接已复制') : message.error('复制失败，请手动复制链接')));
                 }}
               >
                 复制链接
