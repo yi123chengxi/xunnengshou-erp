@@ -258,36 +258,8 @@ export const PRODUCT_FIELD_META: { title: string; dataIndex: string; group?: str
 })();
 export const PRODUCT_FIELD_KEYS = PRODUCT_FIELD_META.map(c => c.dataIndex);
 
-/** 店铺管理四页字段点（菜单 key=ecommerce/shop-management，dataIndex 以页面前缀区分） */
+/** 店铺管理菜单 key（字段/按键权限点归属） */
 export const SHOP_MENU_KEY = 'ecommerce/shop-management';
-export const SHOP_FIELD_META: { page: string; pageLabel: string; title: string; dataIndex: string }[] = [
-  { page: 'shoplist', pageLabel: '店铺列表', title: '店铺名称', dataIndex: 'shoplist.shopName' },
-  { page: 'shoplist', pageLabel: '店铺列表', title: 'ERP店铺ID', dataIndex: 'shoplist.accountId' },
-  { page: 'shoplist', pageLabel: '店铺列表', title: '所属平台', dataIndex: 'shoplist.platform' },
-  { page: 'shoplist', pageLabel: '店铺列表', title: '品牌', dataIndex: 'shoplist.brand' },
-  { page: 'shoplist', pageLabel: '店铺列表', title: '公司名称', dataIndex: 'shoplist.companyName' },
-  { page: 'shoplist', pageLabel: '店铺列表', title: '店铺手机号', dataIndex: 'shoplist.shopPhone' },
-  { page: 'shoplist', pageLabel: '店铺列表', title: '负责人', dataIndex: 'shoplist.person' },
-  { page: 'shoplist', pageLabel: '店铺列表', title: '备注', dataIndex: 'shoplist.remark' },
-  { page: 'shoplist', pageLabel: '店铺列表', title: '店铺登入密码', dataIndex: 'shoplist.shopPassword' },
-  { page: 'monthend', pageLabel: '月末盘点', title: '店铺名称', dataIndex: 'monthend.shopName' },
-  { page: 'monthend', pageLabel: '月末盘点', title: '盘点月份', dataIndex: 'monthend.calcMonth' },
-  { page: 'monthend', pageLabel: '月末盘点', title: '已到账金额', dataIndex: 'monthend.currentBalance' },
-  { page: 'monthend', pageLabel: '月末盘点', title: '待到账金额', dataIndex: 'monthend.pendingAmount' },
-  { page: 'monthend', pageLabel: '月末盘点', title: '广告资金', dataIndex: 'monthend.adFunds' },
-  { page: 'monthend', pageLabel: '月末盘点', title: '押金', dataIndex: 'monthend.deposit' },
-  { page: 'profit', pageLabel: '月利润表', title: '店铺名称', dataIndex: 'profit.shopName' },
-  { page: 'profit', pageLabel: '月利润表', title: '月份', dataIndex: 'profit.calcMonth' },
-  { page: 'profit', pageLabel: '月利润表', title: '发货成本', dataIndex: 'profit.shippingCost' },
-  { page: 'profit', pageLabel: '月利润表', title: '退款金额', dataIndex: 'profit.refundAmount' },
-  { page: 'profit', pageLabel: '月利润表', title: '利润', dataIndex: 'profit.profit' },
-  { page: 'profit', pageLabel: '月利润表', title: '状态', dataIndex: 'profit.status' },
-  { page: 'withdrawal', pageLabel: '提现/充值', title: '店铺名称', dataIndex: 'withdrawal.shopName' },
-  { page: 'withdrawal', pageLabel: '提现/充值', title: '金额', dataIndex: 'withdrawal.amount' },
-  { page: 'withdrawal', pageLabel: '提现/充值', title: '提现日期', dataIndex: 'withdrawal.date' },
-  { page: 'withdrawal', pageLabel: '提现/充值', title: '状态', dataIndex: 'withdrawal.status' },
-  { page: 'withdrawal', pageLabel: '提现/充值', title: '录入人', dataIndex: 'withdrawal.inputBy' },
-];
 export let FN_POINTS: PermPoint[] = [];
 export let FIELD_POINTS: PermPoint[] = [];
 
@@ -315,16 +287,33 @@ export const menuGroupOf = (scope: PermScope, key: string): PermMenuGroup | unde
 export const fnPointsOf = (scope: PermScope): PermPoint[] => FN_POINTS.filter(p => p.scope === scope);
 export const fieldPointsOf = (scope: PermScope): PermPoint[] => FIELD_POINTS.filter(p => p.scope === scope);
 
-// ===================== 功能点/字段点生成（依赖上方查询助手，置于末尾避免 TDZ） =====================
-FN_POINTS = menuKeysOf('supplier').flatMap(mk => {
-  const label = menuLabelOf('supplier', mk);
-  const group = menuGroupOf('supplier', mk)?.key || '';
-  return FN_ACTIONS.map(a => ({ key: `fn:${mk}:${a}`, label: `${label}·${FN_ACTION_LABEL[a]}`, type: 'fn' as PermPointType, group, scope: 'supplier' as PermScope, def: 'allow' as const }));
-});
+// ===================== 功能点/字段点生成（依赖上方查询助手与页面扫描产物，置于末尾避免 TDZ） =====================
+import { SCANNED_PAGES } from './permPageScan.generated';
+
+// 功能点：按页面扫描到的按键存在性生成（未扫描到的菜单回退通用九件套）
+FN_POINTS = (() => {
+  const byMenu = new Map<string, Set<string>>();
+  SCANNED_PAGES.forEach(p => {
+    const s = byMenu.get(p.menuKey) || new Set<string>();
+    p.fns.forEach(a => s.add(a));
+    byMenu.set(p.menuKey, s);
+  });
+  const out: PermPoint[] = [];
+  menuKeysOf('supplier').forEach(mk => {
+    const acts = byMenu.get(mk);
+    const list: string[] = acts && acts.size > 0 ? Array.from(acts) : Array.from(FN_ACTIONS);
+    const label = menuLabelOf('supplier', mk);
+    const group = menuGroupOf('supplier', mk)?.key || '';
+    list.forEach(a => out.push({ key: `fn:${mk}:${a}`, label: `${label}·${FN_ACTION_LABEL[a as FnAction]}`, type: 'fn' as PermPointType, group, scope: 'supplier' as PermScope, def: 'allow' as const }));
+  });
+  return out;
+})();
+
+// 字段点：商品列表（pageConfig）+ 全页面扫描产物（按子页面分组，查看/编辑双点）
 FIELD_POINTS = PRODUCT_FIELD_META.flatMap(c => [
   { key: `field:${PRODUCT_PAGE_KEY}:${c.dataIndex}:view`, label: `${c.title}·查看`, type: 'field' as PermPointType, group: c.group || '其它', scope: 'supplier' as PermScope, def: 'allow' as const },
   { key: `field:${PRODUCT_PAGE_KEY}:${c.dataIndex}:edit`, label: `${c.title}·编辑`, type: 'field' as PermPointType, group: c.group || '其它', scope: 'supplier' as PermScope, def: 'allow' as const },
-]).concat(SHOP_FIELD_META.flatMap(c => [
-  { key: `field:${SHOP_MENU_KEY}:${c.dataIndex}:view`, label: `${c.pageLabel}·${c.title}·查看`, type: 'field' as PermPointType, group: c.pageLabel, scope: 'supplier' as PermScope, def: 'allow' as const },
-  { key: `field:${SHOP_MENU_KEY}:${c.dataIndex}:edit`, label: `${c.pageLabel}·${c.title}·编辑`, type: 'field' as PermPointType, group: c.pageLabel, scope: 'supplier' as PermScope, def: 'allow' as const },
-]));
+]).concat(SCANNED_PAGES.flatMap(p => p.fields.flatMap(c => [
+  { key: `field:${p.menuKey}:${p.page}.${c.dataIndex}:view`, label: `${c.title}·查看`, type: 'field' as PermPointType, group: p.pageLabel, scope: 'supplier' as PermScope, def: 'allow' as const },
+  { key: `field:${p.menuKey}:${p.page}.${c.dataIndex}:edit`, label: `${c.title}·编辑`, type: 'field' as PermPointType, group: p.pageLabel, scope: 'supplier' as PermScope, def: 'allow' as const },
+])));

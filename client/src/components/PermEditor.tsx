@@ -11,7 +11,7 @@ import { Radio, Input, Space, Button, Tag, Typography, Empty } from 'antd';
 import { SearchOutlined, AppstoreOutlined } from '@ant-design/icons';
 import {
   PermScope, PermTri, menuGroupsOf, menuKeysOf, menuLabelOf,
-  FN_ACTIONS, FN_ACTION_LABEL, FIELD_POINTS,
+  FN_ACTION_LABEL, FIELD_POINTS, FN_POINTS,
 } from '../config/permRegistry';
 
 const { Text } = Typography;
@@ -79,8 +79,10 @@ const PermEditor: React.FC<Props> = ({ scopes, value, onChange }) => {
     return Array.from(map.entries());
   }, [activeMenu, kw]);
 
-  const fnRows = FN_ACTIONS.map(a => ({ action: a, key: `fn:${activeMenu}:${a}` }));
-  const hasFnPoints = menuKeysOf('supplier').includes(activeMenu);
+  const fnRows = useMemo(() => FN_POINTS
+    .filter(p => p.key.startsWith(`fn:${activeMenu}:`))
+    .map(p => ({ action: p.key.slice(`fn:${activeMenu}:`.length), key: p.key })), [activeMenu]);
+  const hasFnPoints = fnRows.length > 0;
 
   return (
     <div>
@@ -165,7 +167,7 @@ const PermEditor: React.FC<Props> = ({ scopes, value, onChange }) => {
                   </Space>
                 </div>
                 {fieldGroups.length === 0 ? (
-                  <Text type="secondary" style={{ fontSize: 12 }}>该菜单暂无字段权限点（当前已登记：商品列表、店铺管理四页）</Text>
+                  <Text type="secondary" style={{ fontSize: 12 }}>该菜单暂无字段权限点（页面变更后重跑 client/scripts/gen-perm-points.js 重新扫描生成）</Text>
                 ) : fieldGroups.map(([group, pts]) => (
                   <div key={group} style={{ marginBottom: 10 }}>
                     <div style={{ fontSize: 12, color: '#666', marginBottom: 4, fontWeight: 600 }}>{group}（{pts.length / 2} 字段）</div>
