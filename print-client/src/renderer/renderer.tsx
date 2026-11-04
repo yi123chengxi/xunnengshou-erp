@@ -15,6 +15,7 @@ declare global {
       getStatus(): Promise<{ connected: boolean; username: string; serverUrl: string }>;
       getJobLogs(): Promise<any[]>;
       logout(): Promise<{ ok: boolean }>;
+      cancelJob(jobId: string): Promise<{ ok: boolean; message?: string }>;
       onStatusChange(cb: (s: string) => void): () => void;
       onJobLog(cb: (log: any) => void): () => void;
       onPrintersUpdated(cb: (p: any[]) => void): () => void;
@@ -280,6 +281,22 @@ function MainPage() {
                     {log.jobType === 'url' ? 'URL' : 'PDF'} → {log.printerName}
                   </span>
                   {log.error && <span style={{ color: '#f5222d', fontSize: 11 }}>{log.error}</span>}
+                  {(log.status === 'pending' || log.status === 'printing') && (
+                    <button
+                      style={{
+                        flexShrink: 0, fontSize: 11, padding: '2px 10px', borderRadius: 4, cursor: 'pointer',
+                        border: '1px solid #ffa39e', background: '#fff1f0', color: '#cf1322', marginLeft: 6,
+                      }}
+                      onClick={async () => {
+                        const r = await api.cancelJob(log.id);
+                        if (r.ok) {
+                          setLogs(prev => prev.map(l => l.id === log.id ? { ...l, status: 'failed', error: '已手动取消' } : l));
+                        } else {
+                          alert(`取消失败：${r.message || '未知错误'}`);
+                        }
+                      }}
+                    >取消</button>
+                  )}
                 </div>
               ))}
             </div>

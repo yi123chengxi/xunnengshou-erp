@@ -11,6 +11,7 @@ export interface PrintAPI {
   getStatus(): Promise<{ connected: boolean; username: string; serverUrl: string }>;
   getJobLogs(): Promise<any[]>;
   logout(): Promise<{ ok: boolean }>;
+  cancelJob(jobId: string): Promise<{ ok: boolean; message?: string }>;
   onStatusChange(callback: (status: string) => void): () => void;
   onJobLog(callback: (log: any) => void): () => void;
   onPrintersUpdated(callback: (printers: { name: string; isDefault: boolean }[]) => void): () => void;
@@ -29,6 +30,7 @@ contextBridge.exposeInMainWorld('printAPI', {
   getStatus: () => ipcRenderer.invoke('get-status'),
   getJobLogs: () => ipcRenderer.invoke('get-job-logs'),
   logout: () => ipcRenderer.invoke('logout'),
+  cancelJob: (jobId: string) => ipcRenderer.invoke('cancel-job', jobId),
 
   onStatusChange: (callback: (status: string) => void) => {
     const handler = (_event: any, status: string) => callback(status);

@@ -14,7 +14,6 @@ import {
 import {
   PrinterOutlined, SettingOutlined, PlusOutlined, DeleteOutlined, SaveOutlined,
   ClearOutlined, SearchOutlined, EditOutlined, EyeOutlined, FileTextOutlined,
-  CloseOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { getDataOwner } from '../utils/brandAuth';
@@ -198,7 +197,6 @@ const ProductPrintPage: React.FC = () => {
   }, []);
   useEffect(() => { reloadPrinters(); }, [reloadPrinters]);
   const [qty1, setQty1] = useState(1);
-  const [printTaskId, setPrintTaskId] = useState('');
   const [printLoading, setPrintLoading] = useState(false);
   const [customContents, setCustomContents] = useState<any[]>([]);
   const [selCustom, setSelCustom] = useState('');
@@ -473,8 +471,6 @@ const ProductPrintPage: React.FC = () => {
       const username = localStorage.getItem('username') || '';
       const jobRes = await request.post('/print/job', { type: 'url', content: printUrl, printerName, copies, username });
       if (jobRes?.data?.code === 0) {
-        const taskId = jobRes?.data?.data?.taskId || '';
-        setPrintTaskId(taskId);
         message.success(`吊牌打印任务已提交（${copies} 份）`);
       } else {
         message.error(jobRes?.data?.message || '打印任务提交失败');
@@ -484,19 +480,6 @@ const ProductPrintPage: React.FC = () => {
       message.error(msg);
     } finally {
       setPrintLoading(false);
-    }
-  };
-
-  // 取消当前打印任务
-  const doCancelPrint = async () => {
-    if (!printTaskId) { message.warning('没有正在进行的打印任务'); return; }
-    const username = localStorage.getItem('username') || '';
-    try {
-      await request.post(`/print/job/${printTaskId}/cancel`, { username });
-      message.success('取消指令已发送');
-      setPrintTaskId('');
-    } catch {
-      message.error('取消失败');
     }
   };
 
@@ -807,7 +790,6 @@ const ProductPrintPage: React.FC = () => {
                 <Text style={{ fontSize: 15 }}>打印数量:</Text>
                 <InputNumber size="large" min={1} style={{ height: 48, width: 90 }} value={qty1} onChange={n => setQty1(Number(n) || 1)} />
                 <Button size="large" type="primary" icon={<PrinterOutlined />} style={{ height: 48, fontSize: 16, padding: '0 28px' }} disabled={!selProduct || printLoading} loading={printLoading} onClick={() => doPrintRow('tag', qty1)}>打印吊牌</Button>
-                <Button size="large" icon={<CloseOutlined />} style={{ height: 48, fontSize: 15 }} disabled={!printTaskId} onClick={doCancelPrint}>取消任务</Button>
                 <Button size="large" icon={<EditOutlined />} style={{ height: 48, fontSize: 15 }} onClick={() => navigate('/settings/print-template?type=tag')}>编辑吊牌模板</Button>
                 <Button size="large" icon={<EyeOutlined />} style={{ height: 48, fontSize: 15 }} disabled={!selProduct} onClick={() => doPrintRow('tag', qty1)}>打印预览</Button>
               </div>

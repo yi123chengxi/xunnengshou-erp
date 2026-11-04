@@ -506,6 +506,24 @@ function setupIPC() {
     sendStatusChange('logged_out');
     return { ok: true };
   });
+
+  // 任务日志取消按钮：主进程用已存储的 username 调服务端取消 API（服务端经 WebSocket 转发回本客户端）
+  ipcMain.handle('cancel-job', async (_event: any, jobId: string) => {
+    if (!jobId) return { ok: false, message: '缺少任务 ID' };
+    const base = (serverUrl || DEFAULT_SERVER_URL).replace(/\/+$/, '');
+    try {
+      const resp = await fetch(`${base}/api/print/job/${encodeURIComponent(jobId)}/cancel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username }),
+      });
+      const data = await resp.json().catch(() => null);
+      if (resp.ok && data?.code === 0) return { ok: true };
+      return { ok: false, message: data?.message || `服务端返回 ${resp.status}` };
+    } catch (err: any) {
+      return { ok: false, message: err?.message || '无法连接服务器' };
+    }
+  });
 }
 
 function sendStatusChange(status: string) {
