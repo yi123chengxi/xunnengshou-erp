@@ -17,6 +17,7 @@ import {
   BrandRecord, AUTH_STATUS_OPTS, DEPOSIT_TO_OPTS, SHOP_TYPE_OPTS,
 } from '../utils/brandAuth';
 import { loadTenantUsers, tenantUserDisplayName } from '../utils/tenantUsers';
+import { isAccountingMode, writeAutoEntries } from '../utils/accountingBridge';
 import { OwnBrandEditor, type OwnBrand } from './OwnBrandPage';
 import dayjs from 'dayjs';
 
@@ -161,10 +162,22 @@ const BrandAuthPage: React.FC<{ embedded?: boolean }> = ({ embedded }) => {
       const rec: BrandRecord = { ...(editing || emptyRecord()), ...v, key: editing?.key || genKey('BR') };
       if (!editing) rec.creator = rec.creator || getDisplayName();
       if (!rec.fillTime) rec.fillTime = todayIso();
+      // 保证金流程联动（仅新增且未登记状态）：分销商店铺+我方收 → 自动创建收款确认单并置待确认；
+      // 公司内部店铺代付 → 登记其他应收款台账（退回时核销并记账）
+      let recvCreated = false;
+      if (!editing && !rec.depositStatus) {
+        if (isRecvDepositFlow(rec)) {
+          rec.depositReceiptKey = buildDepositRecvReceipt(rec);
+          rec.depositStatus = 'pending_confirm';
+          recvCreated = true;
+        } else if (isInnerPayFlow(rec)) {
+          registerInnerReceivable(rec);
+        }
+      }
       const list = editing ? records.map(x => (x.key === editing.key ? rec : x)) : [rec, ...records];
       save(list);
       setVisible(false);
-      message.success(editing ? '已保存' : '已新增');
+      message.success(editing ? '已保存' : recvCreated ? '已新增：收款确认单已创建，待财务在收/付申请确认到账' : '已新增');
     });
   };
   const handleDelete = (r: BrandRecord) => save(records.filter(x => x.key !== r.key));
@@ -172,6 +185,149 @@ const BrandAuthPage: React.FC<{ embedded?: boolean }> = ({ embedded }) => {
     const list = records.map(x => x.key === r.key ? { ...x, authStatus: status } : x);
     save(list);
     message.success(`已更新为「${status}」`);
+  };
+
+  // ========== 保证金流程判定 ==========
+  // 分销商店铺+去向=我方收：我方向分销商收取保证金 → 收款确认环节；确认后登记其他应付款，退回时反向核销
+  const isRecvDepositFlow = (r: BrandRecord) => r.shopType === '分销商店铺' && r.depositTo === '我方收' && (Number(r.deposit) || 0) > 0;
+  // 公司内部店铺+去向≠我方收：保证金由我方代付品牌方 → 登记时记其他应收款台账，退回收款时核销并记账
+  const isInnerPayFlow = (r: BrandRecord) => r.shopType === '公司内部店铺' && r.depositTo !== '我方收' && (Number(r.deposit) || 0) > 0;
+
+  // 生成“收款确认单”（财务-收/付申请-收款确认）：财务确认到账后保证金置已到账并同步登记其他应付款
+  const buildDepositRecvReceipt = (rec: BrandRecord): string => {
+    const prKey = `payment_requests_${getDataOwner()}`;
+    let prList: any[] = [];
+    try { prList = JSON.parse(localStorage.getItem(prKey) || '[]'); } catch { /* ignore */ }
+    const skPrefix = `SK${dayjs().format('YYYYMMDD')}`;
+    const skSeqs = prList.filter((pr: any) => pr.requestNo?.startsWith(skPrefix)).map((pr: any) => parseInt(pr.requestNo.slice(-3), 10) || 0);
+    const receiptKey = `recvreq-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const payer = rec.companyName || rec.shopName || rec.brandName || '';
+    const receiptRec: any = {
+      key: receiptKey,
+      requestNo: `${skPrefix}${String((skSeqs.length ? Math.max(...skSeqs) : 0) + 1).padStart(3, '0')}`,
+      amount: Number(rec.deposit) || 0,
+      category: '收款',
+      description: `品牌授权保证金 — ${payer}`,
+      recvType: 'bank',
+      recvAccountName: payer,
+      source: 'manual',
+      status: 'pending_confirm',
+      recordType: 'receipt',
+      payerName: payer,
+      brandAuthKey: rec.key,
+      applicant: localStorage.getItem('username') || '',
+      applicantName: getDisplayName(),
+      applyDate: dayjs().format('YYYY-MM-DD'),
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    try { localStorage.setItem(prKey, JSON.stringify([receiptRec, ...prList])); } catch { /* ignore */ }
+    return receiptKey;
+  };
+
+  // 公司内部店铺代付：登记其他应收款台账（品牌方欠我方保证金退回），幂等
+  const registerInnerReceivable = (rec: BrandRecord) => {
+    try {
+      const orKey = `other_receivables_${getDataOwner()}`;
+      const orList: any[] = JSON.parse(localStorage.getItem(orKey) || '[]');
+      const recvKey = `deposit-pay-${rec.key}`;
+      if (orList.some((x: any) => x.key === recvKey)) return;
+      orList.unshift({
+        key: recvKey,
+        recvDate: dayjs().format('YYYY-MM-DD'),
+        counterparty: rec.brandName || rec.companyName || '',
+        category: '押金/保证金',
+        amount: Number(rec.deposit) || 0,
+        dueDate: '',
+        receivedAmount: 0,
+        receivedDate: '',
+        bankAccount: '',
+        remark: `公司内部店铺代付品牌保证金 — ${rec.brandName || rec.companyName || ''}`,
+        createdAt: new Date().toISOString(),
+      });
+      localStorage.setItem(orKey, JSON.stringify(orList));
+    } catch { /* ignore */ }
+  };
+
+  // 公司内部店铺代付收回：核销其他应收款台账 + 记账（简易：收入分类其他应收款；会计：借银行存款 贷其他应收款），幂等
+  const settleInnerReceivable = (r: BrandRecord, bankName: string) => {
+    const ownerNow = getDataOwner();
+    const amt = Number(r.deposit) || 0;
+    const today = dayjs().format('YYYY-MM-DD');
+    try {
+      const orKey = `other_receivables_${ownerNow}`;
+      const orList: any[] = JSON.parse(localStorage.getItem(orKey) || '[]');
+      const idx = orList.findIndex((x: any) => x.key === `deposit-pay-${r.key}`);
+      if (idx >= 0 && (Number(orList[idx].receivedAmount) || 0) < (Number(orList[idx].amount) || 0)) {
+        orList[idx] = { ...orList[idx], receivedAmount: Number(orList[idx].amount) || 0, receivedDate: today, bankAccount: bankName || orList[idx].bankAccount || '' };
+        localStorage.setItem(orKey, JSON.stringify(orList));
+      }
+    } catch { /* ignore */ }
+    if (isAccountingMode(ownerNow)) {
+      writeAutoEntries(ownerNow, {
+        sourceKey: `ba-depositret-${r.key}`,
+        debitSubject: '银行存款', creditSubject: '其他应收款',
+        amount: amt, summary: `公司内部店铺品牌保证金退回 — ${r.brandName || r.companyName || ''}`,
+        date: today, bookkeeper: getDisplayName(), auditor: getDisplayName(),
+      });
+    } else {
+      try {
+        const bkKey = `daily_bookkeeping_${ownerNow}`;
+        const books: any[] = JSON.parse(localStorage.getItem(bkKey) || '[]');
+        const bookKey = `bk-depositret-${r.key}`;
+        if (!books.some(b => b.key === bookKey)) {
+          const prefix = `PZ-${today.replace(/-/g, '')}`;
+          const seqs = books.map(b => String(b.voucherNo || '')).filter(v => v.startsWith(prefix)).map(v => parseInt(v.slice(-3), 10) || 0);
+          books.unshift({
+            key: bookKey, voucherNo: `${prefix}-${String((seqs.length ? Math.max(...seqs) : 0) + 1).padStart(3, '0')}`,
+            bookDate: today, bookType: '收入', category: '其他应收款', amount: amt,
+            counterparty: r.brandName || r.companyName || '', remark: `公司内部店铺品牌保证金退回 — ${r.brandName || r.companyName || ''}`,
+            person: getDisplayName(), recvAccount: bankName || '', recvBank: '', payAccount: '', payBank: '', image: '',
+            isPersonalAdvance: false, isReturn: false, advanceRecvAccount: '', linkedReimbursementKey: '',
+            createdAt: new Date().toISOString(),
+          });
+          localStorage.setItem(bkKey, JSON.stringify(books));
+        }
+      } catch { /* ignore */ }
+    }
+  };
+
+  // 无状态记录手动登记入口：我方收流程创建收款确认单并置待确认
+  const handleCreateRecvConfirm = (r: BrandRecord) => {
+    const receiptKey = buildDepositRecvReceipt(r);
+    const list = records.map(x => x.key === r.key ? { ...x, depositStatus: 'pending_confirm' as const, depositReceiptKey: receiptKey } : x);
+    save(list);
+    message.success('收款确认单已创建：请到「财务-收/付申请-收款确认」确认到账，确认后自动登记其他应付款');
+  };
+
+  // 我方收反向流程：保证金退给分销商 → 生成付款申请（待审核→支付），支付后核销其他应付款并置已退回
+  const handleRefundToDistributor = (r: BrandRecord) => {
+    const prKey = `payment_requests_${getDataOwner()}`;
+    let prList: any[] = [];
+    try { prList = JSON.parse(localStorage.getItem(prKey) || '[]'); } catch { /* ignore */ }
+    const fkPrefix = `FK${dayjs().format('YYYYMMDD')}`;
+    const fkSeqs = prList.filter((pr: any) => pr.requestNo?.startsWith(fkPrefix)).map((pr: any) => parseInt(pr.requestNo.slice(-3), 10) || 0);
+    const payer = r.companyName || r.shopName || r.brandName || '';
+    const paymentRec: any = {
+      key: `payreq-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      requestNo: `${fkPrefix}${String((fkSeqs.length ? Math.max(...fkSeqs) : 0) + 1).padStart(3, '0')}`,
+      amount: Number(r.deposit) || 0,
+      category: '保证金退回',
+      description: `分销商保证金退回 — ${payer}`,
+      recvType: 'bank',
+      recvAccountName: payer,
+      source: 'manual',
+      status: 'pending_review',
+      recordType: 'payment',
+      brandAuthKey: r.key,
+      applicant: localStorage.getItem('username') || '',
+      applicantName: getDisplayName(),
+      applyDate: dayjs().format('YYYY-MM-DD'),
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    try { localStorage.setItem(prKey, JSON.stringify([paymentRec, ...prList])); } catch { /* ignore */ }
+    message.success('退款付款申请已创建：请到「财务-收/付申请」审核并支付，支付后自动核销其他应付款并置为已退回');
   };
 
   // ========== 保证金退回流程 ==========
@@ -190,9 +346,12 @@ const BrandAuthPage: React.FC<{ embedded?: boolean }> = ({ embedded }) => {
   };
   const confirmDepositReturn = () => {
     if (!depositReturnTarget) return;
-    const list = records.map(x => x.key === depositReturnTarget.key
+    const r = depositReturnTarget;
+    const list = records.map(x => x.key === r.key
       ? { ...x, depositStatus: 'returned' as const, depositReturnImages } : x);
     save(list);
+    // 公司内部店铺代付收回：核销其他应收款台账并记账（简易/会计账薄均联动）
+    if (isInnerPayFlow(r)) settleInnerReceivable(r, '');
     setDepositReturnTarget(null);
     message.success('保证金已标记为已退回');
   };
@@ -335,7 +494,7 @@ const BrandAuthPage: React.FC<{ embedded?: boolean }> = ({ embedded }) => {
     },
     { title: '公司名称', dataIndex: 'companyName', key: 'companyName', width: 180, ellipsis: true },
     {
-      title: <span>店铺类型 <Tooltip title="公司内部店铺：保证金由我方代付，系统自动登记其他应收款台账并记账；分销商店铺：保证金由分销商自行支付，系统仅记录状态不记账"><QuestionCircleOutlined style={{ color: '#999', cursor: 'pointer' }} /></Tooltip></span>,
+      title: <span>店铺类型 <Tooltip title="公司内部店铺：保证金由我方代付品牌方，新增时自动登记其他应收款台账，退回收回时核销并记账；分销商店铺+保证金去向我方收：新增时自动创建收款确认单，确认后登记其他应付款，退回时反向核销；分销商店铺+品牌方：仅记录状态不记账"><QuestionCircleOutlined style={{ color: '#999', cursor: 'pointer' }} /></Tooltip></span>,
       dataIndex: 'shopType', key: 'shopType', width: 110, align: 'center',
       render: v => <Tag color={v === '公司内部店铺' ? 'purple' : 'cyan'}>{v || '—'}</Tag>,
     },
@@ -345,35 +504,44 @@ const BrandAuthPage: React.FC<{ embedded?: boolean }> = ({ embedded }) => {
     { title: '授权人微信', dataIndex: 'authWechat', key: 'authWechat', width: 110, ellipsis: true },
     { title: '手机号码', dataIndex: 'phone', key: 'phone', width: 130, align: 'center' },
     { title: '保证金去向', dataIndex: 'depositTo', key: 'depositTo', width: 120, align: 'center' },
-    { title: <span>保证金 <Tooltip title="公司内部店铺：保证金标记退回时自动登记其他应收款台账并记账（简易/会计账薄均联动）；分销商店铺：仅变更保证金状态，不记账不生成收付款确认单"><QuestionCircleOutlined style={{ color: '#999', cursor: 'pointer' }} /></Tooltip></span>, dataIndex: 'deposit', key: 'deposit', width: 130, align: 'center',
+    { title: <span>保证金 <Tooltip title="我方收流程：待确认→收款确认后已到账并自动登记其他应付款→退回生成付款申请，支付后核销并置已退回；公司内部店铺代付：登记时记其他应收款，退回收回时核销并记账（简易/会计账薄均联动）"><QuestionCircleOutlined style={{ color: '#999', cursor: 'pointer' }} /></Tooltip></span>, dataIndex: 'deposit', key: 'deposit', width: 130, align: 'center',
       render: (v: string, r: BrandRecord) => {
         const amount = v || '0';
         const ds = r.depositStatus;
         if (!v && !ds) return <span style={{ color: '#ccc' }}>—</span>;
-        const clickable = ['received', 'returned', 'pending_confirm', 'applied'].includes(ds || '');
         const tagColors: Record<string, string> = { received: 'green', returned: 'orange', pending_confirm: 'cyan', applied: 'orange' };
         const tagLabels: Record<string, string> = { received: '已到账', returned: '已退回', pending_confirm: '待确认', applied: '已申请' };
-        return (
-          <div style={clickable ? { cursor: 'pointer' } : undefined}
-            onClick={clickable ? () => {
-              if (ds === 'applied') openDepositAppliedModal(r);
-              else setDepositViewModal(r);
-            } : undefined}>
-            <div style={{ fontWeight: 600 }}>{amount}</div>
-            {ds && <Tag color={tagColors[ds] || 'default'} style={{ marginTop: 2 }}>{tagLabels[ds] || ds}</Tag>}
-          </div>
-        );
-        // 无保证金状态：显示金额 + 去申请操作
+        if (ds) {
+          return (
+            <div style={{ cursor: 'pointer' }}
+              onClick={() => {
+                if (ds === 'applied') openDepositAppliedModal(r);
+                else setDepositViewModal(r);
+              }}>
+              <div style={{ fontWeight: 600 }}>{amount}</div>
+              <Tag color={tagColors[ds] || 'default'} style={{ marginTop: 2 }}>{tagLabels[ds] || ds}</Tag>
+            </div>
+          );
+        }
+        // 无保证金状态：显示金额 + 登记操作（分销商店铺且我方收→收款确认流程；其余→退回状态登记）
+        const recvFlow = isRecvDepositFlow(r);
         return (
           <div>
             <div style={{ fontWeight: 600 }}>{amount}</div>
             <Popover trigger="click" placement="bottom" content={
               <Space direction="vertical" size={4}>
-                <Button type="link" size="small" onClick={() => handleDepositApply(r)}>已申请退回</Button>
-                <Button type="link" size="small" onClick={() => handleDepositReturn(r)}>已退回</Button>
+                {recvFlow && (
+                  <Button type="link" size="small" onClick={() => handleCreateRecvConfirm(r)}>登记收款（收款确认）</Button>
+                )}
+                {!recvFlow && (
+                  <>
+                    <Button type="link" size="small" onClick={() => handleDepositApply(r)}>已申请退回</Button>
+                    <Button type="link" size="small" onClick={() => handleDepositReturn(r)}>已退回</Button>
+                  </>
+                )}
               </Space>
             }>
-              <Button type="link" size="small" style={{ fontSize: 11, padding: '0 4px', height: 22 }}>去申请</Button>
+              <Button type="link" size="small" style={{ fontSize: 11, padding: '0 4px', height: 22 }}>{recvFlow ? '登记收款' : '去申请'}</Button>
             </Popover>
           </div>
         );
@@ -472,13 +640,13 @@ const BrandAuthPage: React.FC<{ embedded?: boolean }> = ({ embedded }) => {
         <Form autoComplete="off" form={form} layout="vertical">
           <Row gutter={12}>
             <Col span={6}><Form.Item name="brandName" label="品牌名称" rules={[{ required: true, message: '必填' }]}><AutoComplete options={brandNameOpts} placeholder="选择或输入品牌名称" filterOption={(input, option) => String(option?.value || '').toLowerCase().includes(input.toLowerCase())} /></Form.Item></Col>
-            <Col span={6}><Form.Item name="shopType" label={<span>店铺类型 <Tooltip title="公司内部店铺：保证金由我方代付，标记退回时自动登记其他应收款台账并记账；分销商店铺：保证金由分销商自行支付，仅记录状态不记账"><QuestionCircleOutlined style={{ color: '#999', cursor: 'pointer' }} /></Tooltip></span>}><Select options={SHOP_TYPE_OPTS.map(x => ({ value: x, label: x }))} /></Form.Item></Col>
+            <Col span={6}><Form.Item name="shopType" label={<span>店铺类型 <Tooltip title="公司内部店铺：保证金由我方代付品牌方，新增时自动登记其他应收款台账，退回收回时核销并记账；分销商店铺+我方收：新增时自动创建收款确认单；分销商店铺+品牌方：仅记录状态"><QuestionCircleOutlined style={{ color: '#999', cursor: 'pointer' }} /></Tooltip></span>}><Select options={SHOP_TYPE_OPTS.map(x => ({ value: x, label: x }))} /></Form.Item></Col>
             <Col span={8}><Form.Item name="companyName" label="公司名称"><Input placeholder="被授权公司" /></Form.Item></Col>
             <Col span={6}><Form.Item name="salesperson" label="业务员"><AutoComplete options={salespersonOpts} placeholder="选择或输入" filterOption={(input, option) => String(option?.value || '').toLowerCase().includes(input.toLowerCase())} /></Form.Item></Col>
             <Col span={6}><Form.Item name="authWechat" label="授权人微信"><Input /></Form.Item></Col>
             <Col span={6}><Form.Item name="phone" label="手机号码"><Input /></Form.Item></Col>
             <Col span={6}><Form.Item name="depositTo" label="保证金去向"><Select options={allDepositToOpts.map(x => ({ value: x, label: x }))} /></Form.Item></Col>
-            <Col span={6}><Form.Item name="deposit" label={<span>保证金 <Tooltip title="公司内部店铺：标记退回时自动记账并登记其他应收款台账；分销商店铺：仅记录金额和状态，不参与记账"><QuestionCircleOutlined style={{ color: '#999', cursor: 'pointer' }} /></Tooltip></span>}><Input placeholder="如 5000" /></Form.Item></Col>
+            <Col span={6}><Form.Item name="deposit" label={<span>保证金 <Tooltip title="分销商店铺+我方收：保存时自动创建收款确认单（待确认）；公司内部店铺+品牌方：保存时自动登记其他应收款台账"><QuestionCircleOutlined style={{ color: '#999', cursor: 'pointer' }} /></Tooltip></span>}><Input placeholder="如 5000" /></Form.Item></Col>
             <Col span={8}><Form.Item name="shopName" label="店铺名称"><Input placeholder="店铺名称" /></Form.Item></Col>
             <Col span={8}><Form.Item name="platform" label="授权平台"><Input placeholder="如 拼多多/抖音" /></Form.Item></Col>
             <Col span={24}>
@@ -640,7 +808,12 @@ const BrandAuthPage: React.FC<{ embedded?: boolean }> = ({ embedded }) => {
       {/* 保证金信息查看弹窗（已退回/已到账/待确认状态点击查看） */}
       <Modal title={`保证金信息 — ${depositViewModal?.companyName || depositViewModal?.brandName || ''}`}
         open={!!depositViewModal} onCancel={() => setDepositViewModal(null)}
-        footer={[<Button key="close" onClick={() => setDepositViewModal(null)}>关闭</Button>]}
+        footer={[
+          ...(depositViewModal && depositViewModal.depositStatus === 'received' && isRecvDepositFlow(depositViewModal)
+            ? [<Button key="refund" type="primary" danger icon={<DeleteOutlined />} onClick={() => { handleRefundToDistributor(depositViewModal); setDepositViewModal(null); }}>保证金退回（退给分销商）</Button>]
+            : []),
+          <Button key="close" onClick={() => setDepositViewModal(null)}>关闭</Button>,
+        ]}
         width={520} destroyOnClose>
         {depositViewModal && (() => {
           const ds = depositViewModal.depositStatus;

@@ -74,6 +74,7 @@ interface PaymentRequestRec {
   orderId?: string;               // 分段付款尾款：关联订单号
   installRecordKey?: string;      // 分段付款尾款：关联分期明细 key
   brandAppKey?: string;           // 关联的品牌申请单 key
+  brandAuthKey?: string;          // 关联的授权品牌登记单 key（品牌管理-授权品牌页保证金流程）
   brandRefundReqKey?: string;     // 退回时关联的 BrandRefundReq key
   createdAt: string;
   updatedAt: string;
@@ -537,7 +538,7 @@ const PaymentRequestPage: React.FC = () => {
     setPayTarget(null); setPayBankKey(''); setPayShot('');
     // 会计账薄版本：支付后自动生成借贷两条会计分录（摘要=付款说明；保证金退回默认借方=其他应付款）
     if (isAccountingMode(getDataOwner())) {
-      const isDepositRefund = payTarget.category === '保证金退回' || !!payTarget.brandAppKey;
+      const isDepositRefund = payTarget.category === '保证金退回' || !!payTarget.brandAppKey || !!payTarget.brandAuthKey;
       writeAutoEntries(getDataOwner(), {
         sourceKey: `payreq-${payTarget.key}`,
         debitSubject: (payTarget as any).debitSubject || (isDepositRefund ? '其他应付款' : '应付账款'),
@@ -654,6 +655,12 @@ const PaymentRequestPage: React.FC = () => {
             matchedIdx = opList.findIndex((p: any) => p.key === `deposit-recv-${app.depositReceiptKey}`);
           }
         }
+        if (matchedIdx < 0 && payTarget.brandAuthKey) {
+          // 授权品牌登记单（我方收流程）：按登记单上的收款确认单键精确匹配其他应付款台账
+          const authRecs: any[] = safeJson<any[]>(baKeys(owner).records, []);
+          const arec = authRecs.find((x: any) => x.key === payTarget.brandAuthKey);
+          if (arec?.depositReceiptKey) matchedIdx = opList.findIndex((p: any) => p.key === `deposit-recv-${arec.depositReceiptKey}`);
+        }
         if (matchedIdx < 0) {
           // 回退匹配加往来方约束：退款收款方须与收款时登记的对方一致，避免同金额多品牌误核销
           const refundCounterparty = String(payTarget.recvAccountName || payTarget.payerName || '').trim();
@@ -679,6 +686,19 @@ const PaymentRequestPage: React.FC = () => {
           message.warning('未匹配到待核销的其他应付款记录，如需核销请到 简易账薄→其他应付款 手动付款');
         }
       } catch { /* ignore payables update errors */ }
+    }
+
+    // 授权品牌登记联动：退款支付成功后将授权品牌页保证金状态置为已退回
+    if (payTarget.brandAuthKey) {
+      try {
+        const K = baKeys(owner);
+        const authRecs: any[] = safeJson<any[]>(K.records, []);
+        const aIdx = authRecs.findIndex((x: any) => x.key === payTarget.brandAuthKey);
+        if (aIdx >= 0) {
+          authRecs[aIdx] = { ...authRecs[aIdx], depositStatus: 'returned', depositPaymentKey: payTarget.key };
+          writeJson(K.records, authRecs);
+        }
+      } catch { /* ignore auth record update errors */ }
     }
   };
 
@@ -725,6 +745,13 @@ const PaymentRequestPage: React.FC = () => {
     const today = dayjs().format('YYYY-MM-DD');
     const nowTime = `${today} ${now.toTimeString().slice(0, 8)}`;
     const customerName = r.payerName.trim();
+
+    // 品牌授权登记联动（授权品牌页）：区分我方收收取流程（分销商店铺+我方收）与公司内部店铺代付收回流程
+    let authRec: any = null;
+    if (r.brandAuthKey) {
+      try { authRec = safeJson<any[]>(baKeys(owner).records, []).find((x: any) => x.key === r.brandAuthKey) || null; } catch { /* ignore */ }
+    }
+    const isRecvAuth = !!authRec && authRec.shopType === '分销商店铺' && authRec.depositTo === '我方收';
 
     // 1. 写入客户收款明细台账（customerReceipts_）
     try {
@@ -782,9 +809,9 @@ const PaymentRequestPage: React.FC = () => {
       writeAutoEntries(owner, {
         sourceKey: `receipt-confirm-${r.key}`,
         debitSubject: r.debitSubject || '银行存款',
-        creditSubject: r.creditSubject || (r.brandAppKey ? '其他应付款' : '其他应收款'),
+        creditSubject: r.creditSubject || ((r.brandAppKey || isRecvAuth) ? '其他应付款' : '其他应收款'),
         amount: r.amount,
-        summary: r.brandAppKey
+        summary: (r.brandAppKey || r.brandAuthKey)
           ? `收到${customerName}品牌保证金（收款编号 ${r.requestNo}）`
           : r.orderId
             ? `订单 ${r.orderId} 分段付款收款（收款编号 ${r.requestNo}）`
@@ -810,7 +837,7 @@ const PaymentRequestPage: React.FC = () => {
             voucherNo: `${prefix}-${String((seqs.length ? Math.max(...seqs) : 0) + 1).padStart(3, '0')}`,
             bookDate: today,
             bookType: '收入' as const,
-            category: r.brandAppKey ? '其他应付款' : '主营业务收入-销售收入',
+            category: (r.brandAppKey || isRecvAuth) ? '其他应付款' : (r.brandAuthKey ? '其他应收款' : '主营业务收入-销售收入'),
             amount: r.amount,
             counterparty: customerName,
             remark: r.orderId ? `收款确认 — 订单 ${r.orderId} 分段付款收款（${r.requestNo}）` : `收款确认 — ${customerName}（${r.requestNo}）`,
@@ -833,8 +860,8 @@ const PaymentRequestPage: React.FC = () => {
         }
       } catch { /* ignore */ }
 
-      // 品牌保证金 → 同步写入其他应付款台账（待付状态，退回时核销）
-      if (r.brandAppKey) {
+      // 品牌保证金 → 同步写入其他应付款台账（待付状态，退回时核销）；授权品牌我方收流程同口径
+      if (r.brandAppKey || isRecvAuth) {
         try {
           const opKey = `other_payables_${owner}`;
           const opList: any[] = JSON.parse(localStorage.getItem(opKey) || '[]');
@@ -857,6 +884,19 @@ const PaymentRequestPage: React.FC = () => {
           }
         } catch { /* ignore */ }
       }
+    }
+
+    // 公司内部店铺代付收回收款：核销登记时写入的其他应收款台账（幂等）
+    if (r.brandAuthKey && authRec && !isRecvAuth) {
+      try {
+        const orKey = `other_receivables_${owner}`;
+        const orList: any[] = JSON.parse(localStorage.getItem(orKey) || '[]');
+        const orIdx = orList.findIndex((x: any) => x.key === `deposit-pay-${authRec.key}`);
+        if (orIdx >= 0 && (Number(orList[orIdx].receivedAmount) || 0) < (Number(orList[orIdx].amount) || 0)) {
+          orList[orIdx] = { ...orList[orIdx], receivedAmount: Number(orList[orIdx].amount) || 0, receivedDate: today, bankAccount: bankAccounts.find((b: any) => b.key === bankKey)?.name || orList[orIdx].bankAccount || '' };
+          safeSetItem(orKey, JSON.stringify(orList));
+        }
+      } catch { /* ignore */ }
     }
 
     // 品牌申请联动：收款确认后自动更新品牌申请单状态
