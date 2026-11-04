@@ -1,14 +1,17 @@
 /**
- * PERM_V2 三态权限编辑器（菜单/功能/字段 三类权限点：允许/继承/禁止）
- * 供 角色管理 / 账号管理 / 开发者客户权限 三入口复用
- * value: Record<pointKey, 'allow'|'deny'|'inherit'>（inherit=不写入，沿解析链下坠）
+ * PERM_V2 三态权限编辑器（左菜单 + 右明细布局）
+ * 左侧：系统菜单列表（按平台分组）；点击菜单后右侧展示该菜单的：
+ *   ① 菜单进入权限（菜单点）② 按键权限（功能点 fn）③ 字段权限（字段点 field，查看/编辑双控）
+ * 三态语义：允许/继承/禁止（inherit=不写入，沿 用户>分组>角色>默认 解析链下坠）
+ * 供 角色管理 / 账号管理（个人覆写） / 账号管理（分组权限） 三入口复用
+ * value: Record<pointKey, 'allow'|'deny'|'inherit'>
  */
 import React, { useMemo, useState } from 'react';
-import { Collapse, Radio, Input, Space, Button, Tag, Typography, Empty, Tabs, Select } from 'antd';
-import { SearchOutlined } from '@ant-design/icons';
+import { Radio, Input, Space, Button, Tag, Typography, Empty } from 'antd';
+import { SearchOutlined, AppstoreOutlined } from '@ant-design/icons';
 import {
   PermScope, PermTri, menuGroupsOf, menuKeysOf, menuLabelOf,
-  FN_ACTIONS, FN_ACTION_LABEL, PRODUCT_FIELD_META, PRODUCT_PAGE_KEY,
+  FN_ACTIONS, FN_ACTION_LABEL, FIELD_POINTS,
 } from '../config/permRegistry';
 
 const { Text } = Typography;
@@ -40,160 +43,162 @@ const TriRadio: React.FC<{ value?: PermTri; onChange: (v: PermTri) => void }> = 
 
 const PermEditor: React.FC<Props> = ({ scopes, value, onChange }) => {
   const [search, setSearch] = useState('');
-  const [fnPage, setFnPage] = useState<string>(menuKeysOf('supplier')[0] || '');
+  const allMenuKeys = useMemo(() => scopes.flatMap(s => menuKeysOf(s)), [scopes]);
+  const [selMenu, setSelMenu] = useState<string>(allMenuKeys[0] || '');
+  const activeMenu = allMenuKeys.includes(selMenu) ? selMenu : (allMenuKeys[0] || '');
+
   const set = (key: string, tri: PermTri) => {
     const next = { ...value };
     if (tri === 'inherit') delete next[key];
     else next[key] = tri;
     onChange(next);
   };
-  const batchGroup = (keys: string[], tri: PermTri) => {
+  const batch = (keys: string[], tri: PermTri) => {
     const next = { ...value };
     keys.forEach(k => { if (tri === 'inherit') delete next[k]; else next[k] = tri; });
     onChange(next);
   };
+
   const kw = search.trim().toLowerCase();
-  const totalSet = Object.keys(value).length;
+  const totalSet = Object.keys(value).filter(k => value[k] && value[k] !== 'inherit').length;
 
-  // ---------- 菜单页签 ----------
-  const panels = useMemo(() => scopes.flatMap(scope => menuGroupsOf(scope).map(g => {
-    const items = g.items.filter(i => !kw || i.label.toLowerCase().includes(kw) || i.key.toLowerCase().includes(kw));
-    if (kw && items.length === 0) return null;
-    const setCount = g.items.filter(i => value[i.key] && value[i.key] !== 'inherit').length;
-    return {
-      key: `${scope}:${g.key}`,
-      label: (
-        <Space size={8}>
-          <Text strong style={{ fontSize: 13 }}>{SCOPE_LABEL[scope]} · {g.label}</Text>
-          <Tag color="blue" style={{ marginRight: 0 }}>{g.items.length}项</Tag>
-          {setCount > 0 && <Tag color="orange" style={{ marginRight: 0 }}>已设{setCount}</Tag>}
-        </Space>
-      ),
-      extra: (
-        <Space size={4} onClick={e => e.stopPropagation()}>
-          <Button size="small" type="link" onClick={() => batchGroup(g.items.map(i => i.key), 'allow')}>全允许</Button>
-          <Button size="small" type="link" onClick={() => batchGroup(g.items.map(i => i.key), 'inherit')}>全继承</Button>
-          <Button size="small" type="link" danger onClick={() => batchGroup(g.items.map(i => i.key), 'deny')}>全禁止</Button>
-        </Space>
-      ),
-      children: (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '6px 16px' }}>
-          {items.map(i => (
-            <div key={i.key} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-              <Text style={{ fontSize: 13 }} ellipsis={{ tooltip: i.key }}>{i.label}</Text>
-              <TriRadio value={value[i.key]} onChange={v => set(i.key, v)} />
-            </div>
-          ))}
-        </div>
-      ),
-    };
-  })).filter(Boolean), [scopes, value, kw]);
+  // 每个菜单的已显式设置数（菜单点 + fn + field）
+  const setCountOf = (mk: string): number => Object.keys(value).filter(k =>
+    value[k] && value[k] !== 'inherit' && (k === mk || k.startsWith(`fn:${mk}:`) || k.startsWith(`field:${mk}:`))).length;
 
-  const defaultActive = useMemo(() => panels
-    .filter((p: any) => p.key && (menuGroupsOf(p.key.split(':')[0] as PermScope).find(g => `${p.key.split(':')[0]}:${g.key}` === p.key)?.items || [])
-      .some((i: any) => value[i.key] && value[i.key] !== 'inherit'))
-    .map((p: any) => p.key), [panels, value]);
-
-  // ---------- 功能页签 ----------
-  const fnRows = FN_ACTIONS.map(a => ({ action: a, key: `fn:${fnPage}:${a}` }));
-  // ---------- 字段页签（商品列表 view/edit） ----------
+  // 当前菜单的字段点（按 group=页面 分组）
   const fieldGroups = useMemo(() => {
-    const map = new Map<string, typeof PRODUCT_FIELD_META>();
-    PRODUCT_FIELD_META.forEach(c => {
-      if (kw && !c.title.toLowerCase().includes(kw) && !c.dataIndex.toLowerCase().includes(kw)) return;
-      const arr = map.get(c.group || '其它') || [];
-      arr.push(c);
-      map.set(c.group || '其它', arr);
+    const pts = FIELD_POINTS.filter(p => p.key.startsWith(`field:${activeMenu}:`));
+    const filtered = pts.filter(p => !kw || p.label.toLowerCase().includes(kw));
+    const map = new Map<string, typeof filtered>();
+    filtered.forEach(p => {
+      const arr = map.get(p.group) || [];
+      arr.push(p);
+      map.set(p.group, arr);
     });
     return Array.from(map.entries());
-  }, [kw]);
+  }, [activeMenu, kw]);
 
-  const tabItems = [
-    {
-      key: 'menu',
-      label: `菜单权限${Object.keys(value).filter(k => !k.startsWith('fn:') && !k.startsWith('field:')).length ? ' *' : ''}`,
-      children: panels.length === 0 ? <Empty description="无匹配菜单点" /> : (
-        <Collapse items={panels as any} defaultActiveKey={kw ? panels.map((p: any) => p.key) : defaultActive} style={{ background: '#fafcfd' }} />
-      ),
-    },
-    {
-      key: 'fn',
-      label: '功能权限',
-      children: (
-        <div>
-          <Space style={{ marginBottom: 10 }}>
-            <Text type="secondary" style={{ fontSize: 12 }}>页面：</Text>
-            <Select
-              size="small"
-              style={{ width: 260 }}
-              showSearch
-              value={fnPage}
-              onChange={setFnPage}
-              optionFilterProp="label"
-              options={menuKeysOf('supplier').map(k => ({ label: menuLabelOf('supplier', k), value: k }))}
-            />
-            <Button size="small" type="link" onClick={() => batchGroup(fnRows.map(r => r.key), 'allow')}>全允许</Button>
-            <Button size="small" type="link" onClick={() => batchGroup(fnRows.map(r => r.key), 'inherit')}>全继承</Button>
-            <Button size="small" type="link" danger onClick={() => batchGroup(fnRows.map(r => r.key), 'deny')}>全禁止</Button>
-          </Space>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '6px 16px' }}>
-            {fnRows.map(r => (
-              <div key={r.key} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                <Text style={{ fontSize: 13 }}>{FN_ACTION_LABEL[r.action as keyof typeof FN_ACTION_LABEL]}</Text>
-                <TriRadio value={value[r.key]} onChange={v => set(r.key, v)} />
-              </div>
-            ))}
-          </div>
-          <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 8 }}>
-            控制该页工具栏/行操作按键（新增/编辑/删除/导入/导出/批量/显示字段/打印/审核）；禁止后按键隐藏。
-          </Text>
-        </div>
-      ),
-    },
-    {
-      key: 'field',
-      label: '字段权限（商品列表）',
-      children: (
-        <div>
-          <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 8 }}>
-            查看=控制列表列/表单是否可见；编辑=控制新增/编辑表单中是否可修改（禁止编辑时控件禁用）。作用于 全部商品/成品/半成品/原材料。
-          </Text>
-          <Collapse
-            style={{ background: '#fafcfd' }}
-            items={fieldGroups.map(([group, cols]) => ({
-              key: group,
-              label: <Space size={8}><Text strong style={{ fontSize: 13 }}>{group}</Text><Tag color="blue" style={{ marginRight: 0 }}>{cols.length}字段</Tag></Space>,
-              children: (
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '6px 20px' }}>
-                  {cols.map(c => (
-                    <div key={c.dataIndex} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                      <Text style={{ fontSize: 13 }} ellipsis={{ tooltip: c.dataIndex }}>{c.title}</Text>
-                      <Space size={4}>
-                        <Text type="secondary" style={{ fontSize: 11 }}>查看</Text>
-                        <TriRadio value={value[`field:${PRODUCT_PAGE_KEY}:${c.dataIndex}:view`]} onChange={v => set(`field:${PRODUCT_PAGE_KEY}:${c.dataIndex}:view`, v)} />
-                        <Text type="secondary" style={{ fontSize: 11 }}>编辑</Text>
-                        <TriRadio value={value[`field:${PRODUCT_PAGE_KEY}:${c.dataIndex}:edit`]} onChange={v => set(`field:${PRODUCT_PAGE_KEY}:${c.dataIndex}:edit`, v)} />
-                      </Space>
-                    </div>
-                  ))}
-                </div>
-              ),
-            }))}
-          />
-        </div>
-      ),
-    },
-  ];
+  const fnRows = FN_ACTIONS.map(a => ({ action: a, key: `fn:${activeMenu}:${a}` }));
+  const hasFnPoints = menuKeysOf('supplier').includes(activeMenu);
 
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-        <Input allowClear prefix={<SearchOutlined />} placeholder="搜索菜单/字段名称或权限key" style={{ width: 240 }} value={search} onChange={e => setSearch(e.target.value)} />
-        <Text type="secondary" style={{ fontSize: 12 }}>已显式设置 {totalSet} 项（继承=沿用 用户&gt;开发者&gt;角色&gt;默认 解析链）</Text>
+        <Input allowClear prefix={<SearchOutlined />} placeholder="搜索字段/按键名称" style={{ width: 220 }} value={search} onChange={e => setSearch(e.target.value)} />
+        <Text type="secondary" style={{ fontSize: 12 }}>已显式设置 {totalSet} 项（继承=沿用 用户&gt;分组&gt;角色&gt;默认 解析链；红色禁止 / 绿色允许）</Text>
       </div>
-      <Tabs size="small" items={tabItems} />
+      <div style={{ display: 'flex', gap: 12, border: '1px solid #f0f0f0', borderRadius: 8, overflow: 'hidden' }}>
+        {/* 左侧菜单列表 */}
+        <div style={{ width: 210, flexShrink: 0, borderRight: '1px solid #f0f0f0', background: '#fafcfd', maxHeight: 460, overflowY: 'auto' }}>
+          {scopes.flatMap(scope => menuGroupsOf(scope).map(g => {
+            const items = g.items.filter(i => !kw || i.label.toLowerCase().includes(kw) || i.key.toLowerCase().includes(kw));
+            if (kw && items.length === 0) return null;
+            return (
+              <div key={`${scope}:${g.key}`}>
+                <div style={{ padding: '6px 12px', background: '#f0f5ff', color: PRIMARY_BLUE, fontSize: 12, fontWeight: 700 }}>
+                  {SCOPE_LABEL[scope]} · {g.label}
+                </div>
+                {items.map(i => {
+                  const cnt = setCountOf(i.key);
+                  const active = i.key === activeMenu;
+                  return (
+                    <div key={i.key} onClick={() => setSelMenu(i.key)}
+                      style={{
+                        padding: '6px 12px 6px 20px', cursor: 'pointer', fontSize: 13,
+                        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6,
+                        background: active ? '#e6f4ff' : 'transparent',
+                        borderRight: active ? `3px solid ${PRIMARY_BLUE}` : '3px solid transparent',
+                        color: active ? PRIMARY_BLUE : undefined, fontWeight: active ? 600 : 400,
+                      }}>
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{i.label}</span>
+                      {cnt > 0 && <Tag color="orange" style={{ marginRight: 0, fontSize: 11 }}>{cnt}</Tag>}
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          }))}
+        </div>
+        {/* 右侧明细 */}
+        <div style={{ flex: 1, minWidth: 0, maxHeight: 460, overflowY: 'auto', padding: '4px 8px 12px 4px' }}>
+          {!activeMenu ? <Empty description="无菜单点" /> : (
+            <div>
+              {/* 菜单进入权限 */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '8px 12px', background: '#f6ffed', border: '1px solid #b7eb8f', borderRadius: 6, marginBottom: 12 }}>
+                <Space size={8}>
+                  <AppstoreOutlined style={{ color: '#389e0d' }} />
+                  <Text strong style={{ fontSize: 13 }}>菜单进入权限：{menuLabelOf(scopeOf(activeMenu, scopes), activeMenu)}</Text>
+                  <Text type="secondary" style={{ fontSize: 11 }}>禁止后该菜单隐藏且路由拦截</Text>
+                </Space>
+                <TriRadio value={value[activeMenu]} onChange={v => set(activeMenu, v)} />
+              </div>
+              {/* 按键权限 */}
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <Text strong style={{ fontSize: 13 }}>按键权限（工具栏/行操作）</Text>
+                  <Space size={4}>
+                    <Button size="small" type="link" onClick={() => batch(fnRows.map(r => r.key), 'allow')}>全允许</Button>
+                    <Button size="small" type="link" onClick={() => batch(fnRows.map(r => r.key), 'inherit')}>全继承</Button>
+                    <Button size="small" type="link" danger onClick={() => batch(fnRows.map(r => r.key), 'deny')}>全禁止</Button>
+                  </Space>
+                </div>
+                {hasFnPoints ? (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '6px 16px' }}>
+                    {fnRows.map(r => (
+                      <div key={r.key} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                        <Text style={{ fontSize: 13 }}>{FN_ACTION_LABEL[r.action as keyof typeof FN_ACTION_LABEL]}</Text>
+                        <TriRadio value={value[r.key]} onChange={v => set(r.key, v)} />
+                      </div>
+                    ))}
+                  </div>
+                ) : <Text type="secondary" style={{ fontSize: 12 }}>该菜单暂无按键权限点</Text>}
+              </div>
+              {/* 字段权限（查看/编辑） */}
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <Text strong style={{ fontSize: 13 }}>字段权限（查看=列/表单可见；编辑=表单可修改）</Text>
+                  <Space size={4}>
+                    <Button size="small" type="link" onClick={() => batch(fieldGroups.flatMap(([, pts]) => pts.flatMap(p => [p.key])), 'allow')}>全允许</Button>
+                    <Button size="small" type="link" onClick={() => batch(fieldGroups.flatMap(([, pts]) => pts.flatMap(p => [p.key])), 'inherit')}>全继承</Button>
+                    <Button size="small" type="link" danger onClick={() => batch(fieldGroups.flatMap(([, pts]) => pts.flatMap(p => [p.key])), 'deny')}>全禁止</Button>
+                  </Space>
+                </div>
+                {fieldGroups.length === 0 ? (
+                  <Text type="secondary" style={{ fontSize: 12 }}>该菜单暂无字段权限点（当前已登记：商品列表、店铺管理四页）</Text>
+                ) : fieldGroups.map(([group, pts]) => (
+                  <div key={group} style={{ marginBottom: 10 }}>
+                    <div style={{ fontSize: 12, color: '#666', marginBottom: 4, fontWeight: 600 }}>{group}（{pts.length / 2} 字段）</div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))', gap: '6px 20px' }}>
+                      {pts.filter(p => p.key.endsWith(':view')).map(p => {
+                        const dataIndex = p.key.slice(`field:${activeMenu}:`.length, -':view'.length);
+                        const editKey = `field:${activeMenu}:${dataIndex}:edit`;
+                        return (
+                          <div key={p.key} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                            <Text style={{ fontSize: 13 }} ellipsis={{ tooltip: dataIndex }}>{p.label.replace('·查看', '')}</Text>
+                            <Space size={4}>
+                              <Text type="secondary" style={{ fontSize: 11 }}>查看</Text>
+                              <TriRadio value={value[p.key]} onChange={v => set(p.key, v)} />
+                              <Text type="secondary" style={{ fontSize: 11 }}>编辑</Text>
+                              <TriRadio value={value[editKey]} onChange={v => set(editKey, v)} />
+                            </Space>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 };
+
+const PRIMARY_BLUE = '#1e4a7e';
+const scopeOf = (menuKey: string, scopes: PermScope[]): PermScope =>
+  scopes.find(s => menuKeysOf(s).includes(menuKey)) || 'supplier';
 
 export default PermEditor;

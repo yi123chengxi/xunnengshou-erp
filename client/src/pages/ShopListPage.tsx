@@ -14,6 +14,8 @@ import useResizableColumns from '../hooks/useResizableColumns';
 import { safeSetItem } from '../utils/storageQuota';
 import { saveDataset } from '../utils/dataStore';
 import { loadShopManagerPerms, saveShopManagerPerms, isShopScopeAdmin, scopeShops, canEditShopData, ShopManagerPerm } from '../utils/shopScope';
+import { canField, canFn, usePermTick } from '../utils/perm';
+import { SHOP_MENU_KEY } from '../config/permRegistry';
 import { loadTenantUsers, tenantUserDisplayName } from '../utils/tenantUsers';
 
 const { Text, Title } = Typography;
@@ -551,6 +553,11 @@ const ShopListPage: React.FC = () => {
     },
   ];
 
+  // 字段级权限：列查看门控（账号管理/分组权限三态编辑器配置；行级查看/编辑以负责人设置为优先）
+  const permTick = usePermTick();
+  const COL_PERM: Record<string, string> = { shopName: 'shoplist.shopName', accountId: 'shoplist.accountId', platform: 'shoplist.platform', brand: 'shoplist.brand', companyName: 'shoplist.companyName', shopPhone: 'shoplist.shopPhone', person: 'shoplist.person', remark: 'shoplist.remark', shopPassword: 'shoplist.shopPassword' };
+  const visibleColumns = useMemo(() => columns.filter(c => !COL_PERM[(c as any).dataIndex as string] || canField(SHOP_MENU_KEY, COL_PERM[(c as any).dataIndex as string], 'view')), [columns, permTick]);
+
   // 弹窗表单字段
   const formFields = [
     { label: '店铺名称', required: true, node: (
@@ -639,6 +646,14 @@ const ShopListPage: React.FC = () => {
     )},
   ];
 
+  // 弹窗表单字段级门控：查看禁止→隐藏；编辑禁止→控件禁用（负责人设置的行级权限优先于此处）
+  const FORM_FIELD_PERM: Record<string, string> = { '店铺名称': 'shoplist.shopName', 'ERP店铺ID': 'shoplist.accountId', '所属平台': 'shoplist.platform', '品牌': 'shoplist.brand', '公司名称': 'shoplist.companyName', '负责人': 'shoplist.person', '店铺手机号': 'shoplist.shopPhone', '备注': 'shoplist.remark', '店铺登入密码': 'shoplist.shopPassword' };
+  const gatedFormFields = formFields
+    .filter(f => !FORM_FIELD_PERM[f.label] || canField(SHOP_MENU_KEY, FORM_FIELD_PERM[f.label], 'view'))
+    .map(f => FORM_FIELD_PERM[f.label] && !canField(SHOP_MENU_KEY, FORM_FIELD_PERM[f.label], 'edit')
+      ? { ...f, label: `${f.label}（禁编）`, node: <div style={{ pointerEvents: 'none', opacity: 0.55 }}>{f.node}</div> }
+      : f);
+
   return (
     <div style={{ padding: 0 }}>
       {/* 顶部标题 */}
@@ -672,11 +687,15 @@ const ShopListPage: React.FC = () => {
           <Button type="primary" icon={<SearchOutlined />} onClick={handleSearch} style={{ color: '#fff' }}>查询</Button>
           <Button icon={<ClearOutlined />} onClick={handleReset}>重置</Button>
           <Button icon={<ReloadOutlined />} onClick={reload}>刷新</Button>
-          <Button icon={<ImportOutlined />} onClick={() => { setImportData([]); setImportFileName(''); setImportMode('add'); setMatchField('shopName'); setImportVisible(true); }}>导入</Button>
+          {canFn('supplier', SHOP_MENU_KEY, 'import') && (
+            <Button icon={<ImportOutlined />} onClick={() => { setImportData([]); setImportFileName(''); setImportMode('add'); setMatchField('shopName'); setImportVisible(true); }}>导入</Button>
+          )}
           {isAdmin && <Tooltip title={`负责人：${managerDisplayNames()}`}>
             <Button icon={<TeamOutlined />} onClick={() => { setManagerDraft(shopManagerPerms.map(p => ({ ...p }))); setManagerModalVisible(true); }}>负责人设置</Button>
           </Tooltip>}
-          <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>新增店铺</Button>
+          {canFn('supplier', SHOP_MENU_KEY, 'add') && (
+            <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>新增店铺</Button>
+          )}
         </Space>
       </Card>
 
@@ -684,7 +703,7 @@ const ShopListPage: React.FC = () => {
       <Card style={{ borderRadius: 8 }} bodyStyle={{ padding: 0 }}>
         <Table<ShopInfo>
           bordered
-          columns={wrapColumns(columns)}
+          columns={wrapColumns(visibleColumns)}
           dataSource={filteredShops}
           rowKey="key"
           scroll={{ y: 'calc(100vh - 380px)' }}
@@ -699,7 +718,7 @@ const ShopListPage: React.FC = () => {
       <Modal title={editingShop ? '编辑店铺' : '新增店铺'} open={editVisible}
         onCancel={() => setEditVisible(false)} onOk={handleSave}
         okText={editingShop ? '保存' : '添加'} cancelText="取消" width={520}>
-        {formFields.map((f, i) => (
+        {gatedFormFields.map((f, i) => (
           <div key={i} style={{ marginBottom: 16 }}>
             <div style={{ marginBottom: 6 }}>
               <Text>{f.label}{f.required && <Text type="danger"> *</Text>}</Text>
@@ -904,7 +923,8 @@ const ShopListPage: React.FC = () => {
         <div style={{ marginBottom: 8, color: '#888', fontSize: 12 }}>
           查看权限：可查看全部店铺数据（店铺列表/月末盘点/月利润表/提现充值），组长另可查看本组组员的店铺数据；<br />
           编辑权限：可编辑/删除他人的店铺数据，仅查看权限者只能操作自己负责的店铺；<br />
-          主账号始终拥有全部权限；未设置负责人时所有账号可见可编辑全部。
+          主账号始终拥有全部权限；未设置负责人时所有账号可见可编辑全部；<br />
+          与账号管理/分组权限冲突时，以本页负责人设置为准（行级查看/编辑）。
         </div>
         <div style={{ marginBottom: 8, padding: '8px 12px', background: '#f6ffed', border: '1px solid #b7eb8f', borderRadius: 6, color: '#389e0d', fontSize: 12 }}>
           已接入负责人权限的页面：店铺列表、月末盘点、月利润表、提现/充值

@@ -56,6 +56,14 @@ const readRegisteredUser = (username: string): any => {
   } catch { return null; }
 };
 
+/** 读取账号所属分组（账号管理-分组管理），用于分组三态权限层 */
+const readAccountGroup = (username: string): string => {
+  try {
+    const accs: any[] = JSON.parse(localStorage.getItem(`accounts_${accountBase()}`) || '[]');
+    return accs.find(a => a.username === username)?.group || '';
+  } catch { return ''; }
+};
+
 /** 账号个人三态覆写（存 registeredUsers 条目 permOverrides，与角色/独立权限同源） */
 export const loadUserPermOverrides = (username: string): Record<string, PermTri> => {
   const u = readRegisteredUser(username);
@@ -145,6 +153,13 @@ export const resolvePerm = (scope: PermScope, key: string): boolean => {
     const roleNames: string[] = Array.isArray(user?.roles) ? user.roles : [];
     const customPerms: string[] = Array.isArray(user?.customPermissions) ? user.customPermissions : [];
     const settingsAll = loadRolePermSettings();
+    // 3.0) 分组三态层（账号管理-分组权限配置，与个人同编辑器；低于用户覆写、高于角色层）
+    const grpName = readAccountGroup(username);
+    if (grpName) {
+      const gst = settingsAll[`__group__${grpName}`]?.[key];
+      if (gst === 'deny') return false;
+      if (gst === 'allow') return true;
+    }
     const allRoles = getAllRoles();
     let roleAllow = false;
     for (const name of roleNames) {

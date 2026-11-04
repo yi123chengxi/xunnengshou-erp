@@ -34,7 +34,7 @@ import { modules } from '../layouts/MainLayout';
 import { getAllRoles, permissionModules, getMergedPermissions } from '../config/permissions';
 import * as XLSX from 'xlsx';
 import PermEditor from '../components/PermEditor';
-import { loadUserPermOverrides, saveUserPermOverrides, setPreviewUser } from '../utils/perm';
+import { loadUserPermOverrides, saveUserPermOverrides, setPreviewUser, loadRolePermSettings, saveRolePermSettings } from '../utils/perm';
 import type { PermTri } from '../config/permRegistry';
 import type { ColumnsType } from 'antd/es/table';
 
@@ -272,6 +272,7 @@ const AccountManage: React.FC = () => {
   const [groupForm] = Form.useForm();
   const [editingGroup, setEditingGroup] = useState<string>(''); // 编辑中的旧分组名
   const [groupPerms, setGroupPerms] = useState<string[]>([]); // 当前编辑分组的权限
+  const [groupPermDraft, setGroupPermDraft] = useState<Record<string, PermTri>>({}); // 分组三态权限草稿（与个人同编辑器）
 
   // 登录日志弹窗
   const [logVisible, setLogVisible] = useState(false);
@@ -329,6 +330,7 @@ const AccountManage: React.FC = () => {
   const [addPerms, setAddPerms] = useState<string[]>([]);
   const addPermsRef = React.useRef<string[]>([]);
   const addGroupPermsRef = React.useRef<string[]>([]); // 新建窗自动继承的部门权限快照（切换部门时替换赋
+  const copyFromRef = React.useRef<string>(''); // 复制建号源账号 username
 
   // 使用 Form.useWatch 获取当前角色（用于传递给权限选择器）
   const editWatchedRoles: string[] = Form.useWatch('roles', editForm) || [];
@@ -563,6 +565,7 @@ const AccountManage: React.FC = () => {
     setEditingGroup('');
     setGroupPerms([]);
     groupForm.resetFields();
+    setGroupPermDraft({});
     setGroupModalVisible(true);
   }, [groupForm]);
 
@@ -571,6 +574,10 @@ const AccountManage: React.FC = () => {
     const grp = groups.find(g => g.name === name);
     setGroupPerms(grp?.permissions || []);
     groupForm.setFieldsValue({ name });
+    const savedDraft = loadRolePermSettings()[`__group__${name}`] || {};
+    const draft: Record<string, PermTri> = { ...savedDraft };
+    (grp?.permissions || []).forEach((k: string) => { if (!draft[k]) draft[k] = 'allow'; });
+    setGroupPermDraft(draft);
     setGroupModalVisible(true);
   }, [groupForm, groups]);
 
@@ -596,13 +603,15 @@ const AccountManage: React.FC = () => {
     groupForm.validateFields().then(values => {
       const newName = values.name.trim();
       if (!newName) return;
+      // 三态编辑器中显式允许的菜单点同步为分组 legacy 权限清单
+      const menuAllow = Object.keys(groupPermDraft).filter(k => groupPermDraft[k] === 'allow' && !k.startsWith('fn:') && !k.startsWith('field:'));
       if (editingGroup) {
         // 编辑模式：重命名分组
         if (newName !== editingGroup && groups.some(g => g.name === newName)) {
           message.warning('该分组名称已存在'); return;
         }
         const newGroups = groups.map(g =>
-          g.name === editingGroup ? { name: newName, permissions: groupPerms } : g
+          g.name === editingGroup ? { name: newName, permissions: menuAllow } : g
         );
         setGroups(newGroups); saveGroups(newGroups);
         setDataSource(prev => prev.map(item =>
@@ -615,13 +624,14 @@ const AccountManage: React.FC = () => {
         if (groups.some(g => g.name === newName)) {
           message.warning('该分组名称已存在'); return;
         }
-        const newGroups = [...groups, { name: newName, permissions: groupPerms }];
+        const newGroups = [...groups, { name: newName, permissions: menuAllow }];
         setGroups(newGroups); saveGroups(newGroups);
         message.success(`分组「{newName}」已创建`);
       }
-      setGroupModalVisible(false); groupForm.resetFields(); setGroupPerms([]);
+      saveRolePermSettings(`__group__${newName}`, groupPermDraft);
+      setGroupModalVisible(false); groupForm.resetFields(); setGroupPerms([]); setGroupPermDraft({});
     }).catch(() => { /* 校验失败：表单行内提交*/ });
-  }, [editingGroup, groups, selectedGroup, groupForm, groupPerms]);
+  }, [editingGroup, groups, selectedGroup, groupForm, groupPerms, groupPermDraft]);
 
   // 重置密码
   const handleResetPwd = useCallback((record: AccountRecord) => {
@@ -658,7 +668,19 @@ const AccountManage: React.FC = () => {
     addForm.resetFields();
     updateAddPerms([]);
     addGroupPermsRef.current = [];
+    copyFromRef.current = '';
     setAddVisible(true);
+  }, [addForm]);
+
+  // 复制账号：复用源账号的角色/独立权限/个人三态覆写/分组，快速创建新子账号
+  const handleCopy = useCallback((record: AccountRecord) => {
+    copyFromRef.current = record.username;
+    addForm.resetFields();
+    addForm.setFieldsValue({ roles: record.roles || [], group: record.group || '', remark: `复制自 ${record.displayName}` });
+    updateAddPerms(record.customPermissions || []);
+    addGroupPermsRef.current = [];
+    setAddVisible(true);
+    message.info(`已复制「${record.displayName}」的角色与权限，请为新账号填写用户名/姓名/密码`);
   }, [addForm]);
 
   const handleAddConfirm = useCallback(() => {
@@ -745,6 +767,12 @@ const AccountManage: React.FC = () => {
         needsPasswordChange: true,
       });
       localStorage.setItem('registeredUsers', JSON.stringify(registeredUsers));
+
+      // 复制建号：同步复制源账号的个人三态覆写
+      if (copyFromRef.current) {
+        saveUserPermOverrides(inputUsername, loadUserPermOverrides(copyFromRef.current));
+        copyFromRef.current = '';
+      }
 
       message.success(`子账号「${values.displayName} 创建成功！初始密码为：${values.password}`);
       setAddVisible(false);
@@ -1060,6 +1088,9 @@ const AccountManage: React.FC = () => {
         <Space size="small" wrap>
           <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => handleView(record)}>查看</Button>
           <Button type="link" size="small" icon={<EditOutlined />} onClick={() => handleEdit(record)}>编辑</Button>
+          {record.accountType !== '主账号' && (
+            <Button type="link" size="small" icon={<CopyOutlined />} onClick={() => handleCopy(record)}>复制</Button>
+          )}
           {record.accountType !== '主账号' && (
             <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => { setPreviewUser(record.username); message.success(`已切换为「{record.displayName}」预览视角，页面顶部横幅可退出`); }}>预览视角</Button>
           )}
@@ -1756,7 +1787,7 @@ const AccountManage: React.FC = () => {
         onOk={handleGroupModalOk}
         okText={editingGroup ? '保存' : '创建'}
         cancelText="取消"
-        width={600}
+        width={980}
       >
         <Form autoComplete="off" form={groupForm} layout="vertical" style={{ marginTop: 16 }}>
           <Form.Item name="name" label="分组名称" rules={[{ required: true, message: '请输入分组名称' }]}>
@@ -1764,7 +1795,7 @@ const AccountManage: React.FC = () => {
           </Form.Item>
         </Form>
 
-        {/* 组权限配置 */}
+        {/* 组权限配置（与个人覆写同款三态编辑器：左菜单右明细，菜单/按键/字段查看编辑） */}
         <div style={{
           padding: 12, background: '#f0f5ff', borderRadius: 8,
           border: '1px solid #adc6ff', marginBottom: 16,
@@ -1774,55 +1805,9 @@ const AccountManage: React.FC = () => {
             分组权限配置
           </Text>
           <div style={{ fontSize: 12, color: '#666', marginTop: 4, marginBottom: 12 }}>
-            组权限将与个人权限叠加，例如：组设“全部商品”权限，个人设“成品”权限，则该成员拥有“全部商品」+ 成品”权限
+            左侧选择菜单，右侧配置该菜单的进入/按键/字段（查看/编辑）权限；组权限低于个人显式覆写、高于角色层；组内成员自动生效。
           </div>
-          <div style={{ maxHeight: 350, overflowY: 'auto', padding: '4px 0' }}>
-            {permissionModules.map(mod => {
-              const modPerms = mod.children.map(c => `${mod.key}/${c.key}`);
-              const checkedCount = modPerms.filter(p => groupPerms.includes(p)).length;
-              const allChecked = checkedCount === modPerms.length && modPerms.length > 0;
-              const someChecked = checkedCount > 0 && checkedCount < modPerms.length;
-              return (
-                <div key={mod.key} style={{ marginBottom: 10 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', marginBottom: 4 }}>
-                    <Checkbox
-                      checked={allChecked}
-                      indeterminate={someChecked}
-                      onChange={(e) => {
-                        const current = new Set(groupPerms);
-                        modPerms.forEach(p => {
-                          if (e.target.checked) current.add(p); else current.delete(p);
-                        });
-                        setGroupPerms(Array.from(current));
-                      }}
-                    >
-                      <Text strong style={{ fontSize: 13 }}>{mod.label}</Text>
-                    </Checkbox>
-                    <Tag color="blue" style={{ marginLeft: 6 }}>{modPerms.length}</Tag>
-                  </div>
-                  <Row gutter={[8, 2]} style={{ marginLeft: 24 }}>
-                    {mod.children.map(child => {
-                      const permKey = `${mod.key}/${child.key}`;
-                      return (
-                        <Col span={8} key={permKey}>
-                          <Checkbox
-                            checked={groupPerms.includes(permKey)}
-                            onChange={(e) => {
-                              const current = new Set(groupPerms);
-                              if (e.target.checked) current.add(permKey); else current.delete(permKey);
-                              setGroupPerms(Array.from(current));
-                            }}
-                          >
-                            {child.label}
-                          </Checkbox>
-                        </Col>
-                      );
-                    })}
-                  </Row>
-                </div>
-              );
-            })}
-          </div>
+          <PermEditor scopes={['supplier', 'purchaser', 'factory']} value={groupPermDraft} onChange={setGroupPermDraft} />
         </div>
       </Modal>
 

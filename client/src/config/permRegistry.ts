@@ -257,6 +257,37 @@ export const PRODUCT_FIELD_META: { title: string; dataIndex: string; group?: str
   return out;
 })();
 export const PRODUCT_FIELD_KEYS = PRODUCT_FIELD_META.map(c => c.dataIndex);
+
+/** 店铺管理四页字段点（菜单 key=ecommerce/shop-management，dataIndex 以页面前缀区分） */
+export const SHOP_MENU_KEY = 'ecommerce/shop-management';
+export const SHOP_FIELD_META: { page: string; pageLabel: string; title: string; dataIndex: string }[] = [
+  { page: 'shoplist', pageLabel: '店铺列表', title: '店铺名称', dataIndex: 'shoplist.shopName' },
+  { page: 'shoplist', pageLabel: '店铺列表', title: 'ERP店铺ID', dataIndex: 'shoplist.accountId' },
+  { page: 'shoplist', pageLabel: '店铺列表', title: '所属平台', dataIndex: 'shoplist.platform' },
+  { page: 'shoplist', pageLabel: '店铺列表', title: '品牌', dataIndex: 'shoplist.brand' },
+  { page: 'shoplist', pageLabel: '店铺列表', title: '公司名称', dataIndex: 'shoplist.companyName' },
+  { page: 'shoplist', pageLabel: '店铺列表', title: '店铺手机号', dataIndex: 'shoplist.shopPhone' },
+  { page: 'shoplist', pageLabel: '店铺列表', title: '负责人', dataIndex: 'shoplist.person' },
+  { page: 'shoplist', pageLabel: '店铺列表', title: '备注', dataIndex: 'shoplist.remark' },
+  { page: 'shoplist', pageLabel: '店铺列表', title: '店铺登入密码', dataIndex: 'shoplist.shopPassword' },
+  { page: 'monthend', pageLabel: '月末盘点', title: '店铺名称', dataIndex: 'monthend.shopName' },
+  { page: 'monthend', pageLabel: '月末盘点', title: '盘点月份', dataIndex: 'monthend.calcMonth' },
+  { page: 'monthend', pageLabel: '月末盘点', title: '已到账金额', dataIndex: 'monthend.currentBalance' },
+  { page: 'monthend', pageLabel: '月末盘点', title: '待到账金额', dataIndex: 'monthend.pendingAmount' },
+  { page: 'monthend', pageLabel: '月末盘点', title: '广告资金', dataIndex: 'monthend.adFunds' },
+  { page: 'monthend', pageLabel: '月末盘点', title: '押金', dataIndex: 'monthend.deposit' },
+  { page: 'profit', pageLabel: '月利润表', title: '店铺名称', dataIndex: 'profit.shopName' },
+  { page: 'profit', pageLabel: '月利润表', title: '月份', dataIndex: 'profit.calcMonth' },
+  { page: 'profit', pageLabel: '月利润表', title: '发货成本', dataIndex: 'profit.shippingCost' },
+  { page: 'profit', pageLabel: '月利润表', title: '退款金额', dataIndex: 'profit.refundAmount' },
+  { page: 'profit', pageLabel: '月利润表', title: '利润', dataIndex: 'profit.profit' },
+  { page: 'profit', pageLabel: '月利润表', title: '状态', dataIndex: 'profit.status' },
+  { page: 'withdrawal', pageLabel: '提现/充值', title: '店铺名称', dataIndex: 'withdrawal.shopName' },
+  { page: 'withdrawal', pageLabel: '提现/充值', title: '金额', dataIndex: 'withdrawal.amount' },
+  { page: 'withdrawal', pageLabel: '提现/充值', title: '提现日期', dataIndex: 'withdrawal.date' },
+  { page: 'withdrawal', pageLabel: '提现/充值', title: '状态', dataIndex: 'withdrawal.status' },
+  { page: 'withdrawal', pageLabel: '提现/充值', title: '录入人', dataIndex: 'withdrawal.inputBy' },
+];
 export let FN_POINTS: PermPoint[] = [];
 export let FIELD_POINTS: PermPoint[] = [];
 
@@ -293,4 +324,7 @@ FN_POINTS = menuKeysOf('supplier').flatMap(mk => {
 FIELD_POINTS = PRODUCT_FIELD_META.flatMap(c => [
   { key: `field:${PRODUCT_PAGE_KEY}:${c.dataIndex}:view`, label: `${c.title}·查看`, type: 'field' as PermPointType, group: c.group || '其它', scope: 'supplier' as PermScope, def: 'allow' as const },
   { key: `field:${PRODUCT_PAGE_KEY}:${c.dataIndex}:edit`, label: `${c.title}·编辑`, type: 'field' as PermPointType, group: c.group || '其它', scope: 'supplier' as PermScope, def: 'allow' as const },
-]);
+]).concat(SHOP_FIELD_META.flatMap(c => [
+  { key: `field:${SHOP_MENU_KEY}:${c.dataIndex}:view`, label: `${c.pageLabel}·${c.title}·查看`, type: 'field' as PermPointType, group: c.pageLabel, scope: 'supplier' as PermScope, def: 'allow' as const },
+  { key: `field:${SHOP_MENU_KEY}:${c.dataIndex}:edit`, label: `${c.pageLabel}·${c.title}·编辑`, type: 'field' as PermPointType, group: c.pageLabel, scope: 'supplier' as PermScope, def: 'allow' as const },
+]));
