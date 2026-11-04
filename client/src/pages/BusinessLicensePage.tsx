@@ -586,7 +586,7 @@ const BusinessLicensePage: React.FC = () => {
   // 确认申请：写开票记录（source=apply）+ 合作供应商推送收件箱 + 记忆设置
   const handleConfirmApply = () => {
     const sum = round2(previewDrafts.reduce((s, d) => s + (d.amount || 0), 0));
-    if (previewDrafts.length === 0) { message.warning('请先生成发票'); return; }
+    if (previewDrafts.length === 0) { message.warning('预览中已无发票，请返回修改重新生成'); return; }
     if (previewDrafts.some(d => !(d.amount > 0))) { message.warning('每张发票金额必须大于 0'); return; }
     if (previewDrafts.some(d => !(d.quantity > 0))) { message.warning('发票数量必须为正数'); return; }
     if (previewDrafts.some(d => !String(d.supplier || '').trim())) { message.warning('请为每张发票选择开票供应商'); return; }
@@ -1567,7 +1567,7 @@ const BusinessLicensePage: React.FC = () => {
         }>
         <Alert type="info" showIcon style={{ marginBottom: 12 }}
           message={`公司名称：${applyCompany}　项目名称：${applyProjectName}　发票类型：${applyCompanyType}（税率 ${applyTaxRate}%）　可申请金额：¥${applyAvailable.toFixed(2)}　开票比例：${applyRatio}%　生成开票金额：¥${round2(applyAvailable * applyRatio / 100).toFixed(2)}　月份范围：${applyMonthsSnap.length ? applyMonthsSnap.join('、') : '全部'}`}
-          description="确认申请后写入开票记录（开票状态=待开票）；已合作供应商自动推送到对方「财务管理-开票申请」，未合作仅记录供应商名称（推送状态=待推送）；进项差额按可申请金额全额扣除，进项票显示开票中，已开票后申请金额计入进项票。" />
+          description="确认申请后写入开票记录（开票状态=待开票）；已合作供应商自动推送到对方「财务管理-开票申请」，未合作仅记录供应商名称（推送状态=待推送）；进项差额按预览中实际确认的发票对应差额额度扣除（预览中删除的发票不申请也不扣除），进项票显示开票中，已开票后申请金额计入进项票。" />
         <div style={{ maxHeight: 460, overflowY: 'auto', paddingRight: 4 }}>
           {previewDrafts.map((d, i) => {
             const lineTotal = round2((d.quantity || 0) * (d.unitPrice || 0));
@@ -1580,6 +1580,11 @@ const BusinessLicensePage: React.FC = () => {
                     <AutoComplete value={d.supplier} onChange={v => updateDraft(i, { supplier: v })}
                       options={supplierOptions} placeholder="选择/输入供应商名称" style={{ width: 240 }}
                       filterOption={(input, option) => String((option as any)?.value || '').toLowerCase().includes(input.toLowerCase())} />
+                    <Popconfirm title="删除这张发票？" description="删除后该张不再申请开票，对应的差额额度不会扣除"
+                      okText="删除" cancelText="取消" okButtonProps={{ danger: true }}
+                      onConfirm={() => setPreviewDrafts(previewDrafts.filter((_, x) => x !== i))}>
+                      <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
+                    </Popconfirm>
                   </Space>
                 </div>
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -1631,7 +1636,7 @@ const BusinessLicensePage: React.FC = () => {
           <Text strong style={{ color: '#f5222d', fontSize: 16, marginLeft: 8 }}>
             ¥{round2(previewDrafts.reduce((s, d) => s + (d.amount || 0), 0)).toFixed(2)}
           </Text>
-          <Text type="secondary" style={{ marginLeft: 12 }}>/ 按比例生成 ¥{round2(applyAvailable * applyRatio / 100).toFixed(2)}（差额扣除 ¥{applyAvailable.toFixed(2)}）</Text>
+          <Text type="secondary" style={{ marginLeft: 12 }}>/ 按比例生成 ¥{round2(applyAvailable * applyRatio / 100).toFixed(2)}（差额扣除 ¥{round2(previewDrafts.reduce((s, d) => s + round2((d.amount || 0) * 100 / applyRatio), 0)).toFixed(2)}）</Text>
         </div>
       </Modal>
     </div>
