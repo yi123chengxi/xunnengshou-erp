@@ -22251,10 +22251,26 @@ const saveTplList = (type: string, list: { id: string; name: string }[]) => {
 export interface PrintTemplateEditorProps {
   embeddedTypes?: string[];   // 嵌入模式：类型下拉仅显示这些类型并以其为初始类型（忽略 URL 参数）
   initialTplId?: string;      // 初始加载的模板实例 ID（外部已保存模板卡片“载入”用）
+  tplScope?: string;          // 模板库作用域：非空时使用独立存储键（print_template_<scope>_<type>…），
+                              // 与吊牌/条码等系统模板库完全隔离；不 seed 预设、不同步打印页选择、不做云端备份
   onSave?: (info: { type: string; id: string; name: string }) => void;  // 保存/新增/复制/删除后回调（外部刷新模板列表）
   registerDraft?: (getter: () => any) => void;  // 注册实时草稿 getter（与保存 payload 同构，供外部直接打印/预览）
 }
 export function PrintTemplateEditor(props: PrintTemplateEditorProps = {}) {
+  // 模板库作用域：非空时全部存储键加 scope 前缀，与系统（吊牌/条码等）模板库完全隔离
+  const scope = props.tplScope || '';
+  const sDataKey = (type: string, id: string) => scope
+    ? (id === 'default' ? `print_template_${scope}_${type}` : `print_template_${scope}_${type}_${id}`)
+    : tplDataKey(type, id);
+  const sListKey = (type: string) => scope ? `print_template_list_${scope}_${type}` : `print_template_list_${type}`;
+  const sLastKey = (type: string) => scope ? `print_template_last_${scope}_${type}` : `print_template_last_${type}`;
+  const sLoadList = (type: string, defName: string): { id: string; name: string }[] => {
+    try { const l = JSON.parse(localStorage.getItem(sListKey(type)) || ''); if (Array.isArray(l) && l.length) return l; } catch { /* ignore */ }
+    return [{ id: 'default', name: defName }];
+  };
+  const sSaveList = (type: string, list: { id: string; name: string }[]) => {
+    try { localStorage.setItem(sListKey(type), JSON.stringify(list)); } catch { /* ignore */ }
+  };
   // 支持 ?type=xxx 导航定位（商品打印页跳转编辑吊牌/条码/水洗标模板）；嵌入模式固定为 embeddedTypes
   const initType = (() => {
     if (props.embeddedTypes && props.embeddedTypes.length) return props.embeddedTypes[0];
@@ -22267,7 +22283,7 @@ export function PrintTemplateEditor(props: PrintTemplateEditorProps = {}) {
   const [activeTemplate, setActiveTemplate] = useState(initType);
   const config = TEMPLATE_DEFAULTS[activeTemplate] || TEMPLATE_DEFAULTS.picking;
   // 同一类型下的多个模板
-  const [tplList, setTplList] = useState<{ id: string; name: string }[]>(() => loadTplList(initType, TEMPLATE_DEFAULTS[initType].name));
+  const [tplList, setTplList] = useState<{ id: string; name: string }[]>(() => sLoadList(initType, TEMPLATE_DEFAULTS[initType].name));
   const [activeTplId, setActiveTplId] = useState(props.initialTplId || 'default');
     // 数据归属账号：与商品打印页 settings 键同源（pageData_product_print_settings_<owner>），用于保存时同步打印页的模板选择
     const owner = getDataOwner();
@@ -22397,13 +22413,14 @@ export function PrintTemplateEditor(props: PrintTemplateEditorProps = {}) {
 
   useEffect(() => {
     // 切换模板/模板实例时：尝试从 localStorage 加载已保存的数据
-    seedPresetPrintTemplates(activeTemplate);
-    const list = loadTplList(activeTemplate, config.name);
+    // 作用域模式（自定义打印）使用独立模板库，不注入系统预设模板
+    if (!scope) seedPresetPrintTemplates(activeTemplate);
+    const list = sLoadList(activeTemplate, config.name);
     setTplList(list);
     const curId = list.some(t => t.id === activeTplId) ? activeTplId : 'default';
     if (curId !== activeTplId) { setActiveTplId(curId); return; }
     const cur = list.find(t => t.id === curId);
-    const key = tplDataKey(activeTemplate, curId);
+    const key = sDataKey(activeTemplate, curId);
     const defCols = defaultTableColumnsFor(activeTemplate);
     try {
       const saved = localStorage.getItem(key);
@@ -22438,7 +22455,9 @@ export function PrintTemplateEditor(props: PrintTemplateEditorProps = {}) {
     setSelectedId(null);
   }, [activeTemplate, activeTplId, tplReload]);
   // 模板云端备份：编辑器打开时把本地模板回写服务端数据库（部署/换浏览器不丢）；本地缺失时从服务端恢复
+  // 作用域模式（自定义打印）为纯本地独立模板库，不参与云端同步
   useEffect(() => {
+    if (scope) return;
     const listKey = `print_template_list_${activeTemplate}`;
     const dataKey = tplDataKey(activeTemplate, activeTplId);
     let alive = true;
@@ -22758,7 +22777,7 @@ export function PrintTemplateEditor(props: PrintTemplateEditorProps = {}) {
 
   // 保存模板到 localStorage（按当前模板实例键）
   const saveTemplate = () => {
-    const key = tplDataKey(activeTemplate, activeTplId);
+    const key = sDataKey(activeTemplate, activeTplId);
     const data = {
       templateName, elements, tableColumns, tableFontSize, columnWidths,
       paperWidth, paperHeight, printerName, orientation, paperType,
@@ -22768,23 +22787,28 @@ export function PrintTemplateEditor(props: PrintTemplateEditorProps = {}) {
     try {
       localStorage.setItem(key, JSON.stringify(data));
       // 记录“编辑器最后保存的模板实例”（供打印页初始化时兑底跟随），避免“编辑 A 预览 B”的错位错觉
-      localStorage.setItem(`print_template_last_${activeTemplate}`, JSON.stringify({ id: activeTplId, t: Date.now() }));
+      localStorage.setItem(sLastKey(activeTemplate), JSON.stringify({ id: activeTplId, t: Date.now() }));
       // 同步商品打印页的模板选择：打印页下拉显示与打印取用同一实例（所见即所选，跨路由回跳自动跟随；打印页可再改选）
-      try {
-        const sk = `pageData_product_print_settings_${owner}`;
-        const st = JSON.parse(localStorage.getItem(sk) || '{}');
-        st.tplIds = { ...(st.tplIds || {}), [activeTemplate]: activeTplId };
-        localStorage.setItem(sk, JSON.stringify(st));
-        saveDataset(sk, JSON.stringify(st));
-      } catch { /* ignore */ }
+      // 作用域模式（自定义打印）与系统打印页无关，不回写其模板选择
+      if (!scope) {
+        try {
+          const sk = `pageData_product_print_settings_${owner}`;
+          const st = JSON.parse(localStorage.getItem(sk) || '{}');
+          st.tplIds = { ...(st.tplIds || {}), [activeTemplate]: activeTplId };
+          localStorage.setItem(sk, JSON.stringify(st));
+          saveDataset(sk, JSON.stringify(st));
+        } catch { /* ignore */ }
+      }
       const nextList = tplList.some(t => t.id === activeTplId)
         ? tplList.map(t => t.id === activeTplId ? { ...t, name: templateName } : t)
         : [...tplList, { id: activeTplId, name: templateName }];
       setTplList(nextList);
-      saveTplList(activeTemplate, nextList);
-      // 同步回写服务端数据库：模板随部署/换浏览器保留（系统级共享键）
-      flushDatasetUploadAsync(key, JSON.stringify(data)).catch(() => false);
-      flushDatasetUploadAsync(`print_template_list_${activeTemplate}`, JSON.stringify(nextList)).catch(() => false);
+      sSaveList(activeTemplate, nextList);
+      // 同步回写服务端数据库：模板随部署/换浏览器保留（系统级共享键）；作用域模式为纯本地库，不同步
+      if (!scope) {
+        flushDatasetUploadAsync(key, JSON.stringify(data)).catch(() => false);
+        flushDatasetUploadAsync(`print_template_list_${activeTemplate}`, JSON.stringify(nextList)).catch(() => false);
+      }
       message.success('模板保存成功');
       props.onSave?.({ type: activeTemplate, id: activeTplId, name: templateName });
     } catch (e) {
@@ -22798,7 +22822,7 @@ export function PrintTemplateEditor(props: PrintTemplateEditorProps = {}) {
     const name = `${config.name}${tplList.length + 1}`;
     const next = [...tplList, { id, name }];
     setTplList(next);
-    saveTplList(activeTemplate, next);
+    sSaveList(activeTemplate, next);
     setActiveTplId(id);
     message.success(`已新增模板「${name}」，编辑后点击保存生效`);
     props.onSave?.({ type: activeTemplate, id, name });
@@ -22811,7 +22835,7 @@ export function PrintTemplateEditor(props: PrintTemplateEditorProps = {}) {
     let n = 2;
     const names = new Set(tplList.map(t => t.name));
     while (names.has(name)) { name = `${templateName}-副本${n}`; n += 1; }
-    const key = tplDataKey(activeTemplate, id);
+    const key = sDataKey(activeTemplate, id);
     const data = {
       templateName: name, elements, tableColumns, tableFontSize, columnWidths,
       paperWidth, paperHeight, printerName, orientation, paperType,
@@ -22822,12 +22846,14 @@ export function PrintTemplateEditor(props: PrintTemplateEditorProps = {}) {
       localStorage.setItem(key, JSON.stringify(data));
       const nextList = [...tplList, { id, name }];
       setTplList(nextList);
-      saveTplList(activeTemplate, nextList);
+      sSaveList(activeTemplate, nextList);
       setTemplateName(name);
       setActiveTplId(id);
-      // 同步回写服务端数据库（系统级共享键，与 saveTemplate 同款）
-      flushDatasetUploadAsync(key, JSON.stringify(data)).catch(() => false);
-      flushDatasetUploadAsync(`print_template_list_${activeTemplate}`, JSON.stringify(nextList)).catch(() => false);
+      // 同步回写服务端数据库（系统级共享键，与 saveTemplate 同款）；作用域模式为纯本地库，不同步
+      if (!scope) {
+        flushDatasetUploadAsync(key, JSON.stringify(data)).catch(() => false);
+        flushDatasetUploadAsync(`print_template_list_${activeTemplate}`, JSON.stringify(nextList)).catch(() => false);
+      }
       message.success(`已复制为「${name}」，可编辑后点击保存生效`);
       props.onSave?.({ type: activeTemplate, id, name });
     } catch {
@@ -22838,10 +22864,10 @@ export function PrintTemplateEditor(props: PrintTemplateEditorProps = {}) {
   // 删除当前模板（至少保留一个）
   const deleteTemplate = () => {
     if (tplList.length <= 1) { message.warning('至少保留一个模板'); return; }
-    localStorage.removeItem(tplDataKey(activeTemplate, activeTplId));
+    localStorage.removeItem(sDataKey(activeTemplate, activeTplId));
     const next = tplList.filter(t => t.id !== activeTplId);
     setTplList(next);
-    saveTplList(activeTemplate, next);
+    sSaveList(activeTemplate, next);
     setActiveTplId(next[0].id);
     message.success('模板已删除');
     props.onSave?.({ type: activeTemplate, id: next[0].id, name: templateName });

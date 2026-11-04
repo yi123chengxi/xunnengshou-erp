@@ -109,6 +109,22 @@ const lastEditorTplId = (type: string): string | null => {
   try { const s = localStorage.getItem(`print_template_last_${type}`); if (!s) return null; return JSON.parse(s)?.id || null; } catch { return null; }
 };
 
+// 自定义打印独立模板库（scope='custom'）：与吊牌/条码等系统模板库完全隔离，仅本页读写
+const CUSTOM_SCOPE = 'custom';
+const customTplDataKey = (type: string, id: string) => id === 'default' ? `print_template_${CUSTOM_SCOPE}_${type}` : `print_template_${CUSTOM_SCOPE}_${type}_${id}`;
+const customTplListKey = (type: string) => `print_template_list_${CUSTOM_SCOPE}_${type}`;
+// 独立库仅展示已保存模板（无预设、无默认卡片）
+const loadCustomTplList = (type: string): { id: string; name: string }[] => {
+  const l = loadJson(customTplListKey(type), null);
+  return Array.isArray(l) ? l : [];
+};
+const loadCustomTpl = (type: string, id: string): any => {
+  const raw = loadJson(customTplDataKey(type, id), null);
+  const data = migrateTplDataMm(raw);
+  if (data && data !== raw) { try { localStorage.setItem(customTplDataKey(type, id), JSON.stringify(data)); } catch { /* 忽略回写失败 */ } }
+  return data;
+};
+
 const esc = (s: any) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 // 生成真实可扫描的条形码 SVG
 const buildBarcodeSvg = (code: string, heightMm: number = 15): string => {
@@ -688,13 +704,11 @@ const ProductPrintPage: React.FC = () => {
   const [customProduct, setCustomProduct] = useState('');
   const [customQty, setCustomQty] = useState(1);
 
-  // 删除已保存模板（默认模板不可删）：清实例键+列表键，刷新顶部卡片并重置载入目标
+  // 删除已保存模板（独立本地库，纯前端存储，不涉及云端同步）：清实例键+列表键，刷新顶部卡片并重置载入目标
   const deleteCustomTpl = (id: string) => {
-    if (id === 'default') { message.warning('默认模板不可删除'); return; }
-    try { localStorage.removeItem(`print_template_${customType}_${id}`); } catch { /* ignore */ }
-    const list = loadTplList(customType).filter(t => t.id !== id);
-    safeSetItem(`print_template_list_${customType}`, JSON.stringify(list));
-    saveDataset(`print_template_list_${customType}`, JSON.stringify(list));
+    try { localStorage.removeItem(customTplDataKey(customType, id)); } catch { /* ignore */ }
+    const list = loadCustomTplList(customType).filter(t => t.id !== id);
+    safeSetItem(customTplListKey(customType), JSON.stringify(list));
     if (customLoadId === id) setCustomLoadId('');
     setCustomTplVersion(v => v + 1);
     message.success('模板已删除');
@@ -961,26 +975,28 @@ const ProductPrintPage: React.FC = () => {
               <Text type="secondary" style={{ fontSize: 12 }}>已保存模板（点“载入”到下方编辑器继续编辑；打印始终使用编辑器当前内容）</Text>
             </div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
-              {loadTplList(customType).map(t => {
-                const d = loadTpl(customType, t.id);
+              {loadCustomTplList(customType).length === 0 && (
+                <Text type="secondary" style={{ fontSize: 12 }}>尚无已保存模板（在下方编辑器编辑后点“保存模板”，保存的模板仅在本页展示）</Text>
+              )}
+              {loadCustomTplList(customType).map(t => {
+                const d = loadCustomTpl(customType, t.id);
                 return (
-                  <Card key={`${t.id}-${customTplVersion}`} size="small" style={{ width: 260, borderColor: customLoadId === t.id ? PRIMARY : undefined }}
-                    title={<span style={{ fontSize: 13 }}>{t.name}</span>}
-                    extra={<Space size={4}>
-                      <Button size="small" type="link" onClick={() => setCustomLoadId(t.id)}>载入</Button>
-                      {t.id !== 'default' && (
-                        <Popconfirm title={`删除模板「${t.name}」？` } onConfirm={() => deleteCustomTpl(t.id)}>
-                          <Button size="small" type="link" danger>删除</Button>
-                        </Popconfirm>
-                      )}
+                  <Card key={`${t.id}-${customTplVersion}`} size="small" style={{ width: 190, borderColor: customLoadId === t.id ? PRIMARY : undefined }}
+                    styles={{ header: { padding: '0 8px', minHeight: 34 }, body: { padding: '6px 8px' } }}
+                    title={<span style={{ fontSize: 12 }} title={t.name}>{t.name}</span>}
+                    extra={<Space size={0}>
+                      <Button size="small" type="link" style={{ padding: '0 4px', fontSize: 12 }} onClick={() => setCustomLoadId(t.id)}>载入</Button>
+                      <Popconfirm title={`删除模板「${t.name}」？` } onConfirm={() => deleteCustomTpl(t.id)}>
+                        <Button size="small" type="link" danger style={{ padding: '0 4px', fontSize: 12 }}>删除</Button>
+                      </Popconfirm>
                     </Space>}>
-                    <Text type="secondary" style={{ fontSize: 12 }}>纸张 {Number(d?.paperWidth) || TPL_PAPER[customType].w}×{Number(d?.paperHeight) || TPL_PAPER[customType].h}mm · {Array.isArray(d?.elements) ? d.elements.length : 0} 个元素{d?.savedAt ? ` · ${String(d.savedAt).slice(0, 10)} 保存` : ''}</Text>
+                    <Text type="secondary" style={{ fontSize: 11 }}>纸张 {Number(d?.paperWidth) || TPL_PAPER[customType].w}×{Number(d?.paperHeight) || TPL_PAPER[customType].h}mm · {Array.isArray(d?.elements) ? d.elements.length : 0} 元素{d?.savedAt ? ` · ${String(d.savedAt).slice(5, 10)} 保存` : ''}</Text>
                   </Card>
                 );
               })}
             </div>
-            {/* 嵌入模板编辑器（与系统设置→打印模板同一编辑器窗口） */}
-            <PrintTemplateEditor key={`${customType}:${customLoadId}:${customTplVersion}`} embeddedTypes={[customType]} initialTplId={customLoadId || undefined}
+            {/* 嵌入模板编辑器（独立模板库 tplScope=custom，与吊牌/条码等系统模板完全隔离） */}
+            <PrintTemplateEditor key={`${customType}:${customLoadId}:${customTplVersion}`} embeddedTypes={[customType]} initialTplId={customLoadId || undefined} tplScope={CUSTOM_SCOPE}
               onSave={() => setCustomTplVersion(v => v + 1)} registerDraft={g => { customDraftRef.current = g; }} />
             {/* 打印栏：商品 + 打印机 + 数量 + 预览/直接打印 */}
             <div style={{ position: 'sticky', bottom: 0, zIndex: 5, background: '#fff', borderTop: '1px solid #e3e8ee', padding: '8px 4px', display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 8 }}>
