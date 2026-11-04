@@ -376,16 +376,12 @@ const InvoiceRecordPage: React.FC = () => {
   return (
     <div style={{ padding: 0 }}>
       <Card style={{ marginBottom: 16, borderRadius: 8 }} bodyStyle={{ padding: '16px 24px' }}>
-        <Row justify="space-between" align="middle">
+        <Row align="middle">
           <Col>
             <Space>
               <FileTextOutlined style={{ fontSize: 22, color: PRIMARY }} />
               <Title level={4} style={{ margin: 0, color: PRIMARY }}>开票记录</Title>
               <Tag color="blue">{records.length} 条记录</Tag>
-            </Space>
-          </Col>
-          <Col>
-            <Space>
               <Button icon={<ReloadOutlined />} onClick={reload}>刷新</Button>
               <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>新增</Button>
             </Space>
