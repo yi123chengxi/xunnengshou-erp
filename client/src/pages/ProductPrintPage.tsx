@@ -208,7 +208,7 @@ const ProductPrintPage: React.FC = () => {
   const [previewVisible, setPreviewVisible] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   // 预览弹窗对应的纯打印内容（走打印客户端静默打印，避免浏览器打印弹窗自带页眉页脚）
-  const previewJobRef = useRef<{ type: TplType; html: string } | null>(null);
+  const previewJobRef = useRef<{ type: TplType; tplId: string; html: string } | null>(null);
 
   // 系统预设模板：首次打开把内置预设写入本地（只补不覆写），新部署/新浏览器自带预设
   useEffect(() => { Object.keys(PRESET_PRINT_TEMPLATES).forEach(seedPresetPrintTemplates); }, []);
@@ -316,9 +316,9 @@ const ProductPrintPage: React.FC = () => {
   // 编辑器保存的实例经 saveTemplate 同步写入本页设置（settings.tplIds），下拉显示值随之更新，不再运行时覆盖用户选择
   const resolveTplId = useCallback((type: TplType): string => tplIds[type] || 'default', [tplIds]);
 
-  // 标签页 HTML 构建：有保存模板按元素渲染，无则默认版式
-  const buildPages = useCallback(async (type: TplType, p: any, copies: number): Promise<string> => {
-    const tid = resolveTplId(type);
+  // 标签页 HTML 构建：有保存模板按元素渲染，无则默认版式；tplIdOverride 供下拉选模板同拍预览时显式传入（setState 异步，同拍读 state 会拿到旧值）
+  const buildPages = useCallback(async (type: TplType, p: any, copies: number, tplIdOverride?: string): Promise<string> => {
+    const tid = tplIdOverride || resolveTplId(type);
     const tpl = loadTpl(type, tid);
     // 调试：打印实际加载的模板信息
     console.log(`[buildPages] type=${type}, tplId=${tid}, tpl=${JSON.stringify({ name: tpl?.templateName, elementsCount: tpl?.elements?.length, paperSize: `${tpl?.paperWidth}x${tpl?.paperHeight}` })}`);
@@ -442,15 +442,16 @@ const ProductPrintPage: React.FC = () => {
     return pages.join('');
   }, [tplIds, fieldVal, customContents, selCustom, multiInfo, orderStats, resolveTplId]);
 
-  const openPreview = useCallback(async (type: TplType, rows: { product: any; qty: number }[], title: string) => {
+  const openPreview = useCallback(async (type: TplType, rows: { product: any; qty: number }[], title: string, tplIdOverride?: string) => {
     if (!rows.length) { message.warning('没有可打印的商品'); return; }
-    const pages = (await Promise.all(rows.map(r => buildPages(type, r.product, r.qty)))).join('');
-    const tpl = loadTpl(type, resolveTplId(type));
+    const tid = tplIdOverride || resolveTplId(type);
+    const pages = (await Promise.all(rows.map(r => buildPages(type, r.product, r.qty, tid)))).join('');
+    const tpl = loadTpl(type, tid);
     const pw = Number(tpl?.paperWidth) || TPL_PAPER[type].w;
     const ph = Number(tpl?.paperHeight) || TPL_PAPER[type].h;
     setPreviewTitle(title);
     // 打印用纯内容（无灰底/阴影等屏幕预览样式，末页不再分页避免空白页）
-    previewJobRef.current = { type, html: `<html><head><meta charset="utf-8"><style>@page{size:${pw}mm ${ph}mm;margin:0;}body{margin:0;background:#fff;font-family:'Microsoft YaHei',sans-serif;}.pg{position:relative;z-index:0;width:${pw}mm;height:${ph}mm;page-break-after:always;overflow:hidden;box-sizing:border-box;background:#fff;margin:0;}.pg:last-child{page-break-after:auto;}</style></head><body>${pages}</body></html>` };
+    previewJobRef.current = { type, tplId: tid, html: `<html><head><meta charset="utf-8"><style>@page{size:${pw}mm ${ph}mm;margin:0;}body{margin:0;background:#fff;font-family:'Microsoft YaHei',sans-serif;}.pg{position:relative;z-index:0;width:${pw}mm;height:${ph}mm;page-break-after:always;overflow:hidden;box-sizing:border-box;background:#fff;margin:0;}.pg:last-child{page-break-after:auto;}</style></head><body>${pages}</body></html>` };
     // 屏幕预览：纸张外灰色底、纸张白色居中带阴影；打印时恢复纯白无阴影
     setPreviewHtml(`<html><head><meta charset="utf-8"><style>@page{size:${pw}mm ${ph}mm;margin:0;}body{margin:0;background:#8f9aa5;font-family:'Microsoft YaHei',sans-serif;}.pg{position:relative;z-index:0;width:${pw}mm;height:${ph}mm;page-break-after:always;overflow:hidden;box-sizing:border-box;background:#fff;box-shadow:0 1px 10px rgba(0,0,0,.35);margin:12px auto;}.pg:last-child{page-break-after:auto;}@media print{body{background:#fff;}.pg{margin:0;box-shadow:none;}}</style></head><body>${pages}</body></html>`);
     setPreviewVisible(true);
@@ -469,7 +470,7 @@ const ProductPrintPage: React.FC = () => {
       const renderRes = await request.post('/print/render', { html: job.html });
       const printUrl = renderRes?.data?.data?.url;
       if (!printUrl) { message.error('打印内容生成失败'); return; }
-      const tpl = loadTpl(job.type, resolveTplId(job.type));
+      const tpl = loadTpl(job.type, job.tplId);
       const printerName = printer === '默认使用模板设置的打印机' ? (tpl?.printerName || '') : printer;
       const username = localStorage.getItem('username') || '';
       const jobRes = await request.post('/print/job', { type: 'url', content: printUrl, printerName, copies: 1, username });
@@ -668,11 +669,11 @@ const ProductPrintPage: React.FC = () => {
     setSrcChecked([]); setFileText(''); setSrcModal('');
   };
 
-  const printGrid = (type: TplType) => {
+  const printGrid = (type: TplType, tplIdOverride?: string) => {
     const rows = (gridChecked.length ? grid.filter(g => gridChecked.includes(g.key)) : grid);
     if (!rows.length) { message.warning('没有可打印的行'); return; }
     const payload = rows.map(r => ({ product: products.find((p: any) => p.productCode === r.productCode) || { productCode: r.productCode, name: r.name }, qty: r.qty }));
-    openPreview(type, payload, `${TPL_LABEL[type]}打印预览 - 导入清单(${rows.length} 行)`);
+    openPreview(type, payload, `${TPL_LABEL[type]}打印预览 - 导入清单(${rows.length} 行)`, tplIdOverride);
   };
 
   const gridColumns: any[] = [
@@ -841,13 +842,13 @@ const ProductPrintPage: React.FC = () => {
               {importTab === 'production' && <Button size="small" icon={<PlusOutlined />} onClick={() => { setSrcChecked([]); setSrcModal('production'); }}>选择生产订单明细导入</Button>}
               {importTab === 'file' && <Button size="small" icon={<FileTextOutlined />} onClick={() => { setFileText(''); setSrcModal('file'); }}>粘贴文件内容导入</Button>}
               {importTab === 'free' && <Button size="small" icon={<PlusOutlined />} onClick={() => { setPickChecked([]); setPickKw(''); setPickVisible(true); }}>选择商品导入</Button>}
-              <Dropdown menu={{ items: loadTplList('tag').map(t => ({ key: t.id, label: t.name })), onClick: ({ key }) => { setTplIds(prev => ({ ...prev, tag: key })); printGrid('tag'); } }}>
+              <Dropdown menu={{ items: loadTplList('tag').map(t => ({ key: t.id, label: t.name })), onClick: ({ key }) => { setTplIds(prev => ({ ...prev, tag: key })); printGrid('tag', key); } }}>
                 <Button size="small" icon={<PrinterOutlined />}>打印商品吊牌预览</Button>
               </Dropdown>
-              <Dropdown menu={{ items: loadTplList('barcode').map(t => ({ key: t.id, label: t.name })), onClick: ({ key }) => { setTplIds(prev => ({ ...prev, barcode: key })); printGrid('barcode'); } }}>
+              <Dropdown menu={{ items: loadTplList('barcode').map(t => ({ key: t.id, label: t.name })), onClick: ({ key }) => { setTplIds(prev => ({ ...prev, barcode: key })); printGrid('barcode', key); } }}>
                 <Button size="small" icon={<PrinterOutlined />}>打印商品条码预览</Button>
               </Dropdown>
-              <Dropdown menu={{ items: loadTplList('wash').map(t => ({ key: t.id, label: t.name })), onClick: ({ key }) => { setTplIds(prev => ({ ...prev, wash: key })); printGrid('wash'); } }}>
+              <Dropdown menu={{ items: loadTplList('wash').map(t => ({ key: t.id, label: t.name })), onClick: ({ key }) => { setTplIds(prev => ({ ...prev, wash: key })); printGrid('wash', key); } }}>
                 <Button size="small" icon={<PrinterOutlined />}>打印商品水洗标预览</Button>
               </Dropdown>
               <Button size="small" icon={<PlusOutlined />} onClick={() => { setPickChecked([]); setPickKw(''); setPickVisible(true); }}>添加商品</Button>
