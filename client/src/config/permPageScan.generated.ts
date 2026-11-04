@@ -1,13 +1,13 @@
 /**
  * 页面扫描产物（scripts/gen-perm-points.js 生成，勿手改；页面变更后重跑再生成）
- * 生成时间：2026-11-04T08:04:29.325Z；菜单 51 个 / 页面分组 79 个 / 字段 785 个
+ * 生成时间：2026-11-04T08:43:28.993Z；菜单 51 个 / 页面分组 79 个 / 字段 785 个
  */
 export interface ScannedPage { menuKey: string; page: string; pageLabel: string; fields: { title: string; dataIndex: string }[]; fns: string[]; }
 export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "ecommerce/progress",
   "page": "progress",
-  "pageLabel": "NewStyleProgress·通用",
+  "pageLabel": "新款进度·通用",
   "fields": [
    {
     "title": "款式编码",
@@ -170,7 +170,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "ecommerce/progress",
   "page": "progress.photo",
-  "pageLabel": "photo",
+  "pageLabel": "回传图片",
   "fields": [],
   "fns": [
    "add",
@@ -184,7 +184,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "ecommerce/progress",
   "page": "progress.arrival",
-  "pageLabel": "arrival",
+  "pageLabel": "到货款式",
   "fields": [],
   "fns": [
    "add",
@@ -198,7 +198,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "ecommerce/progress",
   "page": "progress.listing",
-  "pageLabel": "listing",
+  "pageLabel": "商品属性",
   "fields": [
    {
     "title": "创建时间",
@@ -248,7 +248,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "ecommerce/shop-management",
   "page": "shoplist",
-  "pageLabel": "ShopList",
+  "pageLabel": "店铺列表",
   "fields": [
    {
     "title": "店铺名称",
@@ -301,7 +301,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "ecommerce/shop-management",
   "page": "monthend",
-  "pageLabel": "MonthEndCheck",
+  "pageLabel": "月末盘点",
   "fields": [
    {
     "title": "店铺名称",
@@ -403,7 +403,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "ecommerce/shop-management",
   "page": "profit",
-  "pageLabel": "ShopProfit",
+  "pageLabel": "月利润表",
   "fields": [
    {
     "title": "日期",
@@ -428,7 +428,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "ecommerce/shop-management",
   "page": "withdrawal",
-  "pageLabel": "WithdrawalRecord·通用",
+  "pageLabel": "提现充值·通用",
   "fields": [
    {
     "title": "店铺名称",
@@ -482,7 +482,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "ecommerce/shop-management",
   "page": "withdrawal.withdrawal",
-  "pageLabel": "withdrawal",
+  "pageLabel": "提现记录",
   "fields": [],
   "fns": [
    "add",
@@ -496,7 +496,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "ecommerce/shop-management",
   "page": "withdrawal.recharge",
-  "pageLabel": "recharge",
+  "pageLabel": "充值记录",
   "fields": [
    {
     "title": "店铺名称",
@@ -566,7 +566,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "ecommerce/shop-management",
   "page": "license",
-  "pageLabel": "BusinessLicense·通用",
+  "pageLabel": "营业执照·通用",
   "fields": [],
   "fns": [
    "add",
@@ -696,7 +696,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "ecommerce/shop-management",
   "page": "invoice",
-  "pageLabel": "InvoiceRecord",
+  "pageLabel": "开票记录",
   "fields": [
    {
     "title": "公司名称",
@@ -764,7 +764,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "ecommerce/opportunity",
   "page": "market",
-  "pageLabel": "Market",
+  "pageLabel": "商机市场",
   "fields": [
    {
     "title": "发布单号",
@@ -839,7 +839,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "ecommerce/warehouse-stats",
   "page": "warehouse",
-  "pageLabel": "WarehouseStats",
+  "pageLabel": "仓库统计",
   "fields": [
    {
     "title": "月份",
@@ -1038,7 +1038,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "ecommerce/manage",
   "page": "brandmanage",
-  "pageLabel": "BrandManage",
+  "pageLabel": "品牌管理",
   "fields": [],
   "fns": [
    "add",
@@ -1052,7 +1052,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "basic-data/mold",
   "page": "mold",
-  "pageLabel": "Mold",
+  "pageLabel": "模具管理",
   "fields": [
    {
     "title": "主图",
@@ -1110,7 +1110,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "basic-data/product-print",
   "page": "productprint",
-  "pageLabel": "ProductPrint",
+  "pageLabel": "商品打印",
   "fields": [
    {
     "title": "商品编码",
@@ -1193,7 +1193,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "customer/customer-info",
   "page": "customer",
-  "pageLabel": "CustomerInfo·通用",
+  "pageLabel": "客户基础信息·通用",
   "fields": [],
   "fns": [
    "add",
@@ -1208,7 +1208,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "customer/customer-info",
   "page": "customer.direct",
-  "pageLabel": "direct",
+  "pageLabel": "直接客户",
   "fields": [],
   "fns": [
    "add",
@@ -1222,7 +1222,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "customer/customer-info",
   "page": "customer.purchaser",
-  "pageLabel": "purchaser",
+  "pageLabel": "已绑定采购商",
   "fields": [
    {
     "title": "客户编码",
@@ -1341,7 +1341,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "customer/cooperation-manage",
   "page": "cooperationmanage",
-  "pageLabel": "CooperationManage",
+  "pageLabel": "合作申请",
   "fields": [
    {
     "title": "申请ID",
@@ -1386,7 +1386,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "customer/reconciliation",
   "page": "reconciliationmanage",
-  "pageLabel": "ReconciliationManage·通用",
+  "pageLabel": "对账管理·通用",
   "fields": [],
   "fns": [
    "add",
@@ -1398,7 +1398,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "customer/reconciliation",
   "page": "reconciliationmanage.customer",
-  "pageLabel": "customer",
+  "pageLabel": "客户对账",
   "fields": [],
   "fns": [
    "add",
@@ -1412,7 +1412,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "customer/reconciliation",
   "page": "reconciliationmanage.supplier",
-  "pageLabel": "supplier",
+  "pageLabel": "供应商对账",
   "fields": [],
   "fns": [
    "add",
@@ -1426,7 +1426,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "customer/reconciliation",
   "page": "reconciliationmanage.pending",
-  "pageLabel": "pending",
+  "pageLabel": "待入账",
   "fields": [],
   "fns": [
    "add",
@@ -1440,7 +1440,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "customer/reconciliation",
   "page": "reconciliationmanage.abnormal",
-  "pageLabel": "abnormal",
+  "pageLabel": "异常单据",
   "fields": [
    {
     "title": "单据编号",
@@ -1525,7 +1525,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "customer/price-strategy",
   "page": "pricestrategy",
-  "pageLabel": "PriceStrategy",
+  "pageLabel": "采购价设置",
   "fields": [
    {
     "title": "策略名称",
@@ -1598,7 +1598,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "sales/order-profit",
   "page": "orderprofit",
-  "pageLabel": "OrderProfit",
+  "pageLabel": "订单毛利率",
   "fields": [
    {
     "title": "订单编号",
@@ -1645,7 +1645,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "production/workflow-templates",
   "page": "workflowtemplate",
-  "pageLabel": "WorkflowTemplate",
+  "pageLabel": "生产流程模板",
   "fields": [],
   "fns": [
    "add",
@@ -1657,7 +1657,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "inventory/prod-in-stats",
   "page": "prodinboundstats",
-  "pageLabel": "ProdInboundStats",
+  "pageLabel": "生产入库统计",
   "fields": [
    {
     "title": "入库单号",
@@ -1738,7 +1738,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "inventory/purchase-receiving",
   "page": "purchasereceiving",
-  "pageLabel": "PurchaseReceiving",
+  "pageLabel": "采购入库",
   "fields": [
    {
     "title": "入库单号",
@@ -1798,7 +1798,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "inventory/inventory-check",
   "page": "inventorycheck",
-  "pageLabel": "InventoryCheck",
+  "pageLabel": "库存盘点",
   "fields": [
    {
     "title": "盘点单号",
@@ -1859,7 +1859,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "inventory/inventory-outbound",
   "page": "inventoryoutbound",
-  "pageLabel": "InventoryOutbound",
+  "pageLabel": "库存出库",
   "fields": [
    {
     "title": "出库单号",
@@ -1915,7 +1915,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "finance/reimbursement",
   "page": "reimbursement",
-  "pageLabel": "Reimbursement",
+  "pageLabel": "报销",
   "fields": [
    {
     "title": "报销编号",
@@ -1994,7 +1994,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "finance/payment-request",
   "page": "paymentrequest",
-  "pageLabel": "PaymentRequest·通用",
+  "pageLabel": "收/付申请·通用",
   "fields": [
    {
     "title": "收款编号",
@@ -2045,7 +2045,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "finance/payment-request",
   "page": "paymentrequest.review",
-  "pageLabel": "review",
+  "pageLabel": "付款审核",
   "fields": [],
   "fns": [
    "add",
@@ -2059,7 +2059,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "finance/payment-request",
   "page": "paymentrequest.pay",
-  "pageLabel": "pay",
+  "pageLabel": "待支付",
   "fields": [],
   "fns": [
    "add",
@@ -2073,7 +2073,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "finance/payment-request",
   "page": "paymentrequest.my",
-  "pageLabel": "my",
+  "pageLabel": "我的申请",
   "fields": [],
   "fns": [
    "add",
@@ -2083,7 +2083,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "finance/invoice-apply",
   "page": "invoiceapply",
-  "pageLabel": "InvoiceApply",
+  "pageLabel": "开票申请",
   "fields": [
    {
     "title": "申请单号",
@@ -2142,7 +2142,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "finance/general-ledger",
   "page": "generalledger",
-  "pageLabel": "GeneralLedger·通用",
+  "pageLabel": "会计账薄·通用",
   "fields": [
    {
     "title": "科目编码",
@@ -2211,7 +2211,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "finance/general-ledger",
   "page": "generalledger.entry",
-  "pageLabel": "entry",
+  "pageLabel": "会计分录",
   "fields": [],
   "fns": [
    "add",
@@ -2225,7 +2225,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "finance/general-ledger",
   "page": "generalledger.subject",
-  "pageLabel": "subject",
+  "pageLabel": "科目表",
   "fields": [],
   "fns": [
    "add",
@@ -2239,7 +2239,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "finance/general-ledger",
   "page": "generalledger.receivable",
-  "pageLabel": "receivable",
+  "pageLabel": "其他应收款",
   "fields": [],
   "fns": [
    "add",
@@ -2253,7 +2253,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "finance/general-ledger",
   "page": "generalledger.payable",
-  "pageLabel": "payable",
+  "pageLabel": "其他应付款",
   "fields": [],
   "fns": [
    "add",
@@ -2267,7 +2267,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "finance/general-ledger",
   "page": "generalledger.summary",
-  "pageLabel": "summary",
+  "pageLabel": "科目汇总",
   "fields": [
    {
     "title": "摘要",
@@ -2292,7 +2292,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "finance/simple-ledger",
   "page": "simpleledger",
-  "pageLabel": "SimpleLedger",
+  "pageLabel": "简易账薄",
   "fields": [],
   "fns": [
    "add",
@@ -2306,7 +2306,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "finance/daily-bookkeeping",
   "page": "dailybookkeeping",
-  "pageLabel": "DailyBookkeeping",
+  "pageLabel": "日常记账",
   "fields": [
    {
     "title": "凭证编号",
@@ -2369,7 +2369,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "finance/daily-bookkeeping-stats",
   "page": "bookkeepingstats",
-  "pageLabel": "BookkeepingStats",
+  "pageLabel": "记账统计",
   "fields": [
    {
     "title": "月份",
@@ -2452,7 +2452,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "hr-manage/attendance",
   "page": "attendance",
-  "pageLabel": "Attendance",
+  "pageLabel": "考勤打卡",
   "fields": [
    {
     "title": "日期",
@@ -2526,7 +2526,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "hr-manage/salary",
   "page": "salary",
-  "pageLabel": "Salary",
+  "pageLabel": "工资计算",
   "fields": [
    {
     "title": "员工",
@@ -2601,7 +2601,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "hr-manage/employee",
   "page": "employee",
-  "pageLabel": "Employee",
+  "pageLabel": "员工档案",
   "fields": [
    {
     "title": "工号",
@@ -2640,7 +2640,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "hr-manage/shift",
   "page": "shift",
-  "pageLabel": "Shift",
+  "pageLabel": "班次设置",
   "fields": [
    {
     "title": "班次名称",
@@ -2677,7 +2677,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "hr-manage/leave",
   "page": "leave",
-  "pageLabel": "Leave",
+  "pageLabel": "请假管理",
   "fields": [
    {
     "title": "员工",
@@ -2727,7 +2727,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "settings/account-manage",
   "page": "accountmanage",
-  "pageLabel": "AccountManage",
+  "pageLabel": "账号管理",
   "fields": [
    {
     "title": "账号ID",
@@ -2802,7 +2802,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "settings/role-manage",
   "page": "rolemanage",
-  "pageLabel": "RoleManage",
+  "pageLabel": "角色管理",
   "fields": [
    {
     "title": "角色名称",
@@ -2842,7 +2842,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
  {
   "menuKey": "settings/notification-settings",
   "page": "notificationsettings",
-  "pageLabel": "NotificationSettings",
+  "pageLabel": "弹窗设置",
   "fields": [],
   "fns": [
    "audit"

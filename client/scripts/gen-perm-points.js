@@ -83,6 +83,29 @@ const MENU_LABELS = {
   'settings/account-manage': '账号管理', 'settings/role-manage': '角色管理', 'settings/expense-fee': '费用管理', 'settings/warehouse-manage': '仓位管理', 'settings/print-template': '打印模板', 'settings/notification-settings': '弹窗设置',
 };
 
+// 页面文件组件名 → 中文页面名（权限编辑器分组标题展示用；缺失时回退菜单中文名）
+const FILE_LABELS = {
+  NewStyleProgressPage: '新款进度', ShopListPage: '店铺列表', MonthEndCheckPage: '月末盘点', ShopProfitPage: '月利润表',
+  WithdrawalRecordPage: '提现充值', BusinessLicensePage: '营业执照', InvoiceRecordPage: '开票记录',
+  MarketPage: '商机市场', WarehouseStatsPage: '仓库统计', BrandManagePage: '品牌管理', MoldPage: '模具管理', ProductPrintPage: '商品打印',
+  CustomerInfo: '客户基础信息', CooperationManage: '合作申请', ReconciliationManage: '对账管理', PriceStrategyPage: '采购价设置',
+  OrderProfitPage: '订单毛利率', WorkflowTemplatePage: '生产流程模板', ProdInboundStatsPage: '生产入库统计', PurchaseReceivingPage: '采购入库',
+  InventoryCheckPage: '库存盘点', InventoryOutboundPage: '库存出库', ReimbursementPage: '报销', PaymentRequestPage: '收/付申请',
+  InvoiceApplyPage: '开票申请', GeneralLedgerPage: '会计账薄', SimpleLedgerPage: '简易账薄', DailyBookkeepingPage: '日常记账', BookkeepingStatsPage: '记账统计',
+  AttendancePage: '考勤打卡', SalaryPage: '工资计算', EmployeePage: '员工档案', ShiftPage: '班次设置', LeavePage: '请假管理',
+  AccountManage: '账号管理', RoleManage: '角色管理', NotificationSettings: '弹窗设置',
+};
+
+// 子页签中文名：按钮式切换/模板字符串 label 正则扫不到时按 slug.tabKey 显式映射
+const TAB_LABEL_OVERRIDE = {
+  'progress.photo': '回传图片', 'progress.arrival': '到货款式', 'progress.listing': '商品属性',
+  'withdrawal.withdrawal': '提现记录', 'withdrawal.recharge': '充值记录',
+  'customer.direct': '直接客户', 'customer.purchaser': '已绑定采购商',
+  'reconciliationmanage.customer': '客户对账', 'reconciliationmanage.supplier': '供应商对账', 'reconciliationmanage.pending': '待入账', 'reconciliationmanage.abnormal': '异常单据',
+  'paymentrequest.review': '付款审核', 'paymentrequest.pay': '待支付', 'paymentrequest.my': '我的申请',
+  'generalledger.entry': '会计分录', 'generalledger.subject': '科目表', 'generalledger.receivable': '其他应收款', 'generalledger.payable': '其他应付款', 'generalledger.summary': '科目汇总',
+};
+
 const CONFIG_SOURCES = [
   { file: 'src/config/pageConfig.ts', maps: ['basicDataPages', 'customerPages', 'salesPages'] },
   { file: 'src/config/pageConfig2.ts', maps: ['productionPages', 'purchasePages', 'inventoryPages', 'financePages', 'settingsPages'] },
@@ -132,12 +155,13 @@ const extractFns = (src, fallback) => {
   return hit.length > 0 ? hit : (fallback || []);
 };
 
-const scanFile = (rel) => {
+const scanFile = (rel, menuKey) => {
   const file = path.join(PAGES, rel + '.tsx');
   if (!fs.existsSync(file)) return null;
   const src = fs.readFileSync(file, 'utf8');
   const name = rel.split('/').pop();
   const slug = SLUG_OVERRIDE[name] || name.replace(/Page$/, '').toLowerCase();
+  const fileLabel = FILE_LABELS[name] || MENU_LABELS[menuKey] || name.replace(/Page$/, '');
   const markers = [];
   let m;
   TAB_MARKER.lastIndex = 0;
@@ -151,11 +175,11 @@ const scanFile = (rel) => {
     markers.forEach(mk => { if (!uniq.some(u => u.key === mk.key)) uniq.push(mk); });
     uniq.forEach((mk, i) => {
       const seg = src.slice(mk.idx, uniq[i + 1] ? uniq[i + 1].idx : src.length);
-      pages.push({ page: `${slug}.${mk.key}`, pageLabel: tabLabels[mk.key] || mk.key, fields: extractColumns(seg), fns: extractFns(seg, FN_DEFAULT) });
+      pages.push({ page: `${slug}.${mk.key}`, pageLabel: TAB_LABEL_OVERRIDE[`${slug}.${mk.key}`] || tabLabels[mk.key] || mk.key, fields: extractColumns(seg), fns: extractFns(seg, FN_DEFAULT) });
     });
-    pages.unshift({ page: slug, pageLabel: `${name.replace(/Page$/, '')}·通用`, fields: extractColumns(src.slice(0, markers[0].idx)), fns: extractFns(src, FN_DEFAULT) });
+    pages.unshift({ page: slug, pageLabel: `${fileLabel}·通用`, fields: extractColumns(src.slice(0, markers[0].idx)), fns: extractFns(src, FN_DEFAULT) });
   } else {
-    pages.push({ page: slug, pageLabel: name.replace(/Page$/, ''), fields: extractColumns(src), fns: extractFns(src, FN_DEFAULT) });
+    pages.push({ page: slug, pageLabel: fileLabel, fields: extractColumns(src), fns: extractFns(src, FN_DEFAULT) });
   }
   return { pages: pages.filter(p => p.fields.length > 0 || p.fns.length > 0) };
 };
@@ -192,7 +216,7 @@ const scanConfig = () => {
 const result = [];
 Object.entries(MENU_PAGES).forEach(([menuKey, files]) => {
   files.forEach(rel => {
-    const scanned = scanFile(rel);
+    const scanned = scanFile(rel, menuKey);
     if (!scanned) { console.warn('[skip] missing file:', rel); return; }
     scanned.pages.forEach(p => result.push({ menuKey, page: p.page, pageLabel: p.pageLabel, fields: p.fields, fns: p.fns }));
   });
