@@ -22,6 +22,7 @@ import { basicDataPages } from '../config/pageConfig';
 import { getCurrentUserDisplayName } from '../utils/billLog';
 import request from '../utils/request';
 import { PRESET_PRINT_TEMPLATES, seedPresetPrintTemplates } from '../config/presetPrintTemplates';
+import { PrintTemplateEditor } from './ModuleChildPage';
 
 // 成品列标题→数据键映射：建议零售价/其它属性1等列标题字段自动关联商品列表记录
 const PRODUCT_LABEL_KEY: Record<string, string> = {};
@@ -38,6 +39,7 @@ const SUB_MENUS = [
   { key: 'print-tag', label: '打印吊牌&条码' },
   { key: 'import-print', label: '导入打印吊牌&条码' },
   { key: 'carton-spec', label: '箱规码打印' },
+  { key: 'custom-print', label: '自定义打印' },
 ];
 
 const TPL_TYPES = ['tag', 'barcode', 'wash', 'carton'] as const;
@@ -208,7 +210,7 @@ const ProductPrintPage: React.FC = () => {
   const [previewVisible, setPreviewVisible] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   // 预览弹窗对应的纯打印内容（走打印客户端静默打印，避免浏览器打印弹窗自带页眉页脚）
-  const previewJobRef = useRef<{ type: TplType; tplId: string; html: string } | null>(null);
+  const previewJobRef = useRef<{ type: TplType; tplId: string; tplData: any; html: string } | null>(null);
 
   // 系统预设模板：首次打开把内置预设写入本地（只补不覆写），新部署/新浏览器自带预设
   useEffect(() => { Object.keys(PRESET_PRINT_TEMPLATES).forEach(seedPresetPrintTemplates); }, []);
@@ -235,6 +237,9 @@ const ProductPrintPage: React.FC = () => {
     safeSetItem(settingsKey, JSON.stringify({ printKind, scanDirect, multiInfo, printer, tplIds }));
     saveDataset(settingsKey, JSON.stringify({ printKind, scanDirect, multiInfo, printer, tplIds }));
   }, [printKind, scanDirect, multiInfo, printer, tplIds, settingsKey]);
+
+  // 打印机下拉选项（吊牌打印与自定义打印子页共用）
+  const printerOptions = [{ value: '默认使用模板设置的打印机', label: '默认使用模板设置的打印机' }, ...printerList.map((pl: any) => ({ value: pl.name, label: pl.name + (pl.isDefault ? '（系统默认）' : '') + (pl.clientName ? `（@${pl.clientName}）` : '') })), ...(printerList.length ? [] : [{ value: '__print_client_offline__', label: `（打印客户端未在线：请在接打印机的电脑启动讯能手打印客户端，并登录 ${window.location.origin}）`, disabled: true }])];
 
   const brands = useMemo(() => Array.from(new Set(products.map((p: any) => String(p.brand || '').trim()).filter(Boolean))) as string[], [products]);
   const filteredProducts = useMemo(() => {
@@ -317,9 +322,9 @@ const ProductPrintPage: React.FC = () => {
   const resolveTplId = useCallback((type: TplType): string => tplIds[type] || 'default', [tplIds]);
 
   // 标签页 HTML 构建：有保存模板按元素渲染，无则默认版式；tplIdOverride 供下拉选模板同拍预览时显式传入（setState 异步，同拍读 state 会拿到旧值）
-  const buildPages = useCallback(async (type: TplType, p: any, copies: number, tplIdOverride?: string): Promise<string> => {
+  const buildPages = useCallback(async (type: TplType, p: any, copies: number, tplIdOverride?: string, tplDataOverride?: any): Promise<string> => {
     const tid = tplIdOverride || resolveTplId(type);
-    const tpl = loadTpl(type, tid);
+    const tpl = tplDataOverride || loadTpl(type, tid);
     // 调试：打印实际加载的模板信息
     console.log(`[buildPages] type=${type}, tplId=${tid}, tpl=${JSON.stringify({ name: tpl?.templateName, elementsCount: tpl?.elements?.length, paperSize: `${tpl?.paperWidth}x${tpl?.paperHeight}` })}`);
     if (tpl?.elements) {
@@ -442,16 +447,16 @@ const ProductPrintPage: React.FC = () => {
     return pages.join('');
   }, [tplIds, fieldVal, customContents, selCustom, multiInfo, orderStats, resolveTplId]);
 
-  const openPreview = useCallback(async (type: TplType, rows: { product: any; qty: number }[], title: string, tplIdOverride?: string) => {
+  const openPreview = useCallback(async (type: TplType, rows: { product: any; qty: number }[], title: string, tplIdOverride?: string, tplDataOverride?: any) => {
     if (!rows.length) { message.warning('没有可打印的商品'); return; }
     const tid = tplIdOverride || resolveTplId(type);
-    const pages = (await Promise.all(rows.map(r => buildPages(type, r.product, r.qty, tid)))).join('');
-    const tpl = loadTpl(type, tid);
+    const pages = (await Promise.all(rows.map(r => buildPages(type, r.product, r.qty, tid, tplDataOverride)))).join('');
+    const tpl = tplDataOverride || loadTpl(type, tid);
     const pw = Number(tpl?.paperWidth) || TPL_PAPER[type].w;
     const ph = Number(tpl?.paperHeight) || TPL_PAPER[type].h;
     setPreviewTitle(title);
     // 打印用纯内容（无灰底/阴影等屏幕预览样式，末页不再分页避免空白页）
-    previewJobRef.current = { type, tplId: tid, html: `<html><head><meta charset="utf-8"><style>@page{size:${pw}mm ${ph}mm;margin:0;}body{margin:0;background:#fff;font-family:'Microsoft YaHei',sans-serif;}.pg{position:relative;z-index:0;width:${pw}mm;height:${ph}mm;page-break-after:always;overflow:hidden;box-sizing:border-box;background:#fff;margin:0;}.pg:last-child{page-break-after:auto;}</style></head><body>${pages}</body></html>` };
+    previewJobRef.current = { type, tplId: tid, tplData: tplDataOverride || null, html: `<html><head><meta charset="utf-8"><style>@page{size:${pw}mm ${ph}mm;margin:0;}body{margin:0;background:#fff;font-family:'Microsoft YaHei',sans-serif;}.pg{position:relative;z-index:0;width:${pw}mm;height:${ph}mm;page-break-after:always;overflow:hidden;box-sizing:border-box;background:#fff;margin:0;}.pg:last-child{page-break-after:auto;}</style></head><body>${pages}</body></html>` };
     // 屏幕预览：纸张外灰色底、纸张白色居中带阴影；打印时恢复纯白无阴影
     setPreviewHtml(`<html><head><meta charset="utf-8"><style>@page{size:${pw}mm ${ph}mm;margin:0;}body{margin:0;background:#8f9aa5;font-family:'Microsoft YaHei',sans-serif;}.pg{position:relative;z-index:0;width:${pw}mm;height:${ph}mm;page-break-after:always;overflow:hidden;box-sizing:border-box;background:#fff;box-shadow:0 1px 10px rgba(0,0,0,.35);margin:12px auto;}.pg:last-child{page-break-after:auto;}@media print{body{background:#fff;}.pg{margin:0;box-shadow:none;}}</style></head><body>${pages}</body></html>`);
     setPreviewVisible(true);
@@ -470,7 +475,7 @@ const ProductPrintPage: React.FC = () => {
       const renderRes = await request.post('/print/render', { html: job.html });
       const printUrl = renderRes?.data?.data?.url;
       if (!printUrl) { message.error('打印内容生成失败'); return; }
-      const tpl = loadTpl(job.type, job.tplId);
+      const tpl = job.tplData || loadTpl(job.type, job.tplId);
       const printerName = printer === '默认使用模板设置的打印机' ? (tpl?.printerName || '') : printer;
       const username = localStorage.getItem('username') || '';
       const jobRes = await request.post('/print/job', { type: 'url', content: printUrl, printerName, copies: 1, username });
@@ -674,6 +679,61 @@ const ProductPrintPage: React.FC = () => {
     if (!rows.length) { message.warning('没有可打印的行'); return; }
     const payload = rows.map(r => ({ product: products.find((p: any) => p.productCode === r.productCode) || { productCode: r.productCode, name: r.name }, qty: r.qty }));
     openPreview(type, payload, `${TPL_LABEL[type]}打印预览 - 导入清单(${rows.length} 行)`, tplIdOverride);
+  };
+
+  // ============ 子页D：自定义打印（嵌入模板编辑器 + 编辑后直接打印） ============
+  const [customType, setCustomType] = useState<TplType>('tag');
+  const [customLoadId, setCustomLoadId] = useState('');
+  const [customTplVersion, setCustomTplVersion] = useState(0);
+  const customDraftRef = useRef<() => any>(() => null);
+  const [customProduct, setCustomProduct] = useState('');
+  const [customQty, setCustomQty] = useState(1);
+
+  // 删除已保存模板（默认模板不可删）：清实例键+列表键，刷新顶部卡片并重置载入目标
+  const deleteCustomTpl = (id: string) => {
+    if (id === 'default') { message.warning('默认模板不可删除'); return; }
+    try { localStorage.removeItem(`print_template_${customType}_${id}`); } catch { /* ignore */ }
+    const list = loadTplList(customType).filter(t => t.id !== id);
+    safeSetItem(`print_template_list_${customType}`, JSON.stringify(list));
+    saveDataset(`print_template_list_${customType}`, JSON.stringify(list));
+    if (customLoadId === id) setCustomLoadId('');
+    setCustomTplVersion(v => v + 1);
+    message.success('模板已删除');
+  };
+
+  // 自定义打印：预览/静默打印均使用编辑器当前实时草稿（无需先保存）
+  const doCustomPrint = async (previewOnly: boolean) => {
+    const draft = customDraftRef.current ? customDraftRef.current() : null;
+    if (!draft || !Array.isArray(draft.elements) || draft.elements.length === 0) { message.warning('请先在模板编辑器中添加打印元素'); return; }
+    const p = products.find((x: any) => x.productCode === customProduct);
+    if (!p) { message.warning('请先选择要打印的商品'); return; }
+    const tplData = { ...draft, templateName: draft.templateName || '自定义模板' };
+    if (previewOnly) {
+      openPreview(customType, [{ product: p, qty: customQty }], `自定义打印预览 - ${p.productCode} [${tplData.templateName}]`, undefined, tplData);
+      return;
+    }
+    setPrintLoading(true);
+    try {
+      const pages = await buildPages(customType, p, customQty, undefined, tplData);
+      const pw = Number(tplData.paperWidth) || TPL_PAPER[customType].w;
+      const ph = Number(tplData.paperHeight) || TPL_PAPER[customType].h;
+      const html = `<html><head><meta charset="utf-8"><style>@page{size:${pw}mm ${ph}mm;margin:0;}body{margin:0;background:#fff;font-family:'Microsoft YaHei',sans-serif;}.pg{position:relative;z-index:0;width:${pw}mm;height:${ph}mm;page-break-after:always;overflow:hidden;box-sizing:border-box;background:#fff;margin:0;}.pg:last-child{page-break-after:auto;}</style></head><body>${pages}</body></html>`;
+      const renderRes = await request.post('/print/render', { html });
+      const printUrl = renderRes?.data?.data?.url;
+      if (!printUrl) { message.error('打印内容生成失败'); return; }
+      const printerName = printer === '默认使用模板设置的打印机' ? (tplData.printerName || '') : printer;
+      const username = localStorage.getItem('username') || '';
+      const jobRes = await request.post('/print/job', { type: 'url', content: printUrl, printerName, copies: 1, username });
+      if (jobRes?.data?.code === 0) {
+        message.success(`自定义打印任务已提交（模板：${tplData.templateName}）`);
+      } else {
+        message.error(jobRes?.data?.message || '打印任务提交失败');
+      }
+    } catch (err: any) {
+      message.error(err?.response?.data?.message || err?.message || '打印失败');
+    } finally {
+      setPrintLoading(false);
+    }
   };
 
   const gridColumns: any[] = [
@@ -895,6 +955,51 @@ const ProductPrintPage: React.FC = () => {
                 { title: '净重(kg)', dataIndex: 'net', width: 100, align: 'center', render: (v: string, r: any) => <Input size="small" value={v} onChange={e => setCartonGrid(prev => prev.map(x => x.key === r.key ? { ...x, net: e.target.value } : x))} /> },
               ]}
               locale={{ emptyText: <Empty description="暂无箱规行，点击“添加行”录入" image={Empty.PRESENTED_IMAGE_SIMPLE} /> }} />
+          </>
+        )}
+
+        {activeSub === 'custom-print' && (
+          <>
+            {/* 顶部：类型切换 + 已保存模板展开展示 */}
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 8 }}>
+              <Text strong style={{ fontSize: 15 }}>自定义打印</Text>
+              <Select size="small" style={{ width: 110 }} value={customType} onChange={v => { setCustomType(v); setCustomLoadId(''); }} options={TPL_TYPES.map(t => ({ value: t, label: TPL_LABEL[t] }))} />
+              <Text type="secondary" style={{ fontSize: 12 }}>已保存模板（点“载入”到下方编辑器继续编辑；打印始终使用编辑器当前内容）</Text>
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
+              {loadTplList(customType).map(t => {
+                const d = loadTpl(customType, t.id);
+                return (
+                  <Card key={`${t.id}-${customTplVersion}`} size="small" style={{ width: 260, borderColor: customLoadId === t.id ? PRIMARY : undefined }}
+                    title={<span style={{ fontSize: 13 }}>{t.name}</span>}
+                    extra={<Space size={4}>
+                      <Button size="small" type="link" onClick={() => setCustomLoadId(t.id)}>载入</Button>
+                      {t.id !== 'default' && (
+                        <Popconfirm title={`删除模板「${t.name}」？` } onConfirm={() => deleteCustomTpl(t.id)}>
+                          <Button size="small" type="link" danger>删除</Button>
+                        </Popconfirm>
+                      )}
+                    </Space>}>
+                    <Text type="secondary" style={{ fontSize: 12 }}>纸张 {Number(d?.paperWidth) || TPL_PAPER[customType].w}×{Number(d?.paperHeight) || TPL_PAPER[customType].h}mm · {Array.isArray(d?.elements) ? d.elements.length : 0} 个元素{d?.savedAt ? ` · ${String(d.savedAt).slice(0, 10)} 保存` : ''}</Text>
+                  </Card>
+                );
+              })}
+            </div>
+            {/* 嵌入模板编辑器（与系统设置→打印模板同一编辑器窗口） */}
+            <PrintTemplateEditor key={`${customType}:${customLoadId}:${customTplVersion}`} embeddedTypes={[customType]} initialTplId={customLoadId || undefined}
+              onSave={() => setCustomTplVersion(v => v + 1)} registerDraft={g => { customDraftRef.current = g; }} />
+            {/* 打印栏：商品 + 打印机 + 数量 + 预览/直接打印 */}
+            <div style={{ position: 'sticky', bottom: 0, zIndex: 5, background: '#fff', borderTop: '1px solid #e3e8ee', padding: '8px 4px', display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 8 }}>
+              <Select showSearch size="small" style={{ width: 280 }} placeholder="选择商品（编码/名称搜索）" value={customProduct || undefined}
+                onChange={v => setCustomProduct(v)} filterOption={(inp, opt: any) => String(opt?.label || '').toLowerCase().includes(inp.toLowerCase())}
+                options={products.map((p: any) => ({ value: p.productCode, label: `${p.productCode} ${p.shortName || p.name || ''}` }))} />
+              <Select size="small" style={{ width: 220 }} value={printer} onChange={setPrinter} onDropdownVisibleChange={open => { if (open) reloadPrinters(); }} options={printerOptions} />
+              <Text style={{ fontSize: 12 }}>数量:</Text>
+              <InputNumber size="small" min={1} style={{ width: 70 }} value={customQty} onChange={n => setCustomQty(Number(n) || 1)} />
+              <Button size="small" icon={<EyeOutlined />} onClick={() => doCustomPrint(true)}>打印预览</Button>
+              <Button size="small" type="primary" icon={<PrinterOutlined />} loading={printLoading} onClick={() => doCustomPrint(false)}>直接打印</Button>
+              <Text type="secondary" style={{ fontSize: 12 }}>直接打印使用编辑器当前内容（无需先保存）；保存模板按键在编辑器工具栏</Text>
+            </div>
           </>
         )}
       </div>

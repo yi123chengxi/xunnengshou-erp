@@ -22266,9 +22266,16 @@ const saveTplList = (type: string, list: { id: string; name: string }[]) => {
   localStorage.setItem(`print_template_list_${type}`, JSON.stringify(list));
 };
 
-function PrintTemplateEditor() {
-  // 支持 ?type=xxx 导航定位（商品打印页跳转编辑吊牌/条码/水洗标模板）
+export interface PrintTemplateEditorProps {
+  embeddedTypes?: string[];   // 嵌入模式：类型下拉仅显示这些类型并以其为初始类型（忽略 URL 参数）
+  initialTplId?: string;      // 初始加载的模板实例 ID（外部已保存模板卡片“载入”用）
+  onSave?: (info: { type: string; id: string; name: string }) => void;  // 保存/新增/复制/删除后回调（外部刷新模板列表）
+  registerDraft?: (getter: () => any) => void;  // 注册实时草稿 getter（与保存 payload 同构，供外部直接打印/预览）
+}
+export function PrintTemplateEditor(props: PrintTemplateEditorProps = {}) {
+  // 支持 ?type=xxx 导航定位（商品打印页跳转编辑吊牌/条码/水洗标模板）；嵌入模式固定为 embeddedTypes
   const initType = (() => {
+    if (props.embeddedTypes && props.embeddedTypes.length) return props.embeddedTypes[0];
     try {
       const q = new URLSearchParams(window.location.search).get('type');
       if (q && PRINT_TEMPLATE_TYPES.some(t => t.key === q)) return q;
@@ -22279,7 +22286,7 @@ function PrintTemplateEditor() {
   const config = TEMPLATE_DEFAULTS[activeTemplate] || TEMPLATE_DEFAULTS.picking;
   // 同一类型下的多个模板
   const [tplList, setTplList] = useState<{ id: string; name: string }[]>(() => loadTplList(initType, TEMPLATE_DEFAULTS[initType].name));
-  const [activeTplId, setActiveTplId] = useState('default');
+  const [activeTplId, setActiveTplId] = useState(props.initialTplId || 'default');
     // 数据归属账号：与商品打印页 settings 键同源（pageData_product_print_settings_<owner>），用于保存时同步打印页的模板选择
     const owner = getDataOwner();
   const templateFields = useMemo(() => getTemplateFields(activeTemplate), [activeTemplate]);
@@ -22398,6 +22405,13 @@ function PrintTemplateEditor() {
   const [customTextInput, setCustomTextInput] = useState('');
   const [showTextInput, setShowTextInput] = useState(false);
   const [tplReload, setTplReload] = useState(0);
+
+  // 嵌入模式：向外层页面暴露实时草稿（与 saveTemplate payload 同构，另附类型/实例标记），供“编辑后直接打印/预览”
+  const draftRef = useRef<any>(null);
+  draftRef.current = { templateName, elements, tableColumns, tableFontSize, columnWidths, paperWidth, paperHeight, printerName, orientation, paperType, mmFixed: true, mmSchema2: true };
+  useEffect(() => {
+    if (props.registerDraft) props.registerDraft(() => ({ ...draftRef.current, type: activeTemplate, tplId: activeTplId }));
+  });
 
   useEffect(() => {
     // 切换模板/模板实例时：尝试从 localStorage 加载已保存的数据
@@ -22790,6 +22804,7 @@ function PrintTemplateEditor() {
       flushDatasetUploadAsync(key, JSON.stringify(data)).catch(() => false);
       flushDatasetUploadAsync(`print_template_list_${activeTemplate}`, JSON.stringify(nextList)).catch(() => false);
       message.success('模板保存成功');
+      props.onSave?.({ type: activeTemplate, id: activeTplId, name: templateName });
     } catch (e) {
       message.error('保存失败：存储空间不足');
     }
@@ -22804,6 +22819,7 @@ function PrintTemplateEditor() {
     saveTplList(activeTemplate, next);
     setActiveTplId(id);
     message.success(`已新增模板「${name}」，编辑后点击保存生效`);
+    props.onSave?.({ type: activeTemplate, id, name });
   };
 
   // 复制当前模板为新模板：带全部元素与纸张设置，快速创建相似版式（复制的是编辑器当前实时内容）
@@ -22831,6 +22847,7 @@ function PrintTemplateEditor() {
       flushDatasetUploadAsync(key, JSON.stringify(data)).catch(() => false);
       flushDatasetUploadAsync(`print_template_list_${activeTemplate}`, JSON.stringify(nextList)).catch(() => false);
       message.success(`已复制为「${name}」，可编辑后点击保存生效`);
+      props.onSave?.({ type: activeTemplate, id, name });
     } catch {
       message.error('复制失败：存储空间不足');
     }
@@ -22845,6 +22862,7 @@ function PrintTemplateEditor() {
     saveTplList(activeTemplate, next);
     setActiveTplId(next[0].id);
     message.success('模板已删除');
+    props.onSave?.({ type: activeTemplate, id: next[0].id, name: templateName });
   };
 
   const renderBarcodeVisual = (text: string) => {
@@ -22915,7 +22933,7 @@ function PrintTemplateEditor() {
       {/* ===== 顶部工具栏 ===== */}
       <div style={{ background: '#fff', borderBottom: '1px solid #e8edf3', padding: '6px 12px', display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0, flexWrap: 'wrap' }}>
         <Select size="small" value={activeTemplate} onChange={v => setActiveTemplate(v)} style={{ width: 120 }}
-          options={PRINT_TEMPLATE_TYPES.map(t => ({ value: t.key, label: t.label }))} />
+          options={(props.embeddedTypes && props.embeddedTypes.length ? PRINT_TEMPLATE_TYPES.filter(t => props.embeddedTypes!.includes(t.key)) : PRINT_TEMPLATE_TYPES).map(t => ({ value: t.key, label: t.label }))} />
         <Divider type="vertical" style={{ margin: '0 4px' }} />
         <span style={{ fontSize: 12, color: '#5a6d85' }}>模板：</span>
         <Select size="small" value={activeTplId} onChange={v => setActiveTplId(v)} style={{ width: 140 }}
