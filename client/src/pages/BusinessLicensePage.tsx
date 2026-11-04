@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   Card, Table, Button, Space, message, Typography, Modal, Input, InputNumber, Select,
   Row, Col, Popconfirm, Tag, Image, Upload, DatePicker, Checkbox, Tooltip, notification,
+  AutoComplete, Descriptions, Alert,
 } from 'antd';
 import {
   PlusOutlined, EditOutlined, DeleteOutlined, ReloadOutlined, PictureOutlined,
@@ -14,6 +15,7 @@ import useResizableColumns from '../hooks/useResizableColumns';
 import FieldConfigModal from '../components/FieldConfigModal';
 import { safeSetItem } from '../utils/storageQuota';
 import { saveDataset } from '../utils/dataStore';
+import { resolveSupplier, upsertInboxEntry, nextApplyNo } from '../utils/invoiceApply';
 import InvoiceRecordPage from './InvoiceRecordPage';
 import { sendPushNotification, showNativeNotification, isNotificationTypeEnabled } from '../utils/pushNotification';
 import { compressImageFile } from '../utils/imageCompress';
@@ -31,6 +33,12 @@ interface SalesRecord {
 
 const { Text, Title } = Typography;
 const PRIMARY = '#1e4a7e';
+
+// 发票预览卡片样式（仿纸质发票排版）
+const INV_CELL_LABEL: React.CSSProperties = { border: '1px solid #bfbfbf', padding: '6px 12px', fontWeight: 700, width: 130, background: '#fdf8e4' };
+const INV_CELL_VALUE: React.CSSProperties = { border: '1px solid #bfbfbf', padding: '6px 12px', background: '#fdf8e4' };
+const INV_TH: React.CSSProperties = { border: '1px solid #bfbfbf', padding: '6px 10px', background: '#dce6f1', fontWeight: 600, textAlign: 'center' };
+const INV_TD: React.CSSProperties = { border: '1px solid #bfbfbf', padding: '6px 10px', textAlign: 'center' };
 
 // 代账公司颜色池
 const AC_COLORS = [
@@ -95,6 +103,25 @@ const BusinessLicensePage: React.FC = () => {
   const [acPickerSearch, setAcPickerSearch] = useState('');
   // 搜索栏代账公司筛选
   const [searchAcCompany, setSearchAcCompany] = useState('');
+  // ===================== 进项票开票申请 =====================
+  const [applyVisible, setApplyVisible] = useState(false);
+  const [applyCompany, setApplyCompany] = useState('');
+  const [applyAvailable, setApplyAvailable] = useState(0);
+  const [applyMonthsSnap, setApplyMonthsSnap] = useState<string[]>([]);
+  const [applyLimit, setApplyLimit] = useState<number>(300000);
+  const [applyPriceMin, setApplyPriceMin] = useState<number>(0);
+  const [applyPriceMax, setApplyPriceMax] = useState<number>(0);
+  const [applyProjectName, setApplyProjectName] = useState('');
+  const [applyProjectHistory, setApplyProjectHistory] = useState<string[]>([]);
+  const [applyRatio, setApplyRatio] = useState<number>(90);
+  // 申请方纳税人资质（预览发票抬头用）：识别码/类型/税率（小规模 1%、一般纳税人 13%）
+  const [applyTaxpayerCode, setApplyTaxpayerCode] = useState('');
+  const [applyCompanyType, setApplyCompanyType] = useState('小规模纳税人');
+  const [applyTaxRate, setApplyTaxRate] = useState<number>(1);
+  // 发票预览（拆分草稿 + 供应商选择）
+  const [previewVisible, setPreviewVisible] = useState(false);
+  const [previewDrafts, setPreviewDrafts] = useState<{ amount: number; unitPrice: number; quantity: number; supplier: string }[]>([]);
+  const [supplierOptions, setSupplierOptions] = useState<{ value: string; label: string }[]>([]);
   // ===================== 发起销售额统计任务 =====================
   const [salesTaskVisible, setSalesTaskVisible] = useState(false);
   const [salesTaskSelected, setSalesTaskSelected] = useState<string[]>([]);
@@ -438,10 +465,11 @@ const BusinessLicensePage: React.FC = () => {
     return map;
   }, [shops]);
 
-  // 从开票记录计算每个公司的进项票/销售发票总额（按月份筛选）
+  // 从开票记录计算每个公司的进项票/销售发票总额（按月份筛选；仅统计手工记录，开票申请记录由 applyStats 单独统计）
   const invoiceTotals = useMemo(() => {
     const map: Record<string, { input: number; output: number }> = {};
     invoiceRecords.forEach((inv: any) => {
+      if (inv.source === 'apply') return;
       const company = inv.companyName || '';
       if (!company) return;
       // 按月份筛选
@@ -456,6 +484,160 @@ const BusinessLicensePage: React.FC = () => {
     });
     return map;
   }, [invoiceRecords, selectedMonths]);
+
+  // 开票申请统计（按公司）：申请发票额/待开票额/已开票额/消耗差额缺口（gapAmount，含按比例未实开部分）
+  const applyStats = useMemo(() => {
+    const map: Record<string, { applied: number; pending: number; issued: number; consumedGap: number }> = {};
+    invoiceRecords.forEach((inv: any) => {
+      if (inv.source !== 'apply' || inv.invoiceType !== '进项票') return;
+      const company = inv.companyName || '';
+      if (!company) return;
+      const months: string[] = Array.isArray(inv.applyMonths) ? inv.applyMonths : [];
+      if (selectedMonths.length > 0 && months.length > 0 && !months.some(m => selectedMonths.includes(m))) return;
+      if (!map[company]) map[company] = { applied: 0, pending: 0, issued: 0, consumedGap: 0 };
+      const amt = Number(inv.amount) || 0;
+      const gap = Number(inv.gapAmount) || amt;
+      map[company].applied += amt;
+      map[company].consumedGap += gap;
+      const stNorm = inv.invoiceStatus === '已开票' ? '开票成功' : (inv.invoiceStatus || '待开票');
+      if (stNorm !== '开票成功') map[company].pending += amt;
+      else map[company].issued += amt;
+    });
+    return map;
+  }, [invoiceRecords, selectedMonths]);
+
+  // ===================== 开票申请流程 =====================
+  const applySettingsKey = `invoice_apply_settings_${owner}`;
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+  const currentDisplayName = (): string => {
+    const username = localStorage.getItem('username') || '';
+    try {
+      const accounts = JSON.parse(localStorage.getItem(`accounts_${owner}`) || '[]');
+      const account = accounts.find((a: any) => a.username === username);
+      if (account?.displayName) return account.displayName;
+    } catch { /* ignore */ }
+    return username;
+  };
+
+  // 打开开票要求弹窗：回显上次记忆的设置与项目名称候选
+  const openApplyModal = (company: string, available: number) => {
+    if (available <= 0) { message.warning('当前时间范围内无可申请开票金额'); return; }
+    let st: any = {};
+    try { st = JSON.parse(localStorage.getItem(applySettingsKey) || '{}'); } catch { /* ignore */ }
+    setApplyCompany(company);
+    setApplyAvailable(available);
+    setApplyMonthsSnap([...selectedMonths]);
+    // 纳税人资质：从营业执照列表取识别码与公司类型，税率默认小规模 1%、一般纳税人 13%
+    const lic = records.find(r => r.companyName === company);
+    const ctype = String(lic?.companyType || '').trim();
+    setApplyCompanyType(ctype || '小规模纳税人');
+    setApplyTaxpayerCode(String(lic?.taxpayerCode || '').trim());
+    setApplyTaxRate(ctype.includes('一般纳税人') ? 13 : 1);
+    setApplyLimit(Number(st.limit) || 300000);
+    setApplyPriceMin(Number(st.priceMin) || 0);
+    setApplyPriceMax(Number(st.priceMax) || 0);
+    setApplyProjectName(st.projectName || '');
+    setApplyProjectHistory(Array.isArray(st.projectNames) ? st.projectNames : []);
+    setApplyRatio(Number(st.ratio) > 0 ? Number(st.ratio) : 90);
+    // 供应商候选：采购商平台供应商列表（合作中标记），预览中也可自由输入其他供应商名称
+    let sup: any[] = [];
+    try { sup = JSON.parse(localStorage.getItem(`purchaser_suppliers_${owner}`) || '[]'); } catch { /* ignore */ }
+    setSupplierOptions(sup.filter((s: any) => s.supplierName)
+      .map((s: any) => ({ value: s.supplierName, label: `${s.supplierName}${s.cooperationStatus === 'approved' ? '（合作中）' : ''}` })));
+    setApplyVisible(true);
+  };
+
+  // 生成发票：按限额拆张（ceil），金额平均分配（末张补差），单价区间内随机→数量=金额/单价（正整数）再反算单价
+  const handleGenerateInvoices = () => {
+    if (!(applyLimit > 0)) { message.warning('请填写每张发票限额'); return; }
+    if (!(applyPriceMin > 0) || applyPriceMax < applyPriceMin) { message.warning('请填写正确的单价区间（下限>0 且 上限≥下限）'); return; }
+    if (!applyProjectName.trim()) { message.warning('请填写项目名称'); return; }
+    if (!(applyRatio > 0) || applyRatio >= 100) { message.warning('开票比例须大于 0 且小于 100（100% 开票不合规）'); return; }
+    const total = round2(round2(applyAvailable * applyRatio / 100));
+    if (!(total > 0)) { message.warning('按比例生成的开票金额为 0，请检查开票比例'); return; }
+    const n = Math.max(1, Math.ceil(total / applyLimit));
+    const baseAmt = round2(total / n);
+    const drafts: { amount: number; unitPrice: number; quantity: number; supplier: string }[] = [];
+    for (let i = 0; i < n; i++) {
+      const target = i === n - 1 ? round2(total - round2(baseAmt * (n - 1))) : baseAmt;
+      let unitPrice = applyPriceMin >= applyPriceMax ? applyPriceMin : round2(applyPriceMin + Math.random() * (applyPriceMax - applyPriceMin));
+      if (!(unitPrice > 0)) unitPrice = 1;
+      // 发票语义：总价 = 数量 × 单价（数量向下取整保证不超目标额）
+      const quantity = Math.max(1, Math.floor(target / unitPrice));
+      const amount = round2(quantity * unitPrice);
+      drafts.push({ amount, unitPrice, quantity, supplier: '' });
+    }
+    setPreviewDrafts(drafts);
+    setPreviewVisible(true);
+  };
+
+  // 预览中手动调整：改数量/单价→总价=数量×单价恒等重算
+  const updateDraft = (idx: number, patch: Partial<{ amount: number; unitPrice: number; quantity: number; supplier: string }>) => {
+    setPreviewDrafts(prev => prev.map((d, i) => {
+      if (i !== idx) return d;
+      const next = { ...d, ...patch };
+      if (patch.quantity !== undefined) next.quantity = Math.max(1, Math.round(patch.quantity));
+      if (patch.unitPrice !== undefined) next.unitPrice = Math.max(0.01, round2(patch.unitPrice));
+      next.amount = round2((next.quantity || 0) * (next.unitPrice || 0));
+      return next;
+    }));
+  };
+
+  // 确认申请：写开票记录（source=apply）+ 合作供应商推送收件箱 + 记忆设置
+  const handleConfirmApply = () => {
+    const sum = round2(previewDrafts.reduce((s, d) => s + (d.amount || 0), 0));
+    if (previewDrafts.length === 0) { message.warning('请先生成发票'); return; }
+    if (previewDrafts.some(d => !(d.amount > 0))) { message.warning('每张发票金额必须大于 0'); return; }
+    if (previewDrafts.some(d => !(d.quantity > 0))) { message.warning('发票数量必须为正数'); return; }
+    if (previewDrafts.some(d => !String(d.supplier || '').trim())) { message.warning('请为每张发票选择开票供应商'); return; }
+    if (sum > round2(applyAvailable * applyRatio / 100) + 0.001) { message.warning(`发票金额合计 ¥${sum.toFixed(2)} 超过按比例生成金额 ¥${round2(applyAvailable * applyRatio / 100).toFixed(2)}（可申请 ¥${applyAvailable.toFixed(2)} × ${applyRatio}%）`); return; }
+    // 记忆设置（限额/单价区间/项目名称历史）
+    let st: any = {};
+    try { st = JSON.parse(localStorage.getItem(applySettingsKey) || '{}'); } catch { /* ignore */ }
+    const projectNames = Array.from(new Set([applyProjectName.trim(), ...(Array.isArray(st.projectNames) ? st.projectNames : [])])).filter(Boolean).slice(0, 10);
+    safeSetItem(applySettingsKey, JSON.stringify({ limit: applyLimit, priceMin: applyPriceMin, priceMax: applyPriceMax, ratio: applyRatio, projectName: applyProjectName.trim(), projectNames }));
+    // 写开票记录
+    const recKey = `invoice_record_${owner}`;
+    let recs: any[] = [];
+    try { recs = JSON.parse(localStorage.getItem(recKey) || '[]'); } catch { recs = []; }
+    const today = dayjs().format('YYYY-MM-DD');
+    const creator = currentDisplayName();
+    const myCompany = localStorage.getItem('companyName') || owner;
+    const newRecs: any[] = [];
+    let pushed = 0;
+    previewDrafts.forEach(d => {
+      const applyNo = nextApplyNo([...recs, ...newRecs], dayjs().format('YYYYMMDD'));
+      const supplierName = String(d.supplier || '').trim();
+      const { username, cooperated } = resolveSupplier(owner, supplierName);
+      let pushStatus: '推送成功' | '待推送' = '待推送';
+      // 已合作供应商：自动推送到对方「财务管理-开票申请」收件箱
+      if (cooperated && username) {
+        upsertInboxEntry(username, {
+          key: applyNo, applyNo, applicantUsername: owner, applicantCompany: myCompany,
+          supplierName, projectName: applyProjectName.trim(), amount: d.amount, quantity: d.quantity,
+          unitPrice: d.unitPrice, months: applyMonthsSnap, applyDate: today, status: '待开票', remark: '', taxRate: applyTaxRate,
+        });
+        pushStatus = '推送成功';
+        pushed++;
+      }
+      newRecs.push({
+        key: `inv-${Date.now()}-${newRecs.length}`, companyName: applyCompany, invoiceType: '进项票',
+        quantity: d.quantity, unitPrice: d.unitPrice, amount: d.amount, date: today, creator,
+        remark: '开票申请生成', image: '', source: 'apply', applyNo, applyMonths: applyMonthsSnap,
+        invoiceStatus: '待开票', invoiceSupplier: supplierName, supplierUsername: username,
+        pushStatus, projectName: applyProjectName.trim(), gapAmount: round2(d.amount * 100 / applyRatio), taxRate: applyTaxRate, createdAt: new Date().toLocaleString('zh-CN'),
+      });
+    });
+    const merged = [...recs, ...newRecs];
+    const json = JSON.stringify(merged);
+    safeSetItem(recKey, json);
+    safeSetItem(`${recKey}_ts`, String(Date.now()));
+    saveDataset(recKey, json);
+    setInvoiceRecords(merged);
+    setPreviewVisible(false);
+    setApplyVisible(false);
+    message.success(`已生成 ${newRecs.length} 张发票申请并计入开票记录${pushed > 0 ? `，其中 ${pushed} 张已推送合作供应商` : '（未合作供应商待推送）'}`);
+  };
 
   // 最近12个月销售额统计（按公司名称）
   const recentSalesTotals = useMemo(() => {
@@ -624,26 +806,56 @@ const BusinessLicensePage: React.FC = () => {
         const total = storeSalesTotals[r.companyName] || 0;
         return total > 0 ? <Text strong>¥{total.toFixed(2)}</Text> : <Text type="secondary">—</Text>;
       } },
-    inputInvoices: { title: tipTitle('进项票', '数据来源：开票记录中对应月份该公司的进项票金额总和'), dataIndex: 'companyName', key: 'inputInvoices', width: 150, align: 'center' as const,
+    inputInvoices: { title: tipTitle('进项票', '数据来源：开票记录中对应月份该公司的进项票金额总和（含已开票的开票申请）；按进项差额发起开票申请后，按所选时间范围显示开票中/开票完成'), dataIndex: 'companyName', key: 'inputInvoices', width: 160, align: 'center' as const,
       render: (v: string, r: BusinessLicense) => {
-        const total = invoiceTotals[v]?.input || 0;
-        return total > 0 ? <Text strong style={{ color: '#fa8c16' }}>¥{total.toFixed(2)}</Text> : <Text type="secondary">—</Text>;
+        const manual = invoiceTotals[v]?.input || 0;
+        const st = applyStats[v];
+        const applied = st?.applied || 0;
+        const pending = st?.pending || 0;
+        const issued = st?.issued || 0;
+        const consumed = st?.consumedGap || 0;
+        const totalInput = Math.round((manual + issued) * 100) / 100;
+        const statusTag = pending > 0
+          ? <Tag color="blue" style={{ margin: 0 }}>开票中</Tag>
+          : consumed > 0 ? <Tag color="green" style={{ margin: 0 }}>开票完成</Tag> : null;
+        return (
+          <Tooltip title={consumed > 0 ? `已申请发票 ¥${applied.toFixed(2)}（待开票 ¥${pending.toFixed(2)}、已开票 ¥${issued.toFixed(2)}，消耗差额 ¥${consumed.toFixed(2)}）` : undefined}>
+            <Space size={4} wrap style={{ justifyContent: 'center' }}>
+              {totalInput > 0 ? <Text strong style={{ color: '#fa8c16' }}>¥{totalInput.toFixed(2)}</Text> : <Text type="secondary">—</Text>}
+              {statusTag}
+            </Space>
+          </Tooltip>
+        );
       } },
     outputInvoices: { title: tipTitle('销项票', '数据来源：开票记录中对应月份该公司的销售发票金额总和'), dataIndex: 'companyName', key: 'outputInvoices', width: 150, align: 'center' as const,
       render: (v: string, r: BusinessLicense) => {
         const total = invoiceTotals[v]?.output || 0;
         return total > 0 ? <Text strong style={{ color: '#f5222d' }}>¥{total.toFixed(2)}</Text> : <Text type="secondary">—</Text>;
       } },
-    inputDiff: { title: tipTitle('进项差额', '计算公式：max(销项票, 店铺销售额) − 进项票'), key: 'inputDiff', width: 140, align: 'center' as const,
+    inputDiff: { title: tipTitle('进项差额', '计算公式：max(销项票, 店铺销售额) − 进项票；「申请开票」按差额扣除已申请金额后的剩余缺口生成开票申请'), key: 'inputDiff', width: 200, align: 'center' as const,
       render: (_: any, r: BusinessLicense) => {
         const inputTotal = invoiceTotals[r.companyName]?.input || 0;
         const outputTotal = invoiceTotals[r.companyName]?.output || 0;
         const sales = storeSalesTotals[r.companyName] || 0;
-        if (inputTotal === 0 && outputTotal === 0 && sales === 0) return <Text type="secondary">—</Text>;
+        const st = applyStats[r.companyName];
+        const applied = st?.applied || 0;
+        const pending = st?.pending || 0;
+        const consumed = st?.consumedGap || 0;
+        const hasData = !(inputTotal === 0 && outputTotal === 0 && sales === 0 && consumed === 0);
         const base = Math.max(outputTotal, sales);
-        const diff = base - inputTotal;
+        // 差额扣除全部已消耗缺口（含按比例未实开部分）；剩余可申请额度 = 剩余差额
+        const diff = base - inputTotal - consumed;
+        const remaining = Math.max(0, Math.round(diff * 100) / 100);
         const color = diff > 0 ? '#52c41a' : diff < 0 ? '#f5222d' : '#595959';
-        return <Text strong style={{ color }}>¥{diff.toFixed(2)}</Text>;
+        return (
+          <Space size={4} wrap style={{ justifyContent: 'center' }}>
+            {hasData ? <Text strong style={{ color }}>¥{diff.toFixed(2)}</Text> : <Text type="secondary">—</Text>}
+            <Tooltip title={consumed > 0 ? `已消耗差额 ¥${consumed.toFixed(2)}（已申请发票 ¥${applied.toFixed(2)}、待开票 ¥${pending.toFixed(2)}），剩余可申请 ¥${remaining.toFixed(2)}` : '按每张发票限额/开票比例/单价区间/项目名称生成开票申请'}>
+              <Button type="link" size="small" icon={<SendOutlined />} disabled={remaining <= 0}
+                onClick={() => openApplyModal(r.companyName, remaining)}>申请开票</Button>
+            </Tooltip>
+          </Space>
+        );
       } },
     recentSales: { title: tipTitle('近12个月销售额', '数据来源：销售额统计中最近12个月该公司的销售额总和（小规模纳税人超450万显示异常）'), key: 'recentSales', width: 180, align: 'center' as const,
       render: (_: any, r: BusinessLicense) => {
@@ -1228,6 +1440,153 @@ const BusinessLicensePage: React.FC = () => {
         </div>
       </Modal>
       </>)}
+
+      {/* 开票申请 - 开票要求弹窗 */}
+      <Modal title="开票申请 - 开票要求" open={applyVisible} onCancel={() => setApplyVisible(false)} width={560}
+        footer={
+          <Space>
+            <Button onClick={() => setApplyVisible(false)}>取消</Button>
+            <Button type="primary" onClick={handleGenerateInvoices}>生成发票</Button>
+          </Space>
+        }>
+        <Descriptions size="small" column={2} bordered style={{ marginBottom: 16 }}>
+          <Descriptions.Item label="公司名称">{applyCompany || '—'}</Descriptions.Item>
+          <Descriptions.Item label="月份范围">{applyMonthsSnap.length ? applyMonthsSnap.join('、') : '全部月份'}</Descriptions.Item>
+          <Descriptions.Item label="可申请金额" span={2}>
+            <Text strong style={{ color: '#fa8c16' }}>¥{applyAvailable.toFixed(2)}</Text>
+          </Descriptions.Item>
+        </Descriptions>
+        <Row gutter={16}>
+          <Col span={12}>
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ marginBottom: 6, minHeight: 22, lineHeight: '22px', whiteSpace: 'nowrap' }}><Text>开票比例 <Text type="secondary" style={{ fontSize: 12 }}>（%，100% 不合规）</Text></Text></div>
+              <InputNumber value={applyRatio} onChange={v => setApplyRatio(v || 0)} min={1} max={99.99} precision={2}
+                style={{ width: '100%' }} placeholder="如 90" />
+            </div>
+          </Col>
+          <Col span={12}>
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ marginBottom: 6, minHeight: 22, lineHeight: '22px', whiteSpace: 'nowrap' }}><Text>按比例生成开票金额 <Text type="secondary" style={{ fontSize: 12 }}>（可申请 × 比例）</Text></Text></div>
+              <div style={{ width: '100%', height: 32, lineHeight: '30px', padding: '0 11px', background: '#f5f5f5', border: '1px solid #d9d9d9', borderRadius: 6, color: '#52c41a', fontWeight: 600, overflow: 'hidden' }}>
+                ¥{round2(applyAvailable * (applyRatio || 0) / 100).toFixed(2)}
+              </div>
+            </div>
+          </Col>
+        </Row>
+        <div style={{ marginBottom: 12, color: '#999', fontSize: 12 }}>
+          * 开票申请金额按比例生成，但进项差额按可申请金额全额扣除（比例未实开部分一并消耗，避免 100% 开票）
+        </div>
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ marginBottom: 6 }}><Text>每张发票限额 <Text type="secondary" style={{ fontSize: 12 }}>（如 30 万：申请 90 万自动拆 3 张；80 万最少拆 3 张并平均分配，预览中可手动调整）</Text></Text></div>
+          <InputNumber value={applyLimit} onChange={v => setApplyLimit(v || 0)} min={1} precision={2}
+            style={{ width: '100%' }} placeholder="请输入每张发票限额" />
+        </div>
+        <Row gutter={16}>
+          <Col span={12}>
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ marginBottom: 6 }}><Text>单价区间下限 <Text type="secondary" style={{ fontSize: 12 }}>（元）</Text></Text></div>
+              <InputNumber value={applyPriceMin} onChange={v => setApplyPriceMin(v || 0)} min={0} precision={2}
+                style={{ width: '100%' }} placeholder="单价下限" />
+            </div>
+          </Col>
+          <Col span={12}>
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ marginBottom: 6 }}><Text>单价区间上限 <Text type="secondary" style={{ fontSize: 12 }}>（元）</Text></Text></div>
+              <InputNumber value={applyPriceMax} onChange={v => setApplyPriceMax(v || 0)} min={0} precision={2}
+                style={{ width: '100%' }} placeholder="单价上限" />
+            </div>
+          </Col>
+        </Row>
+        <div style={{ marginBottom: 8, color: '#999', fontSize: 12 }}>
+          * 发票数量 = 每张发票金额 ÷ 区间内随机单价（取正整数后反算单价），预览中可手动调整
+        </div>
+        <div>
+          <div style={{ marginBottom: 6 }}><Text>项目名称 <Text type="secondary" style={{ fontSize: 12 }}>（人工填写，下次自动记忆）</Text></Text></div>
+          <AutoComplete value={applyProjectName} onChange={v => setApplyProjectName(v)}
+            options={applyProjectHistory.map(n => ({ value: n }))}
+            placeholder="请输入项目名称"
+            style={{ width: '100%' }}
+            filterOption={(input, option) => String((option as any)?.value || '').toLowerCase().includes(input.toLowerCase())} />
+        </div>
+      </Modal>
+
+      {/* 发票预览 - 确认申请弹窗 */}
+      <Modal title="发票预览 - 确认申请" open={previewVisible} onCancel={() => setPreviewVisible(false)} width={960}
+        footer={
+          <Space>
+            <Button onClick={() => setPreviewVisible(false)}>返回修改</Button>
+            <Button type="primary" onClick={handleConfirmApply}>确认申请</Button>
+          </Space>
+        }>
+        <Alert type="info" showIcon style={{ marginBottom: 12 }}
+          message={`公司名称：${applyCompany}　项目名称：${applyProjectName}　发票类型：${applyCompanyType}（税率 ${applyTaxRate}%）　可申请金额：¥${applyAvailable.toFixed(2)}　开票比例：${applyRatio}%　生成开票金额：¥${round2(applyAvailable * applyRatio / 100).toFixed(2)}　月份范围：${applyMonthsSnap.length ? applyMonthsSnap.join('、') : '全部'}`}
+          description="确认申请后写入开票记录（开票状态=待开票）；已合作供应商自动推送到对方「财务管理-开票申请」，未合作仅记录供应商名称（推送状态=待推送）；进项差额按可申请金额全额扣除，进项票显示开票中，已开票后申请金额计入进项票。" />
+        <div style={{ maxHeight: 460, overflowY: 'auto', paddingRight: 4 }}>
+          {previewDrafts.map((d, i) => {
+            const lineTotal = round2((d.quantity || 0) * (d.unitPrice || 0));
+            return (
+              <div key={i} style={{ border: '1px solid #8c8c8c', borderRadius: 4, marginBottom: 16, overflow: 'hidden' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '6px 12px', background: '#fafafa', borderBottom: '1px solid #8c8c8c', flexWrap: 'wrap' }}>
+                  <Text strong>发票 {i + 1}</Text>
+                  <Space size={4} wrap>
+                    <Text type="secondary">开票供应商：</Text>
+                    <AutoComplete value={d.supplier} onChange={v => updateDraft(i, { supplier: v })}
+                      options={supplierOptions} placeholder="选择/输入供应商名称" style={{ width: 240 }}
+                      filterOption={(input, option) => String((option as any)?.value || '').toLowerCase().includes(input.toLowerCase())} />
+                  </Space>
+                </div>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <tbody>
+                    <tr>
+                      <td style={INV_CELL_LABEL}>公司名称：</td>
+                      <td style={INV_CELL_VALUE}>{applyCompany || '—'}</td>
+                    </tr>
+                    <tr>
+                      <td style={INV_CELL_LABEL}>纳税人识别码：</td>
+                      <td style={INV_CELL_VALUE}>{applyTaxpayerCode || '—'}</td>
+                    </tr>
+                    <tr>
+                      <td style={INV_CELL_LABEL}>发票类型：</td>
+                      <td style={INV_CELL_VALUE}>{applyCompanyType}（税率 {applyTaxRate}%）</td>
+                    </tr>
+                  </tbody>
+                </table>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr>
+                      <th style={{ ...INV_TH, width: '34%' }}>规格名称</th>
+                      <th style={{ ...INV_TH, width: '22%' }}>数量</th>
+                      <th style={{ ...INV_TH, width: '22%' }}>单价</th>
+                      <th style={{ ...INV_TH, width: '22%' }}>总价</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td style={INV_TD}>{applyProjectName || '—'}</td>
+                      <td style={INV_TD}>
+                        <InputNumber size="small" value={d.quantity} min={1} precision={0} style={{ width: 110 }}
+                          onChange={v => updateDraft(i, { quantity: v || 1 })} />
+                      </td>
+                      <td style={INV_TD}>
+                        <InputNumber size="small" value={d.unitPrice} min={0.01} precision={2} style={{ width: 110 }}
+                          onChange={v => updateDraft(i, { unitPrice: v || 0 })} />
+                      </td>
+                      <td style={INV_TD}><Text strong>{lineTotal.toFixed(2)}</Text></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            );
+          })}
+        </div>
+        <div style={{ marginTop: 12, textAlign: 'right' }}>
+          <Text>合计金额：</Text>
+          <Text strong style={{ color: '#f5222d', fontSize: 16, marginLeft: 8 }}>
+            ¥{round2(previewDrafts.reduce((s, d) => s + (d.amount || 0), 0)).toFixed(2)}
+          </Text>
+          <Text type="secondary" style={{ marginLeft: 12 }}>/ 按比例生成 ¥{round2(applyAvailable * applyRatio / 100).toFixed(2)}（差额扣除 ¥{applyAvailable.toFixed(2)}）</Text>
+        </div>
+      </Modal>
     </div>
   );
 };

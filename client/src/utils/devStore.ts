@@ -1,5 +1,5 @@
 import { modules as MAIN_MODULES } from '../layouts/MainLayout';
-import { PERM_V2, PERM_V3, PERM_V4, PERM_V5, PERM_V6, PERM_V7, PERM_V8, PERM_V9, PERM_V10, PERM_V11, PERM_V12, PERM_V13, PERM_V14, PURCHASER_PERM_MENUS, FACTORY_PERM_MENUS, buildPlatformPermNodes } from './devPerms';
+import { PERM_V2, PERM_V3, PERM_V4, PERM_V5, PERM_V6, PERM_V7, PERM_V8, PERM_V9, PERM_V10, PERM_V11, PERM_V12, PERM_V13, PERM_V14, PERM_V15, PURCHASER_PERM_MENUS, FACTORY_PERM_MENUS, buildPlatformPermNodes } from './devPerms';
 import { safeSetItem } from './storageQuota';
 import { loadTenantUsers, tenantUserDisplayName } from './tenantUsers';
 
@@ -97,7 +97,7 @@ export const loadCustomerPerms = (customerUsername: string): string[] | null => 
     const raw = localStorage.getItem(`dev_customer_perms_${customerUsername}`);
     if (!raw) return null;
     const arr = JSON.parse(raw);
-    return Array.isArray(arr) ? arr.filter((k: string) => k !== PERM_V2 && k !== PERM_V3 && k !== PERM_V4 && k !== PERM_V5 && k !== PERM_V6 && k !== PERM_V7 && k !== PERM_V8 && k !== PERM_V9 && k !== PERM_V10 && k !== PERM_V11 && k !== PERM_V12 && k !== PERM_V13 && k !== PERM_V14) : null;
+    return Array.isArray(arr) ? arr.filter((k: string) => k !== PERM_V2 && k !== PERM_V3 && k !== PERM_V4 && k !== PERM_V5 && k !== PERM_V6 && k !== PERM_V7 && k !== PERM_V8 && k !== PERM_V9 && k !== PERM_V10 && k !== PERM_V11 && k !== PERM_V12 && k !== PERM_V13 && k !== PERM_V14 && k !== PERM_V15) : null;
   } catch { return null; }
 };
 
@@ -115,6 +115,7 @@ export const saveCustomerPerms = (customerUsername: string, keys: string[]) => {
   next = next.includes(PERM_V12) ? next : [...next, PERM_V12];
   next = next.includes(PERM_V13) ? next : [...next, PERM_V13];
   next = next.includes(PERM_V14) ? next : [...next, PERM_V14];
+  next = next.includes(PERM_V15) ? next : [...next, PERM_V15];
   localStorage.setItem(`dev_customer_perms_${customerUsername}`, JSON.stringify(next));
   // 通知已打开的客户软件页面实时刷新菜单权限
   window.dispatchEvent(new Event('dev-perms-changed'));
@@ -148,6 +149,7 @@ export const saveGroupPerms = (groupId: string, keys: string[]) => {
   next = next.includes(PERM_V12) ? next : [...next, PERM_V12];
   next = next.includes(PERM_V13) ? next : [...next, PERM_V13];
   next = next.includes(PERM_V14) ? next : [...next, PERM_V14];
+  next = next.includes(PERM_V15) ? next : [...next, PERM_V15];
   localStorage.setItem(`dev_group_perms_${groupId}`, JSON.stringify(next));
   window.dispatchEvent(new Event('dev-perms-changed'));
 };

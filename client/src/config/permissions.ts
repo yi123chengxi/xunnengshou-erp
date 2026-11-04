@@ -88,6 +88,7 @@ export const permissionModules: PermissionModule[] = [
       { key: 'bank-account', label: '银行账户' },
       { key: 'reimbursement', label: '报销' },
       { key: 'payment-request', label: '收/付申请' },
+      { key: 'invoice-apply', label: '开票申请' },
       { key: 'reconciliation', label: '对账管理' },
       { key: 'general-ledger', label: '会计账薄' },
       { key: 'simple-ledger', label: '简易账薄' },

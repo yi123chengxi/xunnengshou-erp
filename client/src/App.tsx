@@ -71,6 +71,7 @@ const EmployeePage = React.lazy(() => import('./pages/hr/EmployeePage'));
 const ShiftPage = React.lazy(() => import('./pages/hr/ShiftPage'));
 const LeavePage = React.lazy(() => import('./pages/hr/LeavePage'));
 const PaymentRequestPage = React.lazy(() => import('./pages/PaymentRequestPage'));
+const InvoiceApplyPage = React.lazy(() => import('./pages/InvoiceApplyPage'));
 const GeneralLedgerPage = React.lazy(() => import('./pages/GeneralLedgerPage'));
 const SimpleLedgerPage = React.lazy(() => import('./pages/SimpleLedgerPage'));
 const PurchaseReceivingPage = React.lazy(() => import('./pages/inventory/PurchaseReceivingPage'));
@@ -214,6 +215,8 @@ function App() {
           <Route path="finance/reimbursement" element={<ReimbursementPage />} />
           {/* 付款申请 */}
           <Route path="finance/payment-request" element={<PaymentRequestPage />} />
+          {/* 开票申请（供应商侧收件箱） */}
+          <Route path="finance/invoice-apply" element={<InvoiceApplyPage />} />
           {/* 总账薄 */}
           <Route path="finance/general-ledger" element={<GeneralLedgerPage />} />
           <Route path="finance/simple-ledger" element={<SimpleLedgerPage />} />
@@ -279,6 +282,7 @@ function App() {
           {/* 报销管理 */}
           <Route path="finance/reimbursement" element={<ReimbursementPage />} />
           <Route path="finance/payment-request" element={<PaymentRequestPage />} />
+          <Route path="finance/invoice-apply" element={<InvoiceApplyPage />} />
           <Route path="finance/daily-bookkeeping" element={<DailyBookkeepingPage />} />
           <Route path="finance/daily-bookkeeping-stats" element={<BookkeepingStatsPage />} />
           <Route path="finance/general-ledger" element={<GeneralLedgerPage />} />

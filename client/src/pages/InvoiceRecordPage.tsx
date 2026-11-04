@@ -11,6 +11,7 @@ import type { ColumnsType } from 'antd/es/table';
 import useResizableColumns from '../hooks/useResizableColumns';
 import { safeSetItem } from '../utils/storageQuota';
 import { saveDataset } from '../utils/dataStore';
+import { updateInboxStatus, readInbox, upsertInboxEntry, normInvoiceStatus } from '../utils/invoiceApply';
 import dayjs from 'dayjs';
 
 const { Text, Title } = Typography;
@@ -30,6 +31,17 @@ interface InvoiceRecord {
   remark: string;
   image: string;
   createdAt: string;
+  // 开票申请生成记录的扩展字段（手动新增记录无这些字段）
+  source?: 'manual' | 'apply';
+  applyNo?: string;
+  applyMonths?: string[];
+  invoiceStatus?: '待开票' | '开票成功' | '已开票'; // '已开票'为历史存量值，读取侧归一为'开票成功'
+  invoiceSupplier?: string;
+  supplierUsername?: string;
+  pushStatus?: '推送成功' | '待推送' | '已推送';
+  projectName?: string;
+  gapAmount?: number; // 消耗的进项差额缺口（按比例开票时大于发票金额）
+  taxRate?: number; // 税率（小规模 1%、一般纳税人 13%）
 }
 
 // 发票类型选项
@@ -89,7 +101,15 @@ const InvoiceRecordPage: React.FC = () => {
   const storageKey = `invoice_record_${owner}`;
 
   const [records, setRecords] = useState<InvoiceRecord[]>([]);
-  const [searchText, setSearchText] = useState('');
+  // 字段拆分搜索（去重候选）
+  const [fCompany, setFCompany] = useState('');
+  const [fType, setFType] = useState('');
+  const [fStatus, setFStatus] = useState('');
+  const [fPush, setFPush] = useState('');
+  const [fSupplier, setFSupplier] = useState('');
+  const [fProject, setFProject] = useState('');
+  const [fCreator, setFCreator] = useState('');
+  const [fMonth, setFMonth] = useState('');
 
   // 编辑弹窗
   const [editVisible, setEditVisible] = useState(false);
@@ -103,9 +123,12 @@ const InvoiceRecordPage: React.FC = () => {
   const [formCreator, setFormCreator] = useState('');
   const [formRemark, setFormRemark] = useState('');
   const [formImage, setFormImage] = useState('');
+  const [formProjectName, setFormProjectName] = useState('');
 
   // 从营业执照中获取公司名称列表
   const [companyNames, setCompanyNames] = useState<string[]>([]);
+  // 供应商合作状态映射（采购商平台供应商列表，按名称/简称索引）
+  const [supplierCoop, setSupplierCoop] = useState<Record<string, any>>({});
 
   // ===================== 数据加载 =====================
   const reload = useCallback(() => {
@@ -114,6 +137,15 @@ const InvoiceRecordPage: React.FC = () => {
       const licenses = JSON.parse(localStorage.getItem(`business_license_${owner}`) || '[]');
       setCompanyNames(licenses.map((l: any) => l.companyName).filter(Boolean));
     } catch { setCompanyNames([]); }
+    try {
+      const sup = JSON.parse(localStorage.getItem(`purchaser_suppliers_${owner}`) || '[]');
+      const m: Record<string, any> = {};
+      sup.forEach((s: any) => {
+        if (s.supplierName) m[s.supplierName] = s;
+        if (s.shortName && !m[s.shortName]) m[s.shortName] = s;
+      });
+      setSupplierCoop(m);
+    } catch { setSupplierCoop({}); }
   }, [storageKey, owner]);
   useEffect(() => { reload(); }, [reload]);
 
@@ -128,7 +160,7 @@ const InvoiceRecordPage: React.FC = () => {
   // ===================== CRUD =====================
   const resetForm = () => {
     setFormCompany(''); setFormType(''); setFormQuantity(0); setFormPrice(0);
-    setFormAmount(0); setFormDate(dayjs().format('YYYY-MM-DD')); setFormCreator(getCurrentUserDisplayName()); setFormRemark(''); setFormImage('');
+    setFormAmount(0); setFormDate(dayjs().format('YYYY-MM-DD')); setFormCreator(getCurrentUserDisplayName()); setFormRemark(''); setFormImage(''); setFormProjectName('');
   };
 
   const openAdd = () => {
@@ -148,6 +180,7 @@ const InvoiceRecordPage: React.FC = () => {
     setFormCreator(r.creator || '');
     setFormRemark(r.remark || '');
     setFormImage(r.image || '');
+    setFormProjectName(r.projectName || '');
     setEditVisible(true);
   };
 
@@ -165,6 +198,7 @@ const InvoiceRecordPage: React.FC = () => {
       creator: formCreator.trim(),
       remark: formRemark.trim(),
       image: formImage,
+      projectName: formProjectName.trim(),
     };
     if (editingRecord) {
       const idx = list.findIndex(r => r.key === editingRecord.key);
@@ -180,6 +214,34 @@ const InvoiceRecordPage: React.FC = () => {
   const handleDelete = (key: string) => {
     saveRecords(records.filter(r => r.key !== key));
     message.success('记录已删除');
+  };
+
+  // 开票状态变更（申请记录，手动）：开票成功为供应商同步专属状态不可手改，手动仅可在待开票/已开票间调整
+  const handleInvoiceStatusChange = (r: InvoiceRecord, status: '待开票' | '已开票') => {
+    const list = records.map(x => (x.key === r.key ? { ...x, invoiceStatus: status } : x));
+    saveRecords(list);
+    if (r.supplierUsername && r.applyNo) updateInboxStatus(r.supplierUsername, r.applyNo, status);
+    message.success(status === '已开票' ? '已标记为已开票' : '已恢复为待开票');
+  };
+
+  // 推送状态变更（申请记录）：手动调成已推送时，若供应商账号可解析且收件箱无此单则补推送
+  const handlePushStatusChange = (r: InvoiceRecord, status: '推送成功' | '待推送' | '已推送') => {
+    const list = records.map(x => (x.key === r.key ? { ...x, pushStatus: status } : x));
+    saveRecords(list);
+    if (status === '已推送' && r.supplierUsername && r.applyNo) {
+      const inbox = readInbox(r.supplierUsername);
+      if (!inbox.some(x => x.applyNo === r.applyNo)) {
+        upsertInboxEntry(r.supplierUsername, {
+          key: r.applyNo, applyNo: r.applyNo, applicantUsername: owner, applicantCompany: r.companyName,
+          supplierName: r.invoiceSupplier || '', projectName: r.projectName || '', amount: r.amount || 0,
+          quantity: r.quantity || 0, unitPrice: r.unitPrice || 0, months: r.applyMonths || [],
+          applyDate: r.date || dayjs().format('YYYY-MM-DD'), status: normInvoiceStatus(r.invoiceStatus), remark: '补推送',
+        });
+        message.success('已补推送到供应商开票申请');
+        return;
+      }
+    }
+    message.success('推送状态已更新');
   };
 
   // 自动计算金额
@@ -211,16 +273,28 @@ const InvoiceRecordPage: React.FC = () => {
     }
   }, []);
 
-  // ===================== 过滤 =====================
-  const filtered = useMemo(() => {
-    if (!searchText.trim()) return records;
-    const q = searchText.toLowerCase();
-    return records.filter(r =>
-      r.companyName.toLowerCase().includes(q) ||
-      (r.invoiceType || '').toLowerCase().includes(q) ||
-      (r.creator || '').toLowerCase().includes(q)
-    );
-  }, [records, searchText]);
+  // ===================== 过滤（字段拆分搜索） =====================
+  const filtered = useMemo(() => records.filter(r => {
+    if (fCompany && (r.companyName || '') !== fCompany) return false;
+    if (fType && (r.invoiceType || '') !== fType) return false;
+    if (fStatus && (r.source !== 'apply' || normInvoiceStatus(r.invoiceStatus) !== fStatus)) return false;
+    if (fPush && (r.source !== 'apply' || (r.pushStatus || '待推送') !== fPush)) return false;
+    if (fSupplier && (r.invoiceSupplier || '') !== fSupplier) return false;
+    if (fProject && (r.projectName || '') !== fProject) return false;
+    if (fCreator && !(r.creator || '').toLowerCase().includes(fCreator.toLowerCase())) return false;
+    if (fMonth && !String(r.date || '').startsWith(fMonth)) return false;
+    return true;
+  }), [records, fCompany, fType, fStatus, fPush, fSupplier, fProject, fCreator, fMonth]);
+
+  const resetFilters = () => {
+    setFCompany(''); setFType(''); setFStatus(''); setFPush('');
+    setFSupplier(''); setFProject(''); setFCreator(''); setFMonth('');
+  };
+
+  // 去重候选项
+  const companyOptions = useMemo(() => Array.from(new Set([...companyNames, ...records.map(r => r.companyName).filter(Boolean)])), [companyNames, records]);
+  const supplierOptions = useMemo(() => Array.from(new Set(records.map(r => r.invoiceSupplier).filter(Boolean))), [records]);
+  const projectOptions = useMemo(() => Array.from(new Set(records.map(r => r.projectName).filter(Boolean))), [records]);
 
   // 列宽拖拽
   const { wrapColumns } = useResizableColumns<InvoiceRecord>(`colWidths_invoiceRecord_${owner}`);
@@ -234,6 +308,41 @@ const InvoiceRecordPage: React.FC = () => {
         const t = INVOICE_TYPES.find(it => it.value === v);
         return v ? <Tag color={t?.color || 'default'}>{v}</Tag> : <Text type="secondary">—</Text>;
       } },
+    { title: '项目名称', dataIndex: 'projectName', key: 'projectName', width: 140, ellipsis: true,
+      render: (v: string) => v || <Text type="secondary">—</Text> },
+    { title: '开票状态', dataIndex: 'invoiceStatus', key: 'invoiceStatus', width: 124, align: 'center' as const,
+      render: (v: string, r: InvoiceRecord) => {
+        if (r.source !== 'apply') return <Text type="secondary">—</Text>;
+        // 开票成功 = 供应商点开票完成同步的专属状态，只读不可改
+        if (normInvoiceStatus(v) === '开票成功') return <Tag color="green" style={{ margin: 0, fontSize: 12, lineHeight: '18px', padding: '0 6px' }}>开票成功</Tag>;
+        return (
+          <Select size="small" style={{ width: 104 }} value={normInvoiceStatus(v)}
+            onChange={(nv: any) => handleInvoiceStatusChange(r, nv)}
+            options={[{ value: '待开票', label: <Tag color="red" style={{ margin: 0, fontSize: 12, lineHeight: '18px', padding: '0 6px' }}>待开票</Tag> }, { value: '已开票', label: <Tag color="green" style={{ margin: 0, fontSize: 12, lineHeight: '18px', padding: '0 6px' }}>已开票</Tag> }]} />
+        );
+      } },
+    { title: '开票供应商', dataIndex: 'invoiceSupplier', key: 'invoiceSupplier', width: 160, ellipsis: true,
+      render: (v: string) => v || <Text type="secondary">—</Text> },
+    { title: '合作状态', key: 'coopStatus', width: 100, align: 'center' as const,
+      render: (_: any, r: InvoiceRecord) => {
+        if (!r.invoiceSupplier) return <Text type="secondary">—</Text>;
+        const entry = supplierCoop[r.invoiceSupplier];
+        if (!entry) return <Tag color="default">未合作</Tag>;
+        switch (entry.cooperationStatus) {
+          case 'approved': return <Tag color="green">合作中</Tag>;
+          case 'pending': return <Tag color="orange">待合作</Tag>;
+          case 'terminating': return <Tag color="orange">终止中</Tag>;
+          case 'terminated': return <Tag color="default">已终止</Tag>;
+          case 'rejected': return <Tag color="red">已拒绝</Tag>;
+          default: return <Tag color="default">未合作</Tag>;
+        }
+      } },
+    { title: '推送状态', dataIndex: 'pushStatus', key: 'pushStatus', width: 124, align: 'center' as const,
+      render: (v: string, r: InvoiceRecord) => r.source === 'apply' ? (
+        <Select size="small" style={{ width: 104 }} value={v || '待推送'}
+          onChange={(nv: any) => handlePushStatusChange(r, nv)}
+          options={[{ value: '推送成功', label: <Tag color="green" style={{ margin: 0, fontSize: 12, lineHeight: '18px', padding: '0 6px' }}>推送成功</Tag> }, { value: '待推送', label: <Tag color="red" style={{ margin: 0, fontSize: 12, lineHeight: '18px', padding: '0 6px' }}>待推送</Tag> }, { value: '已推送', label: <Tag color="green" style={{ margin: 0, fontSize: 12, lineHeight: '18px', padding: '0 6px' }}>已推送</Tag> }]} />
+      ) : <Text type="secondary">—</Text> },
     { title: '数量', dataIndex: 'quantity', key: 'quantity', width: 80, align: 'right' as const,
       render: (v: number) => v ? v : <Text type="secondary">—</Text> },
     { title: '平均单价', dataIndex: 'unitPrice', key: 'unitPrice', width: 110, align: 'right' as const,
@@ -277,13 +386,32 @@ const InvoiceRecordPage: React.FC = () => {
           </Col>
           <Col>
             <Space>
-              <Input.Search placeholder="搜索公司名称/发票类型/创建人" value={searchText} onChange={e => setSearchText(e.target.value)}
-                allowClear style={{ width: 260 }} />
               <Button icon={<ReloadOutlined />} onClick={reload}>刷新</Button>
               <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>新增</Button>
             </Space>
           </Col>
         </Row>
+        <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <Select placeholder="公司名称" allowClear showSearch style={{ width: 180 }} value={fCompany || undefined}
+            onChange={v => setFCompany(v || '')} options={companyOptions.map(n => ({ value: n, label: n }))}
+            filterOption={(input, option) => String((option as any)?.label || '').toLowerCase().includes(input.toLowerCase())} />
+          <Select placeholder="发票类型" allowClear style={{ width: 120 }} value={fType || undefined}
+            onChange={v => setFType(v || '')} options={INVOICE_TYPES.map(t => ({ value: t.value, label: t.label }))} />
+          <Select placeholder="开票状态" allowClear style={{ width: 120 }} value={fStatus || undefined}
+            onChange={v => setFStatus(v || '')} options={[{ value: '待开票', label: '待开票' }, { value: '已开票', label: '已开票' }, { value: '开票成功', label: '开票成功' }]} />
+          <Select placeholder="推送状态" allowClear style={{ width: 110 }} value={fPush || undefined}
+            onChange={v => setFPush(v || '')} options={[{ value: '推送成功', label: '推送成功' }, { value: '待推送', label: '待推送' }, { value: '已推送', label: '已推送' }]} />
+          <Select placeholder="开票供应商" allowClear showSearch style={{ width: 160 }} value={fSupplier || undefined}
+            onChange={v => setFSupplier(v || '')} options={supplierOptions.map(n => ({ value: n, label: n }))}
+            filterOption={(input, option) => String((option as any)?.label || '').toLowerCase().includes(input.toLowerCase())} />
+          <Select placeholder="项目名称" allowClear showSearch style={{ width: 160 }} value={fProject || undefined}
+            onChange={v => setFProject(v || '')} options={projectOptions.map(n => ({ value: n, label: n }))}
+            filterOption={(input, option) => String((option as any)?.label || '').toLowerCase().includes(input.toLowerCase())} />
+          <Input placeholder="创建人" allowClear style={{ width: 120 }} value={fCreator} onChange={e => setFCreator(e.target.value)} />
+          <DatePicker picker="month" placeholder="日期月份" allowClear style={{ width: 130 }}
+            value={fMonth ? dayjs(fMonth) : null} onChange={d => setFMonth(d ? d.format('YYYY-MM') : '')} />
+          <Button icon={<ReloadOutlined />} onClick={resetFilters}>重置</Button>
+        </div>
       </Card>
 
       <Card style={{ borderRadius: 8 }} bodyStyle={{ padding: 0 }}>
@@ -345,6 +473,10 @@ const InvoiceRecordPage: React.FC = () => {
           <DatePicker value={formDate ? dayjs(formDate) : null}
             onChange={(d) => setFormDate(d ? d.format('YYYY-MM-DD') : '')}
             style={{ width: '100%' }} placeholder="请选择日期" />
+        </div>
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ marginBottom: 6 }}><Text>项目名称</Text></div>
+          <Input value={formProjectName} onChange={e => setFormProjectName(e.target.value)} placeholder="请输入项目名称（选填）" />
         </div>
         <div style={{ marginBottom: 16 }}>
           <div style={{ marginBottom: 6 }}><Text>备注</Text></div>
