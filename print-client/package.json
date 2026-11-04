@@ -1,6 +1,6 @@
 {
   "name": "factory-print-client",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "description": "讯能手 ERP 本地打印客户端",
   "main": "dist/main.js",
   "scripts": {
