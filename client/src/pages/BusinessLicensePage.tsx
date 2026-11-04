@@ -826,7 +826,7 @@ const BusinessLicensePage: React.FC = () => {
         if (v === '一般纳税人') return <Tag style={{ background: '#1677ff', color: '#fff', border: 'none', fontWeight: 500 }}>一般纳税人</Tag>;
         return <Tag>{v}</Tag>;
       } },
-    vatRate: { title: '增值税税率', dataIndex: 'vatRate', key: 'vatRate', width: 110, align: 'center',
+    vatRate: { title: tipTitle('增值税税率', '该税率在计算店铺利润时采用，用于利润核算中的税费计算'), dataIndex: 'vatRate', key: 'vatRate', width: 110, align: 'center',
       render: (v: number) => typeof v === 'number' ? <Tag color="blue">{v}%</Tag> : <Text type="secondary">—</Text> },
     storeCount: { title: tipTitle('开店数量', '数据来源：店铺列表中公司名称匹配的店铺数量'), key: 'storeCount', width: 110, align: 'center',
       render: (_: any, r: BusinessLicense) => {
