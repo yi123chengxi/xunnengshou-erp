@@ -1,12 +1,14 @@
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo, useRef } from 'react';
 import {
   Card, Row, Col, Table, Typography, Button, Space, Input, Modal,
-  InputNumber, Tag, Tooltip, message, Descriptions, Statistic, Checkbox,
+  InputNumber, Tag, Tooltip, message, Descriptions, Statistic, Checkbox, Progress, Select,
 } from 'antd';
 import {
   PlusOutlined, DeleteOutlined, EyeOutlined, ExportOutlined,
   CheckCircleOutlined, BarcodeOutlined, AuditOutlined, AppstoreOutlined, CheckOutlined, FileTextOutlined, EditOutlined,
+  UploadOutlined, FileExcelOutlined,
 } from '@ant-design/icons';
+import * as XLSX from 'xlsx';
 import { updateProductStock, generateDocNo } from '../../utils/stockUtils';
 import { getCurrentUserDisplayName } from '../../utils/billLog';
 import { QtyTemplateManagerModal, QtyFillConfirmModal, loadQtyTemplates, saveQtyTemplates } from '../../components/QtyTemplateModals';
@@ -45,6 +47,15 @@ interface CheckRecord {
 
 const STORAGE_KEY = () => `inventory_check_${getDataOwner()}`;
 
+// 表格导入目标字段与表头同义词（自动匹配用，忽略大小写/空格）
+const IMPORT_FIELDS: { key: string; label: string; required?: boolean; synonyms: string[] }[] = [
+  { key: 'productCode', label: '商品编码', required: true, synonyms: ['商品编码', '编码', '货号', '条形码', '条码', '款式编码', 'productcode', 'code'] },
+  { key: 'checkQty', label: '盘点数量', synonyms: ['盘点数量', '盘点数', '数量', '实盘数量', '实盘数', 'checkqty', 'qty'] },
+  { key: 'productName', label: '商品简称', synonyms: ['商品简称', '商品名称', '品名', '名称', '简称'] },
+  { key: 'unit', label: '单位', synonyms: ['单位', 'unit'] },
+  { key: 'remark', label: '备注', synonyms: ['备注', '说明', 'remark'] },
+];
+
 const InventoryCheckPage: React.FC = () => {
   const [dataSource, setDataSource] = useState<CheckRecord[]>(() => {
     try { return JSON.parse(localStorage.getItem(STORAGE_KEY()) || '[]'); } catch { return []; }
@@ -69,6 +80,13 @@ const InventoryCheckPage: React.FC = () => {
   const [qtyFillMultiplier, setQtyFillMultiplier] = useState(1);
   // 已勾选填充的数量模版
   const [checkedTpl, setCheckedTpl] = useState<Record<string, boolean>>({});
+  // 表格导入：字段匹配与导入进度
+  const importFileRef = useRef<HTMLInputElement>(null);
+  const [importState, setImportState] = useState<null | {
+    fileName: string; headers: string[]; rows: Record<string, any>[];
+    mapping: Record<string, string>; stage: 'mapping' | 'importing' | 'done';
+    progress: number; imported: number; skipped: number; total: number; skippedCodes: string[];
+  }>(null);
 
   const productList = useMemo(() => {
     try { return JSON.parse(localStorage.getItem(`pageData_basic-data_product-list_${getDataOwner()}`) || '[]'); } catch { return []; }
@@ -174,7 +192,79 @@ const InventoryCheckPage: React.FC = () => {
     });
   }, [qtyFillTemplate, formItems]);
 
-  const resetForm = () => { setFormItems([]); setFormRemark(''); setScanCode(''); setPickSearch(''); setPickQty({}); setCheckedTpl({}); };
+  const resetForm = () => { setFormItems([]); setFormRemark(''); setScanCode(''); setPickSearch(''); setPickQty({}); setCheckedTpl({}); setImportState(null); };
+
+  // 解析导入表格（xlsx/xls/csv）：首行为表头，自动匹配字段后进入映射确认态
+  const handleImportFile = async (file: File) => {
+    try {
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: 'array' });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const json = XLSX.utils.sheet_to_json<Record<string, any>>(ws, { defval: '' });
+      if (!json.length) { message.warning('表格为空或无法解析，请检查文件'); return; }
+      const headers = Object.keys(json[0]).map(h => String(h));
+      const mapping: Record<string, string> = {};
+      IMPORT_FIELDS.forEach(f => {
+        const norm = (s: string) => s.trim().toLowerCase();
+        const hit = headers.find(h => f.synonyms.some(s => norm(h) === norm(s)))
+          || headers.find(h => h.trim() && f.synonyms.some(s => norm(h).includes(norm(s)) || norm(s).includes(norm(h))));
+        if (hit) mapping[f.key] = hit;
+      });
+      setImportState({ fileName: file.name, headers, rows: json, mapping, stage: 'mapping', progress: 0, imported: 0, skipped: 0, total: json.length, skippedCodes: [] });
+      if (!mapping.productCode) message.error('未自动匹配到商品编码列，请在下方手动选择对应列后再导入');
+      else message.success(`已解析 ${json.length} 行，请确认字段匹配后开始导入`);
+    } catch {
+      message.error('文件解析失败，请确认是 xlsx/xls/csv 格式');
+    }
+  };
+
+  // 执行导入：分块处理并实时更新进度；盘点数量列有映射时按绝对盘点数，无映射时按默认数量累加（与扫码同口径）
+  const runImport = () => {
+    if (!importState || !importState.mapping.productCode) return;
+    const { rows, mapping } = importState;
+    const codeCol = mapping.productCode; const qtyCol = mapping.checkQty || ''; const nameCol = mapping.productName || ''; const unitCol = mapping.unit || ''; const remarkCol = mapping.remark || '';
+    const prodMap = new Map<string, any>(productList.map((p: any) => [String(p.productCode), p]));
+    const merged = new Map<string, CheckItem>(formItems.map(it => [it.productCode, { ...it }]));
+    let i = 0; let imported = 0; const skippedCodes: string[] = [];
+    const CHUNK = 200;
+    setImportState(s => (s ? { ...s, stage: 'importing', progress: 0, imported: 0, skipped: 0, skippedCodes: [] } : s));
+    const step = () => {
+      const end = Math.min(i + CHUNK, rows.length);
+      for (; i < end; i++) {
+        const r = rows[i];
+        const code = String(r[codeCol] ?? '').trim();
+        if (!code) { if (skippedCodes.length < 200) skippedCodes.push(`第${i + 2}行(空编码)`); continue; }
+        const prod = prodMap.get(code);
+        if (!prod) { if (skippedCodes.length < 200) skippedCodes.push(code); continue; }
+        const sysStock = Number(prod.actualStock) || 0;
+        const qtyNum = qtyCol ? Number(String(r[qtyCol]).replace(/[^\d.-]/g, '')) : NaN;
+        const hasQty = qtyCol && Number.isFinite(qtyNum) && String(r[qtyCol]).trim() !== '';
+        const remark = remarkCol ? String(r[remarkCol] ?? '').trim() : '';
+        const cur = merged.get(code);
+        if (cur) {
+          cur.checkQty = hasQty ? qtyNum : cur.checkQty + scanDefaultQty;
+          cur.diff = cur.checkQty - cur.systemStock;
+          if (remark) cur.remark = remark;
+        } else {
+          const checkQty = hasQty ? qtyNum : sysStock + scanDefaultQty;
+          merged.set(code, {
+            productCode: code,
+            productName: (nameCol && String(r[nameCol] ?? '').trim()) || prod.shortName || prod.name || '',
+            unit: (unitCol && String(r[unitCol] ?? '').trim()) || prod.unit || '',
+            spec: prod.spec || '', systemStock: sysStock, checkQty, diff: checkQty - sysStock, remark,
+          });
+        }
+        imported++;
+      }
+      const pct = Math.round((i / rows.length) * 100);
+      setImportState(s => (s ? { ...s, progress: pct, imported, skipped: skippedCodes.length, skippedCodes: skippedCodes.slice(0, 200) } : s));
+      if (i < rows.length) { setTimeout(step, 0); return; }
+      setFormItems(Array.from(merged.values()));
+      setImportState(s => (s ? { ...s, stage: 'done', progress: 100, imported, skipped: skippedCodes.length, skippedCodes: skippedCodes.slice(0, 200) } : s));
+      message.success(`导入完成：成功 ${imported} 条，跳过 ${skippedCodes.length} 条`);
+    };
+    setTimeout(step, 0);
+  };
 
   // 批量填充盘点数量：全部明细行 盘点数量 = 系统库存 + 默认数量
   const handleBatchFillQty = useCallback(() => {
@@ -333,9 +423,54 @@ const InventoryCheckPage: React.FC = () => {
             <Button type="dashed" icon={<PlusOutlined />} block onClick={() => setPickVisible(true)}>添加商品</Button>
           </Col>
         </Row>
-        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginBottom: 8 }}>
+          <Button size="small" icon={<UploadOutlined />} onClick={() => importFileRef.current?.click()}>导入表格</Button>
           <Button size="small" icon={<EditOutlined />} onClick={handleBatchFillQty}>批量填充数量</Button>
         </div>
+        <input ref={importFileRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }}
+          onChange={e => { const f = e.target.files?.[0]; if (f) handleImportFile(f); e.target.value = ''; }} />
+        {/* 导入字段匹配与进度面板 */}
+        {importState && (
+          <div style={{ border: '1px solid #91caff', background: '#f0f7ff', borderRadius: 8, padding: 10, marginBottom: 8 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6, flexWrap: 'wrap', gap: 6 }}>
+              <Text strong style={{ fontSize: 13 }}><FileExcelOutlined style={{ marginRight: 6, color: '#389e0d' }} />表格导入：{importState.fileName}（共 {importState.total} 行）</Text>
+              {importState.stage === 'mapping' && (
+                <Space size={6}>
+                  <Button size="small" type="primary" disabled={!importState.mapping.productCode} onClick={runImport}>开始导入</Button>
+                  <Button size="small" onClick={() => setImportState(null)}>取消</Button>
+                </Space>
+              )}
+              {importState.stage === 'done' && <Button size="small" onClick={() => setImportState(null)}>关闭</Button>}
+            </div>
+            {importState.stage === 'mapping' && (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '6px 16px', marginBottom: 6 }}>
+                {IMPORT_FIELDS.map(f => {
+                  const src = importState.mapping[f.key] || '';
+                  return (
+                    <div key={f.key} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <Text style={{ fontSize: 12, width: 70, flexShrink: 0 }}>{f.label}{f.required && <span style={{ color: '#f5222d' }}>*</span>}</Text>
+                      <Select size="small" style={{ flex: 1, minWidth: 0 }} value={src || undefined} placeholder="不导入" allowClear
+                        onChange={v => setImportState(s => (s ? { ...s, mapping: { ...s.mapping, [f.key]: v || '' } } : s))}
+                        options={importState.headers.map(h => ({ value: h, label: h }))} />
+                      <Tag color={src ? 'green' : (f.required ? 'red' : 'orange')} style={{ marginInlineEnd: 0, fontSize: 11 }}>{src ? '已匹配' : (f.required ? '缺必填' : '未匹配')}</Tag>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {(importState.stage === 'importing' || importState.stage === 'done') && (
+              <>
+                <Progress percent={importState.progress} size="small" status={importState.stage === 'done' ? 'success' : 'active'} />
+                <div style={{ fontSize: 12, color: '#5a6d85', marginTop: 4 }}>
+                  已处理 {Math.min(importState.imported + importState.skipped, importState.total)}/{importState.total} 行 · 匹配成功 <span style={{ color: '#52c41a', fontWeight: 600 }}>{importState.imported}</span> · 跳过 <span style={{ color: '#fa8c16', fontWeight: 600 }}>{importState.skipped}</span>
+                  {importState.stage === 'done' && importState.skippedCodes.length > 0 && (
+                    <div style={{ marginTop: 4, color: '#fa8c16', wordBreak: 'break-all' }}>跳过明细（商品编码为空或商品列表不存在）：{importState.skippedCodes.join('、')}{importState.skipped > importState.skippedCodes.length ? ` 等共 ${importState.skipped} 条` : ''}</div>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        )}
         <Table bordered size="small" pagination={false}
           dataSource={formItems} rowKey={(r, i) => r.productCode || String(i)}
           columns={[
