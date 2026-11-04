@@ -61,6 +61,16 @@ const resolveDataOwner = (): string => {
   return parent;
 };
 
+// 主账号注册时的联系人（主账号姓名固定为该值，不可修改）
+const getRegisteredContact = (): string => {
+  try {
+    const regUsers: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+    const owner = resolveDataOwner();
+    const reg = regUsers.find((u: any) => u.username === owner && !u.isSubAccount) || regUsers.find((u: any) => u.username === owner);
+    return reg?.contactPerson || '';
+  } catch { return ''; }
+};
+
 // 账号数据 localStorage 持久化 key（按主账号隔离，子账号共享主账号数据）
 const getAccountsStorageKey = () => 'accounts_' + resolveDataOwner();
 
@@ -356,6 +366,17 @@ const AccountManage: React.FC = () => {
     localStorage.setItem(getAccountsStorageKey(), JSON.stringify(dataSource));
   }, [dataSource]);
 
+  // 自动修正：主账号姓名固定为注册时的联系人（历史数据可能仍为“系统管理员”）
+  useEffect(() => {
+    const contact = getRegisteredContact();
+    if (!contact) return;
+    setDataSource(prev => {
+      const changed = prev.some(a => a.accountType === '主账号' && a.displayName !== contact);
+      if (!changed) return prev;
+      return prev.map(a => (a.accountType === '主账号' ? { ...a, displayName: contact } : a));
+    });
+  }, []);
+
   // 自动修复：扫描 registeredUsers，修正所有子账号的 parentAccount 指向真正的主账号
   useEffect(() => {
     try {
@@ -435,7 +456,11 @@ const AccountManage: React.FC = () => {
 
   const handleEditConfirm = useCallback(() => {
     editForm.validateFields().then(values => {
-
+      // 主账号姓名锁定为注册联系人，编辑窗口不可修改
+      if (selectedRecord?.accountType === '主账号') {
+        const contact = getRegisteredContact();
+        if (contact) values.displayName = contact;
+      }
 
       setDataSource(prev => {
         const updated = prev.map(item =>
@@ -1405,8 +1430,8 @@ const AccountManage: React.FC = () => {
             }
           }}
         >
-          <Form.Item name="displayName" label="姓名" rules={[{ required: true, message: '请输入姓名' }]}>
-            <Input placeholder="请输入姓名" prefix={<UserOutlined />} />
+          <Form.Item name="displayName" label={selectedRecord?.accountType === '主账号' ? '姓名（注册联系人，不可修改）' : '姓名'} rules={[{ required: true, message: '请输入姓名' }]}>
+            <Input placeholder="请输入姓名" prefix={<UserOutlined />} disabled={selectedRecord?.accountType === '主账号'} />
           </Form.Item>
           <Form.Item name="roles" label="权限角色" rules={[{ required: true, message: '请至少选择一个角色' }]}>
             <Select mode="multiple" placeholder="请选择角色（可多选）" allowClear>

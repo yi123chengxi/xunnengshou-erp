@@ -284,7 +284,8 @@ const ShopListPage: React.FC = () => {
   const loadAccounts = useCallback(() => {
     try {
       const data = JSON.parse(localStorage.getItem(`accounts_${owner}`) || '[]');
-      setAccounts(data.filter((a: any) => a.status !== 'disabled'));
+      // 负责人不可选主账号（系统管理员）：排除主账号，仅子账号可作为店铺负责人
+      setAccounts(data.filter((a: any) => a.status !== 'disabled' && a.accountType !== '主账号'));
     } catch { setAccounts([]); }
   }, [owner]);
   useEffect(() => { loadAccounts(); }, [loadAccounts]);
