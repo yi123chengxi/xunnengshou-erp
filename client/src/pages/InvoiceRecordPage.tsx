@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   Card, Table, Button, Space, message, Typography, Modal, Input, InputNumber,
-  Row, Col, Popconfirm, Tag, Image, Select, DatePicker,
+  Row, Col, Popconfirm, Tag, Image, Select, DatePicker, AutoComplete,
 } from 'antd';
 import {
   PlusOutlined, EditOutlined, DeleteOutlined, ReloadOutlined, PictureOutlined,
@@ -11,7 +11,7 @@ import type { ColumnsType } from 'antd/es/table';
 import useResizableColumns from '../hooks/useResizableColumns';
 import { safeSetItem } from '../utils/storageQuota';
 import { saveDataset } from '../utils/dataStore';
-import { updateInboxStatus, readInbox, upsertInboxEntry, normInvoiceStatus } from '../utils/invoiceApply';
+import { updateInboxStatus, readInbox, upsertInboxEntry, normInvoiceStatus, resolveSupplier } from '../utils/invoiceApply';
 import dayjs from 'dayjs';
 
 const { Text, Title } = Typography;
@@ -124,6 +124,7 @@ const InvoiceRecordPage: React.FC = () => {
   const [formRemark, setFormRemark] = useState('');
   const [formImage, setFormImage] = useState('');
   const [formProjectName, setFormProjectName] = useState('');
+  const [formSupplier, setFormSupplier] = useState('');
 
   // 从营业执照中获取公司名称列表
   const [companyNames, setCompanyNames] = useState<string[]>([]);
@@ -160,7 +161,7 @@ const InvoiceRecordPage: React.FC = () => {
   // ===================== CRUD =====================
   const resetForm = () => {
     setFormCompany(''); setFormType(''); setFormQuantity(0); setFormPrice(0);
-    setFormAmount(0); setFormDate(dayjs().format('YYYY-MM-DD')); setFormCreator(getCurrentUserDisplayName()); setFormRemark(''); setFormImage(''); setFormProjectName('');
+    setFormAmount(0); setFormDate(dayjs().format('YYYY-MM-DD')); setFormCreator(getCurrentUserDisplayName()); setFormRemark(''); setFormImage(''); setFormProjectName(''); setFormSupplier('');
   };
 
   const openAdd = () => {
@@ -181,6 +182,7 @@ const InvoiceRecordPage: React.FC = () => {
     setFormRemark(r.remark || '');
     setFormImage(r.image || '');
     setFormProjectName(r.projectName || '');
+    setFormSupplier(r.invoiceSupplier || '');
     setEditVisible(true);
   };
 
@@ -200,16 +202,25 @@ const InvoiceRecordPage: React.FC = () => {
       image: formImage,
       projectName: formProjectName.trim(),
     };
+    // 开票供应商：仅未推送（待推送）可改；已推送/推送成功锁定保留原值
+    const supplierFields = supplierLocked ? {} : (() => {
+      const supName = formSupplier.trim();
+      const resolved = supName ? resolveSupplier(owner, supName) : { username: '', cooperated: false };
+      return { invoiceSupplier: supName, supplierUsername: resolved.username || '' };
+    })();
     if (editingRecord) {
       const idx = list.findIndex(r => r.key === editingRecord.key);
-      if (idx >= 0) list[idx] = { ...list[idx], ...data };
+      if (idx >= 0) list[idx] = { ...list[idx], ...data, ...supplierFields };
     } else {
-      list.push({ key: `inv-${Date.now()}`, ...data, createdAt: new Date().toLocaleString('zh-CN') });
+      list.push({ key: `inv-${Date.now()}`, ...data, ...supplierFields, createdAt: new Date().toLocaleString('zh-CN') });
     }
     saveRecords(list);
     setEditVisible(false);
     message.success(editingRecord ? '记录已更新' : '记录已添加');
   };
+
+  // 编辑弹窗中开票供应商是否锁定（已推送/推送成功不可修改）
+  const supplierLocked = !!editingRecord && (editingRecord.pushStatus === '已推送' || editingRecord.pushStatus === '推送成功');
 
   const handleDelete = (key: string) => {
     saveRecords(records.filter(r => r.key !== key));
@@ -473,6 +484,13 @@ const InvoiceRecordPage: React.FC = () => {
         <div style={{ marginBottom: 16 }}>
           <div style={{ marginBottom: 6 }}><Text>项目名称</Text></div>
           <Input value={formProjectName} onChange={e => setFormProjectName(e.target.value)} placeholder="请输入项目名称（选填）" />
+        </div>
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ marginBottom: 6 }}><Text>开票供应商 {supplierLocked && <Text type="secondary" style={{ fontSize: 12 }}>（已推送/推送成功，不可修改）</Text>}</Text></div>
+          <AutoComplete value={formSupplier} onChange={v => setFormSupplier(v)} disabled={supplierLocked}
+            placeholder="选择/输入供应商名称" style={{ width: '100%' }}
+            filterOption={(input, option) => String((option as any)?.value || '').toLowerCase().includes(input.toLowerCase())}
+            options={Object.keys(supplierCoop).map(n => ({ value: n, label: n }))} />
         </div>
         <div style={{ marginBottom: 16 }}>
           <div style={{ marginBottom: 6 }}><Text>备注</Text></div>
