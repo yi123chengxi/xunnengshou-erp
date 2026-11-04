@@ -433,6 +433,9 @@ async function handlePrintJob(msg: {
             silent: true,
             deviceName: msg.printerName || undefined,
             copies: msg.copies || 1,
+            // 边距设为 none：页眉页脚（日期/标题/网址/页码）无边距空间可画，确保只打印模板内容；同时保留背景色
+            printBackground: true,
+            margins: { marginType: 'none' },
           },
           (success: boolean, failureReason: string) => {
             if (success) {

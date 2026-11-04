@@ -207,6 +207,8 @@ const ProductPrintPage: React.FC = () => {
   const [previewTitle, setPreviewTitle] = useState('');
   const [previewVisible, setPreviewVisible] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  // 预览弹窗对应的纯打印内容（走打印客户端静默打印，避免浏览器打印弹窗自带页眉页脚）
+  const previewJobRef = useRef<{ type: TplType; html: string } | null>(null);
 
   // 系统预设模板：首次打开把内置预设写入本地（只补不覆写），新部署/新浏览器自带预设
   useEffect(() => { Object.keys(PRESET_PRINT_TEMPLATES).forEach(seedPresetPrintTemplates); }, []);
@@ -447,10 +449,39 @@ const ProductPrintPage: React.FC = () => {
     const pw = Number(tpl?.paperWidth) || TPL_PAPER[type].w;
     const ph = Number(tpl?.paperHeight) || TPL_PAPER[type].h;
     setPreviewTitle(title);
+    // 打印用纯内容（无灰底/阴影等屏幕预览样式，末页不再分页避免空白页）
+    previewJobRef.current = { type, html: `<html><head><meta charset="utf-8"><style>@page{size:${pw}mm ${ph}mm;margin:0;}body{margin:0;background:#fff;font-family:'Microsoft YaHei',sans-serif;}.pg{position:relative;z-index:0;width:${pw}mm;height:${ph}mm;page-break-after:always;overflow:hidden;box-sizing:border-box;background:#fff;margin:0;}.pg:last-child{page-break-after:auto;}</style></head><body>${pages}</body></html>` };
     // 屏幕预览：纸张外灰色底、纸张白色居中带阴影；打印时恢复纯白无阴影
-    setPreviewHtml(`<html><head><meta charset="utf-8"><style>@page{size:${pw}mm ${ph}mm;margin:0;}body{margin:0;background:#8f9aa5;font-family:'Microsoft YaHei',sans-serif;}.pg{position:relative;z-index:0;width:${pw}mm;height:${ph}mm;page-break-after:always;overflow:hidden;box-sizing:border-box;background:#fff;box-shadow:0 1px 10px rgba(0,0,0,.35);margin:12px auto;}@media print{body{background:#fff;}.pg{margin:0;box-shadow:none;}}</style></head><body>${pages}</body></html>`);
+    setPreviewHtml(`<html><head><meta charset="utf-8"><style>@page{size:${pw}mm ${ph}mm;margin:0;}body{margin:0;background:#8f9aa5;font-family:'Microsoft YaHei',sans-serif;}.pg{position:relative;z-index:0;width:${pw}mm;height:${ph}mm;page-break-after:always;overflow:hidden;box-sizing:border-box;background:#fff;box-shadow:0 1px 10px rgba(0,0,0,.35);margin:12px auto;}.pg:last-child{page-break-after:auto;}@media print{body{background:#fff;}.pg{margin:0;box-shadow:none;}}</style></head><body>${pages}</body></html>`);
     setPreviewVisible(true);
   }, [buildPages, resolveTplId]);
+
+  // 预览弹窗“打印”：优先走打印客户端静默打印（无浏览器默认页眉页脚）；客户端未在线时回退浏览器打印并提示
+  const printFromPreview = async () => {
+    const job = previewJobRef.current;
+    if (!job) { message.error('没有可打印的内容'); return; }
+    if (printerList.length === 0) {
+      try { iframeRef.current?.contentWindow?.focus(); iframeRef.current?.contentWindow?.print(); } catch { message.error('打印失败'); }
+      message.warning('打印客户端未在线，已改用浏览器打印：如纸张出现日期/网址/页码等页眉页脚，请在打印弹窗“更多设置”中取消勾选“页眉和页脚”');
+      return;
+    }
+    try {
+      const renderRes = await request.post('/print/render', { html: job.html });
+      const printUrl = renderRes?.data?.data?.url;
+      if (!printUrl) { message.error('打印内容生成失败'); return; }
+      const tpl = loadTpl(job.type, resolveTplId(job.type));
+      const printerName = printer === '默认使用模板设置的打印机' ? (tpl?.printerName || '') : printer;
+      const username = localStorage.getItem('username') || '';
+      const jobRes = await request.post('/print/job', { type: 'url', content: printUrl, printerName, copies: 1, username });
+      if (jobRes?.data?.code === 0) {
+        message.success('打印任务已提交（静默打印，无页眉页脚）');
+      } else {
+        message.error(jobRes?.data?.message || '打印任务提交失败');
+      }
+    } catch (err: any) {
+      message.error(err?.response?.data?.message || err?.message || '打印失败');
+    }
+  };
 
   const doPrintRow = async (type: TplType, copies: number) => {
     if (!selProduct) { message.warning('请先搜索并选择商品'); return; }
@@ -461,7 +492,7 @@ const ProductPrintPage: React.FC = () => {
     try {
       // 1. 生成打印 HTML
       const pages = await buildPages(type, selProduct, copies);
-      const html = `<html><head><meta charset="utf-8"><style>@page{size:${pw}mm ${ph}mm;margin:0;}body{margin:0;background:#fff;font-family:'Microsoft YaHei',sans-serif;}.pg{position:relative;z-index:0;width:${pw}mm;height:${ph}mm;page-break-after:always;overflow:hidden;box-sizing:border-box;background:#fff;margin:0;}</style></head><body>${pages}</body></html>`;
+      const html = `<html><head><meta charset="utf-8"><style>@page{size:${pw}mm ${ph}mm;margin:0;}body{margin:0;background:#fff;font-family:'Microsoft YaHei',sans-serif;}.pg{position:relative;z-index:0;width:${pw}mm;height:${ph}mm;page-break-after:always;overflow:hidden;box-sizing:border-box;background:#fff;margin:0;}.pg:last-child{page-break-after:auto;}</style></head><body>${pages}</body></html>`;
       // 2. 上传 HTML 到服务端，获取可访问 URL
       const renderRes = await request.post('/print/render', { html });
       const printUrl = renderRes?.data?.data?.url;
@@ -870,7 +901,7 @@ const ProductPrintPage: React.FC = () => {
       {/* 打印预览弹窗（iframe + 浏览器打印） */}
       <Modal title={previewTitle} open={previewVisible} onCancel={() => setPreviewVisible(false)} width={820} zIndex={1500}
         footer={<Space>
-          <Button type="primary" icon={<PrinterOutlined />} onClick={() => { try { iframeRef.current?.contentWindow?.focus(); iframeRef.current?.contentWindow?.print(); } catch { message.error('打印失败'); } }}>打印</Button>
+          <Button type="primary" icon={<PrinterOutlined />} onClick={printFromPreview}>打印</Button>
           <Button onClick={() => setPreviewVisible(false)}>关闭</Button>
         </Space>}>
         <iframe ref={iframeRef} title="print-preview" srcDoc={previewHtml} style={{ width: '100%', height: 480, border: '1px solid #e3e8ee' }} />
