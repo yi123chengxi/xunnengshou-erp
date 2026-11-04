@@ -9,7 +9,7 @@ import QRCode from 'qrcode';
 import JsBarcode from 'jsbarcode';
 import {
   Card, Menu, Input, Select, Button, Checkbox, InputNumber, Image, Modal,
-  Table, Tabs, Space, Typography, message, Popconfirm, Dropdown, Empty, Tag, Tooltip,
+  Table, Space, Typography, message, Popconfirm, Dropdown, Empty, Tag, Tooltip,
 } from 'antd';
 import {
   PrinterOutlined, SettingOutlined, PlusOutlined, DeleteOutlined, SaveOutlined,
@@ -554,7 +554,6 @@ const ProductPrintPage: React.FC = () => {
   };
 
   // ============ 子页B 状态 ============
-  const [importTab, setImportTab] = useState('purchase');
   const [grid, setGrid] = useState<GridRow[]>([]);
   const [gridChecked, setGridChecked] = useState<string[]>([]);
   const [focusKey, setFocusKey] = useState('');
@@ -891,17 +890,12 @@ const ProductPrintPage: React.FC = () => {
 
         {activeSub === 'import-print' && (
           <>
-            <Tabs size="small" activeKey={importTab} onChange={setImportTab} items={[
-              { key: 'purchase', label: '从采购单导入' },
-              { key: 'production', label: '从生产订单导入' },
-              { key: 'file', label: '从文件导入' },
-              { key: 'free', label: '自由选择商品编码' },
-            ]} style={{ marginBottom: 4 }} />
+            {/* 导入入口合并为单页：采购单/生产订单/文件粘贴/自由选择四种导入并列 */}
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
-              {importTab === 'purchase' && <Button size="small" icon={<PlusOutlined />} onClick={() => { setSrcChecked([]); setSrcModal('purchase'); }}>选择采购单行导入</Button>}
-              {importTab === 'production' && <Button size="small" icon={<PlusOutlined />} onClick={() => { setSrcChecked([]); setSrcModal('production'); }}>选择生产订单明细导入</Button>}
-              {importTab === 'file' && <Button size="small" icon={<FileTextOutlined />} onClick={() => { setFileText(''); setSrcModal('file'); }}>粘贴文件内容导入</Button>}
-              {importTab === 'free' && <Button size="small" icon={<PlusOutlined />} onClick={() => { setPickChecked([]); setPickKw(''); setPickVisible(true); }}>选择商品导入</Button>}
+              <Button size="small" icon={<PlusOutlined />} onClick={() => { setSrcChecked([]); setSrcModal('purchase'); }}>选择采购单行导入</Button>
+              <Button size="small" icon={<PlusOutlined />} onClick={() => { setSrcChecked([]); setSrcModal('production'); }}>选择生产订单明细导入</Button>
+              <Button size="small" icon={<FileTextOutlined />} onClick={() => { setFileText(''); setSrcModal('file'); }}>粘贴文件内容导入</Button>
+              <Button size="small" icon={<PlusOutlined />} onClick={() => { setPickChecked([]); setPickKw(''); setPickVisible(true); }}>选择商品导入</Button>
               <Dropdown menu={{ items: loadTplList('tag').map(t => ({ key: t.id, label: t.name })), onClick: ({ key }) => { setTplIds(prev => ({ ...prev, tag: key })); printGrid('tag', key); } }}>
                 <Button size="small" icon={<PrinterOutlined />}>打印商品吊牌预览</Button>
               </Dropdown>
