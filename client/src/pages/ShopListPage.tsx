@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   Card, Table, Button, Space, message, Typography, Modal, Input, Select, AutoComplete,
-  Row, Col, Popconfirm, Tag, Radio, Upload, Image, Divider, Tooltip,
+  Row, Col, Popconfirm, Tag, Radio, Upload, Image, Divider, Tooltip, Checkbox,
 } from 'antd';
 import {
   PlusOutlined, EditOutlined, DeleteOutlined, ShopOutlined, ReloadOutlined,
@@ -13,7 +13,7 @@ import * as XLSX from 'xlsx-js-style';
 import useResizableColumns from '../hooks/useResizableColumns';
 import { safeSetItem } from '../utils/storageQuota';
 import { saveDataset } from '../utils/dataStore';
-import { loadShopManagers, saveShopManagers, isShopScopeAdmin, scopeShops } from '../utils/shopScope';
+import { loadShopManagerPerms, saveShopManagerPerms, isShopScopeAdmin, scopeShops, canEditShopData, ShopManagerPerm } from '../utils/shopScope';
 import { loadTenantUsers, tenantUserDisplayName } from '../utils/tenantUsers';
 
 const { Text, Title } = Typography;
@@ -166,16 +166,17 @@ const ShopListPage: React.FC = () => {
   const [formRemark, setFormRemark] = useState('');
   const [formPassword, setFormPassword] = useState('');
 
-  // 店铺管理负责人设置：名单存 username；主账号/负责人可看全部店铺，其他成员仅看自己负责的店铺
-  const [shopManagers, setShopManagers] = useState<string[]>(() => loadShopManagers(owner));
+  // 店铺管理负责人设置：名单存 { username, view, edit }；主账号始终全权；名单为空全员可见可编辑；
+  // 查看=可看全部店铺（组长另可见本组组员店铺）；编辑=可编辑他人数据；仅查看者只能操作自己负责的店铺
+  const [shopManagerPerms, setShopManagerPerms] = useState<ShopManagerPerm[]>(() => loadShopManagerPerms(owner));
   const [managerModalVisible, setManagerModalVisible] = useState(false);
-  const [managerDraft, setManagerDraft] = useState<string[]>([]);
+  const [managerDraft, setManagerDraft] = useState<ShopManagerPerm[]>([]);
   const isAdmin = isShopScopeAdmin();
   const tenantUserOptions = useMemo(() => loadTenantUsers().map((u: any) => ({ value: u.username, label: tenantUserDisplayName(u) || u.username })), []);
-  const managerDisplayNames = () => shopManagers.map(un => {
-    const u = loadTenantUsers().find((x: any) => x.username === un);
-    return (u && tenantUserDisplayName(u)) || un;
-  }).join('、') || '未设置（所有账号可见全部店铺）';
+  const managerDisplayNames = () => shopManagerPerms.map(p => {
+    const u = loadTenantUsers().find((x: any) => x.username === p.username);
+    return ((u && tenantUserDisplayName(u)) || p.username) + (p.view ? '' : '(无查看)') + (p.edit ? '' : '(无编辑)');
+  }).join('、') || '未设置（所有账号可见可编辑全部）';
 
   // 搜索
   const [searchShopName, setSearchShopName] = useState('');
@@ -535,15 +536,18 @@ const ShopListPage: React.FC = () => {
       render: (v: string) => v ? <Tag color="orange">••••••</Tag> : <Text type="secondary">—</Text> },
     { title: '创建时间', dataIndex: 'createdAt', key: 'createdAt', width: 160 },
     { title: '操作', key: 'action', width: 140, fixed: 'right' as const,
-      render: (_: any, r: ShopInfo) => (
+      render: (_: any, r: ShopInfo) => {
+        const editable = canEditShopData(owner, r.person);
+        return (
         <Space size="small">
-          <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openEdit(r)}>编辑</Button>
+          <Button type="link" size="small" icon={<EditOutlined />} disabled={!editable} onClick={() => openEdit(r)}>编辑</Button>
           <Popconfirm title="确认删除此店铺？" description="删除后相关数据不会自动删除"
-            onConfirm={() => handleDelete(r.key)} okText="确认" cancelText="取消">
-            <Button type="link" size="small" danger icon={<DeleteOutlined />}>删除</Button>
+            onConfirm={() => handleDelete(r.key)} okText="确认" cancelText="取消" disabled={!editable}>
+            <Button type="link" size="small" danger icon={<DeleteOutlined />} disabled={!editable}>删除</Button>
           </Popconfirm>
         </Space>
-      ),
+        );
+      },
     },
   ];
 
@@ -670,7 +674,7 @@ const ShopListPage: React.FC = () => {
           <Button icon={<ReloadOutlined />} onClick={reload}>刷新</Button>
           <Button icon={<ImportOutlined />} onClick={() => { setImportData([]); setImportFileName(''); setImportMode('add'); setMatchField('shopName'); setImportVisible(true); }}>导入</Button>
           {isAdmin && <Tooltip title={`负责人：${managerDisplayNames()}`}>
-            <Button icon={<TeamOutlined />} onClick={() => { setManagerDraft([...shopManagers]); setManagerModalVisible(true); }}>负责人设置</Button>
+            <Button icon={<TeamOutlined />} onClick={() => { setManagerDraft(shopManagerPerms.map(p => ({ ...p }))); setManagerModalVisible(true); }}>负责人设置</Button>
           </Tooltip>}
           <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>新增店铺</Button>
         </Space>
@@ -887,21 +891,41 @@ const ShopListPage: React.FC = () => {
         </div>
       </Modal>
 
-      {/* 店铺管理负责人设置弹窗 */}
+      {/* 店铺管理负责人设置弹窗（查看/编辑权限分离） */}
       <Modal title="店铺管理负责人设置" open={managerModalVisible}
         onCancel={() => setManagerModalVisible(false)}
         onOk={() => {
-          saveShopManagers(owner, managerDraft);
-          setShopManagers(managerDraft);
+          saveShopManagerPerms(owner, managerDraft);
+          setShopManagerPerms(managerDraft);
           setManagerModalVisible(false);
-          message.success('负责人已保存：主账号与负责人可查看全部店铺，其他成员仅可见自己负责的店铺数据');
+          message.success('负责人设置已保存：查看权限可看全部店铺数据，编辑权限可编辑他人数据；组长另可见本组组员店铺');
         }}
-        okText="保存" cancelText="取消" width={480}>
+        okText="保存" cancelText="取消" width={560}>
         <div style={{ marginBottom: 8, color: '#888', fontSize: 12 }}>
-          设置店铺管理（店铺列表/月末盘点/月利润表/提现充值）的负责人；名单为空时所有账号可见全部店铺，主账号始终可见全部；其他成员仅可见「负责人」为自己的店铺数据。
+          查看权限：可查看全部店铺数据（店铺列表/月末盘点/月利润表/提现充值），组长另可查看本组组员的店铺数据；<br />
+          编辑权限：可编辑/删除他人的店铺数据，仅查看权限者只能操作自己负责的店铺；<br />
+          主账号始终拥有全部权限；未设置负责人时所有账号可见可编辑全部。
         </div>
-        <Select mode="multiple" style={{ width: '100%' }} placeholder="选择负责人（子账号）" value={managerDraft}
-          onChange={v => setManagerDraft(v)} options={tenantUserOptions} />
+        <div style={{ marginBottom: 8, padding: '8px 12px', background: '#f6ffed', border: '1px solid #b7eb8f', borderRadius: 6, color: '#389e0d', fontSize: 12 }}>
+          已接入负责人权限的页面：店铺列表、月末盘点、月利润表、提现/充值
+        </div>
+        {managerDraft.length === 0 && <div style={{ textAlign: 'center', color: '#999', padding: '12px 0' }}>未设置负责人，所有账号可见可编辑全部</div>}
+        {managerDraft.map((p, i) => {
+          const u = loadTenantUsers().find((x: any) => x.username === p.username);
+          return (
+            <div key={p.username} style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '8px 4px', borderBottom: '1px solid #f0f0f0' }}>
+              <Text strong style={{ flex: 1 }}>{(u && tenantUserDisplayName(u)) || p.username}</Text>
+              <Checkbox checked={p.view} onChange={e => setManagerDraft(managerDraft.map((x, xi) => xi === i ? { ...x, view: e.target.checked } : x))}>查看</Checkbox>
+              <Checkbox checked={p.edit} onChange={e => setManagerDraft(managerDraft.map((x, xi) => xi === i ? { ...x, edit: e.target.checked } : x))}>编辑</Checkbox>
+              <Button size="small" danger icon={<DeleteOutlined />} onClick={() => setManagerDraft(managerDraft.filter((_, xi) => xi !== i))} />
+            </div>
+          );
+        })}
+        <div style={{ marginTop: 12 }}>
+          <Select style={{ width: '100%' }} placeholder="添加负责人（子账号）" value={undefined as any}
+            onChange={v => { if (v && !managerDraft.some(p => p.username === v)) setManagerDraft([...managerDraft, { username: v, view: true, edit: false }]); }}
+            options={tenantUserOptions.filter(o => !managerDraft.some(p => p.username === o.value))} />
+        </div>
       </Modal>
     </div>
   );

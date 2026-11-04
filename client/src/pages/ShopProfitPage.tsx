@@ -173,7 +173,7 @@ const emptyRecord = (shopId: string, shopName: string, calcMonth: string): Profi
   inputBy: '', inputAt: '', createdAt: new Date().toLocaleString('zh-CN'), updatedAt: '',
 });
 
-import { scopeShops } from '../utils/shopScope';
+import { scopeShops, canEditShopData } from '../utils/shopScope';
 
 // ===================== 主组件 =====================
 const ShopProfitPage: React.FC = () => {
@@ -685,20 +685,23 @@ const ShopProfitPage: React.FC = () => {
     { title: <span>状态{srcTip('单据当前状态：草稿 / 已确认')}</span>, dataIndex: 'status', key: 'status', width: 80, align: 'center', fixed: 'right',
       render: (v: number) => <Tag color={statusMap[v]?.color} style={v === 2 ? { background: '#f6ffed', borderColor: '#b7eb8f', color: '#389e0d' } : {}}>{statusMap[v]?.text || '未知'}</Tag> },
     { title: '操作', key: 'action', width: 120, fixed: 'right',
-      render: (_: any, r: ProfitRecord) => (
+      render: (_: any, r: ProfitRecord) => {
+        const editable = canEditShopData(owner, shops.find(s => s.key === r.shopId || s.shopName === r.shopName)?.person, r.inputBy);
+        return (
         <Space size="small">
           {r.status < 2 && (
-            <Popconfirm title="确认此条记录？" onConfirm={() => handleStatusChange(r.key, 2)} okText="确认" cancelText="取消">
-              <Button type="link" size="small" icon={<CheckCircleOutlined />} style={{ color: '#52c41a' }}>确认</Button>
+            <Popconfirm title="确认此条记录？" onConfirm={() => handleStatusChange(r.key, 2)} okText="确认" cancelText="取消" disabled={!editable}>
+              <Button type="link" size="small" icon={<CheckCircleOutlined />} style={{ color: '#52c41a' }} disabled={!editable}>确认</Button>
             </Popconfirm>
           )}
           {r.status >= 2 && (
-            <Popconfirm title="撤回确认？" onConfirm={() => handleStatusChange(r.key, 0)} okText="确认" cancelText="取消">
-              <Button type="link" size="small" icon={<UndoOutlined />} style={{ color: '#fa8c16' }}>撤回</Button>
+            <Popconfirm title="撤回确认？" onConfirm={() => handleStatusChange(r.key, 0)} okText="确认" cancelText="取消" disabled={!editable}>
+              <Button type="link" size="small" icon={<UndoOutlined />} style={{ color: '#fa8c16' }} disabled={!editable}>撤回</Button>
             </Popconfirm>
           )}
         </Space>
-      ),
+        );
+      },
     },
   ];
 

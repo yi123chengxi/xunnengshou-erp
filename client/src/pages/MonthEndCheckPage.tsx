@@ -133,7 +133,7 @@ const fmt = (v: number | undefined | null) => {
   return '¥' + v.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
 
-import { scopeShopRecords } from '../utils/shopScope';
+import { scopeShopRecords, canEditShopData } from '../utils/shopScope';
 
 // ===================== 主组件 =====================
 const MonthEndCheckPage: React.FC = () => {
@@ -1077,14 +1077,17 @@ const MonthEndCheckPage: React.FC = () => {
     { title: '更新时间', dataIndex: 'updatedAt', key: 'updatedAt', width: 160,
       render: (v: string) => v || <Text type="secondary">—</Text> },
     { title: '操作', key: 'action', width: 140, fixed: 'right',
-      render: (_: any, r: MonthEndRecord) => (
+      render: (_: any, r: MonthEndRecord) => {
+        const editable = canEditShopData(owner, getShopPerson(r.shopId, r.shopName), r.inputBy);
+        return (
         <Space size="small">
-          <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openEdit(r)}>编辑</Button>
-          <Popconfirm title="确认删除此盘点记录？" onConfirm={() => handleDelete(r.key)} okText="确认" cancelText="取消">
-            <Button type="link" size="small" danger icon={<DeleteOutlined />}>删除</Button>
+          <Button type="link" size="small" icon={<EditOutlined />} disabled={!editable} onClick={() => openEdit(r)}>编辑</Button>
+          <Popconfirm title="确认删除此盘点记录？" onConfirm={() => handleDelete(r.key)} okText="确认" cancelText="取消" disabled={!editable}>
+            <Button type="link" size="small" danger icon={<DeleteOutlined />} disabled={!editable}>删除</Button>
           </Popconfirm>
         </Space>
-      ),
+        );
+      },
     },
   ];
 
@@ -1306,14 +1309,17 @@ const MonthEndCheckPage: React.FC = () => {
               return map[k];
             }).filter(Boolean),
             { title: '操作', key: 'action', width: 120, fixed: 'right' as const, align: 'center' as const,
-              render: (_: any, r: ShipRecord) => (
+              render: (_: any, r: ShipRecord) => {
+                const editable = canEditShopData(owner, getShopPerson(r.shopId, r.shopName), r.chargePerson);
+                return (
                 <Space size="small">
-                  <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openShipEdit(r)}>编辑</Button>
-                  <Popconfirm title="确认删除？" onConfirm={() => handleShipDelete(r.key)} okText="确认" cancelText="取消">
-                    <Button type="link" size="small" danger icon={<DeleteOutlined />}>删除</Button>
+                  <Button type="link" size="small" icon={<EditOutlined />} disabled={!editable} onClick={() => openShipEdit(r)}>编辑</Button>
+                  <Popconfirm title="确认删除？" onConfirm={() => handleShipDelete(r.key)} okText="确认" cancelText="取消" disabled={!editable}>
+                    <Button type="link" size="small" danger icon={<DeleteOutlined />} disabled={!editable}>删除</Button>
                   </Popconfirm>
                 </Space>
-              ) },
+                );
+              } },
           ] as any)}
           summary={() => {
             const data = filteredShipRecords;
@@ -1425,14 +1431,17 @@ const MonthEndCheckPage: React.FC = () => {
               return map[k];
             }).filter(Boolean),
             { title: '操作', key: 'action', width: 120, fixed: 'right' as const, align: 'center' as const,
-              render: (_: any, r: ReturnRecord) => (
+              render: (_: any, r: ReturnRecord) => {
+                const editable = canEditShopData(owner, getShopPerson(r.shopId, r.shopName), r.chargePerson);
+                return (
                 <Space size="small">
-                  <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openRetEdit(r)}>编辑</Button>
-                  <Popconfirm title="确认删除？" onConfirm={() => handleRetDelete(r.key)} okText="确认" cancelText="取消">
-                    <Button type="link" size="small" danger icon={<DeleteOutlined />}>删除</Button>
+                  <Button type="link" size="small" icon={<EditOutlined />} disabled={!editable} onClick={() => openRetEdit(r)}>编辑</Button>
+                  <Popconfirm title="确认删除？" onConfirm={() => handleRetDelete(r.key)} okText="确认" cancelText="取消" disabled={!editable}>
+                    <Button type="link" size="small" danger icon={<DeleteOutlined />} disabled={!editable}>删除</Button>
                   </Popconfirm>
                 </Space>
-              ) },
+                );
+              } },
           ] as any)} />
         {/* 搜索结果合计固定栏 */}
         <div style={{

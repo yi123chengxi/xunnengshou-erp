@@ -16,7 +16,7 @@ import FieldConfigModal from '../components/FieldConfigModal';
 import { safeSetItem } from '../utils/storageQuota';
 import { sendPushNotification, showNativeNotification, isNotificationBlocked, showTimedNotification, isNotificationTypeEnabled } from '../utils/pushNotification';
 import { saveDataset } from '../utils/dataStore';
-import { scopeShopRecords } from '../utils/shopScope';
+import { scopeShopRecords, canEditShopData } from '../utils/shopScope';
 import { isAccountingMode, writeAutoEntries, removeAutoEntries, loadSubjectOptions } from '../utils/accountingBridge';
 
 const { Text, Title } = Typography;
@@ -1300,30 +1300,33 @@ const WithdrawalRecordPage: React.FC = () => {
         ? <Tag style={{ background: '#52c41a', color: '#fff', border: 'none' }}>已生效</Tag>
         : <Tag color="warning">待确认</Tag> },
     { title: '操作', key: 'action', width: 200, fixed: 'right' as const,
-      render: (_: any, r: WithdrawalRecord) => (
+      render: (_: any, r: WithdrawalRecord) => {
+        const editable = canEditShopData(owner, shops.find(s => s.shopName === r.shopName)?.person, r.inputBy);
+        return (
         <Space size="small" wrap>
           {r.confirmed ? (
             <Popconfirm title="确认撤回此笔提现记录？" description="撤回后将恢复为待确认状态，并撤销银行流水"
-              onConfirm={() => handleRevoke(r)} okText="确认撤回" cancelText="取消">
-              <Button type="link" size="small" icon={<UndoOutlined />} style={{ color: '#fa8c16' }}>撤回</Button>
+              onConfirm={() => handleRevoke(r)} okText="确认撤回" cancelText="取消" disabled={!editable}>
+              <Button type="link" size="small" icon={<UndoOutlined />} style={{ color: '#fa8c16' }} disabled={!editable}>撤回</Button>
             </Popconfirm>
           ) : (<>
-            <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openEdit(r)}>编辑</Button>
+            <Button type="link" size="small" icon={<EditOutlined />} disabled={!editable} onClick={() => openEdit(r)}>编辑</Button>
             {acctMode ? (
-              <Button type="link" size="small" icon={<CheckCircleOutlined />} style={{ color: '#52c41a' }}
+              <Button type="link" size="small" icon={<CheckCircleOutlined />} style={{ color: '#52c41a' }} disabled={!editable}
                 onClick={() => { setWdConfirmRecord(r); setWdDebit('银行存款'); setWdCredit('应收账款'); setWdConfirmVisible(true); }}>确认到账</Button>
             ) : (
               <Popconfirm title="确认此笔提现已到账？" description="确认后将写入银行流水明细并更新账户余额"
-                onConfirm={() => handleConfirmReceipt(r)} okText="确认到账" cancelText="取消">
-                <Button type="link" size="small" icon={<CheckCircleOutlined />} style={{ color: '#52c41a' }}>确认到账</Button>
+                onConfirm={() => handleConfirmReceipt(r)} okText="确认到账" cancelText="取消" disabled={!editable}>
+                <Button type="link" size="small" icon={<CheckCircleOutlined />} style={{ color: '#52c41a' }} disabled={!editable}>确认到账</Button>
               </Popconfirm>
             )}
-            <Popconfirm title="确认删除此提现记录？" onConfirm={() => handleDelete(r.key)} okText="确认" cancelText="取消">
-              <Button type="link" size="small" danger icon={<DeleteOutlined />}>删除</Button>
+            <Popconfirm title="确认删除此提现记录？" onConfirm={() => handleDelete(r.key)} okText="确认" cancelText="取消" disabled={!editable}>
+              <Button type="link" size="small" danger icon={<DeleteOutlined />} disabled={!editable}>删除</Button>
             </Popconfirm>
           </>)}
         </Space>
-      ) },
+        );
+      } },
   ];
 
   return (
@@ -1680,24 +1683,27 @@ const WithdrawalRecordPage: React.FC = () => {
               return map[k];
             }).filter(Boolean),
             { title: '操作', key: 'action', width: 200, fixed: 'right' as const, align: 'center' as const,
-              render: (_: any, r: RechargeRecord) => (
+              render: (_: any, r: RechargeRecord) => {
+                const editable = canEditShopData(owner, shops.find(s => s.key === r.shopId || s.shopName === r.shopName)?.person, r.applicant);
+                return (
                 <Space size="small" wrap>
                   {r.status === 'pending' && (<>
-                    <Button type="link" size="small" icon={<EditOutlined />} onClick={() => handleRechEdit(r)}>编辑</Button>
-                    <Button type="link" size="small" icon={<CheckCircleOutlined />} style={{ color: '#52c41a' }} onClick={() => { setPayRecord(r); setPayBankKey(''); setRechDebit('销售费用'); setRechCredit('银行存款'); setPayVisible(true); }}>确认支付</Button>
-                    <Button type="link" size="small" danger icon={<CloseCircleOutlined />} onClick={() => { setRejectRecord(r); setRejectReason(''); setRejectVisible(true); }}>驳回</Button>
+                    <Button type="link" size="small" icon={<EditOutlined />} disabled={!editable} onClick={() => handleRechEdit(r)}>编辑</Button>
+                    <Button type="link" size="small" icon={<CheckCircleOutlined />} style={{ color: '#52c41a' }} disabled={!editable} onClick={() => { setPayRecord(r); setPayBankKey(''); setRechDebit('销售费用'); setRechCredit('银行存款'); setPayVisible(true); }}>确认支付</Button>
+                    <Button type="link" size="small" danger icon={<CloseCircleOutlined />} disabled={!editable} onClick={() => { setRejectRecord(r); setRejectReason(''); setRejectVisible(true); }}>驳回</Button>
                   </>)}
                   {r.status === 'paid' && (<>
-                    <Button type="link" size="small" danger icon={<UndoOutlined />} onClick={() => handleRevokeRech(r)}>撤回</Button>
+                    <Button type="link" size="small" danger icon={<UndoOutlined />} disabled={!editable} onClick={() => handleRevokeRech(r)}>撤回</Button>
                   </>)}
                   {r.status === 'rejected' && (<>
-                    <Button type="link" size="small" icon={<EditOutlined />} onClick={() => handleRechEdit(r)}>编辑</Button>
-                    <Popconfirm title="确认取消此充值申请？" onConfirm={() => handleCancelRech(r)} okText="确认" cancelText="取消">
-                      <Button type="link" size="small" danger icon={<CloseCircleOutlined />}>取消</Button>
+                    <Button type="link" size="small" icon={<EditOutlined />} disabled={!editable} onClick={() => handleRechEdit(r)}>编辑</Button>
+                    <Popconfirm title="确认取消此充值申请？" onConfirm={() => handleCancelRech(r)} okText="确认" cancelText="取消" disabled={!editable}>
+                      <Button type="link" size="small" danger icon={<CloseCircleOutlined />} disabled={!editable}>取消</Button>
                     </Popconfirm>
                   </>)}
                 </Space>
-              ),
+                );
+              },
             },
           ] as any)} />
       </Card>
