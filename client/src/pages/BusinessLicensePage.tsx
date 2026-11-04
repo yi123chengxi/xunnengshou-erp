@@ -696,6 +696,45 @@ const BusinessLicensePage: React.FC = () => {
     setEditVisible(true);
   };
 
+  // 级联改名：公司名称修改后，同步更新同租户其他业务数据集中对公司名称的引用（companyName/company 字段），
+  // 使店铺列表/销售额统计/开票记录等关联数据自动跟随新名称，避免改名后关联断开仍显示旧名称
+  const cascadeRenameCompany = useCallback((oldName: string, newName: string): number => {
+    const COMPANY_FIELDS = ['companyName', 'company'];
+    const renameIn = (node: any): boolean => {
+      if (Array.isArray(node)) {
+        let changed = false;
+        node.forEach(it => { if (renameIn(it)) changed = true; });
+        return changed;
+      }
+      if (node && typeof node === 'object') {
+        let changed = false;
+        Object.keys(node).forEach(k => {
+          const v = (node as Record<string, any>)[k];
+          if (typeof v === 'string' && COMPANY_FIELDS.includes(k) && v === oldName) {
+            (node as Record<string, any>)[k] = newName; changed = true;
+          } else if (renameIn(v)) changed = true;
+        });
+        return changed;
+      }
+      return false;
+    };
+    const suffix = `_${owner}`;
+    let touched = 0;
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key || !key.endsWith(suffix) || key === storageKey || key.endsWith('_ts')) continue;
+      let parsed: any;
+      try { parsed = JSON.parse(localStorage.getItem(key) || ''); } catch { continue; }
+      if (!renameIn(parsed)) continue;
+      const json = JSON.stringify(parsed);
+      safeSetItem(key, json);
+      safeSetItem(`${key}_ts`, String(Date.now()));
+      saveDataset(key, json);
+      touched++;
+    }
+    return touched;
+  }, [owner, storageKey]);
+
   const handleSave = () => {
     if (!formName.trim()) { message.warning('请输入公司名称'); return; }
     const list = [...records];
@@ -709,6 +748,7 @@ const BusinessLicensePage: React.FC = () => {
       remark: formRemark.trim(),
       image: formImage,
     };
+    const oldName = editingRecord ? editingRecord.companyName : '';
     if (editingRecord) {
       const idx = list.findIndex(r => r.key === editingRecord.key);
       if (idx >= 0) list[idx] = { ...list[idx], ...data };
@@ -716,6 +756,13 @@ const BusinessLicensePage: React.FC = () => {
       list.push({ key: `bl-${Date.now()}`, ...data, createdAt: new Date().toLocaleString('zh-CN') });
     }
     saveRecords(list);
+    // 公司名称变更时级联更新其他页面的关联数据（店铺列表/销售额统计/开票记录等）
+    if (editingRecord && oldName && data.companyName !== oldName) {
+      const touched = cascadeRenameCompany(oldName, data.companyName);
+      reload();
+      reloadSales();
+      if (touched > 0) message.info(`公司名称已修改，${touched} 个关联数据集已自动同步为新名称`);
+    }
     setEditVisible(false);
     message.success(editingRecord ? '记录已更新' : '记录已添加');
   };
