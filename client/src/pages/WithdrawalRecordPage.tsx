@@ -16,6 +16,7 @@ import FieldConfigModal from '../components/FieldConfigModal';
 import { safeSetItem } from '../utils/storageQuota';
 import { sendPushNotification, showNativeNotification, isNotificationBlocked, showTimedNotification, isNotificationTypeEnabled } from '../utils/pushNotification';
 import { saveDataset } from '../utils/dataStore';
+import { scopeShopRecords } from '../utils/shopScope';
 import { isAccountingMode, writeAutoEntries, removeAutoEntries, loadSubjectOptions } from '../utils/accountingBridge';
 
 const { Text, Title } = Typography;
@@ -212,8 +213,10 @@ const WithdrawalRecordPage: React.FC = () => {
   }, []);
   // 负责人可见范围：管理员/未设置负责人/负责人本人 看全部；其他成员仅看自己创建的记录
   const canViewAll = isAdmin || wdManagers.length === 0 || wdManagers.includes(currentUser);
-  const baseRecords = useMemo(() => (canViewAll ? records : records.filter(r => r.inputBy === currentUser)), [records, canViewAll, currentUser]);
-  const baseRechRecords = useMemo(() => (canViewAll ? rechargeRecords : rechargeRecords.filter(r => r.applicant === currentUser)), [rechargeRecords, canViewAll, currentUser]);
+  const scopedRecords = useMemo(() => scopeShopRecords(owner, shops, records), [owner, shops, records]);
+  const baseRecords = useMemo(() => (canViewAll ? scopedRecords : scopedRecords.filter(r => r.inputBy === currentUser)), [scopedRecords, canViewAll, currentUser]);
+  const scopedRechRecords = useMemo(() => scopeShopRecords(owner, shops, rechargeRecords), [owner, shops, rechargeRecords]);
+  const baseRechRecords = useMemo(() => (canViewAll ? scopedRechRecords : scopedRechRecords.filter(r => r.applicant === currentUser)), [scopedRechRecords, canViewAll, currentUser]);
 
   // 充值记录搜索过滤
   const filteredRechRecords = useMemo(() => {

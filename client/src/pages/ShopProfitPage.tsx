@@ -173,6 +173,8 @@ const emptyRecord = (shopId: string, shopName: string, calcMonth: string): Profi
   inputBy: '', inputAt: '', createdAt: new Date().toLocaleString('zh-CN'), updatedAt: '',
 });
 
+import { scopeShops } from '../utils/shopScope';
+
 // ===================== 主组件 =====================
 const ShopProfitPage: React.FC = () => {
   const owner = useMemo(() => getDataOwner(), []);
@@ -474,7 +476,7 @@ const ShopProfitPage: React.FC = () => {
     const month = appliedFilterMonth || dayjs().format('YYYY-MM');
     // 获取所有店铺，为每个店铺生成或查找记录
     const result: ProfitRecord[] = [];
-    shops.forEach(shop => {
+    scopeShops(owner, shops).forEach(shop => {
       if (appliedFilterShop && shop.key !== appliedFilterShop) return;
       // 负责人筛选
       if (appliedSearchPerson.trim()) {

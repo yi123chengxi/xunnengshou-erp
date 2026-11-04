@@ -133,6 +133,8 @@ const fmt = (v: number | undefined | null) => {
   return '¥' + v.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
 
+import { scopeShopRecords } from '../utils/shopScope';
+
 // ===================== 主组件 =====================
 const MonthEndCheckPage: React.FC = () => {
   const owner = useMemo(() => getDataOwner(), []);
@@ -201,13 +203,13 @@ const MonthEndCheckPage: React.FC = () => {
 
   // 发货搜索过滤
   const filteredShipRecords = useMemo(() => {
-    if (!shipSearchActive) return shipRecords;
-    return shipRecords.filter(r => {
+    if (!shipSearchActive) return scopeShopRecords(owner, shops, shipRecords);
+    return scopeShopRecords(owner, shops, shipRecords).filter(r => {
       if (shipSearchShopName && !r.shopName.toLowerCase().includes(shipSearchShopName.toLowerCase())) return false;
       if (shipSearchMonth && r.calcMonth !== shipSearchMonth) return false;
       return true;
     });
-  }, [shipRecords, shipSearchActive, shipSearchShopName, shipSearchMonth]);
+  }, [owner, shops, shipRecords, shipSearchActive, shipSearchShopName, shipSearchMonth]);
 
   // 新增/编辑弹窗
   const [editVisible, setEditVisible] = useState(false);
@@ -407,8 +409,8 @@ const MonthEndCheckPage: React.FC = () => {
   };
 
   const filteredReturnRecords = useMemo(() => {
-    if (!retSearchActive) return returnRecords;
-    return returnRecords.filter(r => {
+    if (!retSearchActive) return scopeShopRecords(owner, shops, returnRecords);
+    return scopeShopRecords(owner, shops, returnRecords).filter(r => {
       if (retAppliedShopName && !r.shopName.toLowerCase().includes(retAppliedShopName.toLowerCase())) return false;
       if (retAppliedAfterSalesNo && !r.afterSalesNo.toLowerCase().includes(retAppliedAfterSalesNo.toLowerCase())) return false;
       if (retAppliedOnlineOrderNo && !r.onlineOrderNo.toLowerCase().includes(retAppliedOnlineOrderNo.toLowerCase())) return false;
@@ -1027,7 +1029,7 @@ const MonthEndCheckPage: React.FC = () => {
 
   // ===================== 过滤 =====================
   const filteredRecords = useMemo(() => {
-    return records.filter(r => {
+    return scopeShopRecords(owner, shops, records).filter(r => {
       if (filterShop && r.shopId !== filterShop) return false;
       if (filterMonth && r.calcMonth !== filterMonth) return false;
       if (searchText.trim()) {
@@ -1036,7 +1038,7 @@ const MonthEndCheckPage: React.FC = () => {
       }
       return true;
     });
-  }, [records, filterShop, filterMonth, searchText]);
+  }, [owner, shops, records, filterShop, filterMonth, searchText]);
 
   // 汇总统计
   const summary = useMemo(() => {

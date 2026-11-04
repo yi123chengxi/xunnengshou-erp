@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   Card, Table, Button, Space, message, Typography, Modal, Input, Select, AutoComplete,
-  Row, Col, Popconfirm, Tag, Radio, Upload, Image, Divider,
+  Row, Col, Popconfirm, Tag, Radio, Upload, Image, Divider, Tooltip,
 } from 'antd';
 import {
   PlusOutlined, EditOutlined, DeleteOutlined, ShopOutlined, ReloadOutlined,
@@ -13,6 +13,8 @@ import * as XLSX from 'xlsx-js-style';
 import useResizableColumns from '../hooks/useResizableColumns';
 import { safeSetItem } from '../utils/storageQuota';
 import { saveDataset } from '../utils/dataStore';
+import { loadShopManagers, saveShopManagers, isShopScopeAdmin, scopeShops } from '../utils/shopScope';
+import { loadTenantUsers, tenantUserDisplayName } from '../utils/tenantUsers';
 
 const { Text, Title } = Typography;
 const { TextArea } = Input;
@@ -163,6 +165,17 @@ const ShopListPage: React.FC = () => {
   const [formPerson, setFormPerson] = useState('');
   const [formRemark, setFormRemark] = useState('');
   const [formPassword, setFormPassword] = useState('');
+
+  // 店铺管理负责人设置：名单存 username；主账号/负责人可看全部店铺，其他成员仅看自己负责的店铺
+  const [shopManagers, setShopManagers] = useState<string[]>(() => loadShopManagers(owner));
+  const [managerModalVisible, setManagerModalVisible] = useState(false);
+  const [managerDraft, setManagerDraft] = useState<string[]>([]);
+  const isAdmin = isShopScopeAdmin();
+  const tenantUserOptions = useMemo(() => loadTenantUsers().map((u: any) => ({ value: u.username, label: tenantUserDisplayName(u) || u.username })), []);
+  const managerDisplayNames = () => shopManagers.map(un => {
+    const u = loadTenantUsers().find((x: any) => x.username === un);
+    return (u && tenantUserDisplayName(u)) || un;
+  }).join('、') || '未设置（所有账号可见全部店铺）';
 
   // 搜索
   const [searchShopName, setSearchShopName] = useState('');
@@ -465,7 +478,7 @@ const ShopListPage: React.FC = () => {
 
   // ===================== 过滤 =====================
   const filteredShops = useMemo(() => {
-    let list = shops;
+    let list = scopeShops(owner, shops);
     const s = appliedSearch;
     if (s.shopName.trim()) {
       const q = s.shopName.toLowerCase();
@@ -492,7 +505,7 @@ const ShopListPage: React.FC = () => {
       list = list.filter(r => (r.platform || '').toLowerCase().includes(q));
     }
     return list;
-  }, [shops, appliedSearch]);
+  }, [owner, shops, appliedSearch]);
 
   // 列宽拖拽调整
   const { wrapColumns } = useResizableColumns<ShopInfo>(`colWidths_shopList_${owner}`);
@@ -655,6 +668,9 @@ const ShopListPage: React.FC = () => {
           <Button icon={<ClearOutlined />} onClick={handleReset}>重置</Button>
           <Button icon={<ReloadOutlined />} onClick={reload}>刷新</Button>
           <Button icon={<ImportOutlined />} onClick={() => { setImportData([]); setImportFileName(''); setImportMode('add'); setMatchField('shopName'); setImportVisible(true); }}>导入</Button>
+          {isAdmin && <Tooltip title={`负责人：${managerDisplayNames()}`}>
+            <Button icon={<TeamOutlined />} onClick={() => { setManagerDraft([...shopManagers]); setManagerModalVisible(true); }}>负责人设置</Button>
+          </Tooltip>}
           <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>新增店铺</Button>
         </Space>
       </Card>
@@ -868,6 +884,23 @@ const ShopListPage: React.FC = () => {
         <div style={{ color: '#999', fontSize: 12 }}>
           添加后将自动生成平台Logo（取名称首字为图标，随机配色）
         </div>
+      </Modal>
+
+      {/* 店铺管理负责人设置弹窗 */}
+      <Modal title="店铺管理负责人设置" open={managerModalVisible}
+        onCancel={() => setManagerModalVisible(false)}
+        onOk={() => {
+          saveShopManagers(owner, managerDraft);
+          setShopManagers(managerDraft);
+          setManagerModalVisible(false);
+          message.success('负责人已保存：主账号与负责人可查看全部店铺，其他成员仅可见自己负责的店铺数据');
+        }}
+        okText="保存" cancelText="取消" width={480}>
+        <div style={{ marginBottom: 8, color: '#888', fontSize: 12 }}>
+          设置店铺管理（店铺列表/月末盘点/月利润表/提现充值）的负责人；名单为空时所有账号可见全部店铺，主账号始终可见全部；其他成员仅可见「负责人」为自己的店铺数据。
+        </div>
+        <Select mode="multiple" style={{ width: '100%' }} placeholder="选择负责人（子账号）" value={managerDraft}
+          onChange={v => setManagerDraft(v)} options={tenantUserOptions} />
       </Modal>
     </div>
   );
