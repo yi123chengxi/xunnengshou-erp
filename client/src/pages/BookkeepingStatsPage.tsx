@@ -47,12 +47,14 @@ const BookkeepingStatsPage: React.FC = () => {
     return allRecords.filter(r => r.bookDate >= s && r.bookDate <= e);
   }, [allRecords, range]);
 
-  // 汇总统计
+  // 汇总统计（损益口径：剔除其他应付款/其他应收款/保证金退回等负债类现金流；分类/账户等流量分析保留）
+  const isLiabFlow = (r: any) => ['其他应付款', '其他应收款', '保证金退回'].includes(String(r.category || ''));
   const stats = useMemo(() => {
-    const inc = records.filter(r => r.bookType === '收入').reduce((s, r) => s + (Number(r.amount) || 0), 0);
-    const out = records.filter(r => r.bookType === '支出').reduce((s, r) => s + (Number(r.amount) || 0), 0);
-    const incCnt = records.filter(r => r.bookType === '收入').length;
-    const outCnt = records.filter(r => r.bookType === '支出').length;
+    const pl = records.filter(r => !isLiabFlow(r));
+    const inc = pl.filter(r => r.bookType === '收入').reduce((s, r) => s + (Number(r.amount) || 0), 0);
+    const out = pl.filter(r => r.bookType === '支出').reduce((s, r) => s + (Number(r.amount) || 0), 0);
+    const incCnt = pl.filter(r => r.bookType === '收入').length;
+    const outCnt = pl.filter(r => r.bookType === '支出').length;
     const months = new Set(records.map(r => r.bookDate?.slice(0, 7)).filter(Boolean)).size || 1;
     return { inc, out, net: inc - out, total: records.length, incCnt, outCnt, avgRec: inc / (incCnt || 1), avgExp: out / (outCnt || 1), monthlyNet: (inc - out) / months };
   }, [records]);
@@ -62,6 +64,7 @@ const BookkeepingStatsPage: React.FC = () => {
     const map: Record<string, { inc: number; out: number }> = {};
     records.forEach(r => {
       const m = r.bookDate?.slice(0, 7); if (!m) return;
+      if (isLiabFlow(r)) return; // 负债类现金流不计入月度收支趋势
       if (!map[m]) map[m] = { inc: 0, out: 0 };
       if (r.bookType === '收入') map[m].inc += Number(r.amount) || 0;
       else map[m].out += Number(r.amount) || 0;

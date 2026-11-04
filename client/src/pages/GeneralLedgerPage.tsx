@@ -974,7 +974,13 @@ const GeneralLedgerPage: React.FC<{ simple?: boolean }> = ({ simple = false }) =
   const summaryMonthStr = selectedPeriod.format('YYYY-MM');
   const colCode = { title: '科目编码', dataIndex: 'subjectCode', key: 'subjectCode', width: 90 };
   const colName = { title: '科目名称', dataIndex: 'subjectName', key: 'subjectName', width: 140,
-    render: (v: string, r: BalanceRow) => renderSubjectName(v, r.category) };
+    render: (v: string, r: BalanceRow) => (
+      !simple && r.subjectCode === '2202' ? (
+        <Tooltip title="品牌保证金收取自动计入本科目贷方（借银行存款/贷其他应付款），退回付款自动借方冲减（借其他应付款/贷银行存款）；简易模式则展示其他应付款台账未付余额">
+          <span style={{ borderBottom: '1px dashed #8c8c8c', cursor: 'help' }}>{renderSubjectName(v, r.category)}</span>
+        </Tooltip>
+      ) : renderSubjectName(v, r.category)
+    ) };
   const colCategory = { title: '类别', dataIndex: 'category', key: 'category', width: 90, align: 'center' as const,
     render: (v: string) => {
       const cat = ACCOUNT_CATEGORIES.find(c => c.key === v);

@@ -655,8 +655,11 @@ const PaymentRequestPage: React.FC = () => {
           }
         }
         if (matchedIdx < 0) {
+          // 回退匹配加往来方约束：退款收款方须与收款时登记的对方一致，避免同金额多品牌误核销
+          const refundCounterparty = String(payTarget.recvAccountName || payTarget.payerName || '').trim();
           matchedIdx = opList.findIndex((p: any) =>
             p.category === '押金/保证金收取' &&
+            (!refundCounterparty || String(p.counterparty || '').trim() === refundCounterparty) &&
             Math.abs((Number(p.amount) || 0) - (Number(payTarget.amount) || 0)) < 0.01 &&
             (Number(p.paidAmount) || 0) < (Number(p.amount) || 0)
           );
@@ -671,6 +674,9 @@ const PaymentRequestPage: React.FC = () => {
             payImage: payShot || rec.payImage || '',
           };
           safeSetItem(opKey, JSON.stringify(opList));
+        } else if (!isAccountingMode(owner)) {
+          // 简易账薄模式下未匹配到待核销应付款：显式提示手动处理，避免静默漏核销
+          message.warning('未匹配到待核销的其他应付款记录，如需核销请到 简易账薄→其他应付款 手动付款');
         }
       } catch { /* ignore payables update errors */ }
     }

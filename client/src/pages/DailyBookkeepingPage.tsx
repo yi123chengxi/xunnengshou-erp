@@ -345,11 +345,12 @@ const DailyBookkeepingPage: React.FC<{ flush?: boolean }> = ({ flush = false }) 
     }).slice().sort((a, b) => (b.bookDate || '').localeCompare(a.bookDate || ''));
   }, [records, searchApplied, typeApplied, rangeApplied, sMainCatApplied, sSubCatApplied, sAmountApplied, sRecvBankApplied, sPayBankApplied, sPersonApplied, sRemarkApplied]);
 
-  // 汇总（排除作废记录）
+  // 汇总（排除作废记录）；负债类分类（其他应付款/其他应收款/保证金退回）属现金流非损益，不计入收入/支出合计
   const totals = useMemo(() => {
     const active = filtered.filter(r => !r.isVoided);
-    const inc = active.filter(r => r.bookType === '收入').reduce((s, r) => s + (Number(r.amount) || 0), 0);
-    const out = active.filter(r => r.bookType === '支出').reduce((s, r) => s + (Math.abs(Number(r.amount)) || 0), 0);
+    const isLiab = (r: any) => ['其他应付款', '其他应收款', '保证金退回'].includes(String(r.category || ''));
+    const inc = active.filter(r => r.bookType === '收入' && !isLiab(r)).reduce((s, r) => s + (Number(r.amount) || 0), 0);
+    const out = active.filter(r => r.bookType === '支出' && !isLiab(r)).reduce((s, r) => s + (Math.abs(Number(r.amount)) || 0), 0);
     return { inc, out, net: inc - out };
   }, [filtered]);
 
