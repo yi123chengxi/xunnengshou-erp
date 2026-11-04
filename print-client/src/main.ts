@@ -62,6 +62,15 @@ function pushLog(log: JobLog) {
   }
 }
 
+// 从任务日志中彻底移除某条记录（手动取消的任务不保留残行）
+function removeJobLog(jobId: string) {
+  const idx = jobLogs.findIndex(l => l.id === jobId);
+  if (idx >= 0) jobLogs.splice(idx, 1);
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('job-log-remove', jobId);
+  }
+}
+
 // ============ 自动更新 ============
 
 function sendUpdateEvent(payload: any) {
@@ -282,10 +291,11 @@ function connectWebSocket() {
         break;
 
       case 'cancel_job': {
-        // 前端发起取消：标记任务 ID，handlePrintJob 在关键节点检查并中止
+        // 前端发起取消：标记任务 ID，handlePrintJob 在关键节点检查并中止；同时立即从日志移除该条
         const cancelId = String(msg.jobId || '');
         if (cancelId) {
           cancelledJobs.add(cancelId);
+          removeJobLog(cancelId);
           console.log(`[ws] 收到取消任务: ${cancelId}`);
         }
         break;
@@ -380,19 +390,19 @@ async function handlePrintJob(msg: {
       webPreferences: { nodeIntegration: false },
     });
 
-    // 带超时的 loadURL/loadFile（15 秒）
-    const loadTimeout = 15_000;
+    // 带超时的 loadURL/loadFile（60 秒，服务器带宽较低时 15s 不够用）
+    const loadTimeout = 60_000;
     if (msg.jobType === 'url') {
       await Promise.race([
         printWin.loadURL(msg.content),
-        new Promise<void>((_, reject) => setTimeout(() => reject(new Error('加载打印内容超时（15s），请检查服务端是否可达')), loadTimeout)),
+        new Promise<void>((_, reject) => setTimeout(() => reject(new Error('加载打印内容超时（60s），请检查网络或服务端是否可达')), loadTimeout)),
       ]);
     } else {
       const tmpFile = path.join(os.tmpdir(), `print-${uuid()}.pdf`);
       fs.writeFileSync(tmpFile, Buffer.from(msg.content, 'base64'));
       await Promise.race([
         printWin.loadFile(tmpFile),
-        new Promise<void>((_, reject) => setTimeout(() => reject(new Error('加载 PDF 超时（15s）')), loadTimeout)),
+        new Promise<void>((_, reject) => setTimeout(() => reject(new Error('加载 PDF 超时（60s）')), loadTimeout)),
       ]);
       setTimeout(() => { try { fs.unlinkSync(tmpFile); } catch { /* ignore */ } }, 60_000);
     }
@@ -409,13 +419,13 @@ async function handlePrintJob(msg: {
           resolve();
         }
       }),
-      new Promise<void>((_, reject) => setTimeout(() => reject(new Error('页面加载超时（15s）')), loadTimeout)),
+      new Promise<void>((_, reject) => setTimeout(() => reject(new Error('页面加载超时（60s）')), loadTimeout)),
     ]);
 
     checkCancelled();
     if (cancelled) { printWin.close(); throw new Error('任务已取消'); }
 
-    // 静默打印（带超时 15 秒，打印机不存在时回调可能不触发）
+    // 静默打印（带超时 60 秒，打印机不存在时回调可能不触发）
     await Promise.race([
       new Promise<void>((resolve, reject) => {
         printWin.webContents.print(
@@ -433,7 +443,7 @@ async function handlePrintJob(msg: {
           }
         );
       }),
-      new Promise<void>((_, reject) => setTimeout(() => reject(new Error(`打印超时（15s），打印机"${msg.printerName || '默认'}"可能不存在或无响应`)), loadTimeout)),
+      new Promise<void>((_, reject) => setTimeout(() => reject(new Error(`打印超时（60s），打印机"${msg.printerName || '默认'}"可能不存在或无响应`)), loadTimeout)),
     ]);
 
     // 关闭打印窗口
@@ -443,6 +453,14 @@ async function handlePrintJob(msg: {
     pushLog({ ...log });
     ws?.send(JSON.stringify({ type: 'job_status', jobId: msg.id, status: 'completed' }));
   } catch (err: any) {
+    checkCancelled();
+    if (cancelled || cancelledJobs.has(msg.id)) {
+      // 手动取消的任务：直接从任务日志中移除，不保留失败残行
+      cancelledJobs.delete(msg.id);
+      removeJobLog(msg.id);
+      ws?.send(JSON.stringify({ type: 'job_status', jobId: msg.id, status: 'cancelled' }));
+      return;
+    }
     log.status = 'failed';
     log.error = err.message;
     pushLog({ ...log });

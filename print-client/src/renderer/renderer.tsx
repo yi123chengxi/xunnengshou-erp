@@ -18,6 +18,7 @@ declare global {
       cancelJob(jobId: string): Promise<{ ok: boolean; message?: string }>;
       onStatusChange(cb: (s: string) => void): () => void;
       onJobLog(cb: (log: any) => void): () => void;
+      onJobLogRemove(cb: (jobId: string) => void): () => void;
       onPrintersUpdated(cb: (p: any[]) => void): () => void;
       getSharedPrinters(): Promise<any[]>;
       onSharedPrinters(cb: (p: any[]) => void): () => void;
@@ -155,7 +156,17 @@ function MainPage() {
 
     // 监听变化
     const unsubStatus = api.onStatusChange(setStatus);
-    const unsubLog = api.onJobLog((log) => setLogs(prev => [log, ...prev].slice(0, 100)));
+    const unsubLog = api.onJobLog((log) => setLogs(prev => {
+      // 同一任务状态更新时原位替换，避免重复行
+      const idx = prev.findIndex(l => l.id === log.id);
+      if (idx >= 0) {
+        const next = prev.slice();
+        next[idx] = log;
+        return next;
+      }
+      return [log, ...prev].slice(0, 100);
+    }));
+    const unsubLogRemove = api.onJobLogRemove((jobId) => setLogs(prev => prev.filter(l => l.id !== jobId)));
     const unsubPrinters = api.onPrintersUpdated(setPrinters);
     const unsubShared = api.onSharedPrinters((list) => setSharedPrinters(Array.isArray(list) ? list : []));
     const unsubUpdate = api.onUpdateEvent((e: any) => {
@@ -167,7 +178,7 @@ function MainPage() {
       if (e.type === 'error') { setUpdate({ stage: 'error', message: e.message }); setTimeout(() => setUpdate(null), 4000); return; }
     });
 
-    return () => { unsubStatus(); unsubLog(); unsubPrinters(); unsubShared(); unsubUpdate(); };
+    return () => { unsubStatus(); unsubLog(); unsubLogRemove(); unsubPrinters(); unsubShared(); unsubUpdate(); };
   }, []);
 
   const statusLabel: Record<string, string> = {
@@ -273,8 +284,8 @@ function MainPage() {
             <div className="empty-text">暂无打印任务</div>
           ) : (
             <div className="log-list">
-              {logs.map((log, i) => (
-                <div key={i} className="log-item">
+              {logs.map((log) => (
+                <div key={log.id} className="log-item">
                   <span className="time">{log.time}</span>
                   <span className={`status-tag ${log.status}`}>{log.status}</span>
                   <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -290,7 +301,8 @@ function MainPage() {
                       onClick={async () => {
                         const r = await api.cancelJob(log.id);
                         if (r.ok) {
-                          setLogs(prev => prev.map(l => l.id === log.id ? { ...l, status: 'failed', error: '已手动取消' } : l));
+                          // 手动取消的任务直接从日志移除
+                          setLogs(prev => prev.filter(l => l.id !== log.id));
                         } else {
                           alert(`取消失败：${r.message || '未知错误'}`);
                         }
