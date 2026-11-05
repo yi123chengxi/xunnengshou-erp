@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Card, Table, Button, Modal, Form, Input, InputNumber, Select, DatePicker, Space, Tag, message, Row, Col, Statistic, Tooltip, Checkbox, Divider,
 } from 'antd';
-import { EditOutlined, UserOutlined, TeamOutlined, UserDeleteOutlined, InfoCircleOutlined, SettingOutlined, ArrowUpOutlined, ArrowDownOutlined } from '@ant-design/icons';
+import { EditOutlined, UserOutlined, TeamOutlined, UserDeleteOutlined, InfoCircleOutlined, SettingOutlined, ArrowUpOutlined, ArrowDownOutlined, FileTextOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
 
@@ -61,6 +61,62 @@ const getDataOwner = (): string => {
 const getAccountsKey = () => `accounts_${getDataOwner()}`;
 const getProfilesKey = () => `hr_employee_profiles_${getDataOwner()}`;
 const getFieldConfigKey = () => `hr_employee_field_config_${getDataOwner()}`;
+const getChangeLogKey = () => `hr_employee_changelog_${getDataOwner()}`;
+const getSnapshotKey = () => `hr_employee_snapshot_${getDataOwner()}`;
+
+// 员工信息变更日志条目（档案编辑/档案建立/账号同步三类来源）
+interface EmployeeChangeLogEntry {
+  key: string;
+  username: string;
+  empName: string;
+  empId: string;
+  time: string;
+  operator: string;
+  source: '档案建立' | '档案编辑' | '账号同步';
+  changes: { field: string; old: string; new: string }[];
+}
+
+const loadChangeLog = (): EmployeeChangeLogEntry[] => {
+  try {
+    const raw = localStorage.getItem(getChangeLogKey());
+    if (raw) { const arr = JSON.parse(raw); if (Array.isArray(arr)) return arr; }
+  } catch { /* ignore */ }
+  return [];
+};
+const appendChangeLog = (entries: EmployeeChangeLogEntry[]) => {
+  if (!entries.length) return;
+  try {
+    const next = [...entries, ...loadChangeLog()].slice(0, 1000);
+    localStorage.setItem(getChangeLogKey(), JSON.stringify(next));
+  } catch { /* ignore */ }
+};
+
+// 操作人显示名（registeredUsers 三级回退，与全局口径一致）
+const getOperatorName = (): string => {
+  const username = localStorage.getItem('username') || '';
+  try {
+    const users = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+    const u = users.find((x: any) => x.username === username);
+    if (u?.displayName || u?.contactPerson || u?.name) return u.displayName || u.contactPerson || u.name;
+  } catch { /* ignore */ }
+  return username || '未知';
+};
+
+// 档案字段中文标签（diff 日志用）
+const PROFILE_FIELD_LABELS: { key: keyof EmployeeProfile; label: string }[] = [
+  { key: 'gender', label: '性别' }, { key: 'phone', label: '手机号' }, { key: 'idCard', label: '身份证号' },
+  { key: 'position', label: '职位' }, { key: 'contractStart', label: '合同开始' }, { key: 'contractEnd', label: '合同到期' },
+  { key: 'baseSalary', label: '基本工资' }, { key: 'allowance', label: '岗位津贴' }, { key: 'performanceSalary', label: '绩效工资' },
+  { key: 'socialSecurityBase', label: '社保基数' }, { key: 'housingFundBase', label: '公积金基数' },
+  { key: 'emergencyContact', label: '紧急联系人' }, { key: 'emergencyPhone', label: '紧急联系电话' },
+  { key: 'bankAccountName', label: '账户名称' }, { key: 'bankName', label: '开户银行' }, { key: 'bankAccountNumber', label: '银行账号' },
+];
+// 账号侧字段中文标签（账号同步 diff 日志用）
+const ACCOUNT_FIELD_LABELS: { key: keyof EmployeeView; label: string }[] = [
+  { key: 'id', label: '工号' }, { key: 'name', label: '姓名' }, { key: 'department', label: '部门' },
+  { key: 'role', label: '角色' }, { key: 'employeeStatus', label: '在职状态' }, { key: 'hireDate', label: '入职日期' },
+];
+const fmtLogVal = (v: any): string => (v === undefined || v === null || v === '' ? '—' : String(v));
 
 // 所有可用字段定义
 const ALL_FIELDS = [
@@ -129,6 +185,10 @@ const EmployeePage: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState('');
   const [visibleFields, setVisibleFields] = useState<string[]>(loadFieldConfig);
   const [fieldConfigVisible, setFieldConfigVisible] = useState(false);
+  // 变更日志弹窗：logScope 为空=全部员工，否则=指定 username
+  const [logVisible, setLogVisible] = useState(false);
+  const [logScope, setLogScope] = useState('');
+  const [logData, setLogData] = useState<EmployeeChangeLogEntry[]>([]);
 
   // 监听 storage 事件以响应其他标签页的账号变更
   useEffect(() => {
@@ -162,6 +222,51 @@ const EmployeePage: React.FC = () => {
   useEffect(() => {
     localStorage.setItem(getProfilesKey(), JSON.stringify(profiles));
   }, [profiles]);
+
+  // 账号侧变更自动记日志：与上次快照比对（工号/姓名/部门/角色/在职状态/入职日期），
+  // 新增/删除账号也各记一条；首次无快照时仅初始化不 flood 日志
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(getSnapshotKey());
+      const snap: Record<string, any> | null = raw ? JSON.parse(raw) : null;
+      const cur: Record<string, any> = {};
+      employees.forEach(e => {
+        cur[e.username] = { id: e.id, name: e.name, department: e.department, role: e.role, employeeStatus: e.employeeStatus, hireDate: e.hireDate };
+      });
+      if (!snap) { localStorage.setItem(getSnapshotKey(), JSON.stringify(cur)); return; }
+      const now = new Date().toLocaleString('zh-CN');
+      const entries: EmployeeChangeLogEntry[] = [];
+      const mk = (username: string, empName: string, empId: string, changes: EmployeeChangeLogEntry['changes']): EmployeeChangeLogEntry => ({
+        key: `elog-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        username, empName, empId, time: now, operator: '账号管理同步', source: '账号同步', changes,
+      });
+      employees.forEach(e => {
+        const old = snap[e.username];
+        if (!old) {
+          entries.push(mk(e.username, e.name, e.id, [{ field: '员工', old: '—', new: '新增员工（账号管理新建子账号）' }]));
+          return;
+        }
+        const changes = ACCOUNT_FIELD_LABELS
+          .map(f => ({ f, ov: fmtLogVal(old[f.key]), nv: fmtLogVal((e as any)[f.key]) }))
+          .filter(x => x.ov !== x.nv)
+          .map(x => ({ field: x.f.label, old: x.ov, new: x.nv }));
+        if (changes.length) entries.push(mk(e.username, e.name, e.id, changes));
+      });
+      Object.keys(snap).forEach(u => {
+        if (!cur[u]) entries.push(mk(u, snap[u]?.name || u, snap[u]?.id || '', [{ field: '员工', old: snap[u]?.name || u, new: '员工移除（账号已删除）' }]));
+      });
+      appendChangeLog(entries);
+      localStorage.setItem(getSnapshotKey(), JSON.stringify(cur));
+    } catch { /* ignore */ }
+  }, [employees]);
+
+  // 打开变更日志弹窗（指定员工或全部）
+  const openChangeLog = useCallback((username?: string) => {
+    const list = loadChangeLog();
+    setLogScope(username || '');
+    setLogData(username ? list.filter(x => x.username === username) : list);
+    setLogVisible(true);
+  }, []);
 
   // 保存字段显示配置
   useEffect(() => {
@@ -238,10 +343,29 @@ const EmployeePage: React.FC = () => {
         if (idx >= 0) return prev.map((p, i) => i === idx ? profile : p);
         return [...prev, profile];
       });
+      // 变更记录日志：与保存前档案逐字段 diff（首次保存记为档案建立）
+      const prevProfile = profiles.find(p => p.username === editingUsername);
+      const changes = PROFILE_FIELD_LABELS
+        .map(f => ({ label: f.label, ov: fmtLogVal(prevProfile ? (prevProfile as any)[f.key] : ''), nv: fmtLogVal((profile as any)[f.key]) }))
+        .filter(x => x.ov !== x.nv)
+        .map(x => ({ field: x.label, old: x.ov, new: x.nv }));
+      if (changes.length || !prevProfile) {
+        const emp = employees.find(e => e.username === editingUsername);
+        appendChangeLog([{
+          key: `elog-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          username: editingUsername,
+          empName: emp?.name || editingUsername,
+          empId: emp?.id || '',
+          time: new Date().toLocaleString('zh-CN'),
+          operator: getOperatorName(),
+          source: prevProfile ? '档案编辑' : '档案建立',
+          changes: changes.length ? changes : [{ field: '档案', old: '—', new: '建立HR档案（未填字段）' }],
+        }]);
+      }
       setModalVisible(false);
       message.success('档案已保存');
     }).catch(() => { /* 校验失败 */ });
-  }, [form, editingUsername]);
+  }, [form, editingUsername, profiles, employees]);
 
   // 所有可用列定义
   const allColumns: ColumnsType<EmployeeView> = useMemo(() => [
@@ -303,15 +427,20 @@ const EmployeePage: React.FC = () => {
       .filter(Boolean) as ColumnsType<EmployeeView>;
     // 操作列始终显示在最后
     const opCol: any = {
-      title: '操作', key: '_action', width: 80, align: 'center' as const, fixed: 'right' as const,
+      title: '操作', key: '_action', width: 120, align: 'center' as const, fixed: 'right' as const,
       render: (_: any, r: EmployeeView) => (
-        <Tooltip title="补充/编辑HR档案">
-          <Button type="link" size="small" icon={<EditOutlined />} onClick={() => handleEditProfile(r)}>档案</Button>
-        </Tooltip>
+        <Space size={0}>
+          <Tooltip title="补充/编辑HR档案">
+            <Button type="link" size="small" icon={<EditOutlined />} onClick={() => handleEditProfile(r)}>档案</Button>
+          </Tooltip>
+          <Tooltip title="查看信息变更日志">
+            <Button type="link" size="small" icon={<FileTextOutlined />} onClick={() => openChangeLog(r.username)}>日志</Button>
+          </Tooltip>
+        </Space>
       ),
     };
     return [...filtered, opCol];
-  }, [allColumns, visibleFields, handleEditProfile]);
+  }, [allColumns, visibleFields, handleEditProfile, openChangeLog]);
 
   return (
     <div>
@@ -338,6 +467,7 @@ const EmployeePage: React.FC = () => {
             <Select.Option value="离职">离职</Select.Option>
           </Select>
           <Button icon={<SettingOutlined />} onClick={() => setFieldConfigVisible(true)}>字段显示设置</Button>
+          <Button icon={<FileTextOutlined />} onClick={() => openChangeLog()}>变更日志</Button>
         </Space>
       </Card>
 
@@ -519,6 +649,44 @@ const EmployeePage: React.FC = () => {
           <Button size="small" onClick={() => setVisibleFields(ALL_FIELDS.map(f => f.key))}>全选</Button>
           <Button size="small" onClick={() => setVisibleFields([])}>全不选</Button>
         </Space>
+      </Modal>
+
+      {/* 员工信息变更日志弹窗（单员工或全部） */}
+      <Modal
+        title={logScope ? `变更日志 - ${employees.find(e => e.username === logScope)?.name || logScope}` : '员工变更日志（全部）'}
+        open={logVisible}
+        onCancel={() => setLogVisible(false)}
+        footer={[<Button key="close" onClick={() => setLogVisible(false)}>关闭</Button>]}
+        width={780}
+      >
+        <Table<EmployeeChangeLogEntry>
+          size="small" bordered rowKey="key" dataSource={logData}
+          pagination={{ pageSize: 10, showTotal: t => `共 ${t} 条` }}
+          locale={{ emptyText: '暂无变更日志' }}
+          columns={[
+            ...(!logScope ? [{
+              title: '员工', key: 'emp', width: 130,
+              render: (_: any, r: EmployeeChangeLogEntry) => <span>{r.empName}<span style={{ color: '#999', fontSize: 11, marginLeft: 6 }}>{r.empId}</span></span>,
+            }] : []),
+            { title: '时间', dataIndex: 'time', key: 'time', width: 150 },
+            { title: '操作人', dataIndex: 'operator', key: 'operator', width: 100 },
+            { title: '来源', dataIndex: 'source', key: 'source', width: 90, align: 'center' as const,
+              render: (v: string) => <Tag color={v === '账号同步' ? 'orange' : v === '档案建立' ? 'green' : 'blue'}>{v}</Tag> },
+            { title: '变更内容', key: 'changes',
+              render: (_: any, r: EmployeeChangeLogEntry) => (
+                <div style={{ fontSize: 12 }}>
+                  {r.changes.map((c, i) => (
+                    <div key={i}>
+                      <span style={{ fontWeight: 600 }}>{c.field}</span>：
+                      <span style={{ color: '#999' }}>{c.old}</span>
+                      <span style={{ color: '#52c41a', margin: '0 4px' }}>→</span>
+                      <span style={{ color: PRIMARY, fontWeight: 600 }}>{c.new}</span>
+                    </div>
+                  ))}
+                </div>
+              ) },
+          ] as any}
+        />
       </Modal>
     </div>
   );
