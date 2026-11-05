@@ -1489,7 +1489,7 @@ const AccountManage: React.FC = () => {
           {/* 权限配置（单一区域）：左侧菜单复选框=菜单级授权（角色预设基础上追加），右侧三态=按键/字段细粒度覆写 */}
           <div style={{ marginBottom: 16 }}>
             <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 8 }}>
-              菜单前复选框＝该账号是否拥有此菜单（在角色预设基础上追加，仅对此子账号生效）；右侧允许/禁止/继承为按键与字段的细粒度覆写（最高优先级）
+              菜单前复选框＝该账号是否拥有此菜单：供应商菜单在角色预设基础上追加；采购商/加工厂平台菜单默认开放，取消勾选＝对该账号隐藏（写入禁止覆写）；右侧允许/禁止/继承为按键与字段的细粒度覆写（最高优先级）
             </Text>
             <div style={{ padding: 12, background: '#fafafa', borderRadius: 8, border: '1px solid #d9d9d9' }}>
               <PermEditor scopes={['supplier', 'purchaser', 'factory']} value={overrideDraft} onChange={setOverrideDraft}

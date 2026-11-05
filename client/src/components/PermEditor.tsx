@@ -51,7 +51,8 @@ const PermEditor: React.FC<Props> = ({ scopes, value, onChange, pageChecks, onPa
   const [selMenu, setSelMenu] = useState<string>(allMenuKeys[0] || '');
   const activeMenu = allMenuKeys.includes(selMenu) ? selMenu : (allMenuKeys[0] || '');
 
-  // 菜单级复选框（仅供应商菜单点参与 legacy 白名单解析）：勾选=追加授权
+  // 菜单级复选框：供应商菜单点走 legacy 白名单（pageChecks，勾选=追加授权）；
+  // 采购商/加工厂菜单点默认放行，复选框映射三态覆写（取消勾选=写入 deny 隐藏，勾选=恢复继承）
   const showPageChecks = pageChecks !== undefined && !!onPageChecksChange;
   const togglePage = (key: string, checked: boolean) => {
     const cur = new Set(pageChecks || []);
@@ -62,6 +63,16 @@ const PermEditor: React.FC<Props> = ({ scopes, value, onChange, pageChecks, onPa
     const cur = new Set(pageChecks || []);
     keys.forEach(k => { if (checked) cur.add(k); else cur.delete(k); });
     onPageChecksChange?.(Array.from(cur));
+  };
+  const isPageChecked = (scope: PermScope, key: string): boolean =>
+    scope === 'supplier' ? (pageChecks || []).includes(key) : value[key] !== 'deny';
+  const togglePageByScope = (scope: PermScope, key: string, checked: boolean) => {
+    if (scope === 'supplier') togglePage(key, checked);
+    else set(key, checked ? 'inherit' : 'deny');
+  };
+  const toggleGroupPagesByScope = (scope: PermScope, keys: string[], checked: boolean) => {
+    if (scope === 'supplier') toggleGroupPages(keys, checked);
+    else batch(keys, checked ? 'inherit' : 'deny');
   };
 
   const set = (key: string, tri: PermTri) => {
@@ -113,9 +124,9 @@ const PermEditor: React.FC<Props> = ({ scopes, value, onChange, pageChecks, onPa
           {scopes.flatMap(scope => menuGroupsOf(scope).map(g => {
             const items = g.items.filter(i => !kw || i.label.toLowerCase().includes(kw) || i.key.toLowerCase().includes(kw));
             if (kw && items.length === 0) return null;
-            const groupChecks = showPageChecks && scope === 'supplier';
+            const groupChecks = showPageChecks;
             const groupKeys = g.items.map(i => i.key);
-            const checkedCount = groupKeys.filter(k => (pageChecks || []).includes(k)).length;
+            const checkedCount = groupChecks ? groupKeys.filter(k => isPageChecked(scope, k)).length : 0;
             return (
               <div key={`${scope}:${g.key}`}>
                 <div style={{ padding: '6px 12px', background: '#f0f5ff', color: PRIMARY_BLUE, fontSize: 12, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -124,7 +135,7 @@ const PermEditor: React.FC<Props> = ({ scopes, value, onChange, pageChecks, onPa
                       <Checkbox
                         checked={checkedCount === groupKeys.length && groupKeys.length > 0}
                         indeterminate={checkedCount > 0 && checkedCount < groupKeys.length}
-                        onChange={e => toggleGroupPages(groupKeys, e.target.checked)}
+                        onChange={e => toggleGroupPagesByScope(scope, groupKeys, e.target.checked)}
                       />
                     </span>
                   )}
@@ -145,8 +156,10 @@ const PermEditor: React.FC<Props> = ({ scopes, value, onChange, pageChecks, onPa
                       }}>
                       <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, flex: 1 }}>
                         {rowCheck && (
-                          <span onClick={e => e.stopPropagation()} title="勾选=该账号拥有此菜单（角色预设基础上追加）">
-                            <Checkbox checked={(pageChecks || []).includes(i.key)} onChange={e => togglePage(i.key, e.target.checked)} />
+                          <span onClick={e => e.stopPropagation()} title={scope === 'supplier'
+                            ? '勾选=该账号拥有此菜单（角色预设基础上追加）'
+                            : '取消勾选=对该账号隐藏此菜单（写入禁止覆写）；勾选=恢复可见（沿继承链）'}>
+                            <Checkbox checked={isPageChecked(scope, i.key)} onChange={e => togglePageByScope(scope, i.key, e.target.checked)} />
                           </span>
                         )}
                         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{i.label}</span>
