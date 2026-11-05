@@ -2,9 +2,12 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Card, Table, Button, Modal, Form, Input, InputNumber, Select, DatePicker, Space, Tag, message, Row, Col, Statistic, Tooltip, Checkbox, Divider,
 } from 'antd';
-import { EditOutlined, UserOutlined, TeamOutlined, UserDeleteOutlined, InfoCircleOutlined, SettingOutlined, ArrowUpOutlined, ArrowDownOutlined, FileTextOutlined } from '@ant-design/icons';
+import { EditOutlined, UserOutlined, TeamOutlined, UserDeleteOutlined, InfoCircleOutlined, SettingOutlined, ArrowUpOutlined, ArrowDownOutlined, FileTextOutlined, ExportOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
+import {
+  ResignationRecord, loadResignations, saveResignations, applyDueResignations, setAccountStatus, resignStateOf, RESIGN_REASONS,
+} from './resignationStore';
 
 const PRIMARY = '#1e4a7e';
 
@@ -64,19 +67,19 @@ const getFieldConfigKey = () => `hr_employee_field_config_${getDataOwner()}`;
 const getChangeLogKey = () => `hr_employee_changelog_${getDataOwner()}`;
 const getSnapshotKey = () => `hr_employee_snapshot_${getDataOwner()}`;
 
-// 员工信息变更日志条目（档案编辑/档案建立/账号同步三类来源）
-interface EmployeeChangeLogEntry {
+// 员工信息变更日志条目（档案编辑/档案建立/账号同步/离职管理四类来源）
+export interface EmployeeChangeLogEntry {
   key: string;
   username: string;
   empName: string;
   empId: string;
   time: string;
   operator: string;
-  source: '档案建立' | '档案编辑' | '账号同步';
+  source: '档案建立' | '档案编辑' | '账号同步' | '离职管理';
   changes: { field: string; old: string; new: string }[];
 }
 
-const loadChangeLog = (): EmployeeChangeLogEntry[] => {
+export const loadChangeLog = (): EmployeeChangeLogEntry[] => {
   try {
     const raw = localStorage.getItem(getChangeLogKey());
     if (raw) { const arr = JSON.parse(raw); if (Array.isArray(arr)) return arr; }
@@ -90,9 +93,10 @@ const appendChangeLog = (entries: EmployeeChangeLogEntry[]) => {
     localStorage.setItem(getChangeLogKey(), JSON.stringify(next));
   } catch { /* ignore */ }
 };
+export { appendChangeLog };
 
 // 操作人显示名（registeredUsers 三级回退，与全局口径一致）
-const getOperatorName = (): string => {
+export const getOperatorName = (): string => {
   const username = localStorage.getItem('username') || '';
   try {
     const users = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
@@ -182,18 +186,45 @@ const EmployeePage: React.FC = () => {
   const [editingUsername, setEditingUsername] = useState('');
   const [form] = Form.useForm();
   const [searchText, setSearchText] = useState('');
-  const [statusFilter, setStatusFilter] = useState('');
   const [visibleFields, setVisibleFields] = useState<string[]>(loadFieldConfig);
   const [fieldConfigVisible, setFieldConfigVisible] = useState(false);
   // 变更日志弹窗：logScope 为空=全部员工，否则=指定 username
   const [logVisible, setLogVisible] = useState(false);
   const [logScope, setLogScope] = useState('');
   const [logData, setLogData] = useState<EmployeeChangeLogEntry[]>([]);
+  // 离职管理：记录集 + 发起离职弹窗
+  const [resignations, setResignations] = useState<ResignationRecord[]>(loadResignations);
+  const [resignVisible, setResignVisible] = useState(false);
+  const [resignTarget, setResignTarget] = useState<EmployeeView | null>(null);
+  const [resignForm] = Form.useForm();
 
-  // 监听 storage 事件以响应其他标签页的账号变更
+  // 到达离职日期自动停用账号：挂载时 + 每 60s 巡检一次，生效时记变更日志并刷新列表
+  useEffect(() => {
+    const runDue = () => {
+      const applied = applyDueResignations();
+      if (!applied.length) return;
+      appendChangeLog(applied.map(r => ({
+        key: `elog-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        username: r.username, empName: r.empName, empId: '',
+        time: new Date().toLocaleString('zh-CN'),
+        operator: '离职计划自动生效',
+        source: '离职管理' as const,
+        changes: [{ field: '在职状态', old: '在职', new: `离职生效（${r.resignDate}，账号已停用）` }],
+      })));
+      setResignations(loadResignations());
+      setRefreshKey(k => k + 1);
+      message.info(`离职计划生效：${applied.map(r => r.empName).join('、')} 的账号已停用`);
+    };
+    runDue();
+    const timer = setInterval(runDue, 60000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // 监听 storage 事件以响应其他标签页的账号/离职记录变更
   useEffect(() => {
     const onStorage = (e: StorageEvent) => {
       if (e.key === getAccountsKey()) setRefreshKey(k => k + 1);
+      if (e.key === `hr_resignations_${getDataOwner()}`) setResignations(loadResignations());
     };
     window.addEventListener('storage', onStorage);
     return () => window.removeEventListener('storage', onStorage);
@@ -284,13 +315,58 @@ const EmployeePage: React.FC = () => {
     }).length,
   }), [employees]);
 
+  // 本页仅显示在职人员；离职人员在「人事管理 → 离职人员」页查看与复职
   const filteredData = useMemo(() => {
     return employees.filter(e => {
+      if (e.employeeStatus !== '在职') return false;
       const matchSearch = !searchText || e.name.includes(searchText) || e.id.toLowerCase().includes(searchText.toLowerCase()) || e.username.includes(searchText);
-      const matchStatus = !statusFilter || e.employeeStatus === statusFilter;
-      return matchSearch && matchStatus;
+      return matchSearch;
     });
-  }, [employees, searchText, statusFilter]);
+  }, [employees, searchText]);
+
+  // 发起离职：选择离职原因与离职时间；到期（含当日及之前）自动停用账号
+  const openResignModal = useCallback((emp: EmployeeView) => {
+    setResignTarget(emp);
+    resignForm.resetFields();
+    setResignVisible(true);
+  }, [resignForm]);
+
+  const handleResignConfirm = useCallback(() => {
+    resignForm.validateFields().then(values => {
+      if (!resignTarget) return;
+      const resignDate = values.resignDate.format('YYYY-MM-DD');
+      const reason = values.reason === '其他' && values.reasonNote ? `其他：${values.reasonNote}` : values.reason;
+      const immediate = resignDate <= dayjs().format('YYYY-MM-DD');
+      const rec: ResignationRecord = {
+        key: `res-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        username: resignTarget.username,
+        empName: resignTarget.name,
+        reason,
+        reasonNote: values.reasonNote || '',
+        resignDate,
+        status: immediate ? 'effective' : 'pending',
+        createdAt: new Date().toISOString(),
+        operator: getOperatorName(),
+        effectiveAt: immediate ? new Date().toISOString() : undefined,
+      };
+      if (immediate) setAccountStatus(resignTarget.username, 'disabled');
+      saveResignations([...loadResignations(), rec]);
+      appendChangeLog([{
+        key: `elog-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        username: resignTarget.username, empName: resignTarget.name, empId: resignTarget.id,
+        time: new Date().toLocaleString('zh-CN'),
+        operator: getOperatorName(),
+        source: '离职管理',
+        changes: [{ field: '离职', old: '—', new: `${immediate ? '离职立即生效' : '发起离职'}（原因：${reason}；离职日期：${resignDate}）` }],
+      }]);
+      setResignations(loadResignations());
+      setRefreshKey(k => k + 1);
+      setResignVisible(false);
+      message.success(immediate
+        ? `已办理离职：${resignTarget.name} 的账号已停用，资料与档案保留`
+        : `已发起离职：将于 ${resignDate} 自动停用 ${resignTarget.name} 的账号`);
+    }).catch(() => { /* 校验失败 */ });
+  }, [resignForm, resignTarget]);
 
   const handleEditProfile = useCallback((emp: EmployeeView) => {
     setEditingUsername(emp.username);
@@ -381,8 +457,16 @@ const EmployeePage: React.FC = () => {
     { title: '身份证号', key: 'idCard', width: 160, align: 'center', render: (_: any, r: EmployeeView) => r.profile?.idCard ? <span style={{ fontSize: 12 }}>{r.profile.idCard}</span> : '-' },
     { title: '职位', key: 'position', width: 100, align: 'center', render: (_: any, r: EmployeeView) => r.profile?.position || '-' },
     { title: '入职日期', dataIndex: 'hireDate', key: 'hireDate', width: 110, align: 'center' },
-    { title: '在职状态', dataIndex: 'employeeStatus', key: 'employeeStatus', width: 90, align: 'center',
-      render: (v: string) => v === '在职' ? <Tag color="green">在职</Tag> : <Tag color="red">离职</Tag>,
+    { title: '在职状态', dataIndex: 'employeeStatus', key: 'employeeStatus', width: 130, align: 'center',
+      render: (v: string, r: EmployeeView) => {
+        const rs = resignStateOf(resignations, r.username);
+        return (
+          <Space size={4}>
+            {v === '在职' ? <Tag color="green">在职</Tag> : <Tag color="red">离职</Tag>}
+            {rs && rs.status === 'pending' && <Tooltip title={`离职原因：${rs.reason}`}><Tag color="orange">待离职 {rs.resignDate}</Tag></Tooltip>}
+          </Space>
+        );
+      },
     },
     { title: '基本工资', key: 'baseSalary', width: 110, align: 'center',
       render: (_: any, r: EmployeeView) => r.profile?.baseSalary ? `¥${r.profile.baseSalary.toLocaleString()}` : '-',
@@ -427,7 +511,7 @@ const EmployeePage: React.FC = () => {
       .filter(Boolean) as ColumnsType<EmployeeView>;
     // 操作列始终显示在最后
     const opCol: any = {
-      title: '操作', key: '_action', width: 120, align: 'center' as const, fixed: 'right' as const,
+      title: '操作', key: '_action', width: 180, align: 'center' as const, fixed: 'right' as const,
       render: (_: any, r: EmployeeView) => (
         <Space size={0}>
           <Tooltip title="补充/编辑HR档案">
@@ -436,11 +520,16 @@ const EmployeePage: React.FC = () => {
           <Tooltip title="查看信息变更日志">
             <Button type="link" size="small" icon={<FileTextOutlined />} onClick={() => openChangeLog(r.username)}>日志</Button>
           </Tooltip>
+          {r.employeeStatus === '在职' && !(() => { const rs = resignStateOf(resignations, r.username); return rs && rs.status === 'pending'; })() && (
+            <Tooltip title="选择离职原因与离职时间，到期自动停用账号">
+              <Button type="link" size="small" danger icon={<ExportOutlined />} onClick={() => openResignModal(r)}>发起离职</Button>
+            </Tooltip>
+          )}
         </Space>
       ),
     };
     return [...filtered, opCol];
-  }, [allColumns, visibleFields, handleEditProfile, openChangeLog]);
+  }, [allColumns, visibleFields, handleEditProfile, openChangeLog, resignations, openResignModal]);
 
   return (
     <div>
@@ -462,10 +551,6 @@ const EmployeePage: React.FC = () => {
       <Card bodyStyle={{ padding: '12px 16px' }} style={{ marginBottom: 16 }}>
         <Space wrap>
           <Input.Search placeholder="搜索姓名/工号/账号" allowClear style={{ width: 220 }} onSearch={v => setSearchText(v)} onChange={e => { if (!e.target.value) setSearchText(''); }} />
-          <Select placeholder="状态筛选" allowClear style={{ width: 120 }} onChange={v => setStatusFilter(v || '')}>
-            <Select.Option value="在职">在职</Select.Option>
-            <Select.Option value="离职">离职</Select.Option>
-          </Select>
           <Button icon={<SettingOutlined />} onClick={() => setFieldConfigVisible(true)}>字段显示设置</Button>
           <Button icon={<FileTextOutlined />} onClick={() => openChangeLog()}>变更日志</Button>
         </Space>
@@ -671,7 +756,7 @@ const EmployeePage: React.FC = () => {
             { title: '时间', dataIndex: 'time', key: 'time', width: 150 },
             { title: '操作人', dataIndex: 'operator', key: 'operator', width: 100 },
             { title: '来源', dataIndex: 'source', key: 'source', width: 90, align: 'center' as const,
-              render: (v: string) => <Tag color={v === '账号同步' ? 'orange' : v === '档案建立' ? 'green' : 'blue'}>{v}</Tag> },
+              render: (v: string) => <Tag color={v === '账号同步' ? 'orange' : v === '档案建立' ? 'green' : v === '离职管理' ? 'red' : 'blue'}>{v}</Tag> },
             { title: '变更内容', key: 'changes',
               render: (_: any, r: EmployeeChangeLogEntry) => (
                 <div style={{ fontSize: 12 }}>
@@ -687,6 +772,28 @@ const EmployeePage: React.FC = () => {
               ) },
           ] as any}
         />
+      </Modal>
+
+      {/* 发起离职弹窗：离职原因 + 离职时间；到达离职日期自动停用账号（资料/档案保留） */}
+      <Modal
+        title={`发起离职 - ${resignTarget?.name || ''}`}
+        open={resignVisible}
+        onOk={handleResignConfirm}
+        onCancel={() => setResignVisible(false)}
+        okText="确认发起" cancelText="取消" width={480}
+      >
+        <Form autoComplete="off" form={resignForm} layout="vertical" style={{ marginTop: 16 }}>
+          <Form.Item name="reason" label="离职原因" rules={[{ required: true, message: '请选择离职原因' }]}>
+            <Select placeholder="选择离职原因" options={RESIGN_REASONS.map(r => ({ value: r, label: r }))} />
+          </Form.Item>
+          <Form.Item name="reasonNote" label="补充说明（可选）">
+            <Input.TextArea rows={2} placeholder="离职原因补充说明/交接备注" maxLength={100} showCount />
+          </Form.Item>
+          <Form.Item name="resignDate" label="离职时间" rules={[{ required: true, message: '请选择离职时间' }]}
+            extra="到达离职日期后账号自动停用（无法登录），账号资料与HR档案保留；离职日期当天仍计薪，之后不再计算工资；选择当日或之前则立即生效">
+            <DatePicker style={{ width: '100%' }} />
+          </Form.Item>
+        </Form>
       </Modal>
     </div>
   );

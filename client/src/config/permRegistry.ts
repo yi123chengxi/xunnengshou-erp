@@ -88,6 +88,7 @@ export const PERM_MENUS: Record<PermScope, PermMenuGroup[]> = {
         { key: 'hr-manage/employee', label: '员工档案' },
         { key: 'hr-manage/shift', label: '班次设置' },
         { key: 'hr-manage/leave', label: '请假管理' },
+        { key: 'hr-manage/resigned', label: '离职人员' },
       ],
     },
     {

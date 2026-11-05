@@ -103,6 +103,7 @@ export const permissionModules: PermissionModule[] = [
       { key: 'employee', label: '员工档案' },
       { key: 'shift', label: '班次设置' },
       { key: 'leave', label: '请假管理' },
+      { key: 'resigned', label: '离职人员' },
     ],
   },
   {

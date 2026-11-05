@@ -6,6 +6,7 @@ import { SettingOutlined, DollarOutlined, DownloadOutlined, FileTextOutlined, In
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
 import { getPfx } from '../../utils/devStore';
+import { loadResignations, paidDaysInMonth, isUnpaidDay } from './resignationStore';
 
 const PRIMARY = '#1e4a7e';
 
@@ -276,11 +277,14 @@ const SalaryPage: React.FC = () => {
 
   // 一键生成本月工资单
   const handleGenerate = useCallback(() => {
+    // 离职/复职记录：工资截断口径——离职日期当天仍计薪，(离职, 复职) 开区间不计薪
+    const resignations = loadResignations();
     const accounts = (() => {
       try {
         const raw = localStorage.getItem(getAccountsKey());
-        // 与考勤打卡/补卡/统计同口径：全部在职账号（含主账号）均作为员工参与工资计算
-        if (raw) { const arr = JSON.parse(raw); if (Array.isArray(arr)) return arr.filter((a: any) => a.status === 'normal'); }
+        // 与考勤打卡/补卡/统计同口径：全部在职账号（含主账号）均作为员工参与工资计算；
+        // 已离职（停用）账号若当月仍有计薪天（离职日在当月内）也参与，离职次月起自动排除
+        if (raw) { const arr = JSON.parse(raw); if (Array.isArray(arr)) return arr.filter((a: any) => a.status === 'normal' || paidDaysInMonth(resignations, a.username, monthStr) > 0); }
       } catch { /* ignore */ }
       return [];
     })();
@@ -344,29 +348,37 @@ const SalaryPage: React.FC = () => {
       return Math.max(1, daysInMonth - restDayCount - holidayCount - adjDays);
     };
 
-    const newRecords: SalaryRecord[] = accounts.map((acc: any) => {
+    const newRecords: SalaryRecord[] = accounts.map((acc: any): SalaryRecord | null => {
       const profile = profiles.find(p => p.username === acc.username);
       // 主账号别名匹配：打卡记录记登录名（owner），而账号表主账号 username 可能为 admin 等历史值
       const ownerName = getDataOwner();
       const matchAtt = (a: AttendanceRecord) => a.employeeUsername === acc.username
         || (acc.accountType === '主账号' && a.employeeUsername === ownerName);
-      const empAttendance = attendance.filter(matchAtt);
+      // 计薪窗口：整月不计薪（离职次月及以后）跳过该员工；离职当月按计薪天数折算
+      const [mY, mM] = monthStr.split('-').map(Number);
+      const daysInMonth = new Date(mY, mM, 0).getDate();
+      const paidDays = paidDaysInMonth(resignations, acc.username, monthStr);
+      if (paidDays === 0) return null;
+      const payRatio = paidDays / daysInMonth;
+      const empAttendance = attendance.filter(a => matchAtt(a) && !isUnpaidDay(resignations, acc.username, a.date));
       const empLeaves = leaves.filter(l => l.employeeUsername === acc.username);
 
       // 查找该员工的班次及对应扣款规则
       const shift = findShiftForEmployee(acc.username, acc.group);
       const shiftRules = findRulesForShift(shift?.key || '');
 
-      // 薪资数据来源：部门已配置时基本工资以配置为准、绩效工资取来源数据；未配置按员工档案默认计算
+      // 薪资数据来源：部门已配置时基本工资以配置为准、绩效工资取来源数据；未配置按员工档案默认计算；
+      // 离职当月基本工资/岗位津贴/档案绩效工资按计薪天数折算，来源实发绩效（仓库汇总/绩效快照）不折算
       const srcCfg = loadSources().find(s => s.dept && s.dept === acc.group);
       const empName = acc.displayName || acc.username;
-      const baseSalary = srcCfg ? (Number(srcCfg.baseSalary) || 0) : (profile?.baseSalary || 0);
-      const allowance = profile?.allowance || 0;
+      const baseFull = srcCfg ? (Number(srcCfg.baseSalary) || 0) : (profile?.baseSalary || 0);
+      const baseSalary = Math.round(baseFull * payRatio);
+      const allowance = Math.round((profile?.allowance || 0) * payRatio);
       const performanceSalary = srcCfg
         ? (srcCfg.source === 'warehouse'
           ? warehouseSalaryTotal(getDataOwner(), monthStr, empName)
           : performanceEarned(getDataOwner(), monthStr, empName))
-        : (profile?.performanceSalary || 0);
+        : Math.round((profile?.performanceSalary || 0) * payRatio);
       // 迟到/早退与打卡数据关联：按员工所属班次的上下班时间与容忍分钟从打卡原始时间重新判定；
       // 当日无下班卡按早退计；自由打卡班次（无上下班时间）按要求工时判定；班次无时间配置时回退打卡落库状态
       const toMin = (t: string) => { const p = String(t || '').split(':'); return parseInt(p[0]) * 60 + (parseInt(p[1]) || 0); };
@@ -383,7 +395,15 @@ const SalaryPage: React.FC = () => {
         if (requiredHours > 0) return (Number(a.workHours) || 0) < requiredHours;
         return a.status === 'early';
       }).length;
-      const leaveCount = empLeaves.reduce((s, l) => s + l.days, 0);
+      const leaveCount = empLeaves.reduce((s, l) => {
+        // 请假天数仅计落在计薪窗口内的部分（离职日之后的请假不再扣款）
+        let cnt = 0;
+        for (let i = 0; i < l.days; i++) {
+          const d = dayjs(l.startDate).add(i, 'day').format('YYYY-MM-DD');
+          if (d.startsWith(monthStr) && !isUnpaidDay(resignations, acc.username, d)) cnt++;
+        }
+        return s + cnt;
+      }, 0);
       const attendanceDays = empAttendance.filter(a => a.status !== 'absent').length;
 
       // 旷工推导：当月已过应出勤工作日（扣除班次休息日/放假日）− 打卡天数 − 批准请假天数 − 弹性休息天数，不足部分计旷工
@@ -396,6 +416,8 @@ const SalaryPage: React.FC = () => {
         const holidays: string[] = sh?.holidays || [];
         let cnt = 0;
         for (let d = 1; d <= lastDay; d++) {
+          const ds = `${monthStr}-${String(d).padStart(2, '0')}`;
+          if (isUnpaidDay(resignations, acc.username, ds)) continue;
           if (restDays.includes(new Date(year, month - 1, d).getDay())) continue;
           if (holidays.some(h => h === `${monthStr}-${String(d).padStart(2, '0')}` || h === `${monthStr}-${d}`)) continue;
           cnt++;
@@ -437,7 +459,7 @@ const SalaryPage: React.FC = () => {
         status: 'draft' as const,
         createdAt: new Date().toISOString(),
       };
-    });
+    }).filter((r): r is SalaryRecord => r !== null);
 
     // 合并：替换同月旧记录
     setSalaryRecords(prev => {

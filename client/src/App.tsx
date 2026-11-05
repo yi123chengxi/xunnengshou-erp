@@ -70,6 +70,7 @@ const SalaryPage = React.lazy(() => import('./pages/hr/SalaryPage'));
 const EmployeePage = React.lazy(() => import('./pages/hr/EmployeePage'));
 const ShiftPage = React.lazy(() => import('./pages/hr/ShiftPage'));
 const LeavePage = React.lazy(() => import('./pages/hr/LeavePage'));
+const ResignedPage = React.lazy(() => import('./pages/hr/ResignedPage'));
 const PaymentRequestPage = React.lazy(() => import('./pages/PaymentRequestPage'));
 const InvoiceApplyPage = React.lazy(() => import('./pages/InvoiceApplyPage'));
 const GeneralLedgerPage = React.lazy(() => import('./pages/GeneralLedgerPage'));
@@ -226,6 +227,7 @@ function App() {
           <Route path="hr-manage/employee" element={<EmployeePage />} />
           <Route path="hr-manage/shift" element={<ShiftPage />} />
           <Route path="hr-manage/leave" element={<LeavePage />} />
+          <Route path="hr-manage/resigned" element={<ResignedPage />} />
           {/* 日常记账 - 三平台共用记账页（须注册在通配路由之前） */}
           <Route path="finance/daily-bookkeeping" element={<DailyBookkeepingPage />} />
           <Route path="finance/daily-bookkeeping-stats" element={<BookkeepingStatsPage />} />

@@ -51,6 +51,7 @@ const MENU_PAGES = {
   'hr-manage/employee': ['hr/EmployeePage'],
   'hr-manage/shift': ['hr/ShiftPage'],
   'hr-manage/leave': ['hr/LeavePage'],
+  'hr-manage/resigned': ['hr/ResignedPage'],
   'settings/account-manage': ['AccountManage'],
   'settings/role-manage': ['RoleManage'],
   'settings/notification-settings': ['NotificationSettings'],
@@ -65,7 +66,7 @@ const SUPPLIER_MENU_KEYS = [
   'production/production-order', 'production/processing-order', 'production/purchase-requisition', 'production/workflow-templates', 'production/production-schedule',
   'inventory/prod-in-stats', 'inventory/purchase-receiving', 'inventory/inventory-check', 'inventory/inventory-outbound',
   'finance/bank-account', 'finance/reimbursement', 'finance/payment-request', 'finance/general-ledger', 'finance/simple-ledger',
-  'hr-manage/attendance', 'hr-manage/salary', 'hr-manage/employee', 'hr-manage/shift', 'hr-manage/leave',
+  'hr-manage/attendance', 'hr-manage/salary', 'hr-manage/employee', 'hr-manage/shift', 'hr-manage/leave', 'hr-manage/resigned',
   'settings/account-manage', 'settings/role-manage', 'settings/expense-fee', 'settings/warehouse-manage', 'settings/print-template', 'settings/notification-settings',
   'jst/order', 'jst/inventory', 'jst/product', 'jst/logistics', 'jst/outbound', 'jst/shop', 'jst/logistics-company', 'jst/shop-product', 'jst/data-order', 'jst/data-inventory', 'jst/data-outbound',
 ];
@@ -79,7 +80,7 @@ const MENU_LABELS = {
   'production/production-order': '生产订单', 'production/processing-order': '加工订单', 'production/purchase-requisition': '采购申请单', 'production/workflow-templates': '生产流程模板', 'production/production-schedule': '生产排期',
   'inventory/prod-in-stats': '生产入库统计', 'inventory/purchase-receiving': '采购入库', 'inventory/inventory-check': '库存盘点', 'inventory/inventory-outbound': '库存出库',
   'finance/bank-account': '银行账户', 'finance/reimbursement': '报销', 'finance/payment-request': '收/付申请', 'finance/invoice-apply': '开票申请', 'finance/general-ledger': '会计账薄', 'finance/simple-ledger': '简易账薄', 'finance/daily-bookkeeping': '日常记账', 'finance/daily-bookkeeping-stats': '记账统计',
-  'hr-manage/attendance': '考勤打卡', 'hr-manage/salary': '工资计算', 'hr-manage/employee': '员工档案', 'hr-manage/shift': '班次设置', 'hr-manage/leave': '请假管理',
+  'hr-manage/attendance': '考勤打卡', 'hr-manage/salary': '工资计算', 'hr-manage/employee': '员工档案', 'hr-manage/shift': '班次设置', 'hr-manage/leave': '请假管理', 'hr-manage/resigned': '离职人员',
   'settings/account-manage': '账号管理', 'settings/role-manage': '角色管理', 'settings/expense-fee': '费用管理', 'settings/warehouse-manage': '仓位管理', 'settings/print-template': '打印模板', 'settings/notification-settings': '弹窗设置',
 };
 
@@ -92,7 +93,7 @@ const FILE_LABELS = {
   OrderProfitPage: '订单毛利率', WorkflowTemplatePage: '生产流程模板', ProdInboundStatsPage: '生产入库统计', PurchaseReceivingPage: '采购入库',
   InventoryCheckPage: '库存盘点', InventoryOutboundPage: '库存出库', ReimbursementPage: '报销', PaymentRequestPage: '收/付申请',
   InvoiceApplyPage: '开票申请', GeneralLedgerPage: '会计账薄', SimpleLedgerPage: '简易账薄', DailyBookkeepingPage: '日常记账', BookkeepingStatsPage: '记账统计',
-  AttendancePage: '考勤打卡', SalaryPage: '工资计算', EmployeePage: '员工档案', ShiftPage: '班次设置', LeavePage: '请假管理',
+  AttendancePage: '考勤打卡', SalaryPage: '工资计算', EmployeePage: '员工档案', ShiftPage: '班次设置', LeavePage: '请假管理', ResignedPage: '离职人员',
   AccountManage: '账号管理', RoleManage: '角色管理', NotificationSettings: '弹窗设置',
 };
 

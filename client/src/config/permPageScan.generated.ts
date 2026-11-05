@@ -1,6 +1,6 @@
 /**
  * 页面扫描产物（scripts/gen-perm-points.js 生成，勿手改；页面变更后重跑再生成）
- * 生成时间：2026-11-05T02:55:07.488Z；菜单 51 个 / 页面分组 79 个 / 字段 788 个
+ * 生成时间：2026-11-05T03:26:45.505Z；菜单 52 个 / 页面分组 80 个 / 字段 799 个
  */
 export interface ScannedPage { menuKey: string; page: string; pageLabel: string; fields: { title: string; dataIndex: string }[]; fns: string[]; }
 export const SCANNED_PAGES: ScannedPage[] = [
@@ -2736,6 +2736,65 @@ export const SCANNED_PAGES: ScannedPage[] = [
   ],
   "fns": [
    "add"
+  ]
+ },
+ {
+  "menuKey": "hr-manage/resigned",
+  "page": "resigned",
+  "pageLabel": "离职人员",
+  "fields": [
+   {
+    "title": "工号",
+    "dataIndex": "id"
+   },
+   {
+    "title": "姓名",
+    "dataIndex": "name"
+   },
+   {
+    "title": "账号",
+    "dataIndex": "username"
+   },
+   {
+    "title": "部门",
+    "dataIndex": "department"
+   },
+   {
+    "title": "角色",
+    "dataIndex": "role"
+   },
+   {
+    "title": "入职日期",
+    "dataIndex": "hireDate"
+   },
+   {
+    "title": "离职原因",
+    "dataIndex": "reason"
+   },
+   {
+    "title": "离职日期",
+    "dataIndex": "resignDate"
+   },
+   {
+    "title": "时间",
+    "dataIndex": "time"
+   },
+   {
+    "title": "操作人",
+    "dataIndex": "operator"
+   },
+   {
+    "title": "来源",
+    "dataIndex": "source"
+   }
+  ],
+  "fns": [
+   "add",
+   "edit",
+   "delete",
+   "import",
+   "export",
+   "fieldconfig"
   ]
  },
  {
