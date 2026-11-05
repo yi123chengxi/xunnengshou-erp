@@ -7,6 +7,7 @@
  */
 import tagPresetDefault from './preset_tag_default.json';
 import tagPreset90x50 from './preset_tag_90x50.json';
+import pickingPresetA4 from './preset_picking_a4.json';
 
 export interface PresetPrintTemplate {
   id: string;
@@ -19,6 +20,9 @@ export const PRESET_PRINT_TEMPLATES: Record<string, PresetPrintTemplate[]> = {
   tag: [
     { id: 'default', name: (tagPresetDefault as any)?.templateName || '90*50中国双星-彩色', data: tagPresetDefault },
     { id: 'preset_90x50', name: (tagPreset90x50 as any)?.templateName || '90*50通用版', data: tagPreset90x50 },
+  ],
+  picking: [
+    { id: 'preset_a4', name: (pickingPresetA4 as any)?.templateName || 'A4拣货单模板', data: pickingPresetA4 },
   ],
 };
 

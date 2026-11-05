@@ -1,6 +1,7 @@
 import React from 'react';
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { pullAllDatasets } from './utils/serverSync';
+import { PRESET_PRINT_TEMPLATES, seedPresetPrintTemplates } from './config/presetPrintTemplates';
 import { connectChatWS, disconnectChatWS } from './utils/chatSocket';
 import MainLayout from './layouts/MainLayout';
 import PurchaserLayout from './layouts/PurchaserLayout';
@@ -89,6 +90,11 @@ const Loading = () => (
   </div>
 );
 
+// 系统预设打印模板种入（只补不覆写）：登录拉取完成后执行，保证所有租户/所有页面（含打印弹窗下拉）均可见预设
+const seedAllPresets = () => {
+  try { Object.keys(PRESET_PRINT_TEMPLATES).forEach(seedPresetPrintTemplates); } catch { /* 忽略本地写入失败 */ }
+};
+
 // 跨浏览器同步闸门：
 // 1) 启动/登录瞬间先拉取服务器较新数据再渲染页面（超时 2.5s 自动放行）；
 // 2) 登录状态下每 30s 后台轮询拉取，多浏览器同时在线时自动更新（不阻塞 UI）。
@@ -100,8 +106,8 @@ const SyncGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
 
   const gatedPull = React.useCallback(() => {
     setReady(false);
-    const timer = setTimeout(() => setReady(true), 15000); // 给 pullAllDatasets 充足时间
-    pullAllDatasets().finally(() => { clearTimeout(timer); setReady(true); });
+    const timer = setTimeout(() => { setReady(true); seedAllPresets(); }, 15000); // 给 pullAllDatasets 充足时间
+    pullAllDatasets().finally(() => { clearTimeout(timer); setReady(true); seedAllPresets(); });
   }, []);
 
   React.useEffect(() => {
