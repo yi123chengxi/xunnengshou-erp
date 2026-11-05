@@ -186,13 +186,14 @@ const DevActionPointsPage: React.FC<{ platform?: AnalyticsPlatform }> = ({ platf
       <Card size="small" title={<span><SettingOutlined style={{ color: '#fa8c16', marginRight: 8 }} />积分系数设置</span>}
         extra={<Space size={8}>
           <Button size="small" icon={<SettingOutlined />} onClick={() => { setMgrSelected(managers); setMgrModalOpen(true); }}>负责人设置</Button>
-          <Button size="small" icon={coeffLocked ? <LockOutlined /> : <UnlockOutlined />}
+          {/* 按键采用动作语义：可编辑态显示「锁定」（点击后锁定），已锁定态显示「编辑」（点击后开启编辑） */}
+          <Button size="small" icon={coeffLocked ? <UnlockOutlined /> : <LockOutlined />}
             disabled={!isManager && !coeffLocked}
             onClick={() => {
               if (!isManager) { message.warning('您不是负责人，无法编辑积分系数'); return; }
               const next = !coeffLocked; setCoeffLocked(next); if (next) message.info('积分系数已锁定'); else message.info('积分系数编辑已开启');
             }}>
-            {coeffLocked ? '锁定' : '编辑'}
+            {coeffLocked ? '编辑' : '锁定'}
           </Button>
         </Space>}>
         <p style={{ fontSize: 12, color: '#999', marginTop: 0, marginBottom: 16 }}>
