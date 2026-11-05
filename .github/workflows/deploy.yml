@@ -68,9 +68,11 @@ jobs:
 
       - name: 打包部署物
         run: |
+          rm -rf pkg
           mkdir -p pkg/nginx pkg/client pkg/server/downloads
-          cp -r server pkg/server
-          rm -rf pkg/server/node_modules pkg/server/data pkg/server/downloads pkg/server/uploads pkg/server/logs
+          # cp -r server pkg/server 在 pkg/server 已存在时会嵌套成 pkg/server/server，导致部署陈旧外层残留；改用内容级复制
+          cp -r server/. pkg/server/
+          rm -rf pkg/server/node_modules pkg/server/data pkg/server/downloads pkg/server/uploads pkg/server/logs pkg/server/server
           cp -r client/build pkg/client/build
           # 打印客户端安装包：从 print-client/release/ 复制（若存在）
           if [ -f print-client/release/xunnengshou-print-client-setup.exe ]; then
@@ -85,6 +87,9 @@ jobs:
           cp nginx/factory-management.conf pkg/nginx/
           cp server-update.sh pkg/
           cp server-setup.sh pkg/
+          # 打包结构自检：入口产物必须位于外层，且不得存在嵌套 server/server
+          test -f pkg/server/dist/app.js || { echo 'FATAL: pkg/server/dist/app.js 缺失，打包结构异常'; exit 1; }
+          test ! -e pkg/server/server || { echo 'FATAL: pkg/server/server 嵌套异常'; exit 1; }
           tar -czf factory-deploy.tar.gz -C pkg .
 
       - name: 留存产物7天(供手动回滚下载)

@@ -9,6 +9,12 @@ command -v rsync >/dev/null 2>&1 || apt-get install -y rsync
 
 mkdir -p "$APP/server" "$APP/client" "$APP/logs"
 
+# 部署包结构自检：后端入口产物必须在外层（防 cp 嵌套致 pkg/server/server 旧包上线）
+if [ ! -f "$SRC/server/dist/app.js" ]; then
+  echo "FATAL: 部署包异常，缺 server/dist/app.js，中止更新" >&2
+  exit 1
+fi
+
 # 备份 .env
 if [ -f "$APP/server/.env" ]; then cp -a "$APP/server/.env" /tmp/factory-env.bak; fi
 
