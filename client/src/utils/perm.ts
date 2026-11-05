@@ -142,12 +142,19 @@ export const resolvePerm = (scope: PermScope, key: string): boolean => {
   if (ov === 'allow') return true;
   if (ov === 'deny') return false;
 
-  // 2) 开发者客户层：显式 deny → 拒绝；白名单存在且未列入 → 仅菜单点拒绝
-  //    （白名单由客户权限编辑器按菜单树生成，不含 fn:/field: 点；若全键拦则会
-  //    误杀该客户全部功能点/字段点——实测成品页整表数据列清空且显示字段按键隐藏）
+  // 2) 开发者客户层：显式 deny → 拒绝；白名单存在且未列入 → 拒绝
+  //    细则：白名单含 fn:/field: 细粒度键时按显式清单严格执行；
+  //    仅含菜单键的遗留白名单（客户权限编辑器按菜单树生成）中，fn:/field: 点
+  //    由其父菜单隐含放行（否则成品页整表数据列与显示字段按键会被误杀）；
+  //    细粒度拒绝仍走 dev deny 列表与用户覆写。
   if (loadDevDeny(username).includes(key)) return false;
   const wl = readDevWhitelist(username);
-  if (wl && !wl.includes(key) && isMenuPoint(scope, key)) return false;
+  if (wl && !wl.includes(key)) {
+    const hasGranular = wl.some(k => k.startsWith('fn:') || k.startsWith('field:'));
+    const parts = key.split(':');
+    const impliedByMenu = !hasGranular && (parts[0] === 'fn' || parts[0] === 'field') && wl.includes(parts[1]);
+    if (!impliedByMenu) return false;
+  }
 
   // 3) 角色层（仅子账号；主账号 bypass）
   if (isSub) {
