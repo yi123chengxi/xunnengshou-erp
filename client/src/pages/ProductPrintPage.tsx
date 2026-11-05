@@ -257,6 +257,16 @@ const ProductPrintPage: React.FC = () => {
   // 打印机下拉选项（吊牌打印与自定义打印子页共用）
   const printerOptions = [{ value: '默认使用模板设置的打印机', label: '默认使用模板设置的打印机' }, ...printerList.map((pl: any) => ({ value: pl.name, label: pl.name + (pl.isDefault ? '（系统默认）' : '') + (pl.clientName ? `（@${pl.clientName}）` : '') })), ...(printerList.length ? [] : [{ value: '__print_client_offline__', label: `（打印客户端未在线：请在接打印机的电脑启动讯能手打印客户端，并登录 ${window.location.origin}）`, disabled: true }])];
 
+  // 保存的打印机选择可能是历史缓存（打印机已移除/换机）：在线名单非空且不含当前选择时自动重置，
+  // 避免向打印客户端发送无效打印机名（Electron 对失配 deviceName 静默挂起不出纸）
+  useEffect(() => {
+    if (!printerList.length) return;
+    if (printer && printer !== '默认使用模板设置的打印机' && !printerList.some((pl: any) => pl.name === printer)) {
+      message.warning(`保存的打印机「${printer}」不在当前在线打印机名单中，已切换为模板默认打印机`);
+      setPrinter('默认使用模板设置的打印机');
+    }
+  }, [printerList, printer]);
+
   const brands = useMemo(() => Array.from(new Set(products.map((p: any) => String(p.brand || '').trim()).filter(Boolean))) as string[], [products]);
   const filteredProducts = useMemo(() => {
     const a = applied || {};

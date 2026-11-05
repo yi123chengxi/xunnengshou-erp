@@ -87,12 +87,22 @@ export function sendPrintJob(tenantId: string, job: PrintJob): boolean {
   }
   if (!client) return false;
 
+  // 打印机名校验：网页保存的选择可能是历史缓存（打印机已移除/换机），
+  // Electron 对不存在的 deviceName 既不回调也不报错→任务永久挂起；
+  // 转发前按执行客户端的实际上报名单替换为其默认打印机（无则留空由客户端走系统默认）
+  let printerName = job.printerName;
+  if (printerName && !client.printers.some(p => p.name === printerName)) {
+    const fb = client.printers.find(p => p.isDefault) || client.printers[0];
+    console.warn(`[print-ws] 打印机"${printerName}"不在客户端 ${client.clientName} 的名单中，替换为 ${fb ? `"${fb.name}"` : '客户端系统默认'}`);
+    printerName = fb ? fb.name : '';
+  }
+
   const msg = JSON.stringify({
     type: 'print_job',
     id: job.id,
     jobType: job.type,
     content: job.content,
-    printerName: job.printerName,
+    printerName,
     copies: job.copies,
   });
 

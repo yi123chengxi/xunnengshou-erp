@@ -425,13 +425,28 @@ async function handlePrintJob(msg: {
     checkCancelled();
     if (cancelled) { printWin.close(); throw new Error('任务已取消'); }
 
+    // 打印前校验打印机名：网页保存的选择可能是历史缓存（打印机已移除/换机），
+    // Electron 对不存在的 deviceName 既不回调也不报错→任务永久挂起；失配时回退本机默认打印机
+    const printers = await getPrinterList();
+    if (!printers.length) { printWin.close(); throw new Error('本机无任何可用打印机，请先安装打印机'); }
+    let deviceName = msg.printerName || '';
+    if (deviceName && !printers.some(p => p.name === deviceName)) {
+      const fb = printers.find(p => p.isDefault) || printers[0];
+      const note = `打印机"${deviceName}"不在本机名单，已改用"${fb.name}"`;
+      console.log(`[print] ${note}`);
+      log.printerName = fb.name;
+      log.error = note;
+      pushLog({ ...log });
+      deviceName = fb.name;
+    }
+
     // 静默打印（带超时 60 秒，打印机不存在时回调可能不触发）
     await Promise.race([
       new Promise<void>((resolve, reject) => {
         printWin.webContents.print(
           {
             silent: true,
-            deviceName: msg.printerName || undefined,
+            deviceName: deviceName || undefined,
             copies: msg.copies || 1,
             // 边距设为 none：页眉页脚（日期/标题/网址/页码）无边距空间可画，确保只打印模板内容；同时保留背景色
             printBackground: true,
@@ -446,7 +461,7 @@ async function handlePrintJob(msg: {
           }
         );
       }),
-      new Promise<void>((_, reject) => setTimeout(() => reject(new Error(`打印超时（60s），打印机"${msg.printerName || '默认'}"可能不存在或无响应`)), loadTimeout)),
+      new Promise<void>((_, reject) => setTimeout(() => reject(new Error(`打印超时（60s），打印机"${deviceName || '默认'}"可能不存在或无响应`)), loadTimeout)),
     ]);
 
     // 关闭打印窗口
