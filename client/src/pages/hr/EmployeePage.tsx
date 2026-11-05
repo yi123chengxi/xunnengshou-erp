@@ -511,7 +511,7 @@ const EmployeePage: React.FC = () => {
       .filter(Boolean) as ColumnsType<EmployeeView>;
     // 操作列始终显示在最后
     const opCol: any = {
-      title: '操作', key: '_action', width: 180, align: 'center' as const, fixed: 'right' as const,
+      title: '操作', key: '_action', width: 210, align: 'center' as const, fixed: 'right' as const,
       render: (_: any, r: EmployeeView) => (
         <Space size={0}>
           <Tooltip title="补充/编辑HR档案">
@@ -564,7 +564,7 @@ const EmployeePage: React.FC = () => {
           pagination={{ pageSize: 15, showTotal: t => `共 ${t} 条` }}
           bordered
           size="middle"
-          scroll={{ x: 1830 }}
+          scroll={{ x: 1960 }}
         />
       </Card>
 
