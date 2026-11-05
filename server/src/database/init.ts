@@ -575,27 +575,121 @@ CREATE TABLE IF NOT EXISTS system_logs (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='系统操作日志';
 
 -- ==========================================
--- 8. 注册用户表（对应前端 localStorage.registeredUsers）
+-- 8. 注册用户表（与 SQLite/应用层同构：登录、租户、试用/授权状态）
 -- ==========================================
 CREATE TABLE IF NOT EXISTS registered_users (
   id INT AUTO_INCREMENT PRIMARY KEY,
-  username VARCHAR(50) NOT NULL UNIQUE COMMENT '登录账号',
+  username VARCHAR(64) NOT NULL UNIQUE COMMENT '登录账号',
   password VARCHAR(255) NOT NULL COMMENT '密码',
-  role VARCHAR(100) NOT NULL COMMENT '角色',
-  company_name VARCHAR(100) COMMENT '公司名称',
-  contact_person VARCHAR(50) COMMENT '联系人',
-  phone VARCHAR(20) COMMENT '联系电话',
-  email VARCHAR(100) COMMENT '电子邮箱',
-  register_date DATE COMMENT '注册日期',
-  status VARCHAR(20) DEFAULT '待审核' COMMENT '状态',
-  trial_end_date DATE COMMENT '试用截止',
-  authorized_until DATE COMMENT '授权至',
-  deleted_at DATETIME COMMENT '数据清理时间',
+  role VARCHAR(32) NOT NULL DEFAULT 'user' COMMENT '角色',
+  company_name VARCHAR(191) DEFAULT '' COMMENT '公司名称',
+  contact_person VARCHAR(64) DEFAULT '' COMMENT '联系人',
+  phone VARCHAR(32) DEFAULT '' COMMENT '联系电话',
+  email VARCHAR(128) DEFAULT '' COMMENT '电子邮箱',
+  register_date VARCHAR(16) DEFAULT '' COMMENT '注册日期',
+  status VARCHAR(16) DEFAULT 'active' COMMENT '状态',
+  trial_end_date VARCHAR(16) DEFAULT '' COMMENT '试用截止',
+  authorized_until VARCHAR(16) DEFAULT '' COMMENT '授权至',
+  deleted_at DATETIME NULL COMMENT '数据清理时间',
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  INDEX idx_email (email),
-  INDEX idx_status (status)
+  INDEX idx_ru_phone (phone),
+  INDEX idx_ru_status (status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='注册用户表';
+
+-- ==========================================
+-- 9. 应用系统表（SQLite 主存储迁移目标：业务 JSON 总仓/用量/设置/推送/认证/即时通讯）
+--    租户隔离：dataset_store.owner 列 + 键名 owner 后缀；聊天以会话参与方/池主为边界
+-- ==========================================
+CREATE TABLE IF NOT EXISTS dataset_store (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  dataset_key VARCHAR(191) NOT NULL UNIQUE COMMENT '数据集键（含租户后缀）',
+  dataset_json LONGTEXT NOT NULL COMMENT '业务数据 JSON',
+  owner VARCHAR(64) NOT NULL DEFAULT '' COMMENT '归属租户',
+  updated_at BIGINT NOT NULL DEFAULT 0 COMMENT '版本时间戳',
+  INDEX idx_ds_owner (owner),
+  INDEX idx_ds_updated (updated_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='页面数据集总仓（业务主数据）';
+
+CREATE TABLE IF NOT EXISTS owner_usage (
+  owner VARCHAR(64) NOT NULL PRIMARY KEY COMMENT '租户',
+  bytes BIGINT NOT NULL DEFAULT 0 COMMENT '用量字节',
+  updated_at BIGINT NOT NULL DEFAULT 0
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='租户存储用量计数器';
+
+CREATE TABLE IF NOT EXISTS system_settings (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  setting_key VARCHAR(191) NOT NULL UNIQUE,
+  setting_value MEDIUMTEXT NOT NULL,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='系统设置键值对';
+
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  username VARCHAR(64) NOT NULL,
+  endpoint VARCHAR(512) NOT NULL UNIQUE,
+  keys_p256dh TEXT NOT NULL,
+  keys_auth TEXT NOT NULL,
+  user_agent VARCHAR(255) DEFAULT '',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX idx_push_user (username)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Web Push 订阅';
+
+CREATE TABLE IF NOT EXISTS enterprise_cert (
+  username VARCHAR(64) NOT NULL PRIMARY KEY,
+  company_name VARCHAR(191) NOT NULL DEFAULT '',
+  credit_code VARCHAR(64) NOT NULL DEFAULT '',
+  legal_person VARCHAR(64) NOT NULL DEFAULT '',
+  id_card VARCHAR(64) NOT NULL DEFAULT '',
+  status VARCHAR(16) NOT NULL DEFAULT 'certified',
+  fail_reason VARCHAR(500) NOT NULL DEFAULT '',
+  check_result VARCHAR(500) NOT NULL DEFAULT '',
+  attempts INT NOT NULL DEFAULT 0,
+  verified_at VARCHAR(32) NOT NULL DEFAULT '',
+  last_verify_at VARCHAR(32) NOT NULL DEFAULT '',
+  last_check_at VARCHAR(32) NOT NULL DEFAULT '',
+  face_certify_id VARCHAR(128) NOT NULL DEFAULT '',
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='企业认证（三要素+刷脸）';
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+  id VARCHAR(64) NOT NULL PRIMARY KEY,
+  conv_id VARCHAR(32) NOT NULL,
+  from_user VARCHAR(64) NOT NULL,
+  to_user VARCHAR(64) NOT NULL,
+  content MEDIUMTEXT NOT NULL,
+  msg_type VARCHAR(16) DEFAULT 'text',
+  conv_subject VARCHAR(255) DEFAULT '',
+  created_at BIGINT NOT NULL,
+  read_at BIGINT DEFAULT 0,
+  INDEX idx_cm_conv (conv_id, created_at),
+  INDEX idx_cm_unread (to_user, read_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='即时通讯消息';
+
+CREATE TABLE IF NOT EXISTS chat_friends (
+  username VARCHAR(64) NOT NULL,
+  friend_username VARCHAR(64) NOT NULL,
+  created_at BIGINT NOT NULL,
+  remark VARCHAR(255) DEFAULT '',
+  PRIMARY KEY (username, friend_username)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='聊天好友';
+
+CREATE TABLE IF NOT EXISTS chat_dispatch_pool (
+  owner VARCHAR(64) NOT NULL PRIMARY KEY COMMENT '池主（租户）',
+  members MEDIUMTEXT NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='聊天分流池';
+
+CREATE TABLE IF NOT EXISTS chat_pending_messages (
+  id VARCHAR(64) NOT NULL PRIMARY KEY,
+  pool_owner VARCHAR(64) NOT NULL,
+  from_user VARCHAR(64) NOT NULL,
+  content MEDIUMTEXT NOT NULL,
+  msg_type VARCHAR(16) DEFAULT 'text',
+  conv_subject VARCHAR(255) DEFAULT '',
+  created_at BIGINT NOT NULL,
+  INDEX idx_cpm_pool (pool_owner)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='聊天待分配消息';
 `;
 
 export async function initDatabase() {

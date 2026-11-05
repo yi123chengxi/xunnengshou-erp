@@ -7,7 +7,7 @@
  * 结果处理：匹配→刷新 last_check_at；不匹配→abnormal（工商变更/查无）；
  * 接口错误→仅记 check_result=error 不推进 last_check_at，次日重试。
  */
-import { stmtCertsDueCheck, stmtUpdateCertStatus, stmtGetSetting, stmtSetSetting } from '../database/sqlite';
+import { store } from '../database/store';
 import { verifyThreeElements } from './enterpriseVerify';
 
 const META_KEY = 'enterprise_patrol_last_date';
@@ -20,26 +20,26 @@ const nowStr = () => new Date().toISOString().replace('T', ' ').slice(0, 19);
 export async function runEnterprisePatrolTick(): Promise<number> {
   const today = dayStr(new Date());
   try {
-    const row = stmtGetSetting.get(META_KEY) as { setting_value: string } | undefined;
-    if (row && row.setting_value === today) return 0; // 当日已跑
+    const lastDate = await store.getSetting(META_KEY);
+    if (lastDate === today) return 0; // 当日已跑
     const cutoff = dayStr(new Date(Date.now() - 30 * DAY_MS));
-    const due = stmtCertsDueCheck.all(cutoff, BATCH_LIMIT) as any[];
+    const due = await store.certsDueCheck(cutoff, BATCH_LIMIT);
     for (const r of due) {
       const res = await verifyThreeElements({
         companyName: r.company_name, creditCode: r.credit_code, legalPerson: r.legal_person,
       });
       if (!res.ok) {
         // 接口故障：不推进巡检日期，次日重试
-        stmtUpdateCertStatus.run(r.status, r.fail_reason, 'error', r.last_check_at, r.username);
+        await store.updateCertStatus(r.status, r.fail_reason, 'error', r.last_check_at, r.username);
         continue;
       }
       if (res.matched) {
-        stmtUpdateCertStatus.run('certified', '', res.devMode ? 'devMode' : 'match', nowStr(), r.username);
+        await store.updateCertStatus('certified', '', res.devMode ? 'devMode' : 'match', nowStr(), r.username);
       } else {
-        stmtUpdateCertStatus.run('abnormal', res.message || '三要素与工商登记不一致', res.reason || 'mismatch', nowStr(), r.username);
+        await store.updateCertStatus('abnormal', res.message || '三要素与工商登记不一致', res.reason || 'mismatch', nowStr(), r.username);
       }
     }
-    stmtSetSetting.run(META_KEY, today);
+    await store.setSetting(META_KEY, today);
     return due.length;
   } catch {
     return 0;

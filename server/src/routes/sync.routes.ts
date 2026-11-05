@@ -1,14 +1,10 @@
 /**
- * 数据同步路由（SQLite 版）
- * 所有业务数据存储在 SQLite 数据库（server/data/factory.db）
+ * 数据同步路由（双驱动版：DB_DRIVER=sqlite|mysql）
+ * 所有业务数据经统一数据访问层 store（SQLite 文件库 或 独立 MySQL 服务器）
  * 不同浏览器登录同一账号 → 读写同一个数据库 → 天然数据同步
  */
 import express, { Router, Request, Response } from 'express';
-import {
-  stmtGetDataset, stmtGetAllMeta, stmtUpsertDataset, stmtForceUpsertDataset, stmtDeleteDataset,
-  stmtGetUser, stmtGetAllUsers, stmtInsertUser, stmtUpdateUser, stmtDeleteUser,
-  stmtGetSetting, stmtSetSetting,
-} from '../database/sqlite';
+import { store, STORE_DRIVER } from '../database/store';
 import { sendPushToUser } from './push.routes';
 import {
   applyUsageDeltaForWrite, getUsageBytes, getAllUsageBytes, recomputeUsage, getDatasetJson,
@@ -41,7 +37,7 @@ async function notifyNewPayRequests(key: string, oldJson: string, newJson: strin
     const owner = key.replace(/^payment_requests_/, '');
     let managers: any = {};
     try {
-      const mrow = stmtGetDataset.get(`payment_request_managers_${owner}`) as any;
+      const mrow = await store.getDataset(`payment_request_managers_${owner}`);
       if (mrow) managers = JSON.parse(mrow.dataset_json || '{}');
     } catch { /* ignore */ }
     for (const rec of fresh.slice(0, 3)) {
@@ -58,7 +54,7 @@ async function notifyNewPayRequests(key: string, oldJson: string, newJson: strin
       for (const u of targets) {
         try {
           // 弹窗设置开关：pay-request 关闭后不推送
-          const srow = stmtGetDataset.get(`notification_settings_${u}`) as any;
+          const srow = await store.getDataset(`notification_settings_${u}`);
           if (srow) {
             const s = JSON.parse(srow.dataset_json || '{}');
             if (s['pay-request'] === false) continue;
@@ -79,9 +75,9 @@ async function notifyNewPayRequests(key: string, oldJson: string, newJson: strin
 // ============ 数据集 CRUD ============
 
 /** 获取所有数据集的元信息（key + 更新时间） */
-router.get('/meta', (_req: Request, res: Response) => {
+router.get('/meta', async (_req: Request, res: Response) => {
   try {
-    const rows = stmtGetAllMeta.all() as { dataset_key: string; updated_at: number }[];
+    const rows = await store.getAllMeta();
     const meta: Record<string, number> = {};
     for (const r of rows) {
       meta[r.dataset_key] = r.updated_at;
@@ -94,11 +90,11 @@ router.get('/meta', (_req: Request, res: Response) => {
 });
 
 /** 获取单个数据集 */
-router.get('/dataset', (req: Request, res: Response) => {
+router.get('/dataset', async (req: Request, res: Response) => {
   try {
     const key = String(req.query.key || '');
     if (!key) { res.status(400).json({ error: 'missing key' }); return; }
-    const row = stmtGetDataset.get(key) as { dataset_key: string; dataset_json: string; updated_at: number } | undefined;
+    const row = await store.getDataset(key);
     if (!row) { res.status(404).json({ error: 'not found' }); return; }
     res.json({ key: row.dataset_key, json: row.dataset_json, updatedAt: row.updated_at });
   } catch (err: any) {
@@ -113,24 +109,24 @@ router.get('/dataset', (req: Request, res: Response) => {
  *   baseTs !== 服务端当前版本 → 客户端数据已过期 → 按 key/id 并集合并，
  *   保护该客户端“不知道”的新增记录不被旧数据覆盖删除。
  */
-router.put('/dataset', (req: Request, res: Response) => {
+router.put('/dataset', async (req: Request, res: Response) => {
   try {
     const { key, json, updatedAt, baseTs, force } = req.body;
     if (!key || typeof json !== 'string') { res.status(400).json({ error: 'missing key or json' }); return; }
     const ts = Number(updatedAt) || Date.now();
     const owner = extractOwner(key);
-    const row = stmtGetDataset.get(key) as { dataset_key: string; dataset_json: string; updated_at: number } | undefined;
+    const row = await store.getDataset(key);
 
     if (!row) {
-      stmtForceUpsertDataset.run(key, json, owner, ts);
-      applyUsageDeltaForWrite(key, null, json);
+      await store.forceUpsertDataset(key, json, owner, ts);
+      await applyUsageDeltaForWrite(key, null, json);
       res.json({ saved: true, newTs: ts });
       return;
     }
     if (force) {
       const finalTs = Math.max(ts, row.updated_at);
-      stmtForceUpsertDataset.run(key, json, owner, finalTs);
-      applyUsageDeltaForWrite(key, row.dataset_json, json);
+      await store.forceUpsertDataset(key, json, owner, finalTs);
+      await applyUsageDeltaForWrite(key, row.dataset_json, json);
       if (key.startsWith('payment_requests_')) void notifyNewPayRequests(key, row.dataset_json, json);
       res.json({ saved: true, newTs: finalTs });
       return;
@@ -141,8 +137,8 @@ router.put('/dataset', (req: Request, res: Response) => {
         const guarded = mergeArrayDatasets(row.dataset_json, json);
         if (guarded) {
           const gTs = Math.max(ts, row.updated_at);
-          stmtForceUpsertDataset.run(key, guarded, owner, gTs);
-          applyUsageDeltaForWrite(key, row.dataset_json, guarded);
+          await store.forceUpsertDataset(key, guarded, owner, gTs);
+          await applyUsageDeltaForWrite(key, row.dataset_json, guarded);
           if (key.startsWith('payment_requests_')) void notifyNewPayRequests(key, row.dataset_json, guarded);
           res.json({ saved: true, merged: true, newTs: gTs });
           return;
@@ -150,8 +146,8 @@ router.put('/dataset', (req: Request, res: Response) => {
       }
       // 客户端基于最新版本修改 → 整体替换
       const finalTs = Math.max(ts, row.updated_at);
-      stmtForceUpsertDataset.run(key, json, owner, finalTs);
-      applyUsageDeltaForWrite(key, row.dataset_json, json);
+      await store.forceUpsertDataset(key, json, owner, finalTs);
+      await applyUsageDeltaForWrite(key, row.dataset_json, json);
       if (key.startsWith('payment_requests_')) void notifyNewPayRequests(key, row.dataset_json, json);
       res.json({ saved: true, newTs: finalTs });
       return;
@@ -160,8 +156,8 @@ router.put('/dataset', (req: Request, res: Response) => {
     const merged = mergeArrayDatasets(row.dataset_json, json);
     const finalJson = merged || json;
     const finalTs = Math.max(ts, row.updated_at);
-    stmtForceUpsertDataset.run(key, finalJson, owner, finalTs);
-    applyUsageDeltaForWrite(key, row.dataset_json, finalJson);
+    await store.forceUpsertDataset(key, finalJson, owner, finalTs);
+    await applyUsageDeltaForWrite(key, row.dataset_json, finalJson);
     if (key.startsWith('payment_requests_')) void notifyNewPayRequests(key, row.dataset_json, finalJson);
     res.json({ saved: true, merged: !!merged, newTs: finalTs });
   } catch (err: any) {
@@ -195,13 +191,13 @@ function mergeArrayDatasets(existingJson: string, incomingJson: string): string 
 }
 
 /** 删除数据集 */
-router.delete('/dataset', (req: Request, res: Response) => {
+router.delete('/dataset', async (req: Request, res: Response) => {
   try {
     const key = String(req.query.key || '');
     if (!key) { res.status(400).json({ error: 'missing key' }); return; }
-    const oldJson = getDatasetJson(key);
-    stmtDeleteDataset.run(key);
-    applyUsageDeltaForWrite(key, oldJson, null);
+    const oldJson = await getDatasetJson(key);
+    await store.deleteDataset(key);
+    await applyUsageDeltaForWrite(key, oldJson, null);
     res.json({ deleted: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -211,30 +207,30 @@ router.delete('/dataset', (req: Request, res: Response) => {
 // ============ 存储用量（增量计数器） ============
 
 /** 查询某租户数据库用量（字节，O(1)） */
-router.get('/usage', (req: Request, res: Response) => {
+router.get('/usage', async (req: Request, res: Response) => {
   const owner = String(req.query.owner || '');
   if (!owner) { res.status(400).json({ error: 'missing owner' }); return; }
-  res.json({ code: 0, data: { owner, bytes: getUsageBytes(owner) } });
+  res.json({ code: 0, data: { owner, bytes: await getUsageBytes(owner) } });
 });
 
 /** 全部租户用量映射（开发者后台列表用） */
-router.get('/usage-all', (_req: Request, res: Response) => {
-  res.json({ code: 0, data: getAllUsageBytes() });
+router.get('/usage-all', async (_req: Request, res: Response) => {
+  res.json({ code: 0, data: await getAllUsageBytes() });
 });
 
 /** 重新扫描：全量重算某租户（或全部）用量计数器 */
-router.post('/usage-recompute', (req: Request, res: Response) => {
+router.post('/usage-recompute', async (req: Request, res: Response) => {
   const owner = String(req.query.owner || req.body?.owner || '');
-  const result = recomputeUsage(owner || undefined);
+  const result = await recomputeUsage(owner || undefined);
   res.json({ code: 0, data: result });
 });
 
 // ============ 用户账号 CRUD ============
 
 /** 获取所有注册用户 */
-router.get('/users', (_req: Request, res: Response) => {
+router.get('/users', async (_req: Request, res: Response) => {
   try {
-    const users = stmtGetAllUsers.all();
+    const users = await store.getAllUsers();
     res.json(users);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -242,9 +238,9 @@ router.get('/users', (_req: Request, res: Response) => {
 });
 
 /** 获取单个用户 */
-router.get('/users/:username', (req: Request, res: Response) => {
+router.get('/users/:username', async (req: Request, res: Response) => {
   try {
-    const user = stmtGetUser.get(req.params.username);
+    const user = await store.getUser(req.params.username);
     if (!user) { res.status(404).json({ error: 'user not found' }); return; }
     res.json(user);
   } catch (err: any) {
@@ -253,15 +249,15 @@ router.get('/users/:username', (req: Request, res: Response) => {
 });
 
 /** 注册用户 */
-router.post('/users', (req: Request, res: Response) => {
+router.post('/users', async (req: Request, res: Response) => {
   try {
     const { username, password, role, company_name, contact_person, phone, email, register_date, status } = req.body;
     if (!username || !password) { res.status(400).json({ error: 'username and password required' }); return; }
-    const result = stmtInsertUser.run(
-      username, password, role || 'user', company_name || '', contact_person || '',
-      phone || '', email || '', register_date || new Date().toISOString().slice(0, 10), status || 'active'
-    );
-    if (result.changes === 0) {
+    const changes = await store.insertUser({
+      username, password, role: role || 'user', company_name: company_name || '', contact_person: contact_person || '',
+      phone: phone || '', email: email || '', register_date: register_date || new Date().toISOString().slice(0, 10), status: status || 'active',
+    });
+    if (changes === 0) {
       res.status(409).json({ error: 'username already exists' });
       return;
     }
@@ -272,10 +268,10 @@ router.post('/users', (req: Request, res: Response) => {
 });
 
 /** 更新用户 */
-router.put('/users/:username', (req: Request, res: Response) => {
+router.put('/users/:username', async (req: Request, res: Response) => {
   try {
     const { password, role, company_name, contact_person, phone, email, status } = req.body;
-    stmtUpdateUser.run(password || null, role || null, company_name || null, contact_person || null, phone || null, email || null, status || null, req.params.username);
+    await store.updateUser({ password: password || null, role: role || null, company_name: company_name || null, contact_person: contact_person || null, phone: phone || null, email: email || null, status: status || null }, req.params.username);
     res.json({ updated: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -283,9 +279,9 @@ router.put('/users/:username', (req: Request, res: Response) => {
 });
 
 /** 删除用户 */
-router.delete('/users/:username', (req: Request, res: Response) => {
+router.delete('/users/:username', async (req: Request, res: Response) => {
   try {
-    stmtDeleteUser.run(req.params.username);
+    await store.deleteUser(req.params.username);
     res.json({ deleted: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -294,18 +290,18 @@ router.delete('/users/:username', (req: Request, res: Response) => {
 
 // ============ 系统设置 ============
 
-router.get('/settings/:key', (req: Request, res: Response) => {
+router.get('/settings/:key', async (req: Request, res: Response) => {
   try {
-    const row = stmtGetSetting.get(req.params.key) as { setting_value: string } | undefined;
-    res.json({ value: row?.setting_value || '' });
+    const value = await store.getSetting(req.params.key);
+    res.json({ value: value || '' });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
-router.put('/settings/:key', (req: Request, res: Response) => {
+router.put('/settings/:key', async (req: Request, res: Response) => {
   try {
-    stmtSetSetting.run(req.params.key, String(req.body.value || ''));
+    await store.setSetting(req.params.key, String(req.body.value || ''));
     res.json({ saved: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -313,8 +309,9 @@ router.put('/settings/:key', (req: Request, res: Response) => {
 });
 
 // ============ 健康检查 ============
+
 router.get('/health', (_req: Request, res: Response) => {
-  res.json({ ok: true, db: 'sqlite', timestamp: Date.now() });
+  res.json({ ok: true, db: STORE_DRIVER, timestamp: Date.now() });
 });
 
 // ============ 辅助 ============

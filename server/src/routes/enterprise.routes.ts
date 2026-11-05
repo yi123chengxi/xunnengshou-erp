@@ -17,7 +17,7 @@
 import { Router, Request, Response } from 'express';
 import { verifyThreeElements, getEnterpriseConfig, testEnterpriseConfig } from '../services/enterpriseVerify';
 import { initFaceVerify, describeFaceVerify } from '../services/aliyunFaceVerify';
-import { stmtGetCert, stmtUpsertCert, stmtUpdateCertStatus, stmtCertFacePass, stmtCertFaceFail, stmtSetSetting } from '../database/sqlite';
+import { store } from '../database/store';
 
 const router = Router();
 
@@ -66,7 +66,7 @@ router.post('/verify', async (req: Request, res: Response) => {
     const sameProfile = (r: CertRow) => r.company_name === companyName && r.credit_code === creditCode && r.legal_person === legalPerson && r.id_card === idCard;
 
     // 待刷脸短路（优先于限频）：同三要素+身份证且仍在 pending → 不重复调三要素接口，直接引导刷脸
-    const exist0 = stmtGetCert.get(username) as CertRow | undefined;
+    const exist0 = await store.getCert(username) as CertRow | undefined;
     if (exist0 && exist0.status === 'pending' && sameProfile(exist0)) {
       res.json({ code: 0, data: { ...publicView(exist0), cached: true }, message: '三要素已核验通过，请继续完成法人刷脸' });
       return;
@@ -81,7 +81,7 @@ router.post('/verify', async (req: Request, res: Response) => {
     if (failsToday >= DAILY_FAIL_MAX) { res.json({ code: 429, message: '今日核验失败次数已达上限，请明天再试' }); return; }
 
     // 控费缓存：已认证且同三要素（含身份证）24h 内 → 直接返回，不重复调接口
-    const exist = stmtGetCert.get(username) as CertRow | undefined;
+    const exist = await store.getCert(username) as CertRow | undefined;
     if (exist && exist.status === 'certified' && sameProfile(exist)
       && exist.last_verify_at && Date.now() - new Date(exist.last_verify_at.replace(' ', 'T')).getTime() < 24 * 3600_000) {
       res.json({ code: 0, data: { ...publicView(exist), cached: true }, message: '该企业已完成认证' });
@@ -95,18 +95,23 @@ router.post('/verify', async (req: Request, res: Response) => {
     if (r.ok && r.matched) {
       const ts = nowStr();
       // 三要素通过 → pending（待法人刷脸）；刷脸通过后由 face/describe 置为 certified
-      stmtUpsertCert.run(
-        username, companyName, creditCode, legalPerson, idCard, 'pending', '等待法人刷脸认证', r.devMode ? 'devMode' : 'match', 0,
-        exist && exist.status === 'certified' ? exist.verified_at : '', ts, ts,
-      );
-      const row = stmtGetCert.get(username) as CertRow;
+      await store.upsertCert({
+        username, company_name: companyName, credit_code: creditCode, legal_person: legalPerson, id_card: idCard,
+        status: 'pending', fail_reason: '等待法人刷脸认证', check_result: r.devMode ? 'devMode' : 'match', attempts: 0,
+        verified_at: exist && exist.status === 'certified' ? exist.verified_at : '', last_verify_at: ts, last_check_at: ts,
+      });
+      const row = await store.getCert(username) as CertRow;
       res.json({ code: 0, data: publicView(row), message: '三要素核验通过，请完成法人刷脸认证' });
       return;
     }
     // 核验不通过：记录失败原因；已有认证不立即撤销（以巡检/复核为准）
     if (r.ok) {
       if (exist) {
-        stmtUpsertCert.run(exist.username, companyName, creditCode, legalPerson, idCard, exist.status, r.message || '三要素不一致', r.reason || 'mismatch', exist.attempts + 1, exist.verified_at, nowStr(), exist.last_check_at);
+        await store.upsertCert({
+          username: exist.username, company_name: companyName, credit_code: creditCode, legal_person: legalPerson, id_card: idCard,
+          status: exist.status, fail_reason: r.message || '三要素不一致', check_result: r.reason || 'mismatch', attempts: exist.attempts + 1,
+          verified_at: exist.verified_at, last_verify_at: nowStr(), last_check_at: exist.last_check_at,
+        });
       }
       res.json({ code: 400, message: r.message || '三要素与工商登记信息不一致，请核对后重试' });
       return;
@@ -117,23 +122,23 @@ router.post('/verify', async (req: Request, res: Response) => {
   }
 });
 
-router.get('/status', (req: Request, res: Response) => {
+router.get('/status', async (req: Request, res: Response) => {
   try {
     const username = String(req.query.username || '').trim();
     if (!username) { res.json({ code: 400, message: '缺少 username' }); return; }
-    const row = stmtGetCert.get(username) as CertRow | undefined;
+    const row = await store.getCert(username) as CertRow | undefined;
     res.json({ code: 0, data: row ? publicView(row) : null });
   } catch (err: any) {
     res.status(500).json({ code: 500, message: err.message });
   }
 });
 
-router.post('/status-batch', (req: Request, res: Response) => {
+router.post('/status-batch', async (req: Request, res: Response) => {
   try {
     const usernames: string[] = Array.isArray(req.body?.usernames) ? req.body.usernames.map((x: any) => String(x || '').trim()).filter(Boolean) : [];
     const map: Record<string, any> = {};
     for (const u of usernames.slice(0, 200)) {
-      const row = stmtGetCert.get(u) as CertRow | undefined;
+      const row = await store.getCert(u) as CertRow | undefined;
       if (row) map[u] = publicView(row);
     }
     res.json({ code: 0, data: { map } });
@@ -145,16 +150,16 @@ router.post('/status-batch', (req: Request, res: Response) => {
 router.post('/recheck', async (req: Request, res: Response) => {
   try {
     const username = String(req.body?.username || '').trim();
-    const row = stmtGetCert.get(username) as CertRow | undefined;
+    const row = await store.getCert(username) as CertRow | undefined;
     if (!row) { res.json({ code: 404, message: '该账号无认证记录' }); return; }
     const r = await verifyThreeElements({ companyName: row.company_name, creditCode: row.credit_code, legalPerson: row.legal_person });
     if (!r.ok) { res.json({ code: 500, message: r.message || '核验服务暂时不可用' }); return; }
     const ts = nowStr();
     if (r.matched) {
-      stmtUpdateCertStatus.run('certified', '', r.devMode ? 'devMode' : 'match', ts, username);
+      await store.updateCertStatus('certified', '', r.devMode ? 'devMode' : 'match', ts, username);
       res.json({ code: 0, message: '复核通过，认证状态正常' });
     } else {
-      stmtUpdateCertStatus.run('abnormal', r.message || '三要素不一致', r.reason || 'mismatch', ts, username);
+      await store.updateCertStatus('abnormal', r.message || '三要素不一致', r.reason || 'mismatch', ts, username);
       res.json({ code: 0, message: `复核不通过：${r.message || '三要素与工商登记不一致'}，已标记为异常` });
     }
   } catch (err: any) {
@@ -162,13 +167,13 @@ router.post('/recheck', async (req: Request, res: Response) => {
   }
 });
 
-router.post('/revoke', (req: Request, res: Response) => {
+router.post('/revoke', async (req: Request, res: Response) => {
   try {
     const username = String(req.body?.username || '').trim();
     const reason = String(req.body?.reason || '开发者后台撤销').trim();
-    const row = stmtGetCert.get(username) as CertRow | undefined;
+    const row = await store.getCert(username) as CertRow | undefined;
     if (!row) { res.json({ code: 404, message: '该账号无认证记录' }); return; }
-    stmtUpdateCertStatus.run('revoked', reason, 'revoked', nowStr(), username);
+    await store.updateCertStatus('revoked', reason, 'revoked', nowStr(), username);
     res.json({ code: 0, message: '已撤销认证' });
   } catch (err: any) {
     res.status(500).json({ code: 500, message: err.message });
@@ -186,7 +191,7 @@ router.post('/face/init', async (req: Request, res: Response) => {
   try {
     const username = String(req.body?.username || '').trim();
     if (!username) { res.json({ code: 400, message: '缺少账号信息' }); return; }
-    const row = stmtGetCert.get(username) as CertRow | undefined;
+    const row = await store.getCert(username) as CertRow | undefined;
     if (!row || !row.legal_person || !row.id_card) { res.json({ code: 400, message: '请先提交企业认证信息（含法人身份证号）' }); return; }
     const now = Date.now();
     const cached = faceInitCache.get(username);
@@ -224,18 +229,18 @@ router.post('/face/describe', async (req: Request, res: Response) => {
     const now = Date.now();
     if (now - (faceQueryThrottle.get(username) || 0) < 800) { res.json({ code: 429, message: '查询过于频繁，请稍候' }); return; }
     faceQueryThrottle.set(username, now);
-    const row = stmtGetCert.get(username) as CertRow | undefined;
+    const row = await store.getCert(username) as CertRow | undefined;
     if (!row) { res.json({ code: 404, message: '该账号无认证记录' }); return; }
     const r = await describeFaceVerify(certifyId);
     if (!r.ok) { res.json({ code: 500, message: r.message || '查询刷脸结果失败' }); return; }
     if (r.passed) {
       // 刷脸通过：置为 certified 并记录刷脸时间（verified_at 刷新，巡检周期重新起算）
-      stmtCertFacePass.run(certifyId, username);
-      const fresh = stmtGetCert.get(username) as CertRow;
+      await store.certFacePass(certifyId, username);
+      const fresh = await store.getCert(username) as CertRow;
       res.json({ code: 0, data: { passed: true, devMode: !!r.devMode, cert: publicView(fresh) }, message: '法人刷脸认证通过' });
     } else {
       // 未通过/未完成：保持 pending，记录失败原因供前端展示；可重新生成二维码重试
-      stmtCertFaceFail.run(r.message || '刷脸未通过', certifyId, username);
+      await store.certFaceFail(r.message || '刷脸未通过', certifyId, username);
       res.json({ code: 0, data: { passed: false, subCode: r.subCode || '', message: r.message || '刷脸未通过' } });
     }
   } catch (err: any) {
@@ -253,9 +258,9 @@ const CFG_KEYS = {
 };
 
 /** 读取当前生效配置（优先后台写入，其次 .env） */
-router.get('/config', (_req: Request, res: Response) => {
+router.get('/config', async (_req: Request, res: Response) => {
   try {
-    const c = getEnterpriseConfig();
+    const c = await getEnterpriseConfig();
     res.json({ code: 0, data: { apiUrl: c.apiUrl, appCode: c.appCode, appKey: c.appKey, appSecret: c.appSecret, source: c.source, configured: !!(c.apiUrl && c.appCode) } });
   } catch (err: any) {
     res.status(500).json({ code: 500, message: err.message });
@@ -263,7 +268,7 @@ router.get('/config', (_req: Request, res: Response) => {
 });
 
 /** 保存配置（写入 system_settings；下一次核验即时读取新值） */
-router.put('/config', (req: Request, res: Response) => {
+router.put('/config', async (req: Request, res: Response) => {
   try {
     const apiUrl = String(req.body?.apiUrl ?? '').trim();
     const appCode = String(req.body?.appCode ?? '').trim();
@@ -271,11 +276,11 @@ router.put('/config', (req: Request, res: Response) => {
     const appSecret = String(req.body?.appSecret ?? '').trim();
     if (appCode && !/^[a-f0-9]{16,64}$/i.test(appCode)) { res.json({ code: 400, message: 'AppCode 格式不正确（应为 16-64 位十六进制字符串）' }); return; }
     if (apiUrl && !/^https?:\/\//i.test(apiUrl)) { res.json({ code: 400, message: '接口地址需以 http:// 或 https:// 开头' }); return; }
-    stmtSetSetting.run(CFG_KEYS.apiUrl, apiUrl);
-    stmtSetSetting.run(CFG_KEYS.appCode, appCode);
-    stmtSetSetting.run(CFG_KEYS.appKey, appKey);
-    stmtSetSetting.run(CFG_KEYS.appSecret, appSecret);
-    const c = getEnterpriseConfig();
+    await store.setSetting(CFG_KEYS.apiUrl, apiUrl);
+    await store.setSetting(CFG_KEYS.appCode, appCode);
+    await store.setSetting(CFG_KEYS.appKey, appKey);
+    await store.setSetting(CFG_KEYS.appSecret, appSecret);
+    const c = await getEnterpriseConfig();
     res.json({ code: 0, message: c.appCode ? '配置已保存并即时生效' : '配置已保存（AppCode 为空，核验将回退未配置状态）', data: { configured: !!(c.apiUrl && c.appCode), source: c.source } });
   } catch (err: any) {
     res.status(500).json({ code: 500, message: err.message });
@@ -288,7 +293,7 @@ router.post('/config/test', async (req: Request, res: Response) => {
     const companyName = String(req.body?.companyName ?? '').trim();
     const creditCode = String(req.body?.creditCode ?? '').trim();
     const legalPerson = String(req.body?.legalPerson ?? '').trim();
-    const cur = getEnterpriseConfig();
+    const cur = await getEnterpriseConfig();
     const cfg = {
       apiUrl: String(req.body?.apiUrl ?? '').trim() || cur.apiUrl,
       appCode: String(req.body?.appCode ?? '').trim() || cur.appCode,

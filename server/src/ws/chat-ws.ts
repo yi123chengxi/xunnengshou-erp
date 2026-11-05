@@ -135,7 +135,7 @@ export function initChatWebSocket(server: HTTPServer) {
       }
     }, 10_000);
 
-    ws.on('message', (raw: Buffer) => {
+    ws.on('message', async (raw: Buffer) => {
       let msg: any;
       try { msg = JSON.parse(raw.toString()); } catch { return; }
 
@@ -174,7 +174,7 @@ export function initChatWebSocket(server: HTTPServer) {
         console.log(`[chat-ws] 用户已认证: ${meta.username}${meta.parentUsername ? ' (parent: ' + meta.parentUsername + ')' : ''}`);
 
         // 检查是否有待分配消息分配给该用户
-        deliverPendingMessages(meta.username);
+        void deliverPendingMessages(meta.username);
         return;
       }
 
@@ -200,10 +200,10 @@ export function initChatWebSocket(server: HTTPServer) {
         let actualTo = to;
         let routedPoolOwner: string | null = null;
         if (msg.dispatch === true) {
-          const poolOwner = findPoolOwnerForUser(to);
+          const poolOwner = await findPoolOwnerForUser(to);
           if (poolOwner) {
             routedPoolOwner = poolOwner;
-            const pool = getDispatchPool(poolOwner);
+            const pool = await getDispatchPool(poolOwner);
             if (pool.length > 0) {
               // 筛选在线成员
               const onlineMembers = pool.filter(m => isUserOnline(m));
@@ -212,7 +212,7 @@ export function initChatWebSocket(server: HTTPServer) {
                 actualTo = onlineMembers[Math.floor(Math.random() * onlineMembers.length)];
               } else {
                 // 无人在线，存为待分配
-                savePendingMessage({
+                await savePendingMessage({
                   pool_owner: poolOwner,
                   from_user: meta.username,
                   content,
@@ -233,7 +233,7 @@ export function initChatWebSocket(server: HTTPServer) {
 
         // 持久化：子账号使用父账号用户名计算 conv_id，确保与采购商端一致；客户端 cid 作幂等键（重试不重复）
         const convFromUser = meta.parentUsername || meta.username;
-        const saved = saveMessage({
+        const saved = await saveMessage({
           id: typeof msg.cid === 'string' && msg.cid ? msg.cid : undefined,
           from_user: meta.username,
           to_user: actualTo,
@@ -297,11 +297,11 @@ export function initChatWebSocket(server: HTTPServer) {
           }
         }
         // 验证发送者是否为池主（主账号权限）
-        const pool = getDispatchPool(meta.username);
+        const pool = await getDispatchPool(meta.username);
         if (!pool.includes(asUser) && meta.username !== asUser) return;
 
         // 代发消息：使用主账号用户名计算 conv_id
-        const saved = saveMessage({
+        const saved = await saveMessage({
           from_user: asUser,
           to_user: to,
           content,
@@ -335,7 +335,7 @@ export function initChatWebSocket(server: HTTPServer) {
       if (msg.type === 'mark_read') {
         const { convId } = msg;
         if (!convId) return;
-        markConvRead(convId, meta.username);
+        await markConvRead(convId, meta.username);
         return;
       }
 
@@ -354,7 +354,7 @@ export function initChatWebSocket(server: HTTPServer) {
       if (msg.type === 'get_history') {
         const { convId, before, limit } = msg;
         if (!convId) return;
-        const messages = getHistory(convId, before, limit || 50);
+        const messages = await getHistory(convId, before, limit || 50);
         ws.send(JSON.stringify({
           type: 'history',
           convId,
@@ -406,16 +406,16 @@ function broadcastPresence(username: string, online: boolean) {
 }
 
 /** 用户上线时，分配待处理消息 */
-function deliverPendingMessages(username: string) {
+async function deliverPendingMessages(username: string) {
   // 查找该用户属于哪些分流池
-  const allPools = getAllPoolsForDispatch();
+  const allPools = await getAllPoolsForDispatch();
   for (const { owner, members } of allPools) {
     if (!members.includes(username)) continue;
     // 获取该池的待分配消息
-    const pending = getPendingMessages(owner);
+    const pending = await getPendingMessages(owner);
     for (const pend of pending) {
       // 保存为正式消息
-      const saved = saveMessage({
+      const saved = await saveMessage({
         from_user: pend.from_user,
         to_user: username,
         content: pend.content,
@@ -452,13 +452,13 @@ function deliverPendingMessages(username: string) {
         });
       }
       // 删除待分配记录
-      deletePendingMessage(pend.id);
+      await deletePendingMessage(pend.id);
     }
   }
 }
 
 /** 获取所有分流池配置（内部辅助） */
-function getAllPoolsForDispatch(): { owner: string; members: string[] }[] {
+async function getAllPoolsForDispatch(): Promise<{ owner: string; members: string[] }[]> {
   // 直接调用 chat-store 的导出
   const { getAllDispatchPools } = require('./chat-store');
   return getAllDispatchPools();

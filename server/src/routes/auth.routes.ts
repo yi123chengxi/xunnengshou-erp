@@ -2,7 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import dotenv from 'dotenv';
-import { stmtGetUser, stmtGetAllUsers, stmtGetDataset } from '../database/sqlite';
+import { store } from '../database/store';
 
 dotenv.config();
 
@@ -73,7 +73,7 @@ router.post('/login', async (req: Request, res: Response) => {
     }
 
     // 2. 在 registered_users 表中查找
-    const dbUser = stmtGetUser.get(username) as {
+    const dbUser = await store.getUser(username) as {
       username: string; password: string; role: string;
       company_name: string; contact_person: string; status: string;
     } | undefined;
@@ -117,7 +117,7 @@ router.post('/login', async (req: Request, res: Response) => {
     // 3. Web 端注册账号（全局同步数据集 registeredUsers）：与网页登录同口径——明文密码比对、不校验 status
     //    打印客户端等非网页入口必须能登录 Web 注册的账号，否则出现"用户名或密码错误"
     try {
-      const rec = stmtGetDataset.get('registeredUsers') as { dataset_json: string } | undefined;
+      const rec = await store.getDataset('registeredUsers');
       if (rec) {
         const users: any[] = JSON.parse(rec.dataset_json || '[]');
         const hit = Array.isArray(users) ? users.find((u: any) => u && u.username === username) : null;

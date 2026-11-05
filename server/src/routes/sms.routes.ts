@@ -9,7 +9,7 @@
  */
 import { Router, Request, Response } from 'express';
 import { isSmsConfigured, sendSmsCode } from '../services/aliyunSms';
-import { stmtGetDataset, stmtGetAllUsers } from '../database/sqlite';
+import { store } from '../database/store';
 
 const router = Router();
 
@@ -18,11 +18,11 @@ const codeStore = new Map<string, CodeRec>();
 const sendThrottle = new Map<string, { last: number; day: string; count: number }>();
 
 /** 按手机号查找账号（服务端用户表 + 客户端同步的 registeredUsers 数据集并集） */
-function findUsersByPhone(phone: string): any[] {
+async function findUsersByPhone(phone: string): Promise<any[]> {
   const out: any[] = [];
   const seen = new Set<string>();
   try {
-    for (const u of stmtGetAllUsers.all() as any[]) {
+    for (const u of await store.getAllUsers()) {
       if (u && u.phone && String(u.phone) === phone && u.username && !seen.has(u.username)) {
         seen.add(u.username);
         out.push(u);
@@ -30,7 +30,7 @@ function findUsersByPhone(phone: string): any[] {
     }
   } catch { /* ignore */ }
   try {
-    const row = stmtGetDataset.get('registeredUsers') as { dataset_json: string } | undefined;
+    const row = await store.getDataset('registeredUsers');
     if (row) {
       for (const u of JSON.parse(row.dataset_json || '[]')) {
         if (u && u.phone && String(u.phone) === phone && u.username && !seen.has(u.username)) {
@@ -47,7 +47,7 @@ router.post('/send-code', async (req: Request, res: Response) => {
   try {
     const phone = String(req.body?.phone || '').trim();
     if (!/^1\d{10}$/.test(phone)) { res.json({ code: 400, message: '请输入正确的11位手机号' }); return; }
-    const users = findUsersByPhone(phone);
+    const users = await findUsersByPhone(phone);
     if (!users.length) { res.json({ code: 404, message: '该手机号未注册账号，请先注册或使用账号密码登录' }); return; }
 
     // 限频：同手机号 60 秒间隔、每日 10 条
@@ -77,7 +77,7 @@ router.post('/send-code', async (req: Request, res: Response) => {
   }
 });
 
-router.post('/login', (req: Request, res: Response) => {
+router.post('/login', async (req: Request, res: Response) => {
   try {
     const phone = String(req.body?.phone || '').trim();
     const code = String(req.body?.code || '').trim();
@@ -87,7 +87,7 @@ router.post('/login', (req: Request, res: Response) => {
     if (rec.attempts >= 5) { codeStore.delete(phone); res.json({ code: 400, message: '验证码错误次数过多，请重新获取' }); return; }
     if (rec.code !== code) { rec.attempts += 1; res.json({ code: 400, message: '验证码不正确' }); return; }
 
-    const users = findUsersByPhone(phone);
+    const users = await findUsersByPhone(phone);
     if (!users.length) { codeStore.delete(phone); res.json({ code: 404, message: '该手机号未注册账号' }); return; }
     // 多账号两段式：先返回候选名单，前端选定账号后带 username 重提（期间验证码不消费）
     let u = users[0];

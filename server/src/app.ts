@@ -7,6 +7,7 @@ import path from 'path';
 import './database/sqlite';
 import { runCleanupFromDB } from './tasks/cleanup.task';
 import { ensureUsageBackfill } from './services/storageUsage';
+import { STORE_DRIVER } from './database/store';
 
 // 路由导入
 import customerRoutes from './routes/customer.routes';
@@ -101,9 +102,9 @@ initChatWebSocket(server);
 
 server.listen(PORT, async () => {
   console.log(`🚀 工厂管理系统服务已启动: http://localhost:${PORT}`);
-  console.log('✅ SQLite 数据库已就绪');
+  console.log(`✅ 数据库已就绪（驱动：${STORE_DRIVER}）`);
   // 存储用量计数器背填：仅首次升级（计数器表为空）时全量聚合一次，后续走增量
-  try { ensureUsageBackfill(); } catch { /* ignore */ }
+  void ensureUsageBackfill().catch(() => { /* ignore */ });
   // 企业认证 30 天巡检日任务（当日已跑自动跳过）
   try { startEnterprisePatrol(); } catch { /* ignore */ }
   console.log('🖨️  打印 WebSocket 服务已就绪: ws://localhost:' + PORT + '/ws/print');

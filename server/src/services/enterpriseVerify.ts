@@ -10,7 +10,7 @@
  * 响应解析采用宽容模式：先识别外层信封 code，再在多层结构中查找匹配标志，
  * 兼容市面常见三要素接口返回形态；拿到正式接口文档后可在 parseMatch 中精确化。
  */
-import { stmtGetSetting } from '../database/sqlite';
+import { store } from '../database/store';
 
 export interface VerifyInput { companyName: string; creditCode: string; legalPerson: string; }
 export interface VerifyResult {
@@ -26,10 +26,10 @@ export interface EnterpriseConfig { apiUrl: string; appCode: string; appKey: str
 
 const DEFAULT_API_URL = 'https://sys.81api.com/verifyCompany/';
 
-function readSetting(key: string): string {
+async function readSetting(key: string): Promise<string> {
   try {
-    const row = stmtGetSetting.get(key) as { setting_value: string } | undefined;
-    return String(row?.setting_value || '').trim();
+    const v = await store.getSetting(key);
+    return String(v || '').trim();
   } catch { return ''; }
 }
 
@@ -37,14 +37,14 @@ function readSetting(key: string): string {
  * 解析生效配置：优先开发者后台写入的 system_settings，其次 server/.env。
  * 这样重新订购/更换 AppCode 后在后台改一次即时生效，无需改 .env 重新部署。
  */
-export function getEnterpriseConfig(): EnterpriseConfig {
-  const dbCode = readSetting('enterprise_appcode');
+export async function getEnterpriseConfig(): Promise<EnterpriseConfig> {
+  const dbCode = await readSetting('enterprise_appcode');
   if (dbCode) {
     return {
-      apiUrl: readSetting('enterprise_api_url') || process.env.ENTERPRISE_API_URL || DEFAULT_API_URL,
+      apiUrl: (await readSetting('enterprise_api_url')) || process.env.ENTERPRISE_API_URL || DEFAULT_API_URL,
       appCode: dbCode,
-      appKey: readSetting('enterprise_app_key'),
-      appSecret: readSetting('enterprise_app_secret'),
+      appKey: await readSetting('enterprise_app_key'),
+      appSecret: await readSetting('enterprise_app_secret'),
       source: 'db',
     };
   }
@@ -55,8 +55,8 @@ export function getEnterpriseConfig(): EnterpriseConfig {
   return { apiUrl: '', appCode: '', appKey: '', appSecret: '', source: 'none' };
 }
 
-export function isEnterpriseConfigured(): boolean {
-  const c = getEnterpriseConfig();
+export async function isEnterpriseConfigured(): Promise<boolean> {
+  const c = await getEnterpriseConfig();
   return !!(c.apiUrl && c.appCode);
 }
 
@@ -141,7 +141,7 @@ function buildVerifyUrl(apiUrl: string, input: VerifyInput): string {
 
 /** 真实调用云市场三要素核验接口（GET + Query：ComapnyName/CreditCode/LegalPersonName，APPCODE 头认证） */
 async function callRemote(input: VerifyInput, cfg?: EnterpriseConfig): Promise<VerifyResult> {
-  const c = cfg || getEnterpriseConfig();
+  const c = cfg || (await getEnterpriseConfig());
   if (!c.apiUrl || !c.appCode) return { ok: false, reason: 'not_configured', message: '企业三要素核验接口未配置' };
   try {
     const resp = await fetch(buildVerifyUrl(c.apiUrl, input), {
@@ -188,7 +188,7 @@ export async function verifyThreeElements(input: VerifyInput): Promise<VerifyRes
   if (!/^[0-9A-HJ-NPQRTUWXY]{18}$/i.test(creditCode)) {
     return { ok: false, reason: 'badcode', message: '统一社会信用代码格式不正确（18 位）' };
   }
-  if (!isEnterpriseConfigured()) {
+  if (!(await isEnterpriseConfigured())) {
     if (!isEnterpriseDevMode()) {
       return { ok: false, reason: 'not_configured', message: '企业三要素核验接口未配置（服务端 .env 缺 ENTERPRISE_API_URL），本次提交未生效；请联系管理员在阿里云市场控制台补全接口地址后重试' };
     }

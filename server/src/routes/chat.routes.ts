@@ -30,11 +30,11 @@ function getUsername(req: Request): string {
 }
 
 /** GET /api/chat/conversations — 获取当前用户的所有会话列表 */
-router.get('/conversations', (req: Request, res: Response) => {
+router.get('/conversations', async (req: Request, res: Response) => {
   try {
     const username = getUsername(req);
     if (!username) { res.status(401).json({ error: '未认证' }); return; }
-    const convs = getConversations(username);
+    const convs = await getConversations(username);
     // 附加在线状态
     const result = convs.map(c => ({
       ...c,
@@ -47,14 +47,14 @@ router.get('/conversations', (req: Request, res: Response) => {
 });
 
 /** GET /api/chat/messages/:convId — 获取指定会话的历史消息 */
-router.get('/messages/:convId', (req: Request, res: Response) => {
+router.get('/messages/:convId', async (req: Request, res: Response) => {
   try {
     const username = getUsername(req);
     if (!username) { res.status(401).json({ error: '未认证' }); return; }
     const { convId } = req.params;
     const before = req.query.before ? Number(req.query.before) : undefined;
     const limit = req.query.limit ? Number(req.query.limit) : 50;
-    const messages = getHistory(convId, before, limit);
+    const messages = await getHistory(convId, before, limit);
     res.json(messages);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -62,11 +62,11 @@ router.get('/messages/:convId', (req: Request, res: Response) => {
 });
 
 /** GET /api/chat/unread-count — 获取当前用户总未读数 */
-router.get('/unread-count', (req: Request, res: Response) => {
+router.get('/unread-count', async (req: Request, res: Response) => {
   try {
     const username = getUsername(req);
     if (!username) { res.status(401).json({ error: '未认证' }); return; }
-    const count = getUnreadCount(username);
+    const count = await getUnreadCount(username);
     res.json({ count });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -74,7 +74,7 @@ router.get('/unread-count', (req: Request, res: Response) => {
 });
 
 /** POST /api/chat/messages — 发送消息（HTTP 备用通道：落库 + 在线接收方实时推送；cid 幂等去重） */
-router.post('/messages', (req: Request, res: Response) => {
+router.post('/messages', async (req: Request, res: Response) => {
   try {
     const username = getUsername(req);
     if (!username) { res.status(401).json({ error: '未认证' }); return; }
@@ -85,7 +85,7 @@ router.post('/messages', (req: Request, res: Response) => {
       const chk = checkChatContent(content);
       if (chk.blocked) { res.status(403).json({ error: 'blocked', reason: blockReason(chk), cid: cid || '' }); return; }
     }
-    const msg = saveMessage({
+    const msg = await saveMessage({
       id: typeof cid === 'string' && cid ? cid : undefined,
       from_user: username,
       to_user: to,
@@ -102,12 +102,12 @@ router.post('/messages', (req: Request, res: Response) => {
 });
 
 /** PUT /api/chat/messages/:convId/read — 标记会话已读 */
-router.put('/messages/:convId/read', (req: Request, res: Response) => {
+router.put('/messages/:convId/read', async (req: Request, res: Response) => {
   try {
     const username = getUsername(req);
     if (!username) { res.status(401).json({ error: '未认证' }); return; }
     const { convId } = req.params;
-    markConvRead(convId, username);
+    await markConvRead(convId, username);
     res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -125,11 +125,11 @@ router.get('/online/:username', (req: Request, res: Response) => {
 });
 
 /** GET /api/chat/friends — 获取好友列表 */
-router.get('/friends', (req: Request, res: Response) => {
+router.get('/friends', async (req: Request, res: Response) => {
   try {
     const username = getUsername(req);
     if (!username) { res.status(401).json({ error: '未认证' }); return; }
-    const friends = getFriends(username);
+    const friends = await getFriends(username);
     const result = friends.map(f => ({
       ...f,
       online: isUserOnline(f.friendUsername),
@@ -141,14 +141,14 @@ router.get('/friends', (req: Request, res: Response) => {
 });
 
 /** POST /api/chat/friends — 添加好友 */
-router.post('/friends', (req: Request, res: Response) => {
+router.post('/friends', async (req: Request, res: Response) => {
   try {
     const username = getUsername(req);
     if (!username) { res.status(401).json({ error: '未认证' }); return; }
     const { friendUsername } = req.body;
     if (!friendUsername) { res.status(400).json({ error: '缺少 friendUsername' }); return; }
     if (friendUsername === username) { res.status(400).json({ error: '不能添加自己为好友' }); return; }
-    addFriend(username, friendUsername);
+    await addFriend(username, friendUsername);
     res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -156,12 +156,12 @@ router.post('/friends', (req: Request, res: Response) => {
 });
 
 /** DELETE /api/chat/friends/:friendUsername — 删除好友 */
-router.delete('/friends/:friendUsername', (req: Request, res: Response) => {
+router.delete('/friends/:friendUsername', async (req: Request, res: Response) => {
   try {
     const username = getUsername(req);
     if (!username) { res.status(401).json({ error: '未认证' }); return; }
     const { friendUsername } = req.params;
-    removeFriend(username, friendUsername);
+    await removeFriend(username, friendUsername);
     res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -169,23 +169,23 @@ router.delete('/friends/:friendUsername', (req: Request, res: Response) => {
 });
 
 /** GET /api/chat/is-friend/:username — 查询是否为好友 */
-router.get('/is-friend/:username', (req: Request, res: Response) => {
+router.get('/is-friend/:username', async (req: Request, res: Response) => {
   try {
     const currentUser = getUsername(req);
     if (!currentUser) { res.status(401).json({ error: '未认证' }); return; }
     const { username } = req.params;
-    res.json({ isFriend: isFriend(currentUser, username) });
+    res.json({ isFriend: await isFriend(currentUser, username) });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
 /** GET /api/chat/dispatch-pool — 获取分流池配置 */
-router.get('/dispatch-pool', (req: Request, res: Response) => {
+router.get('/dispatch-pool', async (req: Request, res: Response) => {
   try {
     const username = getUsername(req);
     if (!username) { res.status(401).json({ error: '未认证' }); return; }
-    const members = getDispatchPool(username);
+    const members = await getDispatchPool(username);
     res.json({ owner: username, members });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -193,13 +193,13 @@ router.get('/dispatch-pool', (req: Request, res: Response) => {
 });
 
 /** POST /api/chat/dispatch-pool — 设置分流池成员 */
-router.post('/dispatch-pool', (req: Request, res: Response) => {
+router.post('/dispatch-pool', async (req: Request, res: Response) => {
   try {
     const username = getUsername(req);
     if (!username) { res.status(401).json({ error: '未认证' }); return; }
     const { members } = req.body;
     if (!Array.isArray(members)) { res.status(400).json({ error: 'members 必须为数组' }); return; }
-    setDispatchPool(username, members);
+    await setDispatchPool(username, members);
     res.json({ success: true, owner: username, members });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -207,9 +207,9 @@ router.post('/dispatch-pool', (req: Request, res: Response) => {
 });
 
 /** GET /api/chat/dispatch-pools — 获取所有分流池（管理用途） */
-router.get('/dispatch-pools', (req: Request, res: Response) => {
+router.get('/dispatch-pools', async (req: Request, res: Response) => {
   try {
-    const pools = getAllDispatchPools();
+    const pools = await getAllDispatchPools();
     res.json(pools);
   } catch (err: any) {
     res.status(500).json({ error: err.message });

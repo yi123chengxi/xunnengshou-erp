@@ -96,6 +96,45 @@ db.exec(`
     face_certify_id TEXT NOT NULL DEFAULT '',
     updated_at TEXT DEFAULT (datetime('now'))
   );
+
+  -- 即时通讯消息（原 chat-store 建表迁入，统一由连接模块管理）
+  CREATE TABLE IF NOT EXISTS chat_messages (
+    id TEXT PRIMARY KEY,
+    conv_id TEXT NOT NULL,
+    from_user TEXT NOT NULL,
+    to_user TEXT NOT NULL,
+    content TEXT NOT NULL,
+    msg_type TEXT DEFAULT 'text',
+    conv_subject TEXT DEFAULT '',
+    created_at INTEGER NOT NULL,
+    read_at INTEGER DEFAULT 0
+  );
+  CREATE INDEX IF NOT EXISTS idx_chat_conv ON chat_messages(conv_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_chat_unread ON chat_messages(to_user, read_at);
+
+  CREATE TABLE IF NOT EXISTS chat_friends (
+    username TEXT NOT NULL,
+    friend_username TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    remark TEXT DEFAULT '',
+    PRIMARY KEY (username, friend_username)
+  );
+
+  CREATE TABLE IF NOT EXISTS chat_dispatch_pool (
+    owner TEXT PRIMARY KEY,
+    members TEXT NOT NULL DEFAULT '[]'
+  );
+
+  CREATE TABLE IF NOT EXISTS chat_pending_messages (
+    id TEXT PRIMARY KEY,
+    pool_owner TEXT NOT NULL,
+    from_user TEXT NOT NULL,
+    content TEXT NOT NULL,
+    msg_type TEXT DEFAULT 'text',
+    conv_subject TEXT DEFAULT '',
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_pending_pool ON chat_pending_messages(pool_owner);
 `);
 
 // 兼容旧库：企业认证表增量列（法人身份证号 / 最近刷脸 CertifyId）
@@ -219,5 +258,64 @@ export const stmtCertFacePass: Statement = db.prepare(`
 export const stmtCertFaceFail: Statement = db.prepare(`
   UPDATE enterprise_cert SET fail_reason = ?, face_certify_id = ?, updated_at = datetime('now') WHERE username = ?
 `);
+
+// ============ 即时通讯（chat_messages / chat_friends / chat_dispatch_pool / chat_pending_messages） ============
+export const stmtChatInsert: Statement = db.prepare(`
+  INSERT OR IGNORE INTO chat_messages (id, conv_id, from_user, to_user, content, msg_type, conv_subject, created_at, read_at)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
+`);
+export const stmtChatHistory: Statement = db.prepare(`
+  SELECT * FROM chat_messages WHERE conv_id = ? AND created_at < ? ORDER BY created_at DESC LIMIT ?
+`);
+export const stmtChatUnreadCount: Statement = db.prepare(`
+  SELECT COUNT(*) as cnt FROM chat_messages WHERE to_user = ? AND read_at = 0
+`);
+export const stmtChatMarkRead: Statement = db.prepare(`
+  UPDATE chat_messages SET read_at = ? WHERE conv_id = ? AND to_user = ? AND read_at = 0
+`);
+export const stmtChatConversations: Statement = db.prepare(`
+  SELECT
+    m.conv_id,
+    CASE WHEN m.from_user = ? THEN m.to_user ELSE m.from_user END as other_user,
+    m.content as last_message,
+    m.msg_type as last_message_type,
+    m.conv_subject,
+    m.created_at as last_time
+  FROM chat_messages m
+  INNER JOIN (
+    SELECT conv_id, MAX(created_at) as max_ts
+    FROM chat_messages
+    WHERE from_user = ? OR to_user = ?
+    GROUP BY conv_id
+  ) latest ON m.conv_id = latest.conv_id AND m.created_at = latest.max_ts
+  WHERE m.from_user = ? OR m.to_user = ?
+  GROUP BY m.conv_id
+  ORDER BY m.created_at DESC
+`);
+export const stmtChatConvUnread: Statement = db.prepare(`
+  SELECT COUNT(*) as cnt FROM chat_messages WHERE conv_id = ? AND to_user = ? AND read_at = 0
+`);
+export const stmtFriendAdd: Statement = db.prepare(`
+  INSERT OR IGNORE INTO chat_friends (username, friend_username, created_at) VALUES (?, ?, ?)
+`);
+export const stmtFriendRemove: Statement = db.prepare(`DELETE FROM chat_friends WHERE username = ? AND friend_username = ?`);
+export const stmtFriendList: Statement = db.prepare(`
+  SELECT friend_username, remark, created_at FROM chat_friends WHERE username = ? ORDER BY created_at DESC
+`);
+export const stmtFriendIs: Statement = db.prepare(`SELECT 1 FROM chat_friends WHERE username = ? AND friend_username = ?`);
+export const stmtPoolGet: Statement = db.prepare(`SELECT members FROM chat_dispatch_pool WHERE owner = ?`);
+export const stmtPoolSet: Statement = db.prepare(`
+  INSERT INTO chat_dispatch_pool (owner, members) VALUES (?, ?)
+  ON CONFLICT(owner) DO UPDATE SET members = excluded.members
+`);
+export const stmtPoolAll: Statement = db.prepare(`SELECT owner, members FROM chat_dispatch_pool`);
+export const stmtPendingInsert: Statement = db.prepare(`
+  INSERT INTO chat_pending_messages (id, pool_owner, from_user, content, msg_type, conv_subject, created_at)
+  VALUES (?, ?, ?, ?, ?, ?, ?)
+`);
+export const stmtPendingList: Statement = db.prepare(`
+  SELECT * FROM chat_pending_messages WHERE pool_owner = ? ORDER BY created_at ASC
+`);
+export const stmtPendingDelete: Statement = db.prepare(`DELETE FROM chat_pending_messages WHERE id = ?`);
 
 export default db;

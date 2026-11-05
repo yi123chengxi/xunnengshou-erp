@@ -5,12 +5,7 @@
 import { Router, Request, Response } from 'express';
 import webpush from 'web-push';
 import dotenv from 'dotenv';
-import {
-  stmtUpsertPushSub,
-  stmtGetSubsByUsername,
-  stmtDeletePushSub,
-  stmtDeletePushSubByUsername,
-} from '../database/sqlite';
+import { store } from '../database/store';
 
 dotenv.config();
 
@@ -39,14 +34,14 @@ router.get('/vapid-public-key', (_req: Request, res: Response) => {
 
 // ============ POST /api/push/subscribe ============
 // 保存用户的推送订阅信息
-router.post('/subscribe', (req: Request, res: Response) => {
+router.post('/subscribe', async (req: Request, res: Response) => {
   try {
     const { username, subscription } = req.body;
     if (!username || !subscription?.endpoint || !subscription?.keys?.p256dh || !subscription?.keys?.auth) {
       return res.status(400).json({ code: 400, message: '缺少必要参数' });
     }
     const userAgent = req.headers['user-agent'] || '';
-    stmtUpsertPushSub.run(
+    await store.upsertPushSub(
       username,
       subscription.endpoint,
       subscription.keys.p256dh,
@@ -63,13 +58,13 @@ router.post('/subscribe', (req: Request, res: Response) => {
 
 // ============ POST /api/push/unsubscribe ============
 // 删除推送订阅
-router.post('/unsubscribe', (req: Request, res: Response) => {
+router.post('/unsubscribe', async (req: Request, res: Response) => {
   try {
     const { endpoint, username } = req.body;
     if (endpoint) {
-      stmtDeletePushSub.run(endpoint);
+      await store.deletePushSub(endpoint);
     } else if (username) {
-      stmtDeletePushSubByUsername.run(username);
+      await store.deletePushSubsByUsername(username);
     }
     res.json({ code: 0, message: '已取消订阅' });
   } catch (err: any) {
@@ -89,7 +84,7 @@ router.post('/send', async (req: Request, res: Response) => {
       return res.status(400).json({ code: 400, message: '缺少 username' });
     }
 
-    const subs: any[] = stmtGetSubsByUsername.all(username) as any[];
+    const subs: any[] = await store.getSubsByUsername(username);
     if (subs.length === 0) {
       return res.json({ code: 0, message: '该用户无推送订阅', sent: 0 });
     }
@@ -117,7 +112,7 @@ router.post('/send', async (req: Request, res: Response) => {
         console.error(`推送失败 [${sub.endpoint}]:`, err.message);
         // 410 Gone 或 404 → 订阅已失效，自动清理
         if (err.statusCode === 410 || err.statusCode === 404) {
-          stmtDeletePushSub.run(sub.endpoint);
+          await store.deletePushSub(sub.endpoint);
           console.log(`🗑️  已清理失效订阅: ${sub.endpoint}`);
         }
         failedEndpoints.push(sub.endpoint);
@@ -140,7 +135,7 @@ export async function sendPushToUser(
 ): Promise<{ sent: number; total: number }> {
   if (!VAPID_PUBLIC_KEY) return { sent: 0, total: 0 };
 
-  const subs: any[] = stmtGetSubsByUsername.all(username) as any[];
+  const subs: any[] = await store.getSubsByUsername(username);
   const payload = JSON.stringify({
     title,
     body,
@@ -160,7 +155,7 @@ export async function sendPushToUser(
       sent++;
     } catch (err: any) {
       if (err.statusCode === 410 || err.statusCode === 404) {
-        stmtDeletePushSub.run(sub.endpoint);
+        await store.deletePushSub(sub.endpoint);
       }
     }
   }
