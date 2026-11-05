@@ -1,6 +1,6 @@
 /**
  * 页面扫描产物（scripts/gen-perm-points.js 生成，勿手改；页面变更后重跑再生成）
- * 生成时间：2026-11-04T08:43:28.993Z；菜单 51 个 / 页面分组 79 个 / 字段 785 个
+ * 生成时间：2026-11-05T02:55:07.488Z；菜单 51 个 / 页面分组 79 个 / 字段 788 个
  */
 export interface ScannedPage { menuKey: string; page: string; pageLabel: string; fields: { title: string; dataIndex: string }[]; fns: string[]; }
 export const SCANNED_PAGES: ScannedPage[] = [
@@ -1852,6 +1852,7 @@ export const SCANNED_PAGES: ScannedPage[] = [
   "fns": [
    "add",
    "delete",
+   "import",
    "export",
    "batch"
   ]
@@ -2630,11 +2631,24 @@ export const SCANNED_PAGES: ScannedPage[] = [
    {
     "title": "在职状态",
     "dataIndex": "employeeStatus"
+   },
+   {
+    "title": "时间",
+    "dataIndex": "time"
+   },
+   {
+    "title": "操作人",
+    "dataIndex": "operator"
+   },
+   {
+    "title": "来源",
+    "dataIndex": "source"
    }
   ],
   "fns": [
    "add",
-   "edit"
+   "edit",
+   "delete"
   ]
  },
  {

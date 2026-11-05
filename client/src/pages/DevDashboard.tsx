@@ -8,7 +8,7 @@ import Logo from '../components/Logo';
 import { getUserQuota, setUserQuota, formatStorageSize, getUsagePercent, getTotalStorageUsage, getAllQuotas, kbToGb, gbToKb, fetchAllServerUsage, getLocalUsageKB, sessionDataOwner } from '../utils/storageQuota';
 import useStickTableHeight from '../hooks/useStickTableHeight';
 import { getDevIdentity, loadGroups, saveGroups, loadGroupPerms, saveGroupPerms, applyGroupPermsToMembers, loadCustomerPerms, saveCustomerPerms, allPermKeys, buildPermTree, updateRegisteredUsers, getSubRole, loadDevSubAccounts, loadFollowups, addFollowup, loadCustomerLogs, addCustomerLog } from '../utils/devStore';
-import { readDevPermSet, PERM_V2, PERM_V3, PERM_V3_DEFAULT_KEYS, PERM_V4, PERM_V4_DEFAULT_KEYS, PERM_V5, PERM_V5_DEFAULT_KEYS, PERM_V6, PERM_V6_DEFAULT_KEYS, PERM_V7, PERM_V7_DEFAULT_KEYS, PERM_V8, PERM_V8_DEFAULT_KEYS, PERM_V9, PERM_V9_DEFAULT_KEYS, PERM_V10, PERM_V10_DEFAULT_KEYS } from '../utils/devPerms';
+import { readDevPermSet, ECOM_KEY_MIGRATION, PERM_V2, PERM_V3, PERM_V3_DEFAULT_KEYS, PERM_V4, PERM_V4_DEFAULT_KEYS, PERM_V5, PERM_V5_DEFAULT_KEYS, PERM_V6, PERM_V6_DEFAULT_KEYS, PERM_V7, PERM_V7_DEFAULT_KEYS, PERM_V8, PERM_V8_DEFAULT_KEYS, PERM_V9, PERM_V9_DEFAULT_KEYS, PERM_V10, PERM_V10_DEFAULT_KEYS } from '../utils/devPerms';
 import { loadDevDeny, saveDevDeny } from '../utils/perm';
 import { CertBadge, fetchCertBatch } from '../components/EnterpriseCertModal';
 import type { CertInfo } from '../components/EnterpriseCertModal';
@@ -16,6 +16,17 @@ import type { DevGroup, PermNode } from '../utils/devStore';
 
 // 权限树叶子键提取
 const leavesOf = (n: PermNode): string[] => (n.children && n.children.length) ? n.children.flatMap(c => leavesOf(c)) : [n.key];
+
+// 旧版已存权限键迁移：电商常用合并前的旧键（newstyle/progress、brandauth/manage、finance/shop-management、market/opportunity）
+// 映射为 ecommerce/* 新键补勾，与运行时 isPermAllowed 的兼容放行保持一致
+const migrateSavedPermKeys = (keys: string[]): string[] => {
+  const extra: string[] = [];
+  keys.forEach(k => {
+    const nk = ECOM_KEY_MIGRATION[k] || (k === 'market/opportunity' ? 'ecommerce/opportunity' : '');
+    if (nk) extra.push(nk);
+  });
+  return extra.length ? Array.from(new Set([...keys, ...extra])) : keys;
+};
 
 const { Title, Text } = Typography;
 const { Search } = Input;
@@ -309,7 +320,8 @@ const DevDashboard: React.FC = () => {
   const openCustomerPerm = (rec: RegisteredUser) => {
     setPermMode('customer'); setPermTargetUser(rec); setPermTargetGroup(null);
     setPermDenied(loadDevDeny(rec.username));
-    const saved = loadCustomerPerms(rec.username);
+    const saved0 = loadCustomerPerms(rec.username);
+    const saved = saved0 !== null ? migrateSavedPermKeys(saved0) : null;
     // 旧版权限数据（未含采购商/加工厂控制）：两平台键默认补勾为全开放
     const rawSet = readDevPermSet(rec.username);
     const legacy = saved !== null && rawSet !== null && !rawSet.has(PERM_V2);
@@ -358,7 +370,8 @@ const DevDashboard: React.FC = () => {
   const openGroupPerm = (g: DevGroup) => {
     setPermMode('group'); setPermTargetGroup(g); setPermTargetUser(null);
     setPermDenied([]);
-    setPermChecked(loadGroupPerms(g.id) ?? allPermKeys());
+    const groupSaved = loadGroupPerms(g.id);
+    setPermChecked(groupSaved ? migrateSavedPermKeys(groupSaved) : allPermKeys());
     setPermVisible(true);
   };
   const togglePerm = (key: string, on: boolean) => {

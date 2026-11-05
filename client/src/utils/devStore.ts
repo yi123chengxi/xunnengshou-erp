@@ -68,15 +68,36 @@ export const saveGroups = (devMain: string, list: DevGroup[]) => {
 // 权限键格式与 MainLayout 子账号权限一致：`${moduleKey}/${childKey}`（三级为 `${moduleKey}/${grandKey}`）
 export interface PermNode { key: string; label: string; children?: PermNode[]; }
 
+// 「电商常用」虚拟分组（与 MainLayout 侧边栏渲染保持一致）：
+// 新款进度/店铺管理/商机市场/仓库统计/品牌管理 合并为一级菜单，叶子键为真实路由全路径
+const ECOM_PERM_CHILDREN: PermNode[] = [
+  { key: 'ecommerce/progress', label: '新款进度' },
+  { key: 'ecommerce/shop-management', label: '店铺管理' },
+  { key: 'ecommerce/opportunity', label: '商机市场' },
+  { key: 'ecommerce/warehouse-stats', label: '仓库统计' },
+  { key: 'ecommerce/manage', label: '品牌管理' },
+];
+
 // 从主平台菜单构建权限树（模块 → 菜单 → 三级菜单），并追加采购商/加工厂平台控制
+// 按侧边栏实际渲染结构生成：商机市场位置替换为「电商常用」分组；
+// 新款进度(newstyle)/品牌授权(brandauth)/财务管理下的店铺管理 已并入电商常用，不再单独出现
 export const buildPermTree = (): PermNode[] => [
-  ...MAIN_MODULES.map((mod: any) => ({
-    key: mod.key,
-    label: mod.label,
-    children: (mod.children || []).map((c: any) => (c.children && c.children.length)
-      ? { key: `${mod.key}/${c.key}`, label: c.label, children: c.children.map((g: any) => ({ key: `${mod.key}/${g.key}`, label: g.label })) }
-      : { key: `${mod.key}/${c.key}`, label: c.label }),
-  })),
+  ...MAIN_MODULES
+    .filter((mod: any) => mod.key !== 'newstyle' && mod.key !== 'brandauth')
+    .map((mod: any) => {
+      if (mod.key === 'market') {
+        return { key: 'ecommerce', label: '电商常用', children: ECOM_PERM_CHILDREN };
+      }
+      return {
+        key: mod.key,
+        label: mod.label,
+        children: (mod.children || [])
+          .filter((c: any) => !(mod.key === 'finance' && c.key === 'shop-management'))
+          .map((c: any) => (c.children && c.children.length)
+            ? { key: `${mod.key}/${c.key}`, label: c.label, children: c.children.map((g: any) => ({ key: `${mod.key}/${g.key}`, label: g.label })) }
+            : { key: `${mod.key}/${c.key}`, label: c.label }),
+      };
+    }),
   { key: 'purchaser', label: '采购商平台', children: buildPlatformPermNodes('purchaser', PURCHASER_PERM_MENUS) as PermNode[] },
   { key: 'factory', label: '加工厂平台', children: buildPlatformPermNodes('factory', FACTORY_PERM_MENUS) as PermNode[] },
 ];
