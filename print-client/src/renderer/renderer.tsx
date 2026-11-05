@@ -292,7 +292,7 @@ function MainPage() {
                     {log.jobType === 'url' ? 'URL' : 'PDF'} → {log.printerName}
                   </span>
                   {log.error && <span style={{ color: '#f5222d', fontSize: 11 }}>{log.error}</span>}
-                  {(log.status === 'pending' || log.status === 'printing') && (
+                  {(log.status === 'pending' || log.status === 'printing' || log.status === 'failed') && (
                     <button
                       style={{
                         flexShrink: 0, fontSize: 11, padding: '2px 10px', borderRadius: 4, cursor: 'pointer',

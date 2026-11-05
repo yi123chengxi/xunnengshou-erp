@@ -377,6 +377,8 @@ async function handlePrintJob(msg: {
   // 取消标志：外部可通过 cancelledJobs Set 标记取消
   let cancelled = false;
   const checkCancelled = () => { if (cancelledJobs.has(msg.id)) cancelled = true; };
+  // 隐藏打印窗口引用：失败/超时时统一清理，避免残留窗口后台续跑
+  let printWinRef: BrowserWindow | null = null;
 
   try {
     // 更新状态为 printing
@@ -389,6 +391,7 @@ async function handlePrintJob(msg: {
       show: false,
       webPreferences: { nodeIntegration: false },
     });
+    printWinRef = printWin;
 
     // 带超时的 loadURL/loadFile（60 秒，服务器带宽较低时 15s 不够用）
     const loadTimeout = 60_000;
@@ -410,20 +413,32 @@ async function handlePrintJob(msg: {
     checkCancelled();
     if (cancelled) { printWin.close(); throw new Error('任务已取消'); }
 
-    // 等待页面加载完成（带超时）
+    // 等待 DOM 就绪：did-finish-load 可能在 loadURL 期间已触发，必须先判 isLoading 再挂监听，
+    // 否则等待一个永不再次到来的事件→任务必挂满 60s 超时（旧包故障教训）
     await Promise.race([
       new Promise<void>((resolve) => {
-        if (printWin.webContents.isLoading()) {
-          printWin.webContents.once('did-finish-load', () => resolve());
-        } else {
-          resolve();
-        }
+        const wc = printWin.webContents;
+        if (!wc.isLoading()) { resolve(); return; }
+        wc.once('dom-ready', () => resolve());
+        wc.once('did-finish-load', () => resolve());
       }),
-      new Promise<void>((_, reject) => setTimeout(() => reject(new Error('页面加载超时（60s）')), loadTimeout)),
+      new Promise<void>((_, reject) => setTimeout(() => reject(new Error('页面加载超时（60s），请检查网络或服务端是否可达')), loadTimeout)),
     ]);
-
+    
     checkCancelled();
     if (cancelled) { printWin.close(); throw new Error('任务已取消'); }
+    
+    // 图片等子资源最多再等 10s：超时放弃等待直接打印，
+    // 避免单张不可达图片把 load 事件拖到超时（标签内容不依赖图片时仍可正常出纸）
+    await Promise.race([
+      new Promise<void>((resolve) => {
+        const wc = printWin.webContents;
+        if (!wc.isLoading()) { resolve(); return; }
+        wc.once('did-finish-load', () => resolve());
+        wc.once('did-stop-loading', () => resolve());
+      }),
+      new Promise<void>((resolve) => setTimeout(resolve, 10_000)),
+    ]);
 
     // 打印前校验打印机名：网页保存的选择可能是历史缓存（打印机已移除/换机），
     // Electron 对不存在的 deviceName 既不回调也不报错→任务永久挂起；失配时回退本机默认打印机
@@ -471,6 +486,11 @@ async function handlePrintJob(msg: {
     pushLog({ ...log });
     ws?.send(JSON.stringify({ type: 'job_status', jobId: msg.id, status: 'completed' }));
   } catch (err: any) {
+    // 失败/超时：立即停载并关闭隐藏窗口，防止残留窗口后台续跑或迟到的 print 回调干扰
+    if (printWinRef && !printWinRef.isDestroyed()) {
+      try { printWinRef.webContents.stop(); } catch { /* ignore */ }
+      printWinRef.close();
+    }
     checkCancelled();
     if (cancelled || cancelledJobs.has(msg.id)) {
       // 手动取消的任务：直接从任务日志中移除，不保留失败残行
