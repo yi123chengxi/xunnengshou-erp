@@ -498,6 +498,22 @@ const ProductPrintPage: React.FC = () => {
     const job = previewJobRef.current;
     if (!job) { message.error('没有可打印的内容'); return; }
     if (previewBrowserOnly || printerList.length === 0) {
+      if (previewBrowserOnly) {
+        // 浏览器渲染打印：打开同源独立窗口写入纯打印文档（@page 零边距在顶层文档必定生效，
+        // 页眉页脚无边距空间可画即自动消失）；srcdoc iframe 的 @page 规则在部分 Chrome 版本打印时被忽略
+        const win = window.open('', '_blank');
+        if (win) {
+          win.document.open();
+          win.document.write(job.html);
+          win.document.close();
+          const doPrint = () => { try { win.focus(); win.print(); } catch { message.error('打印失败'); } };
+          if (win.document.readyState === 'complete') doPrint();
+          else win.onload = doPrint;
+          message.info('已按浏览器渲染打印（零页边距自动隐藏页眉页脚）；如仍显示请在打印弹窗“更多设置”中取消勾选“页眉和页脚”');
+          return;
+        }
+        message.warning('弹窗被浏览器拦截，已改用页内预览打印');
+      }
       try { iframeRef.current?.contentWindow?.focus(); iframeRef.current?.contentWindow?.print(); } catch { message.error('打印失败'); }
       if (previewBrowserOnly) {
         message.info('已按浏览器渲染打印：如纸张出现日期/网址/页码等页眉页脚，请在打印弹窗“更多设置”中取消勾选“页眉和页脚”');
