@@ -142,10 +142,12 @@ export const resolvePerm = (scope: PermScope, key: string): boolean => {
   if (ov === 'allow') return true;
   if (ov === 'deny') return false;
 
-  // 2) 开发者客户层：显式 deny → 拒绝；白名单存在且未列入 → 拒绝
+  // 2) 开发者客户层：显式 deny → 拒绝；白名单存在且未列入 → 仅菜单点拒绝
+  //    （白名单由客户权限编辑器按菜单树生成，不含 fn:/field: 点；若全键拦则会
+  //    误杀该客户全部功能点/字段点——实测成品页整表数据列清空且显示字段按键隐藏）
   if (loadDevDeny(username).includes(key)) return false;
   const wl = readDevWhitelist(username);
-  if (wl && !wl.includes(key)) return false;
+  if (wl && !wl.includes(key) && isMenuPoint(scope, key)) return false;
 
   // 3) 角色层（仅子账号；主账号 bypass）
   if (isSub) {
