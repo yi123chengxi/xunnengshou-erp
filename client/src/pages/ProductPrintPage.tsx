@@ -224,6 +224,8 @@ const ProductPrintPage: React.FC = () => {
   const [previewHtml, setPreviewHtml] = useState('');
   const [previewTitle, setPreviewTitle] = useState('');
   const [previewVisible, setPreviewVisible] = useState(false);
+  // 导入打印子页标记：预览弹窗的打印按键跳过客户端、直接浏览器渲染打印
+  const [previewBrowserOnly, setPreviewBrowserOnly] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   // 预览弹窗对应的纯打印内容（走打印客户端静默打印，避免浏览器打印弹窗自带页眉页脚）
   const previewJobRef = useRef<{ type: TplType; tplId: string; tplData: any; html: string } | null>(null);
@@ -473,7 +475,7 @@ const ProductPrintPage: React.FC = () => {
     return pages.join('');
   }, [tplIds, fieldVal, customContents, selCustom, multiInfo, orderStats, resolveTplId]);
 
-  const openPreview = useCallback(async (type: TplType, rows: { product: any; qty: number }[], title: string, tplIdOverride?: string, tplDataOverride?: any) => {
+  const openPreview = useCallback(async (type: TplType, rows: { product: any; qty: number }[], title: string, tplIdOverride?: string, tplDataOverride?: any, browserOnly?: boolean) => {
     if (!rows.length) { message.warning('没有可打印的商品'); return; }
     const tid = tplIdOverride || resolveTplId(type);
     const pages = (await Promise.all(rows.map(r => buildPages(type, r.product, r.qty, tid, tplDataOverride)))).join('');
@@ -481,6 +483,8 @@ const ProductPrintPage: React.FC = () => {
     const pw = Number(tpl?.paperWidth) || TPL_PAPER[type].w;
     const ph = Number(tpl?.paperHeight) || TPL_PAPER[type].h;
     setPreviewTitle(title);
+    // 导入打印子页：打印跳过客户端，直接浏览器渲染打印（iframe 内 window.print）
+    setPreviewBrowserOnly(!!browserOnly);
     // 打印用纯内容（无灰底/阴影等屏幕预览样式，末页不再分页避免空白页）
     previewJobRef.current = { type, tplId: tid, tplData: tplDataOverride || null, html: `<html><head><meta charset="utf-8"><style>@page{size:${pw}mm ${ph}mm;margin:0;}body{margin:0;background:#fff;font-family:'Microsoft YaHei',sans-serif;}.pg{position:relative;z-index:0;width:${pw}mm;height:${ph}mm;page-break-after:always;overflow:hidden;box-sizing:border-box;background:#fff;margin:0;}.pg:last-child{page-break-after:auto;}</style></head><body>${pages}</body></html>` };
     // 屏幕预览：纸张外灰色底、纸张白色居中带阴影；打印时恢复纯白无阴影
@@ -488,13 +492,18 @@ const ProductPrintPage: React.FC = () => {
     setPreviewVisible(true);
   }, [buildPages, resolveTplId]);
 
-  // 预览弹窗“打印”：优先走打印客户端静默打印（无浏览器默认页眉页脚）；客户端未在线时回退浏览器打印并提示
+  // 预览弹窗“打印”：默认优先走打印客户端静默打印（无浏览器默认页眉页脚）；
+  // 导入打印子页（browserOnly）或客户端未在线时回退浏览器打印并提示
   const printFromPreview = async () => {
     const job = previewJobRef.current;
     if (!job) { message.error('没有可打印的内容'); return; }
-    if (printerList.length === 0) {
+    if (previewBrowserOnly || printerList.length === 0) {
       try { iframeRef.current?.contentWindow?.focus(); iframeRef.current?.contentWindow?.print(); } catch { message.error('打印失败'); }
-      message.warning('打印客户端未在线，已改用浏览器打印：如纸张出现日期/网址/页码等页眉页脚，请在打印弹窗“更多设置”中取消勾选“页眉和页脚”');
+      if (previewBrowserOnly) {
+        message.info('已按浏览器渲染打印：如纸张出现日期/网址/页码等页眉页脚，请在打印弹窗“更多设置”中取消勾选“页眉和页脚”');
+      } else {
+        message.warning('打印客户端未在线，已改用浏览器打印：如纸张出现日期/网址/页码等页眉页脚，请在打印弹窗“更多设置”中取消勾选“页眉和页脚”');
+      }
       return;
     }
     try {
@@ -703,7 +712,8 @@ const ProductPrintPage: React.FC = () => {
     const rows = (gridChecked.length ? grid.filter(g => gridChecked.includes(g.key)) : grid);
     if (!rows.length) { message.warning('没有可打印的行'); return; }
     const payload = rows.map(r => ({ product: products.find((p: any) => p.productCode === r.productCode) || { productCode: r.productCode, name: r.name }, qty: r.qty }));
-    openPreview(type, payload, `${TPL_LABEL[type]}打印预览 - 导入清单(${rows.length} 行)`, tplIdOverride);
+    // 导入打印子页：打印跳过客户端，预览弹窗内直接浏览器渲染打印
+    openPreview(type, payload, `${TPL_LABEL[type]}打印预览 - 导入清单(${rows.length} 行)`, tplIdOverride, undefined, true);
   };
 
   // ============ 子页D：自定义打印（嵌入模板编辑器 + 编辑后直接打印） ============
@@ -1027,7 +1037,7 @@ const ProductPrintPage: React.FC = () => {
       {/* 打印预览弹窗（iframe + 浏览器打印） */}
       <Modal title={previewTitle} open={previewVisible} onCancel={() => setPreviewVisible(false)} width={820} zIndex={1500}
         footer={<Space>
-          <Button type="primary" icon={<PrinterOutlined />} onClick={printFromPreview}>打印</Button>
+          <Button type="primary" icon={<PrinterOutlined />} onClick={printFromPreview}>{previewBrowserOnly ? '浏览器打印' : '打印'}</Button>
           <Button onClick={() => setPreviewVisible(false)}>关闭</Button>
         </Space>}>
         <iframe ref={iframeRef} title="print-preview" srcDoc={previewHtml} style={{ width: '100%', height: 480, border: '1px solid #e3e8ee' }} />
