@@ -445,6 +445,7 @@ const AccountManage: React.FC = () => {
       displayName: record.displayName,
       roles: record.roles || [],
       remark: record.remark,
+      phone: record.phone || '',
     });
     updateEditPerms(initPerms);
     setOverrideDraft(loadUserPermOverrides(record.username));
@@ -463,6 +464,17 @@ const AccountManage: React.FC = () => {
         const contact = getRegisteredContact();
         if (contact) values.displayName = contact;
       }
+      // 手机号码：同号多账号提示（同号并存时手机号登录将被禁用），并同步 registeredUsers 供手机号登录
+      const inputPhone = String(values.phone || '').trim();
+      if (inputPhone) {
+        try {
+          const regUsers0: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+          const dupPhones = regUsers0.filter((u: any) => u.username !== selectedRecord?.username && String(u.phone || '').trim() === inputPhone);
+          if (dupPhones.length > 0) {
+            message.warning(`注意：该手机号已绑定 ${dupPhones.length} 个其他账号；同一号码绑定多个租户/子账号时，手机号登录将被禁用，请使用用户名登录`);
+          }
+        } catch { /* ignore */ }
+      }
 
       setDataSource(prev => {
         const updated = prev.map(item =>
@@ -474,16 +486,18 @@ const AccountManage: React.FC = () => {
                 customPermissions: editPermsRef.current,
                 remark: values.remark || '',
                 group: values.group || '',
+                phone: inputPhone,
               }
             : item
         );
-        // 同步更新 registeredUsers 中的角色和权限
+        // 同步更新 registeredUsers 中的角色和权限（含手机号，供手机号登录校验）
         try {
           const regUsers: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
           const idx = regUsers.findIndex((u: any) => u.username === selectedRecord?.username);
           if (idx >= 0) {
             regUsers[idx].roles = values.roles || [];
             regUsers[idx].customPermissions = editPermsRef.current;
+            regUsers[idx].phone = inputPhone;
             localStorage.setItem('registeredUsers', JSON.stringify(regUsers));
           }
         } catch { /* ignore */ }
@@ -1463,6 +1477,16 @@ const AccountManage: React.FC = () => {
         >
           <Form.Item name="displayName" label={selectedRecord?.accountType === '主账号' ? '姓名（注册联系人，不可修改）' : '姓名'} rules={[{ required: true, message: '请输入姓名' }]}>
             <Input placeholder="请输入姓名" prefix={<UserOutlined />} disabled={selectedRecord?.accountType === '主账号'} />
+          </Form.Item>
+          <Form.Item
+            name="phone"
+            label="手机号码"
+            tooltip="选填；填写后该子账号可用手机号登录。若同一手机号同时绑定多个租户或多个子账号，手机号登录将被禁用，须使用用户名登录"
+            rules={[
+              { pattern: /^1[3-9]\d{9}$/, message: '请输入 11 位有效手机号）' },
+            ]}
+          >
+            <Input placeholder="请输入手机号码（选填，可用于登录）" prefix={<MobileOutlined />} allowClear />
           </Form.Item>
           <Form.Item name="roles" label="权限角色" rules={[{ required: true, message: '请至少选择一个角色' }]}>
             <Select mode="multiple" placeholder="请选择角色（可多选）" allowClear>
