@@ -601,8 +601,13 @@ CREATE TABLE IF NOT EXISTS registered_users (
 export async function initDatabase() {
   const statements = createTablesSQL
     .split(';')
-    .map(s => s.trim())
-    .filter(s => s.length > 0 && !s.startsWith('--'));
+    // 先剔除每段内的 -- 注释行再判空：按 ; 切分后段首常为注释，旧逻辑整段过滤导致 0 张表
+    .map(s => s
+      .split('\n')
+      .filter(line => !line.trim().startsWith('--'))
+      .join('\n')
+      .trim())
+    .filter(s => s.length > 0);
 
   for (const sql of statements) {
     try {
