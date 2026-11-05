@@ -15,11 +15,11 @@ import dayjs from 'dayjs';
 dotenv.config();
 
 const pool = mysql.createPool({
-  host: process.env.DB_HOST || 'localhost',
+  host: process.env.DB_HOST || '172.30.52.13',
   port: Number(process.env.DB_PORT) || 3306,
-  user: process.env.DB_USER || 'root',
+  user: process.env.DB_USER || 'erpuser',
   password: process.env.DB_PASSWORD || '',
-  database: process.env.DB_NAME || 'factory_management',
+  database: process.env.DB_NAME || 'xinnengshu',
   waitForConnections: true,
   connectionLimit: 10,
 });
