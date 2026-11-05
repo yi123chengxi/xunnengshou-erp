@@ -7,7 +7,7 @@
  * value: Record<pointKey, 'allow'|'deny'|'inherit'>
  */
 import React, { useMemo, useState } from 'react';
-import { Radio, Input, Space, Button, Tag, Typography, Empty } from 'antd';
+import { Radio, Input, Space, Button, Tag, Typography, Empty, Checkbox } from 'antd';
 import { SearchOutlined, AppstoreOutlined } from '@ant-design/icons';
 import {
   PermScope, PermTri, menuGroupsOf, menuKeysOf, menuLabelOf,
@@ -24,6 +24,10 @@ interface Props {
   scopes: PermScope[];
   value: Record<string, PermTri>;
   onChange: (next: Record<string, PermTri>) => void;
+  /** 菜单级授权清单（复选框勾选集）：传入时左侧供应商菜单前显示复选框，
+   * 取代原“独立权限配置”区域（角色预设基础上额外追加，仅对该账号生效） */
+  pageChecks?: string[];
+  onPageChecksChange?: (next: string[]) => void;
 }
 
 const TriRadio: React.FC<{ value?: PermTri; onChange: (v: PermTri) => void }> = ({ value, onChange }) => (
@@ -41,11 +45,24 @@ const TriRadio: React.FC<{ value?: PermTri; onChange: (v: PermTri) => void }> = 
   />
 );
 
-const PermEditor: React.FC<Props> = ({ scopes, value, onChange }) => {
+const PermEditor: React.FC<Props> = ({ scopes, value, onChange, pageChecks, onPageChecksChange }) => {
   const [search, setSearch] = useState('');
   const allMenuKeys = useMemo(() => scopes.flatMap(s => menuKeysOf(s)), [scopes]);
   const [selMenu, setSelMenu] = useState<string>(allMenuKeys[0] || '');
   const activeMenu = allMenuKeys.includes(selMenu) ? selMenu : (allMenuKeys[0] || '');
+
+  // 菜单级复选框（仅供应商菜单点参与 legacy 白名单解析）：勾选=追加授权
+  const showPageChecks = pageChecks !== undefined && !!onPageChecksChange;
+  const togglePage = (key: string, checked: boolean) => {
+    const cur = new Set(pageChecks || []);
+    if (checked) cur.add(key); else cur.delete(key);
+    onPageChecksChange?.(Array.from(cur));
+  };
+  const toggleGroupPages = (keys: string[], checked: boolean) => {
+    const cur = new Set(pageChecks || []);
+    keys.forEach(k => { if (checked) cur.add(k); else cur.delete(k); });
+    onPageChecksChange?.(Array.from(cur));
+  };
 
   const set = (key: string, tri: PermTri) => {
     const next = { ...value };
@@ -96,14 +113,27 @@ const PermEditor: React.FC<Props> = ({ scopes, value, onChange }) => {
           {scopes.flatMap(scope => menuGroupsOf(scope).map(g => {
             const items = g.items.filter(i => !kw || i.label.toLowerCase().includes(kw) || i.key.toLowerCase().includes(kw));
             if (kw && items.length === 0) return null;
+            const groupChecks = showPageChecks && scope === 'supplier';
+            const groupKeys = g.items.map(i => i.key);
+            const checkedCount = groupKeys.filter(k => (pageChecks || []).includes(k)).length;
             return (
               <div key={`${scope}:${g.key}`}>
-                <div style={{ padding: '6px 12px', background: '#f0f5ff', color: PRIMARY_BLUE, fontSize: 12, fontWeight: 700 }}>
-                  {SCOPE_LABEL[scope]} · {g.label}
+                <div style={{ padding: '6px 12px', background: '#f0f5ff', color: PRIMARY_BLUE, fontSize: 12, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  {groupChecks && (
+                    <span onClick={e => e.stopPropagation()}>
+                      <Checkbox
+                        checked={checkedCount === groupKeys.length && groupKeys.length > 0}
+                        indeterminate={checkedCount > 0 && checkedCount < groupKeys.length}
+                        onChange={e => toggleGroupPages(groupKeys, e.target.checked)}
+                      />
+                    </span>
+                  )}
+                  <span>{SCOPE_LABEL[scope]} · {g.label}</span>
                 </div>
                 {items.map(i => {
                   const cnt = setCountOf(i.key);
                   const active = i.key === activeMenu;
+                  const rowCheck = groupChecks;
                   return (
                     <div key={i.key} onClick={() => setSelMenu(i.key)}
                       style={{
@@ -113,7 +143,14 @@ const PermEditor: React.FC<Props> = ({ scopes, value, onChange }) => {
                         borderRight: active ? `3px solid ${PRIMARY_BLUE}` : '3px solid transparent',
                         color: active ? PRIMARY_BLUE : undefined, fontWeight: active ? 600 : 400,
                       }}>
-                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{i.label}</span>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, flex: 1 }}>
+                        {rowCheck && (
+                          <span onClick={e => e.stopPropagation()} title="勾选=该账号拥有此菜单（角色预设基础上追加）">
+                            <Checkbox checked={(pageChecks || []).includes(i.key)} onChange={e => togglePage(i.key, e.target.checked)} />
+                          </span>
+                        )}
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{i.label}</span>
+                      </span>
                       {cnt > 0 && <Tag color="orange" style={{ marginRight: 0, fontSize: 11 }}>{cnt}</Tag>}
                     </div>
                   );

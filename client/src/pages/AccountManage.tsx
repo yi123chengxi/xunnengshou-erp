@@ -317,12 +317,10 @@ const AccountManage: React.FC = () => {
   const [pwdForm] = Form.useForm();
   const [pwdAccount, setPwdAccount] = useState<AccountRecord | null>(null);
 
-  // 权限展开状态
-  const [editPermExpanded, setEditPermExpanded] = useState(false);
+  // 权限展开状态（新建子账号弹窗的独立权限配置）
   const [addPermExpanded, setAddPermExpanded] = useState(false);
   // PERM_V2 个人三态覆写草稿
   const [overrideDraft, setOverrideDraft] = useState<Record<string, PermTri>>({});
-  const [overrideExpanded, setOverrideExpanded] = useState(false);
 
   // 权限数据（完全由组件状态管理，不依赖 Form
   const [editPerms, setEditPerms] = useState<string[]>([]);
@@ -333,7 +331,6 @@ const AccountManage: React.FC = () => {
   const copyFromRef = React.useRef<string>(''); // 复制建号源账号 username
 
   // 使用 Form.useWatch 获取当前角色（用于传递给权限选择器）
-  const editWatchedRoles: string[] = Form.useWatch('roles', editForm) || [];
   const addWatchedRoles: string[] = Form.useWatch('roles', addForm) || [];
 
   // 同步 ref 到 state
@@ -450,10 +447,6 @@ const AccountManage: React.FC = () => {
     updateEditPerms(initPerms);
     setOverrideDraft(loadUserPermOverrides(record.username));
 
-    // 如果账号有权限，自动展开权限配置
-    if (initPerms.length > 0) {
-      setEditPermExpanded(true);
-    }
     setEditVisible(true);
   }, [editForm]);
 
@@ -506,8 +499,6 @@ const AccountManage: React.FC = () => {
       if (selectedRecord) saveUserPermOverrides(selectedRecord.username, overrideDraft);
       message.success('账号信息更新成功');
       setEditVisible(false);
-      setEditPermExpanded(false);
-      setOverrideExpanded(false);
       updateEditPerms([]);
       editForm.resetFields();
     }).catch(() => { /* 校验失败：表单行内提示并滚动到首个错误项，不抛未处理异常 */ });
@@ -1495,43 +1486,15 @@ const AccountManage: React.FC = () => {
               ))}
             </Select>
           </Form.Item>
-          {/* 独立权限分配 */}
+          {/* 权限配置（单一区域）：左侧菜单复选框=菜单级授权（角色预设基础上追加），右侧三态=按键/字段细粒度覆写 */}
           <div style={{ marginBottom: 16 }}>
-            <Button
-              type="link"
-              icon={editPermExpanded ? <LockOutlined /> : <SettingOutlined />}
-              onClick={() => setEditPermExpanded(!editPermExpanded)}
-              style={{ paddingLeft: 0, color: editPermExpanded ? PRIMARY : '#666' }}
-            >
-              {editPermExpanded ? '收起权限配置' : '展开独立权限配置'}
-            </Button>
-            {editPermExpanded && editVisible && (
-              <div style={{ marginTop: 8, padding: 12, background: '#fafafa', borderRadius: 8, border: '1px solid #d9d9d9' }}>
-                <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 12 }}>
-                  此处设置的权限将在角色权限基础上额外追加，仅对此子账号生效
-                </Text>
-                <CustomPermSelector key={selectedRecord?.key || 'edit'} value={editPerms} onChange={updateEditPerms} roles={editWatchedRoles} />
-              </div>
-            )}
-          </div>
-          {/* PERM_V2 个人三态覆写（最高优先级）*/}
-          <div style={{ marginBottom: 16 }}>
-            <Button
-              type="link"
-              icon={overrideExpanded ? <LockOutlined /> : <SettingOutlined />}
-              onClick={() => setOverrideExpanded(!overrideExpanded)}
-              style={{ paddingLeft: 0, color: overrideExpanded ? PRIMARY : '#666' }}
-            >
-              {overrideExpanded ? '收起个人细粒度覆写' : '展开个人细粒度覆写（允许/禁止/继承）'}
-            </Button>
-            {overrideExpanded && editVisible && (
-              <div style={{ marginTop: 8, padding: 12, background: '#fafafa', borderRadius: 8, border: '1px solid #d9d9d9', maxHeight: 400, overflowY: 'auto' }}>
-                <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 8 }}>
-                  最高优先级：禁止直接拦截、允许直接放行；继承=沿用 开发者&gt;角色&gt;默认 解析链
-                </Text>
-                <PermEditor scopes={['supplier', 'purchaser', 'factory']} value={overrideDraft} onChange={setOverrideDraft} />
-              </div>
-            )}
+            <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 8 }}>
+              菜单前复选框＝该账号是否拥有此菜单（在角色预设基础上追加，仅对此子账号生效）；右侧允许/禁止/继承为按键与字段的细粒度覆写（最高优先级）
+            </Text>
+            <div style={{ padding: 12, background: '#fafafa', borderRadius: 8, border: '1px solid #d9d9d9' }}>
+              <PermEditor scopes={['supplier', 'purchaser', 'factory']} value={overrideDraft} onChange={setOverrideDraft}
+                pageChecks={editPerms} onPageChecksChange={updateEditPerms} />
+            </div>
           </div>
           <Form.Item name="group" label="所属部门">
             <Select placeholder="请选择部门（可选）" allowClear>
