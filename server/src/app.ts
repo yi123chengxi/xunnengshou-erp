@@ -31,6 +31,7 @@ import printRoutes from './routes/print.routes';
 import chatRoutes from './routes/chat.routes';
 import smsRoutes from './routes/sms.routes';
 import enterpriseRoutes from './routes/enterprise.routes';
+import systemRoutes from './routes/system.routes';
 import { startEnterprisePatrol } from './services/enterprisePatrol';
 import { initPrintWebSocket } from './ws/print-ws';
 import { initChatWebSocket } from './ws/chat-ws';
@@ -70,6 +71,7 @@ app.use('/api/jst', jstRoutes);
 app.use('/api/push', pushRoutes);
 app.use('/api/print', printRoutes);
 app.use('/api/chat', chatRoutes);
+app.use('/api/system', systemRoutes);
 
 // 健康检查
 app.get('/api/health', (_req, res) => {

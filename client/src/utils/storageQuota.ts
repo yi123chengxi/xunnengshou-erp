@@ -52,6 +52,16 @@ export function getUserQuota(username: string): number {
   return Math.max(quotas[username] || 0, base);
 }
 
+/** 已购/已分配配额（KB，不含免费赠送底座；开发者后台"总订购空间"只统计此部分） */
+export function getPaidQuotaKB(username: string): number {
+  return getAllQuotas()[username] || 0;
+}
+
+/** 免费赠送底座配额（KB：未认证 2GB / 认证 10GB；开发者后台"总赠送空间"统计此部分） */
+export function getFreeBaseQuotaKB(username: string): number {
+  return isCertifiedCached(username) ? CERTIFIED_QUOTA_KB : BASE_QUOTA_KB;
+}
+
 /**
  * 设置指定用户的空间配额（KB）
  */

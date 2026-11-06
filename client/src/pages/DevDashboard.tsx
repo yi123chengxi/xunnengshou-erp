@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Card, Typography, Table, Tag, Button, Space, message, Popconfirm, Descriptions, Modal, Input, Select, DatePicker, Alert, Progress, InputNumber, Slider, Checkbox, Tooltip, Dropdown, Form, List, Row, Col } from 'antd';
-import { DeleteOutlined, UserOutlined, BankOutlined, PhoneOutlined, MailOutlined, SearchOutlined, ReloadOutlined, ExportOutlined, ClockCircleOutlined, CheckCircleOutlined, LockOutlined, CloudOutlined, SettingOutlined, PlusOutlined, EditOutlined, KeyOutlined, UserAddOutlined, RollbackOutlined, TeamOutlined, DownOutlined, FormOutlined } from '@ant-design/icons';
+import { DeleteOutlined, UserOutlined, BankOutlined, PhoneOutlined, MailOutlined, SearchOutlined, ReloadOutlined, ExportOutlined, ClockCircleOutlined, CheckCircleOutlined, LockOutlined, CloudOutlined, SettingOutlined, PlusOutlined, EditOutlined, KeyOutlined, UserAddOutlined, RollbackOutlined, TeamOutlined, DownOutlined, FormOutlined, HddOutlined, DatabaseOutlined, GiftOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { useNavigate, useLocation } from 'react-router-dom';
 import dayjs, { Dayjs } from 'dayjs';
 import Logo from '../components/Logo';
-import { getUserQuota, setUserQuota, formatStorageSize, getUsagePercent, getTotalStorageUsage, getAllQuotas, kbToGb, gbToKb, fetchAllServerUsage, getLocalUsageKB, sessionDataOwner } from '../utils/storageQuota';
+import { getUserQuota, setUserQuota, formatStorageSize, getUsagePercent, getTotalStorageUsage, getAllQuotas, kbToGb, gbToKb, fetchAllServerUsage, getLocalUsageKB, sessionDataOwner, getPaidQuotaKB, getFreeBaseQuotaKB } from '../utils/storageQuota';
+import request from '../utils/request';
 import useStickTableHeight from '../hooks/useStickTableHeight';
 import { getDevIdentity, loadGroups, saveGroups, loadGroupPerms, saveGroupPerms, applyGroupPermsToMembers, loadCustomerPerms, saveCustomerPerms, allPermKeys, buildPermTree, updateRegisteredUsers, getSubRole, loadDevSubAccounts, loadFollowups, addFollowup, loadCustomerLogs, addCustomerLog } from '../utils/devStore';
 import { readDevPermSet, ECOM_KEY_MIGRATION, PERM_V2, PERM_V3, PERM_V3_DEFAULT_KEYS, PERM_V4, PERM_V4_DEFAULT_KEYS, PERM_V5, PERM_V5_DEFAULT_KEYS, PERM_V6, PERM_V6_DEFAULT_KEYS, PERM_V7, PERM_V7_DEFAULT_KEYS, PERM_V8, PERM_V8_DEFAULT_KEYS, PERM_V9, PERM_V9_DEFAULT_KEYS, PERM_V10, PERM_V10_DEFAULT_KEYS, PERM_V16, PERM_V16_DEFAULT_KEYS } from '../utils/devPerms';
@@ -68,6 +69,9 @@ const DevDashboard: React.FC = () => {
   // 各租户数据库用量（服务端增量计数器，字节）：列表/详情/配额弹窗共用
   const [serverUsageMap, setServerUsageMap] = useState<Record<string, number>>({});
   useEffect(() => { fetchAllServerUsage().then(m => setServerUsageMap(m)); }, []);
+  // 基础设施统计（应用服务磁盘 + 数据库空间）：服务端 /system/infra-stats
+  const [infra, setInfra] = useState<any>(null);
+  useEffect(() => { request.get('/system/infra-stats').then(r => setInfra(r?.data?.data || null)).catch(() => setInfra(null)); }, []);
   // 租户总用量 KB = 本浏览器本地账本（仅当前会话租户） + 服务端数据库计数器
   const usedKBOf = (uname: string): number => {
     const local = uname && uname === sessionDataOwner() ? getLocalUsageKB(uname) : 0;
@@ -795,8 +799,10 @@ const DevDashboard: React.FC = () => {
 
   const modeTitle = mode === 'mine' ? '我的客户' : mode === 'pool' ? '客户公海' : '全部客户';
 
-  // 客户总订购空间：全部客户空间配额之和（含免费期默认赠送 10G 与已购加购）
-  const totalQuotaKB = useMemo(() => users.reduce((s: number, u: any) => s + (getUserQuota(u.username) || 0), 0), [users]);
+  // 客户总订购空间：全部客户已购/已分配配额之和（不含免费赠送底座）
+  const totalPaidKB = useMemo(() => users.reduce((s: number, u: any) => s + (getPaidQuotaKB(u.username) || 0), 0), [users]);
+  // 客户总赠送空间：全部客户免费底座配额之和（未认证 2GB / 认证 10GB）
+  const totalFreeKB = useMemo(() => users.reduce((s: number, u: any) => s + (getFreeBaseQuotaKB(u.username) || 0), 0), [users]);
   // 表格贴窗底：动态测高 + body minHeight 锁死留白
   const stick = useStickTableHeight();
 
@@ -914,12 +920,57 @@ const DevDashboard: React.FC = () => {
         <Card bodyStyle={{ padding: '16px 20px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div>
-              <Text type="secondary">总订购空间</Text>
+              <Tooltip title="仅统计客户付款订购/登记加购的空间，不含免费赠送底座">
+                <Text type="secondary">总订购空间</Text>
+              </Tooltip>
               <div style={{ fontSize: 24, fontWeight: 'bold', color: '#722ed1' }}>
-                {formatStorageSize(totalQuotaKB)}
+                {formatStorageSize(totalPaidKB)}
               </div>
             </div>
             <CloudOutlined style={{ fontSize: 32, color: '#722ed1', opacity: 0.3 }} />
+          </div>
+        </Card>
+        <Card bodyStyle={{ padding: '16px 20px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div>
+              <Tooltip title="免费赠送底座之和：未认证 2GB / 企业认证 10GB，与订购空间分开统计">
+                <Text type="secondary">总赠送空间</Text>
+              </Tooltip>
+              <div style={{ fontSize: 24, fontWeight: 'bold', color: '#52c41a' }}>
+                {formatStorageSize(totalFreeKB)}
+              </div>
+            </div>
+            <GiftOutlined style={{ fontSize: 32, color: '#52c41a', opacity: 0.3 }} />
+          </div>
+        </Card>
+        <Card bodyStyle={{ padding: '16px 20px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div>
+              <Text type="secondary">应用服务盘剩余</Text>
+              <div style={{ fontSize: 24, fontWeight: 'bold', color: '#13c2c2' }}>
+                {infra?.app ? formatStorageSize(infra.app.freeBytes / 1024) : '—'}
+              </div>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                {infra?.app ? `总 ${formatStorageSize(infra.app.totalBytes / 1024)} · 已用 ${formatStorageSize(infra.app.usedBytes / 1024)}` : '服务端非 Linux 平台不可取'}
+              </Text>
+            </div>
+            <HddOutlined style={{ fontSize: 32, color: '#13c2c2', opacity: 0.3 }} />
+          </div>
+        </Card>
+        <Card bodyStyle={{ padding: '16px 20px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div>
+              <Tooltip title={infra?.db?.driver === 'mysql' && !infra?.db?.diskTotalConfigured ? '数据库盘总量未配置环境变量 DB_DISK_TOTAL_GB，按缺省 100GB 计算' : '数据库占用为表空间（数据+索引）聚合；剩余 = 盘总量 - 占用'}>
+                <Text type="secondary">数据库剩余</Text>
+              </Tooltip>
+              <div style={{ fontSize: 24, fontWeight: 'bold', color: '#2f54eb' }}>
+                {infra?.db ? formatStorageSize(infra.db.freeBytes / 1024) : '—'}
+              </div>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                {infra?.db ? `占用 ${formatStorageSize(infra.db.usedBytes / 1024)} · 盘总 ${formatStorageSize(infra.db.totalBytes / 1024)}` : '取数失败'}
+              </Text>
+            </div>
+            <DatabaseOutlined style={{ fontSize: 32, color: '#2f54eb', opacity: 0.3 }} />
           </div>
         </Card>
       </div>
