@@ -109,7 +109,7 @@ import { appendStockLog, updateProductStock } from '../utils/stockUtils';
 import { loadTenantUsers } from '../utils/tenantUsers';
 import { appendBillLogEntry, readBillLog, billLogColor, resolveOperatorName, diffBillRecords, SUPPLIER_BILL_FIELD_MAP, getCurrentUserDisplayName } from '../utils/billLog';
 import { pullAllDatasets, flushDatasetUploadAsync, ensureDatasetFromServer } from '../utils/serverSync';
-import { seedPresetPrintTemplates } from '../config/presetPrintTemplates';
+import { PRESET_PRINT_TEMPLATES, seedPresetPrintTemplates } from '../config/presetPrintTemplates';
 import { refreshCustomerPurchase } from '../utils/paySummary';
 import { loadAllCustomersFromStorage } from './CustomerInfo';
 import { resolveCustomerPrice, resolveCustomerRef } from '../utils/priceStrategy';
@@ -22271,6 +22271,20 @@ export function PrintTemplateEditor(props: PrintTemplateEditorProps = {}) {
   const sSaveList = (type: string, list: { id: string; name: string }[]) => {
     try { localStorage.setItem(sListKey(type), JSON.stringify(list)); } catch { /* ignore */ }
   };
+  // 默认实例解析：系统预设作为兜底默认（default 实例无已存数据、或 wanted 实例不在列表时落到预设），
+  // 已有自存数据的 default / 用户显式选择（调用方以 lastResolvedTypeRef 守卫）不被覆写
+  const resolveInitTplId = (type: string, list: { id: string; name: string }[], wanted: string): string => {
+    const presetIds = scope ? [] : (PRESET_PRINT_TEMPLATES[type] || []).map((p: any) => p.id);
+    const has = (id: string) => list.some(t => t.id === id);
+    let defaultEmpty = false;
+    try { defaultEmpty = !localStorage.getItem(sDataKey(type, 'default')); } catch { defaultEmpty = false; }
+    if (has(wanted) && !(wanted === 'default' && presetIds.some(has) && defaultEmpty)) return wanted;
+    const hit = list.find(t => presetIds.includes(t.id));
+    if (hit) return hit.id;
+    if (has(wanted)) return wanted;
+    return list[0]?.id || 'default';
+  };
+  const lastResolvedTypeRef = useRef<string>('');
   // 支持 ?type=xxx 导航定位（商品打印页跳转编辑吊牌/条码/水洗标模板）；嵌入模式固定为 embeddedTypes
   const initType = (() => {
     if (props.embeddedTypes && props.embeddedTypes.length) return props.embeddedTypes[0];
@@ -22284,7 +22298,7 @@ export function PrintTemplateEditor(props: PrintTemplateEditorProps = {}) {
   const config = TEMPLATE_DEFAULTS[activeTemplate] || TEMPLATE_DEFAULTS.picking;
   // 同一类型下的多个模板
   const [tplList, setTplList] = useState<{ id: string; name: string }[]>(() => sLoadList(initType, TEMPLATE_DEFAULTS[initType].name));
-  const [activeTplId, setActiveTplId] = useState(props.initialTplId || 'default');
+  const [activeTplId, setActiveTplId] = useState(() => resolveInitTplId(initType, tplList, props.initialTplId || 'default'));
     // 数据归属账号：与商品打印页 settings 键同源（pageData_product_print_settings_<owner>），用于保存时同步打印页的模板选择
     const owner = getDataOwner();
   const templateFields = useMemo(() => getTemplateFields(activeTemplate), [activeTemplate]);
@@ -22417,7 +22431,11 @@ export function PrintTemplateEditor(props: PrintTemplateEditorProps = {}) {
     if (!scope) seedPresetPrintTemplates(activeTemplate);
     const list = sLoadList(activeTemplate, config.name);
     setTplList(list);
-    const curId = list.some(t => t.id === activeTplId) ? activeTplId : 'default';
+    let curId = activeTplId;
+    const typeChanged = lastResolvedTypeRef.current !== activeTemplate;
+    lastResolvedTypeRef.current = activeTemplate;
+    // 类型切换/首挂载时按预设优先解析默认实例；同类型内尊重用户显式选择（仅校验成员资格）
+    if (!list.some(t => t.id === curId) || typeChanged) curId = resolveInitTplId(activeTemplate, list, curId);
     if (curId !== activeTplId) { setActiveTplId(curId); return; }
     const cur = list.find(t => t.id === curId);
     const key = sDataKey(activeTemplate, curId);
