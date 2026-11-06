@@ -16788,14 +16788,33 @@ const handleBatchAttrsConfirm = () => {
                 }
               };
 
+              // 货品明细文本统一解析（productDetail/goodsDetail："编码 ×数量、编码 ×数量" 或多行文本）
+              const parseDetailText = (txt: string): any[] => String(txt || '').split(/[\n、，,]+/).filter(Boolean).map((seg: string) => {
+                const m = seg.match(/[×x*]\s*(\d+(?:\.\d+)?)/);
+                const code = (seg.split(/[×x*]/)[0] || '').trim();
+                return { productCode: code || seg.trim(), quantity: m ? Number(m[1]) : 1, price: 0, color: '', spec: '', styleCode: '', location: '' };
+              });
+              // 货品明细行：orderItems JSON → items 数组 → productDetail/goodsDetail 文本（覆盖各建单路径的键形态）
+              const detailRowsOf = (r: any): any[] => {
+                let items: any[] = [];
+                try { if (r.orderItems) items = typeof r.orderItems === 'string' ? JSON.parse(r.orderItems) : r.orderItems; } catch { items = []; }
+                if ((!Array.isArray(items) || !items.length) && Array.isArray(r.items) && r.items.length) items = r.items;
+                if (Array.isArray(items) && items.length) return items;
+                return parseDetailText(r.productDetail || r.goodsDetail || r.goodsDesc || '');
+              };
+              // 货品总数：明细行数量求和；无明细时回退 palletCount/totalCount
+              const totalQtyOf = (r: any): number => {
+                const s = detailRowsOf(r).reduce((sum: number, it: any) => sum + (Number(it.quantity) || 0), 0);
+                return s || (Number(r.palletCount) || Number(r.totalCount) || 0);
+              };
+
               // 字段映射：模板字段名 → 订单数据
               const fieldMap = (r: any, fieldName: string): string => {
                 // 商品字段回退：从订单首个商品匹配产品列表（吊牌/商品条码等复用）
                 let prod0: any = null;
                 let code0 = '';
                 try {
-                  const items0 = r.orderItems ? (typeof r.orderItems === 'string' ? JSON.parse(r.orderItems) : r.orderItems) : [];
-                  code0 = items0[0]?.productCode || '';
+                  code0 = detailRowsOf(r)[0]?.productCode || '';
                   if (code0) {
                     const pl = JSON.parse(localStorage.getItem(`pageData_basic-data_product-list_${owner}`) || '[]');
                     prod0 = pl.find((p: any) => p.productCode === code0) || null;
@@ -16813,7 +16832,7 @@ const handleBatchAttrsConfirm = () => {
                   '备注图片5': Array.isArray(r.sellerImages) ? String(r.sellerImages[4] || '') : '',
                   '订单编号': r.id || '', '订单号': r.id || '', '出库单号': r.outboundNo || '', '订单状态': r.auditStatus || '',
                   '客户名称': r.customerName || '', '收货名称': r.receiverName || '', '联系电话': r.receiverPhone || '',
-                  '收货地址': r.receiverAddress || '', '货品明细': (r.goodsDetail || r.goodsDesc || '').replace(/\n/g, '\n'),
+                  '收货地址': r.receiverAddress || '', '货品明细': (r.productDetail || r.goodsDetail || r.goodsDesc || '').replace(/\n/g, '\n'),
                   '唛头': r.shippingMark || '', '买家留言': r.buyerMessage || '',
                   '卖家留言': r.sellerMessage || '', '货品总额': r.amount ? `¥${Number(r.amount).toFixed(2)}` : '',
                   '运费': r.shippingFee ? `¥${Number(r.shippingFee).toFixed(2)}` : '',
@@ -16822,7 +16841,7 @@ const handleBatchAttrsConfirm = () => {
                   '操作人': getCurrentUserDisplayName(), '打印人': getCurrentUserDisplayName(),
                   '打印时间': new Date().toLocaleString('zh-CN'),
                   '打印日期': new Date().toLocaleDateString('zh-CN'),
-                  '货品总数': (() => { try { const items = (r.goodsDetail || r.goodsDesc || '').split('\n').filter(Boolean); return String(items.reduce((s: number, line: string) => { const m = line.match(/x(\d+)/); return s + (m ? Number(m[1]) : 1); }, 0)); } catch { return '0'; } })(),
+                  '货品总数': String(totalQtyOf(r)),
                   '已付金额': r.paidAmount ? `¥${Number(r.paidAmount).toFixed(2)}` : '', '付款方式': r.payMethod || '',
                   '商品编码': r.productCode || prod0?.productCode || code0 || '', '款式编码': r.styleCode || prod0?.styleCode || '',
                   '条形码': r.barcode || prod0?.barcode || '', '颜色': r.color || prod0?.color || '',
@@ -16913,8 +16932,10 @@ const handleBatchAttrsConfirm = () => {
                       ? `position:relative;margin-left:${x}mm;z-index:${el.zIndex || 0};${w !== 'auto' ? `width:${w}mm;` : `width:${maxW}mm;`}font-size:${fs}pt;font-family:${ff};font-weight:${fw};font-style:${fst};text-decoration:${td};text-align:${ta};${el.color ? `color:${el.color};` : ''}page-break-inside:auto;`
                       : `position:absolute;left:${x}mm;top:${topMm}mm;z-index:${el.zIndex || 0};${w !== 'auto' ? `width:${w}mm;` : `width:${maxW}mm;`}${h !== 'auto' ? `height:${h}mm;` : ''}font-size:${fs}pt;font-family:${ff};font-weight:${fw};font-style:${fst};text-decoration:${td};text-align:${ta};${el.color ? `color:${el.color};` : ''}overflow:visible;`;
                     if (el.type === 'field') {
-                      const val = fieldMap(r, el.field || '');
+                      let val = fieldMap(r, el.field || '');
                       if (el.displayAs === 'barcode') {
+                        // 出库单号未生成（未拣货审核）时回退订单编号，保证条码可扫且标签有内容
+                        if (!val && el.field === '出库单号') val = r.id || '';
                         const bh = typeof h === 'number' && h > 0 ? h * 0.7 : 20;
                         const bcSvg = buildBarcodeSvgString(val, bh);
                         const showLabel = el.showLabel !== false;
@@ -16932,42 +16953,28 @@ const handleBatchAttrsConfirm = () => {
                     } else if (el.type === 'text') {
                       push(`<div style="${posStyle}">${el.content || ''}</div>`);
                     } else if (el.type === 'table') {
-                      // 解析货品明细生成表格行（优先使用 orderItems JSON，回退 goodsDetail 文本）
-                      let orderItems: any[] = [];
-                      try {
-                        if (r.orderItems) orderItems = typeof r.orderItems === 'string' ? JSON.parse(r.orderItems) : r.orderItems;
-                      } catch { /* ignore */ }
+                      // 解析货品明细生成表格行（orderItems JSON → items 数组 → productDetail/goodsDetail 文本）
+                      const rawItems = detailRowsOf(r);
                       // 加载产品列表用于匹配商品名称
                       let prodList: any[] = [];
                       try { prodList = JSON.parse(localStorage.getItem(`pageData_basic-data_product-list_${owner}`) || '[]'); } catch { /* ignore */ }
                       // 商品字段标题→数据键映射，供表格列按商品编码回填任意商品字段
                       const labelKeyMap: Record<string, string> = {};
                       try { ((basicDataPages as any)['finished-product']?.columns || []).forEach((c: any) => { labelKeyMap[String(c.title)] = String(c.key); }); } catch { /* ignore */ }
-                      const rows: any[] = Array.isArray(orderItems) && orderItems.length > 0
-                        ? orderItems.map((it: any) => {
-                            const prod = prodList.find((p: any) => p.productCode === it.productCode);
-                            return {
-                              productCode: it.productCode || '—',
-                              productName: it.productName || prod?.shortName || prod?.name || it.productCode || '—',
-                              quantity: Number(it.quantity) || 0,
-                              price: Number(it.price) || 0,
-                              color: it.color || prod?.color || '',
-                              spec: it.spec || prod?.spec || '',
-                              styleCode: it.styleCode || prod?.styleCode || '',
-                              location: it.location || '',
-                              _prod: prod || null,
-                            };
-                          })
-                        : (r.goodsDetail || r.goodsDesc || '').split('\n').filter(Boolean).map((item: string) => {
-                            const parts = item.split(/[\s|]+/).filter(Boolean);
-                            const qtyMatch = item.match(/[×x*](\d+)/);
-                            return {
-                              productCode: parts[0] || '—',
-                              productName: parts[1] || parts[0] || '—',
-                              quantity: qtyMatch ? Number(qtyMatch[1]) : (Number(parts[parts.length - 1]) || 1),
-                              price: 0, color: '', spec: '', styleCode: '', location: '', _prod: null,
-                            };
-                          });
+                      const rows: any[] = rawItems.map((it: any) => {
+                        const prod = prodList.find((p: any) => p.productCode === it.productCode);
+                        return {
+                          productCode: it.productCode || '—',
+                          productName: it.productName || prod?.shortName || prod?.name || it.productCode || '—',
+                          quantity: Number(it.quantity) || 0,
+                          price: Number(it.price) || 0,
+                          color: it.color || prod?.color || '',
+                          spec: it.spec || prod?.spec || '',
+                          styleCode: it.styleCode || prod?.styleCode || '',
+                          location: it.location || '',
+                          _prod: prod || null,
+                        };
+                      });
                       const colWArr = tableColumns.map((_, ci) => (columnWidths[ci] && columnWidths[ci] > 0 ? columnWidths[ci] : (100 / tableColumns.length)));
                       // 表格字号根据可用宽度动态缩放
                       const tableFs = Math.min(tFontSize, fs);
