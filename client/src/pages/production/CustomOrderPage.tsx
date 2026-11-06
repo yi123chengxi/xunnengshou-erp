@@ -9,8 +9,9 @@ import {
   WarningOutlined, CheckCircleOutlined, ClockCircleOutlined, SyncOutlined,
   FileTextOutlined, PrinterOutlined, EyeOutlined, SaveOutlined, UploadOutlined,
   PlayCircleOutlined, PauseCircleOutlined, ArrowLeftOutlined, ArrowRightOutlined,
-  DownOutlined, UpOutlined, CloseOutlined, InboxOutlined,
+  DownOutlined, UpOutlined, CloseOutlined, InboxOutlined, ThunderboltOutlined,
 } from '@ant-design/icons';
+import { INDUSTRY_TEMPLATES } from './WorkflowTemplatePage';
 import dayjs from 'dayjs';
 import type { UploadFile } from 'antd';
 
@@ -943,6 +944,7 @@ export const WorkflowOrderCard: React.FC<{
   const [editFlowNewIcon, setEditFlowNewIcon] = useState('');
   const [editFlowNewDesc, setEditFlowNewDesc] = useState('');
   const [editFlowNewDays, setEditFlowNewDays] = useState('');
+  const [editFlowTplSelect, setEditFlowTplSelect] = useState<string | undefined>(undefined);
 
   // 快捷备注（可自定义扩展）
   useEffect(() => {
@@ -1054,6 +1056,26 @@ export const WorkflowOrderCard: React.FC<{
     setEditFlowNewIcon('');
     setEditFlowNewDesc('');
     setEditFlowNewDays('');
+    setEditFlowTplSelect(undefined);
+  }
+
+  // 选择模板快速替换流程节点
+  function handleSelectTemplate(tplId: string | undefined) {
+    if (!tplId) { setEditFlowTplSelect(undefined); return; }
+    const allTpls = templates.length > 0 ? templates : (INDUSTRY_TEMPLATES as WorkflowTemplate[]);
+    const tpl = allTpls.find(t => t.id === tplId);
+    if (!tpl) { setEditFlowTplSelect(undefined); return; }
+    Modal.confirm({
+      title: '确认替换流程节点',
+      content: `确定要用模板「${tpl.name}」的 ${tpl.nodes.length} 个节点替换当前编辑的流程吗？当前未保存的修改将被覆盖。`,
+      okText: '确认替换',
+      cancelText: '取消',
+      onOk: () => {
+        setEditFlowNodes(tpl.nodes.map(n => ({ ...n })));
+        message.success(`已替换为模板「${tpl.name}」`);
+      },
+      afterClose: () => { setEditFlowTplSelect(undefined); },
+    });
   }
 
   function saveEditFlow() {
@@ -1288,6 +1310,19 @@ export const WorkflowOrderCard: React.FC<{
         {editFlowOrder && (
           <div>
             <Alert type="info" showIcon message={`订单：${editFlowOrder.orderNo} · ${editFlowOrder.customerName || ''}`} style={{ marginBottom: 12 }} />
+            <Select
+              placeholder="⚡ 选择模板快速替换当前流程节点..."
+              style={{ width: '100%', marginBottom: 12 }}
+              value={editFlowTplSelect}
+              onChange={handleSelectTemplate}
+              allowClear
+              showSearch
+              optionFilterProp="label"
+              options={(templates.length > 0 ? templates : (INDUSTRY_TEMPLATES as WorkflowTemplate[])).map(t => ({
+                label: `${t.name}（${t.industry}）`,
+                value: t.id,
+              }))}
+            />
             <div style={{ maxHeight: 320, overflowY: 'auto' }}>
               {editFlowNodes.map((node, i) => (
                 <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center', background: '#fafbfc', padding: 8, borderRadius: 8, border: '1px solid #eee', marginBottom: 6 }}>

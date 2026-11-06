@@ -5,7 +5,7 @@ import {
 } from 'antd';
 import {
   PlusOutlined, DeleteOutlined, EyeOutlined, ExportOutlined, InboxOutlined,
-  SearchOutlined, ReloadOutlined, LinkOutlined, ProfileOutlined,
+  SearchOutlined, ReloadOutlined, LinkOutlined, ProfileOutlined, CopyOutlined,
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
@@ -207,14 +207,39 @@ const ProdInboundStatsPage: React.FC = () => {
   const columns: ColumnsType<PisRecord> = [
     { title: '入库单号', dataIndex: 'id', key: 'id', width: 140, fixed: 'left', render: v => <Text strong copyable={{ text: v }}>{v}</Text> },
     { title: '产品名称', dataIndex: 'productName', key: 'productName', width: 140, render: v => v || '—' },
-    { title: '商品编码', dataIndex: 'productCode', key: 'productCode', width: 120, render: v => <Tag color="geekblue">{v}</Tag> },
+    {
+      title: '商品编码', dataIndex: 'productCode', key: 'productCode', width: 140,
+      render: v => v ? (
+        <Space size={4}>
+          <Tag color="geekblue">{v}</Tag>
+          <Tooltip title="复制商品编码">
+            <Button
+              type="text" size="small" icon={<CopyOutlined style={{ fontSize: 12 }} />}
+              onClick={() => {
+                navigator.clipboard.writeText(v).then(() => message.success('已复制商品编码')).catch(() => message.error('复制失败'));
+              }}
+            />
+          </Tooltip>
+        </Space>
+      ) : '—',
+    },
     { title: '入库数量', dataIndex: 'quantity', key: 'quantity', width: 100, align: 'right', render: v => <Text strong style={{ color: '#52c41a', fontSize: 14 }}>{Number(v || 0).toLocaleString()}</Text> },
     {
-      title: '生产工单', dataIndex: 'woNo', key: 'woNo', width: 140,
+      title: '生产工单', dataIndex: 'woNo', key: 'woNo', width: 160,
       render: v => v ? (
-        <Tooltip title={prodOrders.find(p => String(p.id) === String(v)) ? `生产订单状态：${prodOrders.find(p => String(p.id) === String(v))?.statusLabel || prodOrders.find(p => String(p.id) === String(v))?.status || '-'}` : '未在生产订单中找到'}>
-          <Tag icon={<LinkOutlined />} color="purple">{v}</Tag>
-        </Tooltip>
+        <Space size={4}>
+          <Tooltip title={prodOrders.find(p => String(p.id) === String(v)) ? `生产订单状态：${prodOrders.find(p => String(p.id) === String(v))?.statusLabel || prodOrders.find(p => String(p.id) === String(v))?.status || '-'}` : '未在生产订单中找到'}>
+            <Tag icon={<LinkOutlined />} color="purple">{v}</Tag>
+          </Tooltip>
+          <Tooltip title="复制生产工单号">
+            <Button
+              type="text" size="small" icon={<CopyOutlined style={{ fontSize: 12 }} />}
+              onClick={() => {
+                navigator.clipboard.writeText(v).then(() => message.success('已复制生产工单号')).catch(() => message.error('复制失败'));
+              }}
+            />
+          </Tooltip>
+        </Space>
       ) : <Text type="secondary">—</Text>,
     },
     { title: '入库仓库', dataIndex: 'warehouse', key: 'warehouse', width: 100, render: v => <Tag color={WAREHOUSE_COLOR[v] || 'default'}>{v}</Tag> },
