@@ -960,7 +960,7 @@ const DevDashboard: React.FC = () => {
         <Card bodyStyle={{ padding: '16px 20px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div>
-              <Tooltip title={infra?.db?.driver === 'mysql' && !infra?.db?.diskTotalConfigured ? '数据库盘总量未配置环境变量 DB_DISK_TOTAL_GB，按缺省 100GB 计算' : '数据库占用为表空间（数据+索引）聚合；剩余 = 盘总量 - 占用'}>
+              <Tooltip title={infra?.db?.driver === 'mysql' && !infra?.db?.diskTotalConfigured ? '数据库盘总量未配置环境变量 DB_DISK_TOTAL_GB，按缺省 20GB 计算' : '数据库占用为表空间（数据+索引）聚合；剩余 = 盘总量 - 占用'}>
                 <Text type="secondary">数据库剩余</Text>
               </Tooltip>
               <div style={{ fontSize: 24, fontWeight: 'bold', color: '#2f54eb' }}>

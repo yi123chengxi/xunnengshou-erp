@@ -2,7 +2,7 @@
  * 系统基础设施统计（开发者后台用）：应用服务磁盘 + 数据库空间
  * - 应用盘：Linux/ macOS 走 df -B1 取所在分区总量/已用/可用；其他平台返回 null（前端占位显示）
  * - MySQL：占用 = information_schema 表空间（data+index）聚合；数据库盘总量读环境变量
- *   DB_DISK_TOTAL_GB（订购的云盘容量，缺省 100），剩余 = 总量 - 占用
+ *   DB_DISK_TOTAL_GB（订购的云盘容量，缺省 20），剩余 = 总量 - 占用
  * - SQLite：占用 = 数据库文件体积；总量/剩余与应用盘同源（同一台机器）
  * 仅返回容量聚合数字，不含路径/租户等明细（与 /sync/usage-all 运营接口同风险口径）
  */
@@ -44,7 +44,8 @@ router.get('/infra-stats', async (_req: Request, res: Response) => {
         [schema]
       );
       const usedBytes = Number((rows as any[])[0]?.bytes) || 0;
-      const totalBytes = Math.round((Number(process.env.DB_DISK_TOTAL_GB) || 100) * 1024 * 1024 * 1024);
+      // 数据库盘订购容量缺省 20GB（可以环境变量 DB_DISK_TOTAL_GB 覆盖）
+      const totalBytes = Math.round((Number(process.env.DB_DISK_TOTAL_GB) || 20) * 1024 * 1024 * 1024);
       db = {
         driver: 'mysql', schema, usedBytes, totalBytes,
         freeBytes: Math.max(0, totalBytes - usedBytes),
