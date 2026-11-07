@@ -995,7 +995,6 @@ const PurchaserSupplierList: React.FC = () => {
       setSpProductCounts(prev => ({ ...prev, ...map }));
     }).catch(() => { /* ignore */ });
     return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dataSource]);
 
   // 填写供应商编号 → 向对应供应商账号发起合作申请（新增/编辑窗口共用）
