@@ -185,9 +185,45 @@ const PaymentRequestPage: React.FC = () => {
   }, [storageKey]);
   useEffect(() => {
     load();
+    const ownerOfKey = storageKey.replace(/^payment_requests_/, '');
     const onStorage = (e: StorageEvent) => { if (e.key === storageKey || (e.key || '').includes('pageData_finance_bank-account_') || e.key === managersKey) load(); };
+    // 同标签页其他页面（如订单分期登记）写入收款确认单后即时刷新（本页被保活，不会重新挂载）
+    const onLocalUpdate = (e: Event) => {
+      const detail = (e as CustomEvent).detail || {};
+      if (detail.owner && detail.owner !== ownerOfKey) return;
+      if (detail.key && !String(detail.key).includes('payment_requests_')) return;
+      load();
+    };
+    // 服务端同步完成 / 窗口重新聚焦 / 标签页切回时刷新，避免保活页面展示旧数据
+    const onResume = () => load();
+    const onVisibility = () => { if (document.visibilityState === 'visible') load(); };
     window.addEventListener('storage', onStorage);
-    return () => window.removeEventListener('storage', onStorage);
+    window.addEventListener('payment-requests-updated', onLocalUpdate);
+    window.addEventListener('sync-data-updated', onResume);
+    window.addEventListener('focus', onResume);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.removeEventListener('storage', onStorage);
+      window.removeEventListener('payment-requests-updated', onLocalUpdate);
+      window.removeEventListener('sync-data-updated', onResume);
+      window.removeEventListener('focus', onResume);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [load, storageKey, managersKey]);
+
+  // 兜底刷新：其他页面（品牌保证金等）写入收/付款申请时若未派发事件，定时比对存储原文自动重载
+  const lastRawRef = useRef<string>('');
+  useEffect(() => {
+    try { lastRawRef.current = localStorage.getItem(storageKey) || ''; } catch { /* ignore */ }
+    const timer = setInterval(() => {
+      let raw = '';
+      try { raw = localStorage.getItem(storageKey) || ''; } catch { return; }
+      if (raw !== lastRawRef.current) {
+        lastRawRef.current = raw;
+        load();
+      }
+    }, 3000);
+    return () => clearInterval(timer);
   }, [load, storageKey]);
 
   // ========== 系统级通知提醒 ==========

@@ -3087,7 +3087,7 @@ const ModuleChildPage: React.FC = () => {
     let list: any[] = [];
     try { list = JSON.parse(localStorage.getItem('recon_records') || '[]'); } catch { /* ignore */ }
     if (!Array.isArray(list)) list = [];
-    if (list.some((r: any) => r.source === 'bill' && r.orderNo === record.id)) {
+    if (list.some((r: any) => !r.delisted && r.source === 'bill' && r.orderNo === record.id)) {
       if (!silent) message.warning('该账单已发起对账，请勿重复发起');
       return { ok: false, reason: '已发起对账，请勿重复发起' };
     }
@@ -3274,7 +3274,7 @@ const ModuleChildPage: React.FC = () => {
     const owner = isSub ? (localStorage.getItem('parentAccount') || localStorage.getItem('username') || '') : (localStorage.getItem('username') || '');
     let list: any[] = [];
     try { list = JSON.parse(localStorage.getItem('recon_records') || '[]'); } catch { list = []; }
-    const recs = (Array.isArray(list) ? list : []).filter((r: any) => r.initiator === 'purchaser' && r.docNo && (!r.supplierUsername || r.supplierUsername === owner));
+    const recs = (Array.isArray(list) ? list : []).filter((r: any) => !r.delisted && r.initiator === 'purchaser' && r.docNo && (!r.supplierUsername || r.supplierUsername === owner));
     setBillAddReconOptions(recs.map((r: any) => ({
       value: r.docNo,
       label: (
@@ -4602,7 +4602,7 @@ const ModuleChildPage: React.FC = () => {
         try {
           let list: any[] = JSON.parse(localStorage.getItem('recon_records') || '[]');
           if (!Array.isArray(list)) list = [];
-          const nextList = list.filter((r: any) => !(r.source === 'bill' && r.orderNo === record.id));
+          const nextList = list.map((r: any) => (r.source === 'bill' && r.orderNo === record.id) ? { ...r, delisted: true, delistedAt: new Date().toISOString() } : r);
           localStorage.setItem('recon_records', JSON.stringify(nextList));
         } catch { /* ignore */ }
         // 记录撤回对账日志
@@ -6495,7 +6495,15 @@ const ModuleChildPage: React.FC = () => {
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     });
-    try { localStorage.setItem(prKey, JSON.stringify(prList)); } catch { /* ignore */ }
+    const json = JSON.stringify(prList);
+    try {
+      safeSetItem(prKey, json);
+      // IndexedDB 同步 + 时间戳，避免刷新时读回旧数据
+      saveDataset(prKey, json);
+      safeSetItem(`${prKey}_ts`, String(Date.now()));
+      // 同标签页通知「收/付申请-收款确认」页即时刷新（该页为保活页面，不会重新挂载）
+      window.dispatchEvent(new CustomEvent('payment-requests-updated', { detail: { owner, key: prKey } }));
+    } catch { /* ignore */ }
   }, [getDataOwner]);
 
   // 分段付款：登记本期收款（追加台账 + 累加 paidAmount + 收满自动置已付款；双侧账套联动）
