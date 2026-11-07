@@ -82,7 +82,7 @@ export const sqliteDriver: StoreDriver = {
     return s.stmtGetCert.get(username);
   },
   async upsertCert(c) {
-    s.stmtUpsertCert.run(c.username, c.company_name, c.credit_code, c.legal_person, c.id_card, c.status, c.fail_reason, c.check_result, c.attempts, c.verified_at, c.last_verify_at, c.last_check_at);
+    s.stmtUpsertCert.run(c.username, c.company_name, c.credit_code, c.legal_person, c.id_card, c.status, c.fail_reason, c.check_result, c.attempts, c.verified_at, c.last_verify_at, c.last_check_at, c.last_change_at);
   },
   async updateCertStatus(status, failReason, checkResult, lastCheckAt, username) {
     s.stmtUpdateCertStatus.run(status, failReason, checkResult, lastCheckAt, username);

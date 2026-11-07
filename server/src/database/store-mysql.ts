@@ -128,13 +128,13 @@ export const mysqlDriver: StoreDriver = {
   },
   async upsertCert(c) {
     await run(
-      `INSERT INTO enterprise_cert (username, company_name, credit_code, legal_person, id_card, status, fail_reason, check_result, attempts, verified_at, last_verify_at, last_check_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+      `INSERT INTO enterprise_cert (username, company_name, credit_code, legal_person, id_card, status, fail_reason, check_result, attempts, verified_at, last_verify_at, last_check_at, last_change_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
        ON DUPLICATE KEY UPDATE company_name = VALUES(company_name), credit_code = VALUES(credit_code), legal_person = VALUES(legal_person),
          id_card = VALUES(id_card), status = VALUES(status), fail_reason = VALUES(fail_reason), check_result = VALUES(check_result),
          attempts = VALUES(attempts), verified_at = VALUES(verified_at), last_verify_at = VALUES(last_verify_at),
-         last_check_at = VALUES(last_check_at), updated_at = NOW()`,
-      [c.username, c.company_name, c.credit_code, c.legal_person, c.id_card, c.status, c.fail_reason, c.check_result, c.attempts, c.verified_at, c.last_verify_at, c.last_check_at]
+         last_check_at = VALUES(last_check_at), last_change_at = VALUES(last_change_at), updated_at = NOW()`,
+      [c.username, c.company_name, c.credit_code, c.legal_person, c.id_card, c.status, c.fail_reason, c.check_result, c.attempts, c.verified_at, c.last_verify_at, c.last_check_at, c.last_change_at]
     );
   },
   async updateCertStatus(status, failReason, checkResult, lastCheckAt, username) {

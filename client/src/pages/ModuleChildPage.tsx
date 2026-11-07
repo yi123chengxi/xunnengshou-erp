@@ -105,6 +105,9 @@ import SalesOutboundStatsPage from './inventory/SalesOutboundStatsPage';
 import { safeSetItem } from '../utils/storageQuota';
 import { getDataOwner } from '../utils/brandAuth';
 import { saveDataset, loadDataset } from '../utils/dataStore';
+import ReturnRegisterModal from '../components/ReturnRegisterModal';
+import type { ReturnRegisterPayload } from '../components/ReturnRegisterModal';
+import { buildSupplierReturnRow, buildPurchaserReturnBill, writeReturnStockFlows, getOwnCompanyName } from '../utils/returnRegister';
 import { appendStockLog, updateProductStock } from '../utils/stockUtils';
 import { loadTenantUsers } from '../utils/tenantUsers';
 import { appendBillLogEntry, readBillLog, billLogColor, resolveOperatorName, diffBillRecords, SUPPLIER_BILL_FIELD_MAP, getCurrentUserDisplayName } from '../utils/billLog';
@@ -2821,6 +2824,65 @@ const ModuleChildPage: React.FC = () => {
       safeSetItem(storageKey, JSON.stringify(next));
     } catch { /* ignore */ }
   }, [buildBillDetailRows]);
+
+  // ============ 退货登记（账单明细）：负数退货行 + 镜像同步采购商平台 + 库存出入库联动 ============
+  const [returnRegVisible, setReturnRegVisible] = useState(false);
+  const returnRegCounterpartyOptions = useMemo(() => {
+    if (!returnRegVisible) return [];
+    const names = new Set<string>();
+    dataSource.forEach((r: any) => { if (r && r.customerName) names.add(String(r.customerName)); });
+    try {
+      const cust: any[] = JSON.parse(localStorage.getItem(`pageData_customer_customer-info_${getDataOwner()}`) || '[]');
+      cust.forEach((c: any) => { if (c && c.name) names.add(String(c.name)); });
+    } catch { /* ignore */ }
+    let users: any[] = [];
+    try { users = JSON.parse(localStorage.getItem('registeredUsers') || '[]'); } catch { users = []; }
+    return Array.from(names)
+      .map(n => ({ name: n, username: users.find((u: any) => String(u?.companyName || '').trim() === n)?.username || '' }))
+      .filter(x => x.username)
+      .map(x => ({ value: x.username, label: x.name }));
+  }, [returnRegVisible, dataSource, getDataOwner]);
+  const returnRegLinkedOptions = useMemo(() => (dataSource as any[])
+    .filter(r => r && r.docType !== 'return' && r.outboundNo)
+    .map(r => ({
+      value: String(r.outboundNo),
+      label: `${r.outboundNo}（${r.customerName || '-'} ¥${Number(r.totalAmount || 0).toFixed(2)}）`,
+      items: (Array.isArray(r.items) ? r.items : []).map((it: any) => ({ productCode: it.productCode || '', productName: it.productName || '', color: it.color || '', spec: it.spec || '', quantity: Number(it.quantity) || 0, unitPrice: Number(it.price ?? it.unitPrice) || 0 })),
+    })), [dataSource]);
+
+  /** 退货登记提交：本端负数退货行 → 镜像采购商采购账单 → 库存联动（供方退货仓入库/采方退货出库） */
+  const handleReturnRegister = useCallback((p: ReturnRegisterPayload) => {
+    const owner = getDataOwner();
+    if (dataSource.some((r: any) => r.id === p.returnNo || r.outboundNo === p.returnNo)) { message.warning(`退货单 ${p.returnNo} 已登记，请勿重复提交`); return; }
+    const now = new Date().toLocaleString('zh-CN');
+    const operator = getCurrentUserDisplayName();
+    const row = buildSupplierReturnRow(p, { customerName: p.counterpartyName, counterpartyUsername: p.counterpartyUsername, now }) as any;
+    const updated = [row, ...dataSource];
+    setDataSource(updated);
+    const storageKey = `pageData_customer_bill-detail_${owner}`;
+    const json = JSON.stringify(updated);
+    safeSetItem(storageKey, json);
+    saveDataset(storageKey, json);
+    // 镜像同步采购商平台采购账单（负数退货账单，走相同对账流程）
+    if (p.counterpartyUsername) {
+      const purKey = `purchaser_bills_${p.counterpartyUsername}`;
+      let list: any[] = [];
+      try { list = JSON.parse(localStorage.getItem(purKey) || '[]'); if (!Array.isArray(list)) list = []; } catch { list = []; }
+      if (!list.some((b: any) => b.key === `bill-${p.returnNo}` || b.outboundNo === p.returnNo)) {
+        const bill = buildPurchaserReturnBill(p, { operator, supplierName: getOwnCompanyName(owner), now });
+        const pjson = JSON.stringify([bill, ...list]);
+        safeSetItem(purKey, pjson);
+        saveDataset(purKey, pjson);
+      }
+    }
+    // 库存联动：供应商侧退货仓入库 + 采购商侧退货出库
+    writeReturnStockFlows(p, {
+      supplierOwner: owner, purchaserOwner: p.counterpartyUsername, operator,
+      supplierCompanyName: getOwnCompanyName(owner), purchaserCompanyName: p.counterpartyName,
+    });
+    setReturnRegVisible(false);
+    message.success(`退货单 ${p.returnNo} 已登记：负数退货账单已生成并同步至采购商平台`);
+  }, [dataSource, getDataOwner, getCurrentUserDisplayName]);
 
   // 账单明细：确认无误
   const handleBillConfirm = useCallback((record: Record<string, any>) => {
@@ -12806,6 +12868,7 @@ const handleBatchAttrsConfirm = () => {
       ) : pageConfig?.title !== '银行账户' && pageConfig?.title !== '订单管理' && pageConfig?.title !== '生产订单' && pageConfig?.title !== '打单拣货' && pageConfig?.title !== '生产排期' ? (
         <>
         {isBillDetail && (
+          <>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
             <span style={{ fontSize: 12, color: '#8c8c8c', whiteSpace: 'nowrap' }}>统计时间范围：</span>
             {([['thisMonth', '本月'], ['lastMonth', '上月'], ['halfYear', '最近半年'], ['year', '最近一年']] as const).map(([k, label]) => (
@@ -12815,7 +12878,12 @@ const handleBatchAttrsConfirm = () => {
               value={[dayjs(billRange[0]), dayjs(billRange[1])]}
               onChange={v => { if (v && v[0] && v[1]) { setBillRangeQuick('custom'); setBillRange([v[0].format('YYYY-MM-DD'), v[1].format('YYYY-MM-DD')]); } }} />
             {billRangeQuick === 'custom' && <Tag color="blue">自定义区间</Tag>}
+            <Button size="small" icon={<RollbackOutlined />} style={{ marginLeft: 'auto', color: '#cf1322', borderColor: '#cf1322' }} onClick={() => setReturnRegVisible(true)}>退货登记</Button>
           </div>
+          <ReturnRegisterModal open={returnRegVisible} onClose={() => setReturnRegVisible(false)} side="supplier"
+            counterpartyOptions={returnRegCounterpartyOptions} linkedBillOptions={returnRegLinkedOptions}
+            onSubmit={handleReturnRegister} />
+          </>
         )}
         <Row gutter={compactStats ? [8, 8] : [16, 16]} style={{ marginBottom: compactStats ? 8 : 20 }}>
           <Col xs={12} sm={6}>

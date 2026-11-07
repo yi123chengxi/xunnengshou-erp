@@ -137,9 +137,10 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_pending_pool ON chat_pending_messages(pool_owner);
 `);
 
-// 兼容旧库：企业认证表增量列（法人身份证号 / 最近刷脸 CertifyId）
+// 兼容旧库：企业认证表增量列（法人身份证号 / 最近刷脸 CertifyId / 最近变更认证时间）
 try { db.exec("ALTER TABLE enterprise_cert ADD COLUMN id_card TEXT NOT NULL DEFAULT ''"); } catch { /* 已存在 */ }
 try { db.exec("ALTER TABLE enterprise_cert ADD COLUMN face_certify_id TEXT NOT NULL DEFAULT ''"); } catch { /* 已存在 */ }
+try { db.exec("ALTER TABLE enterprise_cert ADD COLUMN last_change_at TEXT NOT NULL DEFAULT ''"); } catch { /* 已存在 */ }
 
 // ============ 预编译语句 ============
 
@@ -226,8 +227,8 @@ export const stmtDeletePushSubByUsername: Statement = db.prepare('DELETE FROM pu
 // enterprise_cert（企业认证）
 export const stmtGetCert: Statement = db.prepare('SELECT * FROM enterprise_cert WHERE username = ?');
 export const stmtUpsertCert: Statement = db.prepare(`
-  INSERT INTO enterprise_cert (username, company_name, credit_code, legal_person, id_card, status, fail_reason, check_result, attempts, verified_at, last_verify_at, last_check_at, updated_at)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+  INSERT INTO enterprise_cert (username, company_name, credit_code, legal_person, id_card, status, fail_reason, check_result, attempts, verified_at, last_verify_at, last_check_at, last_change_at, updated_at)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
   ON CONFLICT(username) DO UPDATE SET
     company_name = excluded.company_name,
     credit_code = excluded.credit_code,
@@ -240,6 +241,7 @@ export const stmtUpsertCert: Statement = db.prepare(`
     verified_at = excluded.verified_at,
     last_verify_at = excluded.last_verify_at,
     last_check_at = excluded.last_check_at,
+    last_change_at = excluded.last_change_at,
     updated_at = datetime('now')
 `);
 export const stmtUpdateCertStatus: Statement = db.prepare(`

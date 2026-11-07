@@ -40,7 +40,7 @@ import KeepAliveOutlet from '../components/KeepAliveOutlet';
 import { menuVisible, menuKeyFromPath, usePermTick, getPreviewUser, setPreviewUser } from '../utils/perm';
 import { Result as AntResult } from 'antd';
 import ServiceOrdersModal from '../components/ServiceOrdersModal';
-import EnterpriseCertModal, { CertBadge, fetchCertStatus } from '../components/EnterpriseCertModal';
+import EnterpriseCertModal, { CertBadge, fetchCertStatus, getChangeLockMessage } from '../components/EnterpriseCertModal';
 import type { CertInfo } from '../components/EnterpriseCertModal';
 import StorageCleanupModal from '../components/StorageCleanupModal';
 import TrialCountdown from '../components/TrialCountdown';
@@ -627,7 +627,11 @@ const MainLayout: React.FC = () => {
                 {userInfo.companyName}
                 <CertBadge info={ownCertInfo} showUncertified />
                 {ownCertInfo?.status === 'certified' ? (
-                  <Button type="link" size="small" icon={<EditOutlined />} style={{ marginLeft: 8, padding: 0, fontSize: 12 }} onClick={() => setEnterpriseCertVisible(true)}>申请变更认证</Button>
+                  <Button type="link" size="small" icon={<EditOutlined />} style={{ marginLeft: 8, padding: 0, fontSize: 12 }} onClick={() => {
+                    const lock = getChangeLockMessage(ownCertInfo);
+                    if (lock) { message.warning(lock, 5); return; }
+                    setEnterpriseCertVisible(true);
+                  }}>申请变更认证</Button>
                 ) : (
                   <Button type="primary" size="small" style={{ marginLeft: 8, fontSize: 12 }} onClick={() => setEnterpriseCertVisible(true)}>去认证</Button>
                 )}
@@ -2025,7 +2029,11 @@ const MainLayout: React.FC = () => {
           {ownCertInfo?.status === 'certified' && (
             <Alert type="warning" showIcon style={{ marginBottom: 16 }}
               message="企业已通过认证，公司名称和法人代表不可修改。如需变更，请先申请变更认证。"
-              action={<Button size="small" type="link" onClick={() => { setEditProfileVisible(false); setEnterpriseCertVisible(true); }}>申请变更认证</Button>}
+              action={<Button size="small" type="link" onClick={() => {
+                const lock = getChangeLockMessage(ownCertInfo);
+                if (lock) { message.warning(lock, 5); return; }
+                setEditProfileVisible(false); setEnterpriseCertVisible(true);
+              }}>申请变更认证</Button>}
             />
           )}
           <Form.Item name="companyName" label="公司名称" rules={[{ required: true, message: '请输入公司名称' }]}>

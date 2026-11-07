@@ -4,6 +4,7 @@
  * 供应商（财务管理·开票申请）标记已开票 → 回写申请方 invoice_record_<申请方账号>.invoiceStatus
  */
 import { safeSetItem } from './storageQuota';
+import { fetchServerDataset, flushDatasetUploadAsync } from './serverSync';
 
 export interface InvoiceApplyRequest {
   key: string;            // 与 applyNo 同值，作收件箱 rowKey
@@ -25,6 +26,27 @@ export interface InvoiceApplyRequest {
 
 /** 状态归一：空值归为待开票，其余原样保留（待开票/已开票/开票成功） */
 export const normInvoiceStatus = (s?: string): '待开票' | '开票成功' | '已开票' => (s === '开票成功' ? '开票成功' : s === '已开票' ? '已开票' : '待开票');
+
+/**
+ * 申请方公司显示名：历史数据中 applicantCompany 可能存的是账号名（localStorage 缺 companyName 时回退 owner），
+ * 按账号反查 registeredUsers.companyName 转为公司名称；本身已是公司名则原样返回；
+ * 值为空时用 fallbackUsername（申请方账号）反查。
+ */
+export const resolveApplicantCompany = (v?: string, fallbackUsername?: string): string => {
+  let users: any[] = [];
+  try { users = JSON.parse(localStorage.getItem('registeredUsers') || '[]'); } catch { users = []; }
+  const raw = String(v || '').trim();
+  if (raw) {
+    const byUser = users.find((x: any) => x.username === raw);
+    if (byUser?.companyName) return byUser.companyName;
+    return raw;
+  }
+  if (fallbackUsername) {
+    const u = users.find((x: any) => x.username === fallbackUsername);
+    if (u?.companyName) return u.companyName;
+  }
+  return '';
+};
 
 /** 发票是否已开完（开票成功=供应商同步 / 已开票=申请方手动） */
 export const isInvoiceDone = (s?: string): boolean => normInvoiceStatus(s) !== '待开票';
@@ -103,23 +125,47 @@ export const nextApplyNo = (records: any[], dayjsFormat: string): string => {
   return `${prefix}${String(max + 1).padStart(3, '0')}`;
 };
 
-/** 回写申请方开票记录中的开票状态（供应商侧标记开票完成时调用，闭环；可附带发票图片） */
-export const syncApplicantRecordStatus = (applicantUsername: string, applyNo: string, status: '待开票' | '开票成功', image?: string): boolean => {
+/**
+ * 回写申请方开票记录中的开票状态（供应商侧标记开票完成时调用，闭环；可附带发票图片）
+ * 跨浏览器兼容：申请方的 invoice_record_ 为私有键，不会拉取到供应商浏览器，
+ * 本地未命中时改从服务端拉取该数据集、改状态后直接回传服务端。
+ */
+export const syncApplicantRecordStatus = async (applicantUsername: string, applyNo: string, status: '待开票' | '开票成功', image?: string): Promise<boolean> => {
   if (!applicantUsername || !applyNo) return false;
   const key = `invoice_record_${applicantUsername}`;
+  const apply = (list: any[]): { list: any[]; hit: boolean } => {
+    let hit = false;
+    const next = list.map((r: any) => {
+      if (r?.source === 'apply' && r?.applyNo === applyNo && (r.invoiceStatus !== status || (image && r.image !== image))) {
+        hit = true;
+        return { ...r, invoiceStatus: status, image: image ? image : r.image };
+      }
+      return r;
+    });
+    return { list: next, hit };
+  };
+  // 1) 本地命中（同浏览器/本账号场景）：直接回写，写入钩子自动上传
   let list: any[] = [];
-  try { list = JSON.parse(localStorage.getItem(key) || '[]'); } catch { return false; }
-  let hit = false;
-  list = list.map((r: any) => {
-    if (r?.source === 'apply' && r?.applyNo === applyNo && (r.invoiceStatus !== status || (image && r.image !== image))) {
-      hit = true;
-      return { ...r, invoiceStatus: status, image: image ? image : r.image };
+  try { list = JSON.parse(localStorage.getItem(key) || '[]'); } catch { list = []; }
+  if (Array.isArray(list) && list.length > 0) {
+    const r1 = apply(list);
+    if (r1.hit) {
+      const json = JSON.stringify(r1.list);
+      safeSetItem(key, json);
+      safeSetItem(`${key}_ts`, String(Date.now()));
+      return true;
     }
-    return r;
-  });
-  if (!hit) return false;
-  const json = JSON.stringify(list);
-  safeSetItem(key, json);
-  safeSetItem(`${key}_ts`, String(Date.now()));
-  return true;
+  }
+  // 2) 跨浏览器：服务端拉取申请方开票记录 → 改状态 → 回传服务端（乐观并发 baseTs 合并）
+  try {
+    const rec = await fetchServerDataset(key);
+    if (rec && rec.json) {
+      const serverList: any[] = JSON.parse(rec.json);
+      if (Array.isArray(serverList)) {
+        const r2 = apply(serverList);
+        if (r2.hit) return await flushDatasetUploadAsync(key, JSON.stringify(r2.list));
+      }
+    }
+  } catch { /* ignore */ }
+  return false;
 };

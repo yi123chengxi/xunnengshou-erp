@@ -29,7 +29,12 @@ interface CertRow {
   username: string; company_name: string; credit_code: string; legal_person: string; id_card: string;
   status: string; fail_reason: string; check_result: string; attempts: number;
   verified_at: string; last_verify_at: string; last_check_at: string; face_certify_id: string;
+  last_change_at: string;
 }
+
+// 变更认证限制：已认证企业每 365 天仅可申请变更一次（受理变更申请时落时间戳）
+const CHANGE_INTERVAL_MS = 365 * 24 * 3600_000;
+const dayStr = (t: number) => new Date(t).toISOString().slice(0, 10);
 
 const verifyThrottle = new Map<string, { last: number; day: string; fails: number }>();
 // 限频策略：连续失败达 COOLDOWN_AFTER_FAILS 次后才冷却 COOLDOWN_MS（此前可立即重试）；每日失败上限 DAILY_FAIL_MAX 作配额保护
@@ -47,6 +52,7 @@ function publicView(r: CertRow) {
     idCardMasked: maskIdCard(r.id_card),
     verifiedAt: r.verified_at,
     lastCheckAt: r.last_check_at,
+    lastChangeAt: r.last_change_at,
     checkResult: r.check_result,
     failReason: r.fail_reason,
   };
@@ -70,6 +76,18 @@ router.post('/verify', async (req: Request, res: Response) => {
     if (exist0 && exist0.status === 'pending' && sameProfile(exist0)) {
       res.json({ code: 0, data: { ...publicView(exist0), cached: true }, message: '三要素已核验通过，请继续完成法人刷脸' });
       return;
+    }
+
+    // 年度变更限制：已认证企业提交的三要素/身份证与在册不同即为变更申请，365 天内仅受理一次
+    const isChangeApply = !!exist0 && exist0.status === 'certified' && !sameProfile(exist0);
+    if (isChangeApply && exist0!.last_change_at) {
+      // 落库为 UTC 字符串（nowStr），解析须补 Z 后缀按 UTC 读回，否则东八区会偏差一天
+      const lastTs = new Date(exist0!.last_change_at.replace(' ', 'T') + 'Z').getTime();
+      const nextTs = lastTs + CHANGE_INTERVAL_MS;
+      if (Date.now() < nextTs) {
+        res.json({ code: 429, message: `企业认证信息每年仅可变更一次：上次变更 ${dayStr(lastTs)}，请于 ${dayStr(nextTs)} 后再申请` });
+        return;
+      }
     }
 
     // 限频：前 3 次失败可立即重试；连续 3 次未通过后冷却 60 秒；每日失败上限作配额保护
@@ -99,6 +117,8 @@ router.post('/verify', async (req: Request, res: Response) => {
         username, company_name: companyName, credit_code: creditCode, legal_person: legalPerson, id_card: idCard,
         status: 'pending', fail_reason: '等待法人刷脸认证', check_result: r.devMode ? 'devMode' : 'match', attempts: 0,
         verified_at: exist && exist.status === 'certified' ? exist.verified_at : '', last_verify_at: ts, last_check_at: ts,
+        // 变更申请受理即占用年度变更名额；非变更（首次/异常重认证）保留原时间戳
+        last_change_at: isChangeApply ? ts : (exist?.last_change_at || ''),
       });
       const row = await store.getCert(username) as CertRow;
       res.json({ code: 0, data: publicView(row), message: '三要素核验通过，请完成法人刷脸认证' });
@@ -111,6 +131,7 @@ router.post('/verify', async (req: Request, res: Response) => {
           username: exist.username, company_name: companyName, credit_code: creditCode, legal_person: legalPerson, id_card: idCard,
           status: exist.status, fail_reason: r.message || '三要素不一致', check_result: r.reason || 'mismatch', attempts: exist.attempts + 1,
           verified_at: exist.verified_at, last_verify_at: nowStr(), last_check_at: exist.last_check_at,
+          last_change_at: exist.last_change_at || '',
         });
       }
       res.json({ code: 400, message: r.message || '三要素与工商登记信息不一致，请核对后重试' });

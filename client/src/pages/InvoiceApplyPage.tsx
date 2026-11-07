@@ -5,7 +5,7 @@ import {
 import { ReloadOutlined, FileTextOutlined, CheckCircleOutlined, PictureOutlined, DeleteOutlined, SnippetsOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import useResizableColumns from '../hooks/useResizableColumns';
-import { readInbox, writeInbox, syncApplicantRecordStatus, normInvoiceStatus, isInvoiceDone, InvoiceApplyRequest } from '../utils/invoiceApply';
+import { readInbox, writeInbox, syncApplicantRecordStatus, normInvoiceStatus, isInvoiceDone, resolveApplicantCompany, InvoiceApplyRequest } from '../utils/invoiceApply';
 
 const { Text, Title } = Typography;
 const PRIMARY = '#1e4a7e';
@@ -81,13 +81,14 @@ const InvoiceApplyPage: React.FC = () => {
     }
   }, []);
 
-  const handleConfirmComplete = () => {
+  const handleConfirmComplete = async () => {
     if (!uploadTarget) return;
     const target = uploadTarget;
     const list = records.map(x => (x.applyNo === target.applyNo ? { ...x, status: '开票成功' as const, invoiceImage: uploadImage || x.invoiceImage } : x));
     writeInbox(owner, list);
     setRecords(list);
-    const synced = syncApplicantRecordStatus(target.applicantUsername, target.applyNo, '开票成功', uploadImage || undefined);
+    // 跨浏览器兼容：本地无申请方开票记录时内部自动改走服务端拉取→回传
+    const synced = await syncApplicantRecordStatus(target.applicantUsername, target.applyNo, '开票成功', uploadImage || undefined);
     setUploadVisible(false);
     setUploadTarget(null);
     message.success(synced ? `开票完成，已同步申请方开票记录为「开票成功」${uploadImage ? '并附发票图片' : ''}` : '开票完成（未找到申请方对应记录）');
@@ -100,6 +101,7 @@ const InvoiceApplyPage: React.FC = () => {
     return records.filter(r =>
       (r.applyNo || '').toLowerCase().includes(q) ||
       (r.applicantCompany || '').toLowerCase().includes(q) ||
+      resolveApplicantCompany(r.applicantCompany, r.applicantUsername).toLowerCase().includes(q) ||
       (r.projectName || '').toLowerCase().includes(q) ||
       (r.supplierName || '').toLowerCase().includes(q)
     );
@@ -115,7 +117,11 @@ const InvoiceApplyPage: React.FC = () => {
     { title: '申请单号', dataIndex: 'applyNo', key: 'applyNo', width: 150, fixed: 'left' as const,
       render: (v: string) => <Text strong>{v}</Text> },
     { title: '申请方公司', dataIndex: 'applicantCompany', key: 'applicantCompany', width: 200,
-      render: (v: string) => v || <Text type="secondary">—</Text> },
+      render: (v: string, r: InvoiceApplyRequest) => {
+        // 历史数据可能存账号名：按账号反查公司名称展示
+        const name = resolveApplicantCompany(v, r.applicantUsername);
+        return name || <Text type="secondary">—</Text>;
+      } },
     { title: '项目名称', dataIndex: 'projectName', key: 'projectName', width: 160, ellipsis: true,
       render: (v: string) => v || <Text type="secondary">—</Text> },
     { title: '发票金额', dataIndex: 'amount', key: 'amount', width: 130, align: 'right' as const,
@@ -186,7 +192,7 @@ const InvoiceApplyPage: React.FC = () => {
           </Space>
         }>
         <div style={{ marginBottom: 12 }}>
-          <Text type="secondary">申请单号：{uploadTarget?.applyNo}　申请方：{uploadTarget?.applicantCompany}　发票金额：¥{Number(uploadTarget?.amount || 0).toFixed(2)}</Text>
+          <Text type="secondary">申请单号：{uploadTarget?.applyNo}　申请方：{resolveApplicantCompany(uploadTarget?.applicantCompany, uploadTarget?.applicantUsername)}　发票金额：¥{Number(uploadTarget?.amount || 0).toFixed(2)}</Text>
         </div>
         <div style={{ marginBottom: 8 }}>
           <Space>

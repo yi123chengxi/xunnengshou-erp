@@ -11,7 +11,7 @@ import type { ColumnsType } from 'antd/es/table';
 import useResizableColumns from '../hooks/useResizableColumns';
 import { safeSetItem } from '../utils/storageQuota';
 import { saveDataset } from '../utils/dataStore';
-import { updateInboxStatus, readInbox, upsertInboxEntry, normInvoiceStatus, resolveSupplier } from '../utils/invoiceApply';
+import { updateInboxStatus, readInbox, upsertInboxEntry, normInvoiceStatus, resolveSupplier, resolveApplicantCompany } from '../utils/invoiceApply';
 import dayjs from 'dayjs';
 
 const { Text, Title } = Typography;
@@ -68,10 +68,12 @@ const getCurrentUserDisplayName = (): string => {
     if (account?.displayName) return account.displayName;
   } catch { /* ignore */ }
   try {
-    // 回退到 registeredUsers
+    // 回退到 registeredUsers（displayName → 姓名 contactPerson → 公司名）
     const users = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
     const user = users.find((u: any) => u.username === username);
     if (user?.displayName) return user.displayName;
+    if (user?.contactPerson) return user.contactPerson;
+    if (user?.companyName) return user.companyName;
   } catch { /* ignore */ }
   return username;
 };
@@ -87,10 +89,12 @@ const resolveDisplayName = (username: string): string => {
     if (account?.displayName) return account.displayName;
   } catch { /* ignore */ }
   try {
-    // 回退到 registeredUsers
+    // 回退到 registeredUsers（displayName → 姓名 contactPerson → 公司名）
     const users = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
     const user = users.find((u: any) => u.username === username);
     if (user?.displayName) return user.displayName;
+    if (user?.contactPerson) return user.contactPerson;
+    if (user?.companyName) return user.companyName;
   } catch { /* ignore */ }
   return username;
 };
@@ -149,6 +153,12 @@ const InvoiceRecordPage: React.FC = () => {
     } catch { setSupplierCoop({}); }
   }, [storageKey, owner]);
   useEffect(() => { reload(); }, [reload]);
+  // 服务器同步落地（供应商侧开票完成回写拉取后）自动刷新，避免状态停留旧值
+  useEffect(() => {
+    const onSync = () => reload();
+    window.addEventListener('sync-data-updated', onSync);
+    return () => window.removeEventListener('sync-data-updated', onSync);
+  }, [reload]);
 
   const saveRecords = (list: InvoiceRecord[]) => {
     const json = JSON.stringify(list);
@@ -178,7 +188,7 @@ const InvoiceRecordPage: React.FC = () => {
     setFormPrice(r.unitPrice || 0);
     setFormAmount(r.amount || 0);
     setFormDate(r.date || '');
-    setFormCreator(r.creator || '');
+    setFormCreator(resolveDisplayName(r.creator) || '');
     setFormRemark(r.remark || '');
     setFormImage(r.image || '');
     setFormProjectName(r.projectName || '');
@@ -243,7 +253,7 @@ const InvoiceRecordPage: React.FC = () => {
       const inbox = readInbox(r.supplierUsername);
       if (!inbox.some(x => x.applyNo === r.applyNo)) {
         upsertInboxEntry(r.supplierUsername, {
-          key: r.applyNo, applyNo: r.applyNo, applicantUsername: owner, applicantCompany: r.companyName,
+          key: r.applyNo, applyNo: r.applyNo, applicantUsername: owner, applicantCompany: resolveApplicantCompany(r.companyName, owner),
           supplierName: r.invoiceSupplier || '', projectName: r.projectName || '', amount: r.amount || 0,
           quantity: r.quantity || 0, unitPrice: r.unitPrice || 0, months: r.applyMonths || [],
           applyDate: r.date || dayjs().format('YYYY-MM-DD'), status: normInvoiceStatus(r.invoiceStatus), remark: '补推送',

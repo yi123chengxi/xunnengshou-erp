@@ -7,7 +7,7 @@ import {
   PlusOutlined, FileTextOutlined, PictureOutlined, DeleteOutlined, TeamOutlined, ReloadOutlined,
   CameraOutlined, CopyOutlined, EditOutlined, EyeOutlined, SettingOutlined, ShopOutlined,
   SearchOutlined, ShoppingCartOutlined, SwapOutlined, UndoOutlined, ClockCircleOutlined,
-  MenuOutlined, DownloadOutlined, FileExcelOutlined,
+  MenuOutlined, DownloadOutlined, FileExcelOutlined, RollbackOutlined,
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
@@ -18,6 +18,11 @@ import { refreshSupplierPurchase } from '../utils/paySummary';
 import { isAccountingMode, writeAutoEntries, removeAutoEntries, loadSubjectOptions } from '../utils/accountingBridge';
 import { downloadBillExportCsv, BillItemExportRow, loadExportFieldCfg, loadProductMasterMap, resolveItemColorSpec } from '../utils/billItemsExport';
 import BillExportFieldModal from '../components/BillExportFieldModal';
+import ReturnRegisterModal from '../components/ReturnRegisterModal';
+import type { ReturnRegisterPayload } from '../components/ReturnRegisterModal';
+import { buildPurchaserReturnBill, buildSupplierReturnRow, writeReturnStockFlows, getOwnCompanyName } from '../utils/returnRegister';
+import { safeSetItem } from '../utils/storageQuota';
+import { saveDataset } from '../utils/dataStore';
 import { compressImageFile } from '../utils/imageCompress';
 
 const { Text } = Typography;
@@ -100,7 +105,11 @@ interface BillRecord {
   createdAt: string;
   auxDocNo?: string;
   linkedSupplierBillId?: string;
-  billSource?: string; // 账单来源：手工新增 / 订单发货
+  billSource?: string; // 账单来源：手工新增 / 订单发货 / 退货登记
+  docType?: 'outbound' | 'return'; // 单据类型：return=退货登记负数账单
+  returnNo?: string;
+  linkedOutboundNo?: string;
+  returnReason?: string;
 }
 
 const PurchaserBillPage: React.FC = () => {
@@ -658,6 +667,54 @@ const PurchaserBillPage: React.FC = () => {
     message.success('采购账单已保存');
   };
 
+  // ============ 退货登记：负数退货账单 + 镜像同步供应商平台 + 库存出入库联动 ============
+  const [returnVisible, setReturnVisible] = useState(false);
+  const returnCounterpartyOptions = useMemo(() => {
+    if (!returnVisible) return [];
+    try {
+      const users: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+      return users.filter((u: any) => u && u.companyName).map((u: any) => ({ value: u.username, label: u.companyName }));
+    } catch { return []; }
+  }, [returnVisible]);
+  const returnLinkedOptions = useMemo(() => bills.filter(b => (b as any).docType !== 'return' && b.outboundNo).map(b => ({
+    value: b.outboundNo,
+    label: `${b.outboundNo}（${b.supplier || '-'} ¥${Number(b.totalAmount || 0).toFixed(2)}）`,
+    items: (b.items || []).map(it => ({ productCode: it.productCode, productName: (it as any).productName || '', color: it.color, spec: it.spec, quantity: it.quantity, unitPrice: it.unitPrice })),
+  })), [bills]);
+
+  /** 退货登记提交：本端负数账单 → 镜像供应商账单明细 → 库存联动（本端退货出库/供方退货仓入库） */
+  const handleReturnRegister = (p: ReturnRegisterPayload) => {
+    const owner = getDataOwner();
+    const all: any[] = JSON.parse(localStorage.getItem(storageKey) || '[]');
+    if (all.some(b => b.outboundNo === p.returnNo || (b as any).returnNo === p.returnNo)) { message.warning(`退货单 ${p.returnNo} 已登记，请勿重复提交`); return; }
+    const now = new Date().toLocaleString('zh-CN');
+    const operator = getCurrentUserDisplayName();
+    const rec = buildPurchaserReturnBill(p, { operator, supplierName: p.counterpartyName, now },
+      appendBillLogEntry(undefined, '退货登记', undefined, p.linkedOutboundNo ? `关联原出库单号 ${p.linkedOutboundNo}` : '')) as unknown as BillRecord;
+    localStorage.setItem(storageKey, JSON.stringify([rec, ...all]));
+    // 镜像同步供应商平台账单明细（负数退货行，走相同对账流程）
+    if (p.counterpartyUsername) {
+      const supKey = `pageData_customer_bill-detail_${p.counterpartyUsername}`;
+      let rows: any[] = [];
+      try { rows = JSON.parse(localStorage.getItem(supKey) || '[]'); if (!Array.isArray(rows)) rows = []; } catch { rows = []; }
+      if (!rows.some((r: any) => r.id === p.returnNo || r.outboundNo === p.returnNo)) {
+        const row = buildSupplierReturnRow(p, { customerName: getOwnCompanyName(owner), counterpartyUsername: owner, now });
+        const json = JSON.stringify([row, ...rows]);
+        safeSetItem(supKey, json);
+        saveDataset(supKey, json);
+      }
+    }
+    // 库存联动：采购商侧退货出库 + 供应商侧退货仓入库
+    writeReturnStockFlows(p, {
+      supplierOwner: p.counterpartyUsername, purchaserOwner: owner, operator,
+      supplierCompanyName: p.counterpartyName, purchaserCompanyName: getOwnCompanyName(owner),
+    });
+    refreshSupplierPurchase(owner, [p.counterpartyName]);
+    reload();
+    setReturnVisible(false);
+    message.success(`退货单 ${p.returnNo} 已登记：负数退货账单已生成并同步至供应商平台`);
+  };
+
   // 当前图片（新建/编辑）
   const currentImage = imageTarget === 'create' ? billImage : editImage;
   const setCurrentImage = (v: string) => { if (imageTarget === 'create') setBillImage(v); else setEditImage(v); };
@@ -910,7 +967,7 @@ const PurchaserBillPage: React.FC = () => {
   };
 
   const columnMap: Record<string, any> = {
-    outboundNo: { title: '出库单号', dataIndex: 'outboundNo', key: 'outboundNo', width: 150, align: 'center' as const, render: (t: string, r: BillRecord) => (<Space size={4}><Text strong>{t}</Text><Button type="link" size="small" style={{ padding: 0, height: 'auto' }} icon={<EyeOutlined />} onClick={() => openDetail(r)}>详</Button></Space>) },
+    outboundNo: { title: '出库单号', dataIndex: 'outboundNo', key: 'outboundNo', width: 150, align: 'center' as const, render: (t: string, r: BillRecord) => (<Space size={4}>{(r as any).docType === 'return' && <Tag color="red" style={{ marginRight: 0 }}>退货</Tag>}<Text strong>{t}</Text><Button type="link" size="small" style={{ padding: 0, height: 'auto' }} icon={<EyeOutlined />} onClick={() => openDetail(r)}>详</Button></Space>) },
     auxDocNo: { title: '辅助单据号', dataIndex: 'auxDocNo', key: 'auxDocNo', width: 140, align: 'center' as const, render: (t: string) => t || '-' },
     date: { title: '日期', dataIndex: 'date', key: 'date', width: 110, align: 'center' as const },
     styleCode: { title: '款式编号', key: 'styleCode', width: 140, align: 'center' as const, render: (_: any, r: BillRecord) => {
@@ -955,6 +1012,7 @@ const PurchaserBillPage: React.FC = () => {
         // 存量数据无来源字段：按出库单号前缀/推送标记回退判定（MC-PUSH- 或采购商推送订单生成 = 订单发货）
         const auto = String(r.outboundNo || (r as any).no || '').startsWith('MC-PUSH-') || (r as any).orderSource === '采购商推送' || !!(r as any).orderId;
         const src = t || (auto ? '订单发货' : '手工新增');
+        if (src === '退货登记') return <Tag color="red">{src}</Tag>;
         return <Tag color={src === '订单发货' ? 'blue' : 'green'}>{src}</Tag>;
       },
     },
@@ -1021,6 +1079,7 @@ const PurchaserBillPage: React.FC = () => {
             批量发起对账{selectedRowKeys.length > 0 ? ` (${selectedRowKeys.length})` : ''}
           </Button>
           <Button type="primary" icon={<PlusOutlined />} onClick={() => { resetCreate(); setCreateVisible(true); }}>新建单据</Button>
+            <Button icon={<RollbackOutlined />} style={{ color: '#cf1322', borderColor: '#cf1322' }} onClick={() => setReturnVisible(true)}>退货登记</Button>
           <Button icon={<SettingOutlined />} onClick={() => setBillFieldConfigVisible(true)}>显示字段</Button>
           <Dropdown trigger={['click']} menu={{
             items: [
@@ -1056,6 +1115,7 @@ const PurchaserBillPage: React.FC = () => {
         <div>1、账单来源：<Tag color="green" style={{ marginRight: 4 }}>手工新增</Tag>本页「新建单据」手工录入的账单；<Tag color="blue" style={{ marginRight: 4 }}>订单发货</Tag>供应商在供应商平台发货时自动写入的账单（出库单号前缀 MC-PUSH-），与供应商发货订单联动生成。</div>
         <div>2、账单对账：勾选账单后点击「发起对账 / 批量发起对账」，账单发送至供应商平台对账管理，按出库单号自动匹配核对；发起后对账结果显示蓝色「已发起对账」标签，对账完成前可「撤回对账」；已对账完成/按供方入账或供应商已发起对账的账单不可重复发起。</div>
         <div>3、结果状态与联动：对账结果状态为 未对账、已发起对账、对账完成、按供方入账、不相符，可用搜索栏「对账结果」筛选；会计账薄开启时，对账结果变更为 对账完成/按供方入账 等终态自动生成 2 条会计分录，变更回其他状态时自动删除。</div>
+        <div>4、退货登记：点击「退货登记」生成负数退货账单（账单来源=<Tag color="red" style={{ marginRight: 4 }}>退货登记</Tag>，单号 RT- 前缀），自动镜像同步至供应商平台账单明细；库存联动：本侧退货出库、供应商侧退货仓入库；退货账单与正常账单走相同对账流程，对账完成后会计分录按负数冲抵。</div>
       </div>
 
       {/* 新建单据弹窗 */}
@@ -2007,6 +2067,11 @@ const PurchaserBillPage: React.FC = () => {
 
       {/* 导出字段设置（按商品编码/按款式编码分别配置） */}
       <BillExportFieldModal open={billExportFieldVisible} scope={'purchaserBill_' + getDataOwner()} onClose={() => setBillExportFieldVisible(false)} />
+
+      {/* 退货登记：负数退货账单 + 镜像供应商平台 + 库存联动 */}
+      <ReturnRegisterModal open={returnVisible} onClose={() => setReturnVisible(false)} side="purchaser"
+        counterpartyOptions={returnCounterpartyOptions} linkedBillOptions={returnLinkedOptions}
+        onSubmit={handleReturnRegister} />
     </div>
   );
 };

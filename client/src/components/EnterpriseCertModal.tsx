@@ -60,8 +60,22 @@ export interface CertInfo {
   idCardMasked?: string;
   verifiedAt: string;
   lastCheckAt: string;
+  lastChangeAt?: string;
   checkResult: string;
   failReason: string;
+}
+
+/** 变更认证限制：每 365 天仅可申请变更一次；处于限制期内返回提示文案，否则返回 null */
+const CHANGE_INTERVAL_MS = 365 * 24 * 3600_000;
+const fmtDay = (t: number) => {
+  const d = new Date(t);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+};
+export function getChangeLockMessage(info?: CertInfo | null): string | null {
+  const last = info?.lastChangeAt ? new Date(info.lastChangeAt.replace(' ', 'T')).getTime() : 0;
+  if (!last || Date.now() >= last + CHANGE_INTERVAL_MS) return null;
+  return `企业认证信息每年仅可变更一次：上次变更 ${fmtDay(last)}，请于 ${fmtDay(last + CHANGE_INTERVAL_MS)} 后再申请`;
 }
 
 /** 认证徽章：certified 绿 / abnormal 橙 / revoked 灰；无记录不渲染 */
@@ -369,6 +383,9 @@ const EnterpriseCertModal: React.FC<{ open: boolean; onClose: () => void; onCert
           </Descriptions>
           <div style={{ marginTop: 16, textAlign: 'center' }}>
             <Button type="link" icon={<EditOutlined />} onClick={() => {
+              // 年度变更限制：365 天内已变更过则点击后仅提示，不进入变更表单
+              const lock = getChangeLockMessage(info);
+              if (lock) { message.warning(lock, 5); return; }
               setReCertMode(true);
               form.setFieldsValue({
                 companyName: info.companyName || profile.companyName || '',
@@ -379,6 +396,9 @@ const EnterpriseCertModal: React.FC<{ open: boolean; onClose: () => void; onCert
             }}>
               申请变更认证信息
             </Button>
+            <div style={{ marginTop: 2, fontSize: 12, color: '#8c8c8c' }}>
+              认证信息每年仅可变更一次{info.lastChangeAt ? `（上次变更 ${(info.lastChangeAt || '').slice(0, 10)}）` : ''}
+            </div>
           </div>
         </>
       ) : isPending && !reCertMode ? (

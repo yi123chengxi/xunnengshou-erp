@@ -650,6 +650,7 @@ CREATE TABLE IF NOT EXISTS enterprise_cert (
   last_verify_at VARCHAR(32) NOT NULL DEFAULT '',
   last_check_at VARCHAR(32) NOT NULL DEFAULT '',
   face_certify_id VARCHAR(128) NOT NULL DEFAULT '',
+  last_change_at VARCHAR(32) NOT NULL DEFAULT '',
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='企业认证（三要素+刷脸）';
 
@@ -714,6 +715,8 @@ export async function initDatabase() {
     }
   }
   console.log(`✅ 数据库表初始化完成 (共${statements.length}张表)`);
+  // 兼容旧库：企业认证表增量列（最近变更认证时间，年度变更限制用）
+  try { await pool.execute("ALTER TABLE enterprise_cert ADD COLUMN last_change_at VARCHAR(32) NOT NULL DEFAULT ''"); } catch { /* 已存在 */ }
 }
 
 export default pool;

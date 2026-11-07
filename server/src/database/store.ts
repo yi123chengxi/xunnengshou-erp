@@ -48,7 +48,7 @@ export interface StoreDriver {
   upsertCert(c: {
     username: string; company_name: string; credit_code: string; legal_person: string; id_card: string;
     status: string; fail_reason: string; check_result: string; attempts: number;
-    verified_at: string; last_verify_at: string; last_check_at: string;
+    verified_at: string; last_verify_at: string; last_check_at: string; last_change_at: string;
   }): Promise<void>;
   updateCertStatus(status: string, failReason: string, checkResult: string, lastCheckAt: string, username: string): Promise<void>;
   certsDueCheck(cutoff: string, limit: number): Promise<any[]>;

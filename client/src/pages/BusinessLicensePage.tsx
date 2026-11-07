@@ -15,7 +15,7 @@ import useResizableColumns from '../hooks/useResizableColumns';
 import FieldConfigModal from '../components/FieldConfigModal';
 import { safeSetItem } from '../utils/storageQuota';
 import { saveDataset } from '../utils/dataStore';
-import { resolveSupplier, upsertInboxEntry, nextApplyNo } from '../utils/invoiceApply';
+import { resolveSupplier, upsertInboxEntry, nextApplyNo, resolveApplicantCompany } from '../utils/invoiceApply';
 import InvoiceRecordPage from './InvoiceRecordPage';
 import { sendPushNotification, showNativeNotification, isNotificationTypeEnabled } from '../utils/pushNotification';
 import { compressImageFile } from '../utils/imageCompress';
@@ -516,6 +516,14 @@ const BusinessLicensePage: React.FC = () => {
       const account = accounts.find((a: any) => a.username === username);
       if (account?.displayName) return account.displayName;
     } catch { /* ignore */ }
+    // 回退 registeredUsers（姓名 contactPerson → 公司名），避免创建人落库为账号名
+    try {
+      const users = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+      const user = users.find((u: any) => u.username === username);
+      if (user?.displayName) return user.displayName;
+      if (user?.contactPerson) return user.contactPerson;
+      if (user?.companyName) return user.companyName;
+    } catch { /* ignore */ }
     return username;
   };
 
@@ -602,7 +610,8 @@ const BusinessLicensePage: React.FC = () => {
     try { recs = JSON.parse(localStorage.getItem(recKey) || '[]'); } catch { recs = []; }
     const today = dayjs().format('YYYY-MM-DD');
     const creator = currentDisplayName();
-    const myCompany = localStorage.getItem('companyName') || owner;
+    // 申请方公司名：优先 registeredUsers 公司名称（历史逻辑回退账号名导致收件箱显示账号）
+    const myCompany = resolveApplicantCompany(localStorage.getItem('companyName') || owner);
     const newRecs: any[] = [];
     let pushed = 0;
     previewDrafts.forEach(d => {
