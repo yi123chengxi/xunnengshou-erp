@@ -5815,13 +5815,118 @@ const ModuleChildPage: React.FC = () => {
         safeSetItem(omKey, json);
         saveDataset(omKey, json);
         safeSetItem(`${omKey}_ts`, String(Date.now()));
-        // 同标签页内通知账单明细等同步监听者
-        window.dispatchEvent(new CustomEvent('order-data-updated', { detail: { owner } }));
+        // 同标签页内通知账单明细等同步监听者（带 orderId 供订单页只刷新该单）
+        window.dispatchEvent(new CustomEvent('order-data-updated', { detail: { owner, key: omKey, orderId } }));
       }
     } catch { /* ignore */ }
     // 同步内存数据
     setDataSource(prev => prev.map(r => r.id === orderId ? { ...r, ...updates, updatedAt: new Date().toLocaleString('zh-CN') } : r));
+    setSelectedRecord((prev: any) => (prev && prev.id === orderId
+      ? { ...prev, ...updates, updatedAt: new Date().toLocaleString('zh-CN') }
+      : prev));
   }, [getDataOwner]);
+
+  // 读取订单最新落盘数据：列表 record 可能是打开页面时的快照，
+  // 跨页面操作（如收款确认回填分期明细）后直接用快照会显示旧状态
+  const readOrderLatest = useCallback((record: Record<string, any>) => {
+    if (!record || (!record.id && !record.key)) return record;
+    try {
+      const list: any[] = JSON.parse(localStorage.getItem(`pageData_sales_order-manage_${getDataOwner()}`) || '[]');
+      const hit = Array.isArray(list) ? list.find((r: any) => (record.id && r.id === record.id) || (record.key && r.key === record.key)) : null;
+      return hit ? { ...record, ...hit } : record;
+    } catch { return record; }
+  }, [getDataOwner]);
+
+  // 订单管理：监听订单回写（同标签页自定义事件 + 跨标签页 storage），刷新列表与已打开的详情快照
+  React.useEffect(() => {
+    if (pageConfig?.title !== '订单管理') return;
+    const owner = getDataOwner();
+    const omKey = `pageData_sales_order-manage_${owner}`;
+    const applyLatest = (orderId?: string) => {
+      let list: any[] = [];
+      try { list = JSON.parse(localStorage.getItem(omKey) || '[]'); } catch { return; }
+      if (!Array.isArray(list) || list.length === 0) return;
+      const byId = new Map(list.map((r: any) => [String(r.id || r.key), r]));
+      const mergeOne = (r: any) => {
+        const hit = byId.get(String(r.id || r.key));
+        return hit ? { ...r, ...hit } : r;
+      };
+      if (orderId) {
+        const hit = byId.get(String(orderId));
+        if (!hit) return;
+        setDataSource(prev => prev.map(r => (String(r.id || r.key) === String(orderId) ? { ...r, ...hit } : r)));
+        setSelectedRecord((prev: any) => (prev && String(prev.id || prev.key) === String(orderId) ? { ...prev, ...hit } : prev));
+        return;
+      }
+      setDataSource(prev => prev.map(mergeOne));
+      setSelectedRecord((prev: any) => (prev ? mergeOne(prev) : prev));
+    };
+    const onUpdated = (e: Event) => {
+      const detail = (e as CustomEvent).detail || {};
+      if (detail.owner && detail.owner !== owner) return;
+      if (detail.key && !String(detail.key).includes(owner)) return;
+      applyLatest(detail.orderId);
+    };
+    const onStorage = (e: StorageEvent) => { if (e.key === omKey && e.newValue) applyLatest(); };
+    window.addEventListener('order-data-updated', onUpdated);
+    window.addEventListener('storage', onStorage);
+    return () => {
+      window.removeEventListener('order-data-updated', onUpdated);
+      window.removeEventListener('storage', onStorage);
+    };
+  }, [pageConfig?.title, getDataOwner]);
+
+  // 订单管理：分期收款自愈——收款确认单已确认、但订单明细仍为待确认时自动补齐
+  // （修复历史未联动的数据；正常流程由收款确认页直接回写）
+  React.useEffect(() => {
+    if (pageConfig?.title !== '订单管理' || dataSource.length === 0) return;
+    const owner = getDataOwner();
+    const omKey = `pageData_sales_order-manage_${owner}`;
+    let prList: any[] = [];
+    let omList: any[] = [];
+    try {
+      prList = JSON.parse(localStorage.getItem(`payment_requests_${owner}`) || '[]');
+      omList = JSON.parse(localStorage.getItem(omKey) || '[]');
+    } catch { return; }
+    const confirmed = (Array.isArray(prList) ? prList : [])
+      .filter((r: any) => r && r.recordType === 'receipt' && r.status === 'confirmed' && r.orderId);
+    if (confirmed.length === 0 || !Array.isArray(omList) || omList.length === 0) return;
+    let changed = false;
+    const updated = omList.map((o: any) => {
+      const mine = confirmed.filter((r: any) => r.orderId === o.id || r.orderId === o.key);
+      if (mine.length === 0) return o;
+      let recs: any[] = Array.isArray(o.payRecords) ? o.payRecords : [];
+      let touched = false;
+      mine.forEach((r: any) => {
+        let target = r.installRecordKey ? recs.find((x: any) => x.key === r.installRecordKey) : null;
+        if (!target) {
+          const cands = recs.filter((x: any) => x.status === 'pending_confirm' && Math.abs((Number(x.amount) || 0) - (Number(r.amount) || 0)) < 0.01);
+          if (cands.length === 1) target = cands[0];
+        }
+        if (target && target.status === 'pending_confirm') {
+          recs = recs.map((x: any) => (x.key === target.key
+            ? { ...x, status: 'confirmed', confirmedAt: r.confirmedAt || r.updatedAt || '', confirmedBy: r.confirmedBy || r.applicantName || '' }
+            : x));
+          touched = true;
+        }
+      });
+      if (!touched) return o;
+      changed = true;
+      const paid = sumPayRecords(recs);
+      const patch: any = { payRecords: recs, paidAmount: paid };
+      const st = installmentStatusOf(o, Number(o.productAmount) || 0, paid);
+      if (st && (o.orderStatus === '待付款' || o.orderStatus === '部分付款')) {
+        patch.orderStatus = st;
+        if (st === '已付款') patch.payTime = mine[mine.length - 1]?.confirmedAt || new Date().toLocaleString('zh-CN');
+      }
+      return { ...o, ...patch };
+    });
+    if (!changed) return;
+    const json = JSON.stringify(updated);
+    safeSetItem(omKey, json);
+    saveDataset(omKey, json);
+    try { window.dispatchEvent(new CustomEvent('order-data-updated', { detail: { owner, key: omKey } })); } catch { /* ignore */ }
+  }, [pageConfig?.title, dataSource.length, syncVersion, getDataOwner]);
 
   // 跨页面数据注入助手：同时更新 localStorage + IndexedDB + 时间戳，防止目标页面读取旧数据
   const pushRecordToPage = useCallback((key: string, list: any[]) => {
@@ -8052,13 +8157,17 @@ const ModuleChildPage: React.FC = () => {
 
   // 查看详情
   const handleView = useCallback((record: Record<string, any>) => {
-    setSelectedRecord(record);
+    // 订单管理：优先读取最新落盘数据（跨页面收款确认等回写后，列表快照可能过期）
+    const latest = pageConfig?.title === '订单管理' ? readOrderLatest(record) : record;
+    setSelectedRecord(latest);
     setDetailVisible(true);
-  }, []);
+  }, [pageConfig?.title, readOrderLatest]);
 
   // 编辑
-  const handleEdit = useCallback((record: Record<string, any>, asOrderDetail?: boolean) => {
+  const handleEdit = useCallback((sourceRecord: Record<string, any>, asOrderDetail?: boolean) => {
     if (!fnOk('edit')) { message.warning('无编辑权限'); return; }
+    // 订单管理：优先使用最新落盘数据，避免跨页面确认收款后仍用列表旧快照
+    const record = pageConfig?.title === '订单管理' ? readOrderLatest(sourceRecord) : sourceRecord;
     setPickOrderDetailMode(!!asOrderDetail);
     // 订单上下文：参数优先（避免 useCallback 旧闭包读到未更新的 pickOrderDetailMode）
     const orderCtx = pageConfig?.title === '订单管理' || !!asOrderDetail;
@@ -8165,7 +8274,7 @@ const ModuleChildPage: React.FC = () => {
       const imgs = Array.isArray((record as any).productionImages) ? (record as any).productionImages.filter(Boolean) : [];
       setPoEditImages(imgs);
     }
-  }, [editForm, pageConfig]);
+  }, [editForm, pageConfig, readOrderLatest]);
 
   // 选择产品弹窗：打开时重置到第1页
   useEffect(() => { if (productSelectVisible) setProductSelectPage(1); }, [productSelectVisible]);

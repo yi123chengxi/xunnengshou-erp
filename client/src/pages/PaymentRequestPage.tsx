@@ -10,6 +10,8 @@ import {
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
 import { safeSetItem } from '../utils/storageQuota';
+import { saveDataset } from '../utils/dataStore';
+import { flushDatasetUploadAsync } from '../utils/serverSync';
 import { recordSupplierPayment, incrementCustomerReceived } from '../utils/paySummary';
 import { sumPayRecords, installmentStatusOf } from '../utils/receiptWrite';
 import { isNotificationTypeEnabled } from '../utils/pushNotification';
@@ -931,32 +933,49 @@ const PaymentRequestPage: React.FC = () => {
     // 更新状态为已确认
     const confirmedBy = getDisplayName();
     // 分段付款尾款收款确认：回写订单分期明细（待确认→已确认）并计入累计已收、推进订单状态
-    if (r.orderId && r.installRecordKey) {
+    if (r.orderId) {
       try {
         const omKey = `pageData_sales_order-manage_${owner}`;
         const omList: any[] = JSON.parse(localStorage.getItem(omKey) || '[]');
-        const ord = omList.find((o: any) => o.id === r.orderId);
+        const ord = Array.isArray(omList) ? omList.find((o: any) => o.id === r.orderId || o.key === r.orderId) : null;
         if (ord) {
-          const recs = (ord.payRecords || []).map((x: any) => x.key === r.installRecordKey
-            ? { ...x, status: 'confirmed', confirmedAt: nowStr, confirmedBy }
-            : x);
-          const paidNow = sumPayRecords(recs);
-          const patch: any = { payRecords: recs, paidAmount: paidNow };
-          const stNow = installmentStatusOf(ord, Number(ord.productAmount) || 0, paidNow);
-          if (stNow && stNow !== ord.orderStatus && (ord.orderStatus === '待付款' || ord.orderStatus === '部分付款')) {
-            patch.orderStatus = stNow;
-            if (stNow === '已付款') patch.payTime = nowStr;
+          const recs0: any[] = Array.isArray(ord.payRecords) ? ord.payRecords : [];
+          // 关联键优先；历史确认单可能缺 installRecordKey，按金额在该订单待确认记录中唯一匹配兜底
+          let targetKey = r.installRecordKey && recs0.some((x: any) => x.key === r.installRecordKey) ? r.installRecordKey : '';
+          if (!targetKey) {
+            const cands = recs0.filter((x: any) => x.status === 'pending_confirm' && Math.abs((Number(x.amount) || 0) - (Number(r.amount) || 0)) < 0.01);
+            if (cands.length === 1) targetKey = cands[0].key;
           }
-          const logs: any[] = (() => { try { return JSON.parse(ord.orderLog || '[]'); } catch { return []; } })();
-          logs.push({ time: nowStr, action: '收款确认', operator: confirmedBy, detail: `分段付款收款 ¥${Number(r.amount).toFixed(2)} 收款确认，累计已收 ¥${paidNow.toFixed(2)}${patch.orderStatus ? `，订单状态变更为${patch.orderStatus}` : ''}` });
-          const updatedOrd = { ...ord, ...patch, orderLog: JSON.stringify(logs) };
-          safeSetItem(omKey, JSON.stringify(omList.map((o: any) => (o.id === ord.id ? updatedOrd : o))));
-          // 推送单回写：保持两端分期台账一致
-          try {
-            const pk = 'purchaser_pushed_orders';
-            const pushed: any[] = JSON.parse(localStorage.getItem(pk) || '[]');
-            safeSetItem(pk, JSON.stringify(pushed.map((po: any) => po.id === ord.id ? { ...po, payRecords: recs, paidAmount: paidNow, ...(patch.orderStatus ? { orderStatus: patch.orderStatus } : {}) } : po)));
-          } catch { /* ignore */ }
+          if (targetKey) {
+            const recs = recs0.map((x: any) => (x.key === targetKey
+              ? { ...x, status: 'confirmed', confirmedAt: nowStr, confirmedBy }
+              : x));
+            const paidNow = sumPayRecords(recs);
+            const patch: any = { payRecords: recs, paidAmount: paidNow };
+            const stNow = installmentStatusOf(ord, Number(ord.productAmount) || 0, paidNow);
+            if (stNow && stNow !== ord.orderStatus && (ord.orderStatus === '待付款' || ord.orderStatus === '部分付款')) {
+              patch.orderStatus = stNow;
+              if (stNow === '已付款') patch.payTime = nowStr;
+            }
+            const logs: any[] = (() => { try { return JSON.parse(ord.orderLog || '[]'); } catch { return []; } })();
+            logs.push({ time: nowStr, action: '收款确认', operator: confirmedBy, detail: `分段付款收款 ¥${Number(r.amount).toFixed(2)} 收款确认，累计已收 ¥${paidNow.toFixed(2)}${patch.orderStatus ? `，订单状态变更为${patch.orderStatus}` : ''}` });
+            const updatedOrd = { ...ord, ...patch, orderLog: JSON.stringify(logs) };
+            const omJson = JSON.stringify(omList.map((o: any) => (o.id === ord.id ? updatedOrd : o)));
+            safeSetItem(omKey, omJson);
+            // IndexedDB 同步 + 立即上传：防止刷新或服务端拉取时用旧订单数据回灌覆盖
+            saveDataset(omKey, omJson);
+            void flushDatasetUploadAsync(omKey, omJson);
+            // 同标签页通知订单管理页刷新内存快照（列表 + 已打开的订单详情）
+            try { window.dispatchEvent(new CustomEvent('order-data-updated', { detail: { owner, key: omKey, orderId: ord.id } })); } catch { /* ignore */ }
+            // 推送单回写：保持两端分期台账一致
+            try {
+              const pk = 'purchaser_pushed_orders';
+              const pushed: any[] = JSON.parse(localStorage.getItem(pk) || '[]');
+              const pJson = JSON.stringify(pushed.map((po: any) => po.id === ord.id ? { ...po, payRecords: recs, paidAmount: paidNow, ...(patch.orderStatus ? { orderStatus: patch.orderStatus } : {}) } : po));
+              safeSetItem(pk, pJson);
+              saveDataset(pk, pJson);
+            } catch { /* ignore */ }
+          }
         }
       } catch { /* ignore */ }
     }
