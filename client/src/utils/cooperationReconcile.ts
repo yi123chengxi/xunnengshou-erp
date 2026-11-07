@@ -79,9 +79,25 @@ export function reconcileCooperationPairs(): void {
       });
     });
 
+    // 时效守卫：终止/终止中镜像若存在同公司对更新的未作废合作申请（重新合作/邀约受理），
+    // 不得参与规范状态仲裁——否则陈旧浏览器里的旧终止镜像会把新建合作改回已解除并回传服务端
+    const apps: any[] = (() => { try { return JSON.parse(localStorage.getItem('cooperation_applications') || '[]'); } catch { return []; } })();
+    const appTs = (a: any): number => Date.parse(String(a.approveDate || a.applyDate || '').replace(/-/g, '/')) || 0;
+    const supersededByNewerCoop = (r: Rec): boolean => {
+      if (r.status !== 'terminated' && r.status !== 'terminating') return false;
+      const sRec = users.find(u => u.username === r.s);
+      return apps.some((a: any) =>
+        (a.type || 'cooperation') === 'cooperation' && !a.superseded &&
+        (a.status === 'approved' || a.status === 'pending') &&
+        a.purchaserUsername === r.p &&
+        (a.supplierUsername === r.s || (sRec?.companyName && a.targetSupplierName === sRec.companyName)) &&
+        appTs(a) > r.ts);
+    };
+    const guardedRecs = recs.filter(r => !supersededByNewerCoop(r));
+
     // 公司对规范状态：取最近一次状态事件（statusTs/业务时间），同时间再取最进阶（terminated > terminating > approved）
     const canon = new Map<string, { status: string; terminateAt: number; terminateBy: string; ts: number }>();
-    recs.forEach(r => {
+    guardedRecs.forEach(r => {
       if (!STATUS_RANK[r.status] || r.s === r.p) return;
       const pk = pairKey(r.s, r.p);
       const cur = canon.get(pk);
@@ -116,12 +132,12 @@ export function reconcileCooperationPairs(): void {
 
     // 2) 每方向镜像补全：boundPurchasers_<s> / purchaser_suppliers_<p> 任一侧缺失时按对侧镜像 + registeredUsers 补正确形状
     const dirs = new Map<string, { s: string; p: string }>();
-    recs.forEach(r => { if (r.s !== r.p && STATUS_RANK[r.status]) dirs.set(pairKey(r.s, r.p), { s: r.s, p: r.p }); });
+    guardedRecs.forEach(r => { if (r.s !== r.p && STATUS_RANK[r.status]) dirs.set(pairKey(r.s, r.p), { s: r.s, p: r.p }); });
     dirs.forEach(({ s, p }) => {
       const c = canon.get(pairKey(s, p));
       if (!c) return;
       const pk = pairKey(s, p);
-      const src = recs.filter(r => pairKey(r.s, r.p) === pk);
+      const src = guardedRecs.filter(r => pairKey(r.s, r.p) === pk);
       const pRec = users.find(u => u.username === p);
       const sRec = users.find(u => u.username === s);
       // 供应商侧 boundPurchasers_<s> 应有 p 的采购商卡片
