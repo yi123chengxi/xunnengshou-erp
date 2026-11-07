@@ -3140,6 +3140,27 @@ const ModuleChildPage: React.FC = () => {
   const [billAddCustomer, setBillAddCustomer] = useState('');
   const [billAddDate, setBillAddDate] = useState<any>(dayjs());
   const [billAddItems, setBillAddItems] = useState<any[]>([]);
+  // 新建/编辑账单单据弹窗-表格显示字段控制（keys=列序、visible=显示；按租户持久化；勾选列与操作列恒显）
+  const [billAddColConfig, setBillAddColConfig] = useState<{ keys: string[]; visible: string[] }>(() => {
+    const def = { keys: ['styleCode', 'productCode', 'quantity', 'unitPrice', 'amount'], visible: ['styleCode', 'productCode', 'quantity', 'unitPrice', 'amount'] };
+    try {
+      const saved = localStorage.getItem(`billAddColConfig_${getDataOwner()}`);
+      if (saved) {
+        const p = JSON.parse(saved);
+        if (Array.isArray(p?.keys) && Array.isArray(p?.visible) && p.keys.length) {
+          const keys = [...p.keys.filter((k: string) => def.keys.includes(k)), ...def.keys.filter(k => !p.keys.includes(k))];
+          const visible = p.visible.filter((k: string) => def.keys.includes(k));
+          if (keys.length && visible.length) return { keys, visible };
+        }
+      }
+    } catch { /* ignore */ }
+    return def;
+  });
+  const [billAddColPopover, setBillAddColPopover] = useState(false);
+  const saveBillAddColConfig = (next: { keys: string[]; visible: string[] }) => {
+    setBillAddColConfig(next);
+    try { localStorage.setItem(`billAddColConfig_${getDataOwner()}`, JSON.stringify(next)); } catch { /* ignore */ }
+  };
   const [billAddCustomerPickVisible, setBillAddCustomerPickVisible] = useState(false);
   const [billAddEditKey, setBillAddEditKey] = useState<string>(''); // 非空时为编辑模式（复用新增弹窗）
   // 货品明细复选框 + 批量填充
@@ -19863,44 +19884,49 @@ tr:nth-child(even) { background: #f5f9ff; }
           pagination={false}
           rowKey="_i"
           dataSource={billAddItems.map((it: any, i: number) => ({ ...it, _i: i }))}
-          columns={[
-            {
-              title: <Checkbox
-                checked={billAddItems.length > 0 && billAddCheckedRows.size === billAddItems.length}
-                indeterminate={billAddCheckedRows.size > 0 && billAddCheckedRows.size < billAddItems.length}
-                onChange={e => { if (e.target.checked) setBillAddCheckedRows(new Set(billAddItems.map((_, i) => i))); else setBillAddCheckedRows(new Set()); }}
-              />,
-              width: 36, align: 'center' as const,
-              render: (_: any, r: any) => <Checkbox checked={billAddCheckedRows.has(r._i)} onChange={e => { const s = new Set(billAddCheckedRows); if (e.target.checked) s.add(r._i); else s.delete(r._i); setBillAddCheckedRows(s); }} />,
-            },
-            {
-              title: '款式编号', dataIndex: 'styleCode', width: 170,
-              render: (_: any, r: any) => <Input size="small" value={r.styleCode} onChange={e => setBillAddItems(prev => prev.map((row, i) => i === r._i ? { ...row, styleCode: e.target.value } : row))} />,
-            },
-            {
-              title: '商品编码', dataIndex: 'productCode', width: 170,
-              render: (_: any, r: any) => <Input size="small" value={r.productCode} onChange={e => setBillAddItems(prev => prev.map((row, i) => i === r._i ? { ...row, productCode: e.target.value } : row))} />,
-            },
-            {
-              title: '数量', dataIndex: 'quantity', width: 100,
-              render: (_: any, r: any) => <InputNumber size="small" controls={false} min={0} value={r.quantity} style={{ width: '100%' }} onChange={v => setBillAddItems(prev => prev.map((row, i) => i === r._i ? { ...row, quantity: Number(v) || 0 } : row))} />,
-            },
-            {
-              title: '单价', dataIndex: 'unitPrice', width: 110,
-              render: (_: any, r: any) => <InputNumber size="small" controls={false} min={0} precision={2} value={r.unitPrice} style={{ width: '100%' }} onChange={v => setBillAddItems(prev => prev.map((row, i) => i === r._i ? { ...row, unitPrice: Number(v) || 0 } : row))} />,
-            },
-            {
-              title: '金额', width: 100,
-              render: (_: any, r: any) => <Text style={{ color: '#f5222d' }}>{((Number(r.quantity) || 0) * (Number(r.unitPrice) || 0)).toFixed(2)}</Text>,
-            },
-            {
-              title: '', width: 50, align: 'center' as const,
-              render: (_: any, r: any) => <Button type="text" size="small" danger icon={<DeleteOutlined />} onClick={() => {
-                setBillAddItems(prev => prev.filter((_, i) => i !== r._i));
-                setBillAddCheckedRows(prev => { const s = new Set<number>(); prev.forEach(idx => { if (idx < r._i) s.add(idx); else if (idx > r._i) s.add(idx - 1); }); return s; });
-              }} />,
-            },
-          ] as any}
+          columns={(() => {
+            const defs: Record<string, any> = {
+              styleCode: {
+                title: '款式编号', dataIndex: 'styleCode', width: 170,
+                render: (_: any, r: any) => <Input size="small" value={r.styleCode} onChange={e => setBillAddItems(prev => prev.map((row, i) => i === r._i ? { ...row, styleCode: e.target.value } : row))} />,
+              },
+              productCode: {
+                title: '商品编码', dataIndex: 'productCode', width: 170,
+                render: (_: any, r: any) => <Input size="small" value={r.productCode} onChange={e => setBillAddItems(prev => prev.map((row, i) => i === r._i ? { ...row, productCode: e.target.value } : row))} />,
+              },
+              quantity: {
+                title: '数量', dataIndex: 'quantity', width: 100,
+                render: (_: any, r: any) => <InputNumber size="small" controls={false} min={0} value={r.quantity} style={{ width: '100%' }} onChange={v => setBillAddItems(prev => prev.map((row, i) => i === r._i ? { ...row, quantity: Number(v) || 0 } : row))} />,
+              },
+              unitPrice: {
+                title: '单价', dataIndex: 'unitPrice', width: 110,
+                render: (_: any, r: any) => <InputNumber size="small" controls={false} min={0} precision={2} value={r.unitPrice} style={{ width: '100%' }} onChange={v => setBillAddItems(prev => prev.map((row, i) => i === r._i ? { ...row, unitPrice: Number(v) || 0 } : row))} />,
+              },
+              amount: {
+                title: '金额', width: 100,
+                render: (_: any, r: any) => <Text style={{ color: '#f5222d' }}>{((Number(r.quantity) || 0) * (Number(r.unitPrice) || 0)).toFixed(2)}</Text>,
+              },
+            };
+            return [
+              {
+                title: <Checkbox
+                  checked={billAddItems.length > 0 && billAddCheckedRows.size === billAddItems.length}
+                  indeterminate={billAddCheckedRows.size > 0 && billAddCheckedRows.size < billAddItems.length}
+                  onChange={e => { if (e.target.checked) setBillAddCheckedRows(new Set(billAddItems.map((_, i) => i))); else setBillAddCheckedRows(new Set()); }}
+                />,
+                width: 36, align: 'center' as const,
+                render: (_: any, r: any) => <Checkbox checked={billAddCheckedRows.has(r._i)} onChange={e => { const s = new Set(billAddCheckedRows); if (e.target.checked) s.add(r._i); else s.delete(r._i); setBillAddCheckedRows(s); }} />,
+              },
+              ...billAddColConfig.keys.filter(k => billAddColConfig.visible.includes(k)).map(k => defs[k]),
+              {
+                title: '', width: 50, align: 'center' as const,
+                render: (_: any, r: any) => <Button type="text" size="small" danger icon={<DeleteOutlined />} onClick={() => {
+                  setBillAddItems(prev => prev.filter((_, i) => i !== r._i));
+                  setBillAddCheckedRows(prev => { const s = new Set<number>(); prev.forEach(idx => { if (idx < r._i) s.add(idx); else if (idx > r._i) s.add(idx - 1); }); return s; });
+                }} />,
+              },
+            ];
+          })() as any}
         />
         <div style={{ marginTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
           <Space size={4}><Text style={{ fontSize: 12 }}>批量数量</Text><InputNumber size="small" controls={false} min={0} placeholder="数量" value={billAddBatchQty ?? undefined} onChange={v => setBillAddBatchQty(v != null ? Number(v) : null)} style={{ width: 80 }} /></Space>
@@ -19919,6 +19945,50 @@ tr:nth-child(even) { background: #f5f9ff; }
         <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
           <Button size="small" icon={<PlusOutlined />} onClick={() => { setManualAddTarget('billAdd'); setManualAddVisible(true); }}>手动添加</Button>
           <Button size="small" icon={<ShoppingOutlined />} onClick={() => { setProductSelectTarget('billAdd'); setProductSelectKeys([]); setProductSelectSearch(''); setPsSearchCode(''); setPsSearchName(''); setPsSearchStyle(''); setPsSearchColor(''); setPsSearchSpec(''); setPsSearchSupplier(''); setPsSearchTag(''); setPsAppliedCode(''); setPsAppliedName(''); setPsAppliedStyle(''); setPsAppliedColor(''); setPsAppliedSpec(''); setPsAppliedSupplier(''); setPsAppliedTag(''); setProductSelectType('成品'); setProductSelectVisible(true); }}>添加商品</Button>
+          {/* 显示字段控制：置于添加商品右边（勾选显隐 + ▲▼调序 + 恢复默认，按租户持久化） */}
+          <Popover
+            open={billAddColPopover}
+            onOpenChange={setBillAddColPopover}
+            trigger="click"
+            placement="bottomLeft"
+            content={(() => {
+              const allCols = [
+                { key: 'styleCode', title: '款式编号' },
+                { key: 'productCode', title: '商品编码' },
+                { key: 'quantity', title: '数量' },
+                { key: 'unitPrice', title: '单价' },
+                { key: 'amount', title: '金额' },
+              ];
+              const ordered = billAddColConfig.keys.map(k => allCols.find(c => c.key === k)).filter(Boolean) as { key: string; title: string }[];
+              return (
+                <div style={{ width: 200, maxHeight: 320, overflowY: 'auto' }}>
+                  {ordered.map((col, idx) => (
+                    <div key={col.key} style={{ display: 'flex', alignItems: 'center', padding: '4px 0', gap: 4 }}>
+                      <Checkbox
+                        checked={billAddColConfig.visible.includes(col.key)}
+                        onChange={e => {
+                          const next = { ...billAddColConfig };
+                          next.visible = e.target.checked ? [...next.visible, col.key] : next.visible.filter(k => k !== col.key);
+                          if (!next.visible.length) { message.warning('至少保留一个显示字段'); return; }
+                          saveBillAddColConfig(next);
+                        }}
+                      />
+                      <span style={{ flex: 1, fontSize: 12 }}>{col.title}</span>
+                      <Button type="text" size="small" disabled={idx === 0} icon={<ArrowUpOutlined />} style={{ padding: '0 2px', fontSize: 10 }}
+                        onClick={() => { const keys = [...billAddColConfig.keys]; [keys[idx - 1], keys[idx]] = [keys[idx], keys[idx - 1]]; saveBillAddColConfig({ ...billAddColConfig, keys }); }} />
+                      <Button type="text" size="small" disabled={idx === ordered.length - 1} icon={<ArrowDownOutlined />} style={{ padding: '0 2px', fontSize: 10 }}
+                        onClick={() => { const keys = [...billAddColConfig.keys]; [keys[idx], keys[idx + 1]] = [keys[idx + 1], keys[idx]]; saveBillAddColConfig({ ...billAddColConfig, keys }); }} />
+                    </div>
+                  ))}
+                  <div style={{ marginTop: 6, borderTop: '1px solid #f0f0f0', paddingTop: 6 }}>
+                    <Button size="small" onClick={() => saveBillAddColConfig({ keys: ['styleCode', 'productCode', 'quantity', 'unitPrice', 'amount'], visible: ['styleCode', 'productCode', 'quantity', 'unitPrice', 'amount'] })}>恢复默认</Button>
+                  </div>
+                </div>
+              );
+            })()}
+          >
+            <Button size="small" icon={<SettingOutlined />}>显示字段</Button>
+          </Popover>
           <Button size="small" icon={<FileTextOutlined />} onClick={() => setBillAddQtyTemplateVisible(true)}>数量模版</Button>
           {/* 已保存的模板快捷按键 */}
           {billAddQtyTemplates.map((t, i) => (
