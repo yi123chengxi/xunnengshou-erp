@@ -37,7 +37,13 @@ export function healReconTerminalLinks(): void {
     if (billKeys.length === 0 && detailKeys.length === 0) return;
     const details = detailKeys.map(k => ({ key: k, rows: readList(k) }));
     const billsAll = billKeys.map(k => readList(k));
-    // 1) 终态账单 → 供应商账单明细行断言回写（对抗旧端复活的回滚）
+    // 全局键墓碑（双端必拉）：携带供应商侧回写断言，使供应商浏览器无需采购商账单键也能自愈明细行
+    const recsAll = readList('recon_records');
+    const tombs = recsAll.filter((r: any) => r && r.delisted && r.docNo);
+    const tombOfRow = (row: any): any => tombs.find((t: any) =>
+      (t.orderNo && row.id === t.orderNo) ||
+      (!!row.outboundNo && String(row.outboundNo).trim() === String(t.docNo).trim())) || null;
+    // 1) 终态账单/完成墓碑 → 供应商账单明细行断言回写（对抗旧端复活的回滚）
     billsAll.forEach(bills => {
       bills.forEach((b: any) => {
         const res = String(b?.reconcileResult || '');
@@ -49,30 +55,56 @@ export function healReconTerminalLinks(): void {
           d.rows = d.rows.map((row: any) => {
             if (String(row?.outboundNo || '').trim() !== no) return row;
             if (SUP_ROW_TERMINAL.includes(String(row?.reconResult || ''))) return row;
+            const tomb = tombOfRow(row);
+            const alignAmt = res === '不相符' ? 0 : (Number(tomb ? (tomb.supResult === '按采方入账' ? tomb.theirAmount : tomb.ourAmount) : b.totalAmount) || 0);
             ch = true;
             return {
               ...row,
-              reconResult: '对账完成',
-              diffDesc: diffOfBill(res),
-              purchaserReconPerson: row.purchaserReconPerson || b.purchaserReconciler || '',
-              supplierReconPerson: row.supplierReconPerson || b.supplierReconciler || '',
+              reconResult: tomb?.supResult || '对账完成',
+              diffDesc: tomb?.supDiff || diffOfBill(res),
+              totalAmount: alignAmt > 0 ? alignAmt : row.totalAmount,
+              purchaserReconPerson: row.purchaserReconPerson || tomb?.purPerson || b.purchaserReconciler || '',
+              supplierReconPerson: row.supplierReconPerson || tomb?.supPerson || b.supplierReconciler || '',
             };
           });
           if (ch) { try { localStorage.setItem(d.key, JSON.stringify(d.rows)); } catch { /* ignore */ } }
         });
       });
     });
+    // 1.5) 仅有墓碑（账单键不在本端，如供应商浏览器）也断言回写明细行
+    if (tombs.length > 0) {
+      details.forEach(d => {
+        let ch = false;
+        d.rows = d.rows.map((row: any) => {
+          if (SUP_ROW_TERMINAL.includes(String(row?.reconResult || ''))) return row;
+          const tomb = tombOfRow(row);
+          if (!tomb) return row;
+          const alignAmt = Number(tomb.supResult === '按采方入账' ? tomb.theirAmount : tomb.ourAmount) || 0;
+          ch = true;
+          return {
+            ...row,
+            reconResult: tomb.supResult || '对账完成',
+            diffDesc: tomb.supDiff || row.diffDesc || '',
+            totalAmount: alignAmt > 0 ? alignAmt : row.totalAmount,
+            purchaserReconPerson: row.purchaserReconPerson || tomb.purPerson || '',
+            supplierReconPerson: row.supplierReconPerson || tomb.supPerson || '',
+          };
+        });
+        if (ch) { try { localStorage.setItem(d.key, JSON.stringify(d.rows)); } catch { /* ignore */ } }
+      });
+    }
     // 2) 存活 pending 记录 + 任一侧已终态 → delisted 墓碑（服务端合并保护墓碑不被复活）
-    const recs = readList('recon_records');
+    const recs = recsAll;
     if (recs.length === 0) return;
     const today = new Date().toISOString().slice(0, 10);
     let chR = false;
     const next = recs.map((r: any) => {
       if (!r || r.delisted || String(r.reconResult || 'pending') !== 'pending') return r;
       const no = String(r.docNo || '').trim();
-      const billHit = billsAll.some(list => list.some((b: any) =>
+      const hitBill = billsAll.map(list => list.find((b: any) =>
         BILL_TERMINAL.includes(String(b?.reconcileResult || '')) &&
-        ((r.matchedBillKey && b.key === r.matchedBillKey) || (!!no && String(b?.outboundNo || '').trim() === no))));
+        ((r.matchedBillKey && b.key === r.matchedBillKey) || (!!no && String(b?.outboundNo || '').trim() === no)))).find(Boolean) as any;
+      const billHit = !!hitBill;
       const rowHit = !billHit && details.some(d => d.rows.some((row: any) =>
         SUP_ROW_TERMINAL.includes(String(row?.reconResult || '')) &&
         ((r.orderNo && row.id === r.orderNo) || (!!no && String(row?.outboundNo || '').trim() === no))));
@@ -85,6 +117,11 @@ export function healReconTerminalLinks(): void {
         reconResult: 'matched',
         theirEntryDate: !r.theirEntryDate || r.theirEntryDate === '-' ? today : r.theirEntryDate,
         ourEntryDate: !r.ourEntryDate || r.ourEntryDate === '-' ? today : r.ourEntryDate,
+        // 墓碑携带回写断言，供任一端（含供应商浏览器）自愈明细行
+        supResult: '对账完成',
+        supDiff: hitBill ? diffOfBill(String(hitBill.reconcileResult)) : '按供方入账，采购商已确认',
+        purPerson: hitBill?.purchaserReconciler || '',
+        supPerson: hitBill?.supplierReconciler || '',
       };
     });
     if (chR) { try { localStorage.setItem('recon_records', JSON.stringify(next)); } catch { /* ignore */ } }

@@ -283,6 +283,8 @@ const ReconciliationManage: React.FC = () => {
               ...rows[idx],
               reconResult: supResult,
               diffDesc: supDiff,
+              // 闭环：账单总额对齐最终确认的对账金额（按采方=theirAmount，其余=ourAmount；不相符保留差异）
+              totalAmount: action === 'mismatch' ? rows[idx].totalAmount : (Number(action === 'entryByPurchaser' ? r.theirAmount : r.ourAmount) || rows[idx].totalAmount),
               supplierReconPerson: supReconPerson || rows[idx].supplierReconPerson || '',
               purchaserReconPerson: purReconPerson || rows[idx].purchaserReconPerson || '',
               billLog: appendBillLogEntry(rows[idx].billLog, logAction, operatorName, logDetail),
@@ -319,7 +321,8 @@ const ReconciliationManage: React.FC = () => {
       }
     } catch { /* ignore */ }
     setDataSource(prev => prev.filter(x => x.key !== r.key));
-    // 墓碑：完成记录以 delisted 形式留在共享存储（服务端合并保护墓碑），旧端 PUT 的存活版本会被强制降级，杜绝复活
+    // 墓碑：完成记录以 delisted 形式留在共享存储（服务端合并保护墓碑），旧端 PUT 的存活版本会被强制降级，杜绝复活；
+    // 墓碑携带供应商侧回写断言（supResult/supDiff/双方对账人），使任一端（含供应商浏览器）自愈时能精确回写账单明细行
     const todayStr = new Date().toISOString().slice(0, 10);
     tombsRef.current.set(r.key, {
       ...r,
@@ -330,7 +333,11 @@ const ReconciliationManage: React.FC = () => {
       ourEntryDate: !r.ourEntryDate || r.ourEntryDate === '-' ? todayStr : r.ourEntryDate,
       confirmedBy: operatorName || r.confirmedBy,
       confirmedAt: new Date().toISOString().slice(0, 19).replace('T', ' '),
-    });
+      supResult: action === 'entryByPurchaser' ? '按采方入账' : '对账完成',
+      supDiff,
+      supPerson: supReconPerson,
+      purPerson: purReconPerson,
+    } as ReconRecord);
   }, []);
 
   // ==================== 对方反馈 / 账单不符弹窗 / 明细显示字段 状态 ====================
