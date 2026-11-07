@@ -20,6 +20,7 @@ import type { FieldConfigItem } from '../components/FieldConfigModal';
 import useResizableColumns from '../hooks/useResizableColumns';
 import { loadTenantUsers, tenantUserDisplayName } from '../utils/tenantUsers';
 import { saveDataset, loadDataset } from '../utils/dataStore';
+import { reloadAfterPull } from '../utils/serverSync';
 
 // 表格贴底样式注入
 const STICKY_BOTTOM_STYLE = `
@@ -397,7 +398,7 @@ const StockTab: React.FC = () => {
   }, [wageRates, records]);
 
   const handleQuery = () => {
-    reload(); // 查询时自动刷新表单数据
+    reloadAfterPull(reload); // 查询时自动刷新表单数据（本地+服务端拉取）
     setAppliedSearch(search.trim());
     setAppliedDateRange(dateRange);
     setAppliedFMonth(fMonth);
@@ -1084,7 +1085,7 @@ const UrgentTab: React.FC = () => {
     records.forEach(r => { if (r.material) s.add(r.material); });
     return Array.from(s);
   }, [wageRates, records]);
-  const handleQuery = () => { reload(); setAppliedSearch(search.trim()); setAppliedDateRange(dateRange); setAppliedFMonth(fMonth); setAppliedFInspector(fInspector); setAppliedFMaterial(fMaterial); };
+  const handleQuery = () => { reloadAfterPull(reload); setAppliedSearch(search.trim()); setAppliedDateRange(dateRange); setAppliedFMonth(fMonth); setAppliedFInspector(fInspector); setAppliedFMaterial(fMaterial); };
   // 负责人权限判定
   const canViewAll = useMemo(() => { if (isAdmin) return true; if (viewManagers.length === 0 && editManagers.length === 0) return true; return viewManagers.includes(curUsername) || editManagers.includes(curUsername); }, [viewManagers, editManagers]);
   const canEditAll = useMemo(() => { if (isAdmin) return true; return editManagers.includes(curUsername); }, [editManagers]);
@@ -1861,7 +1862,7 @@ const OrderLabelTab: React.FC = () => {
   };
   // 查询按钮处理
   const handleQuery = () => {
-    setRecords(readOLSync(owner)); // 查询时自动刷新表单数据
+    reloadAfterPull(() => setRecords(readOLSync(owner))); // 查询时自动刷新表单数据（本地+服务端拉取）
     setAppliedOrderNo(searchOrderNo.trim());
     setAppliedLabel(searchLabel.trim());
     setAppliedStyleNo(searchStyleNo.trim());

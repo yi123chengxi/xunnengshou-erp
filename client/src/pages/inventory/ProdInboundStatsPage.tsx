@@ -12,6 +12,7 @@ import dayjs from 'dayjs';
 import { updateProductStock, generateDocNo, getStockLogs } from '../../utils/stockUtils';
 import type { StockLogEntry } from '../../utils/stockUtils';
 import { getCurrentUserDisplayName } from '../../utils/billLog';
+import { reloadAfterPull } from '../../utils/serverSync';
 
 const { Text, Paragraph } = Typography;
 const { RangePicker } = DatePicker;
@@ -98,6 +99,7 @@ const ProdInboundStatsPage: React.FC = () => {
 
   // ============ 筛选 ============
   const handleQuery = useCallback(() => {
+    reloadAfterPull(() => setDataSource(safeJson<PisRecord[]>(localStorage.getItem(STORAGE_KEY()), []))); // 查询时先本地重载再拉服务端
     setApplied({
       q: search.trim().toLowerCase(),
       wh: fWarehouse,

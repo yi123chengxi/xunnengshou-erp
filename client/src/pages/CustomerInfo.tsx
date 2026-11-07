@@ -34,7 +34,7 @@ import AsOfDebtModal from '../components/AsOfDebtModal';
 import EnterpriseCertModal, { CertBadge, fetchCertStatus, fetchCertBatch } from '../components/EnterpriseCertModal';
 import FieldConfigModal from '../components/FieldConfigModal';
 import type { CertInfo } from '../components/EnterpriseCertModal';
-import { flushDatasetUpload, flushDatasetUploadAsync, ensureDatasetFromServer, mergeDatasetFromServer } from '../utils/serverSync';
+import { flushDatasetUpload, flushDatasetUploadAsync, ensureDatasetFromServer, mergeDatasetFromServer, reloadAfterPull } from '../utils/serverSync';
 import { safeSetItem } from '../utils/storageQuota';
 import { isAccountingMode, writeAutoEntries, loadSubjectOptions, subjectFilterOption } from '../utils/accountingBridge';
 import { loadTenantUsers } from '../utils/tenantUsers';
@@ -2445,7 +2445,18 @@ const CustomerInfo: React.FC = () => {
               <Option value="purchaser">已绑定采购商</Option>
             </Select>
             <Space size={8} wrap>
-              <Button type="primary" icon={<SearchOutlined />} onClick={() => { setCustomers(loadCustomersFromStorage()); syncBoundPurchasers(); setCustSummary(loadCustomerSummary(getDataOwner())); setDataRefreshKey(k => k + 1); setSearchText(searchInput.trim()); setCodeSearchText(codeSearchInput.trim()); setAddressSearchText(addressSearchInput.trim()); }}>查询</Button>
+              <Button type="primary" icon={<SearchOutlined />} onClick={() => {
+                              // 查询统一契约：先本地重载（含额度调整），再异步拉服务端后二次重载，跨端新增数据立即可见
+                              const reload = () => {
+                                setCustomers(loadCustomersFromStorage());
+                                syncBoundPurchasers();
+                                setCustSummary(loadCustomerSummary(getDataOwner()));
+                                setCreditAdjustments(loadCreditAdjustments());
+                                setDataRefreshKey(k => k + 1);
+                              };
+                              reloadAfterPull(reload);
+                              setSearchText(searchInput.trim()); setCodeSearchText(codeSearchInput.trim()); setAddressSearchText(addressSearchInput.trim());
+                            }}>查询</Button>
               <Button icon={<ReloadOutlined />} onClick={() => { setSearchInput(''); setSearchText(''); setCodeSearchInput(''); setCodeSearchText(''); setAddressSearchInput(''); setAddressSearchText(''); setLevelFilter(''); setTypeFilter(''); setSalesmanFilter(''); }}>
                 重置
               </Button>

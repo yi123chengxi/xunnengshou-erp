@@ -15,6 +15,7 @@ import useResizableColumns from '../hooks/useResizableColumns';
 import FieldConfigModal from '../components/FieldConfigModal';
 import { safeSetItem } from '../utils/storageQuota';
 import { saveDataset } from '../utils/dataStore';
+import { reloadAfterPull } from '../utils/serverSync';
 
 const { Text } = Typography;
 const PRIMARY = '#1e4a7e';
@@ -393,6 +394,7 @@ const MonthEndCheckPage: React.FC = () => {
   const [retSearchActive, setRetSearchActive] = useState(false);
 
   const handleRetSearch = () => {
+    reloadAfterPull(reload); // 查询时先本地重载再拉服务端，跨端新增退货立即可见
     setRetAppliedShopName(retDraftShopName);
     setRetAppliedAfterSalesNo(retDraftAfterSalesNo);
     setRetAppliedOnlineOrderNo(retDraftOnlineOrderNo);
@@ -1256,7 +1258,7 @@ const MonthEndCheckPage: React.FC = () => {
           <div><Text style={{ fontSize: 12, color: '#888', display: 'block', marginBottom: 2 }}>店铺名称</Text><Input allowClear placeholder="店铺名称" value={shipSearchShopName} onChange={e => setShipSearchShopName(e.target.value)} style={{ width: 140 }} /></div>
           <div><Text style={{ fontSize: 12, color: '#888', display: 'block', marginBottom: 2 }}>月份</Text><DatePicker picker="month" value={shipSearchMonth ? dayjs(shipSearchMonth + '-01') : undefined} onChange={v => setShipSearchMonth(v ? v.format('YYYY-MM') : '')} style={{ width: 140 }} /></div>
           <Space>
-            <Button type="primary" icon={<SearchOutlined />} onClick={() => setShipSearchActive(true)}>查询</Button>
+            <Button type="primary" icon={<SearchOutlined />} onClick={() => { reloadAfterPull(reload); setShipSearchActive(true); }}>查询</Button>
             <Button icon={<RollbackOutlined />} onClick={() => { setShipSearchShopName(''); setShipSearchMonth(''); setShipSearchActive(false); }}>重置</Button>
           </Space>
           <div style={{ borderLeft: '1px solid #f0f0f0', paddingLeft: 12, marginLeft: 'auto' }}>

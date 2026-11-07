@@ -4,6 +4,7 @@ import {
   Card, Table, Button, Space, message, Typography, Modal, Input, InputNumber, DatePicker,
   Row, Col, Select, Tag, Empty, Image, Popconfirm,
 } from 'antd';
+import { reloadAfterPull } from '../utils/serverSync';
 import {
   PlusOutlined, DeleteOutlined, EditOutlined, DownloadOutlined, SearchOutlined,
   AccountBookOutlined, ArrowUpOutlined, ArrowDownOutlined, WalletOutlined,
@@ -1007,6 +1008,7 @@ const DailyBookkeepingPage: React.FC<{ flush?: boolean }> = ({ flush = false }) 
           <Input placeholder="记账说明" allowClear style={{ width: 130 }} value={sRemark}
             onChange={e => setSRemark(e.target.value)} />
           <Button type="primary" icon={<SearchOutlined />} onClick={() => {
+            reloadAfterPull(load); // 查询时先本地重载再拉服务端，跨端新增记账立即可见
             setSearchApplied(searchInput);
             setTypeApplied(typeInput);
             setRangeApplied(rangeInput && rangeInput[0] && rangeInput[1] ? [rangeInput[0].format('YYYY-MM-DD'), rangeInput[1].format('YYYY-MM-DD')] : null);

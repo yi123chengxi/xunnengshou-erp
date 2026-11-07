@@ -3,6 +3,7 @@ import {
   Card, Table, Button, Space, message, Typography, Modal, Input, InputNumber, Select,
   Row, Col, Tag, Statistic, Form, Tabs, Checkbox, Tooltip, Empty, AutoComplete, Image as AntdImage, DatePicker, Descriptions,
 } from 'antd';
+import { reloadAfterPull } from '../utils/serverSync';
 import {
   PlusOutlined, EditOutlined, DeleteOutlined, SearchOutlined, ReloadOutlined,
   PictureOutlined, SnippetsOutlined, UploadOutlined, DownloadOutlined, RocketOutlined,
@@ -969,7 +970,7 @@ const NewStyleProgressPage: React.FC<{ photoOnly?: boolean }> = ({ photoOnly = f
   const emptyF = { code: '', cost: '', color: '', size: '', factory: '', brand: '', place: '', recv: '', platform: '', range: null as [string, string] | null };
   const [fIn, setFIn] = useState(emptyF);
   const [fAp, setFAp] = useState(emptyF);
-  const applySearch = () => { reload(); setFAp({ ...fIn }); };
+  const applySearch = () => { reloadAfterPull(reload); setFAp({ ...fIn }); };
   const [onlyOverdue, setOnlyOverdue] = useState(false);
   // 上架逾期点击筛选：限定货号集合（null=不限制）
   const [focusCodes, setFocusCodes] = useState<string[] | null>(null);

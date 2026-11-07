@@ -14,6 +14,8 @@ import { SafetyCertificateOutlined, ReloadOutlined, EditOutlined, ArrowLeftOutli
 import { API_BASE } from '../utils/apiBase';
 import { cacheCertStatus, safeSetItem } from '../utils/storageQuota';
 import { saveDataset } from '../utils/dataStore';
+import { flushDatasetUpload } from '../utils/serverSync';
+import { recordCompanyRename, repairCounterpartyNames } from '../utils/nameSync';
 export const ENTERPRISE_API_BASE = API_BASE;
 
 /** 加载阿里云实人认证 H5 SDK 并获取 MetaInfo（官方要求：不传真实 MetaInfo 则 InitFaceVerify 不返回 CertifyUrl） */
@@ -188,9 +190,26 @@ const EnterpriseCertModal: React.FC<{ open: boolean; onClose: () => void; onCert
     setFaceResult(null);
     setStep('form');
     setReCertMode(false);
+    // 认证通过触发一次名称更新：认证公司名与登记公司名不一致时以认证名为准回写 registeredUsers，
+    // 记录改名（跨浏览器同步）并同步本端关联数据名称，对手方下次轮询即拉到新名称
+    try {
+      const certName = String(cert?.companyName || '').trim();
+      if (username && certName) {
+        const users: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+        const me = users.find((u: any) => u.username === username);
+        const oldName = String(me?.companyName || '').trim();
+        if (me && oldName !== certName) {
+          const json = JSON.stringify(users.map((u: any) => (u.username === username ? { ...u, companyName: certName } : u)));
+          safeSetItem('registeredUsers', json);
+          flushDatasetUpload('registeredUsers', json);
+          recordCompanyRename(username, oldName, certName);
+          repairCounterpartyNames();
+        }
+      }
+    } catch { /* ignore */ }
     message.success('法人刷脸认证通过，企业认证完成');
     onCertChanged?.();
-  }, [onCertChanged]);
+  }, [onCertChanged, username]);
 
   // 刷脸轮询：face 步骤下每 3 秒查询一次结果；未通过时静默继续等（用户可能尚未刷脸）
   useEffect(() => {

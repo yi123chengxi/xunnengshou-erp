@@ -15,6 +15,7 @@ import useResizableColumns from '../hooks/useResizableColumns';
 import FieldConfigModal from '../components/FieldConfigModal';
 import { safeSetItem } from '../utils/storageQuota';
 import { saveDataset } from '../utils/dataStore';
+import { reloadAfterPull } from '../utils/serverSync';
 import { resolveSupplier, upsertInboxEntry, nextApplyNo, resolveApplicantCompany } from '../utils/invoiceApply';
 import InvoiceRecordPage from './InvoiceRecordPage';
 import { sendPushNotification, showNativeNotification, isNotificationTypeEnabled } from '../utils/pushNotification';
@@ -197,8 +198,8 @@ const BusinessLicensePage: React.FC = () => {
   const [appliedSearchText, setAppliedSearchText] = useState('');
   const [appliedSearchAcCompany, setAppliedSearchAcCompany] = useState('');
   const handleSearch = useCallback(() => {
-    // 重读存储：开票记录等在「开票记录」标签页的增改不会同步到本页状态，查询时强制刷新进项票/销项票合计
-    reload();
+    // 重读存储：开票记录等在「开票记录」标签页的增改不会同步到本页状态，查询时强制刷新进项票/销项票合计；再拉服务端兼顾跨端新增
+    reloadAfterPull(reload);
     setAppliedSearchText(searchText);
     setAppliedSearchAcCompany(searchAcCompany);
   }, [searchText, searchAcCompany, reload]);
@@ -344,6 +345,7 @@ const BusinessLicensePage: React.FC = () => {
   // 已应用的搜索条件
   const [salesAppliedSearch, setSalesAppliedSearch] = useState({ shopName: '', shopNo: '', companyName: '', month: '' });
   const handleSalesSearch = useCallback(() => {
+    reloadAfterPull(reload); // 查询时先本地重载再拉服务端
     setSalesAppliedSearch({
       shopName: salesSearchShopName,
       shopNo: salesSearchShopNo,

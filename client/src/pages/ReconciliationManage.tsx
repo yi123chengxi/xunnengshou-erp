@@ -5,6 +5,7 @@ import {
   Popconfirm, Badge, Tooltip, Tabs, Steps, Divider, Alert, Result,
   InputNumber, DatePicker, Timeline, Popover, Checkbox, Upload, Image, Switch,
 } from 'antd';
+import { reloadAfterPull } from '../utils/serverSync';
 import {
   SearchOutlined,
   ReloadOutlined,
@@ -1637,12 +1638,15 @@ const ReconciliationManage: React.FC = () => {
           <Col xs={24} sm={4}>
             <Space>
               <Button type="primary" icon={<SearchOutlined />} onClick={() => {
-                // 查询时自动刷新表单数据（重读对账记录共享存储）
-                try {
-                  const raw = localStorage.getItem('recon_records');
-                  const arr = raw ? JSON.parse(raw) : null;
-                  if (Array.isArray(arr)) setDataSource(arr as ReconRecord[]);
-                } catch { /* ignore */ }
+                // 查询时自动刷新表单数据（重读对账记录共享存储）+ 拉服务端兼顾跨端新增
+                const rl = () => {
+                  try {
+                    const raw = localStorage.getItem('recon_records');
+                    const arr = raw ? JSON.parse(raw) : null;
+                    if (Array.isArray(arr)) setDataSource(arr as ReconRecord[]);
+                  } catch { /* ignore */ }
+                };
+                reloadAfterPull(rl);
               }}>查询</Button>
               <Button icon={<ReloadOutlined />} onClick={handleReset}>重置</Button>
             </Space>
@@ -2422,7 +2426,7 @@ const ReconciliationManage: React.FC = () => {
           </Col>
           <Col span={4}>
             <Space size={4}>
-              <Button size="small" type="primary" icon={<SearchOutlined />} onClick={() => setLinkSearchApplied({ ...linkSearch })}>查询</Button>
+              <Button size="small" type="primary" icon={<SearchOutlined />} onClick={() => { reloadAfterPull(() => { try { const raw = localStorage.getItem('recon_records'); const arr = raw ? JSON.parse(raw) : null; if (Array.isArray(arr)) setDataSource(arr as ReconRecord[]); } catch { /* ignore */ } }); setLinkSearchApplied({ ...linkSearch }); }}>查询</Button>
               <Button size="small" icon={<ReloadOutlined />} onClick={() => { setLinkSearch({ ...emptyLinkSearch }); setLinkSearchApplied({ ...emptyLinkSearch }); setLinkPick(''); }}>重置</Button>
             </Space>
           </Col>

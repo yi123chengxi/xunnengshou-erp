@@ -8,7 +8,7 @@ import {
 } from '@ant-design/icons';
 import { compressImageFile } from '../utils/imageCompress';
 import { safeSetItem } from '../utils/storageQuota';
-import { flushDatasetUpload } from '../utils/serverSync';
+import { flushDatasetUpload, reloadAfterPull } from '../utils/serverSync';
 import { computeSubjectFeatures, subjectSimilarity } from '../utils/imageSimilarity';
 import { triggerOpenChat } from '../utils/chatSocket';
 import { copyText } from '../utils/clipboard';
@@ -685,9 +685,12 @@ const MoldMarketTab: React.FC<{ onContact?: (username: string, subject: string) 
             </Tooltip>
           )}
           <Button type="primary" icon={<SearchOutlined />} onClick={() => {
-                        // 查询时自动刷新表单数据
-                        try { setMolds(JSON.parse(localStorage.getItem(`molds_${owner}`) || '[]')); } catch { /* ignore */ }
-                        try { const raw: MoldListing[] = JSON.parse(localStorage.getItem(STORAGE_KEY()) || '[]'); setListings(raw.map(resolveImageKeys)); } catch { /* ignore */ }
+                        // 查询时自动刷新表单数据（本地+服务端拉取）
+                        const rl = () => {
+                          try { setMolds(JSON.parse(localStorage.getItem(`molds_${owner}`) || '[]')); } catch { /* ignore */ }
+                          try { const raw: MoldListing[] = JSON.parse(localStorage.getItem(STORAGE_KEY()) || '[]'); setListings(raw.map(resolveImageKeys)); } catch { /* ignore */ }
+                        };
+                        reloadAfterPull(rl);
                         setAppliedSearch(searchInput);
                       }}>查询</Button>
           <Button icon={<ReloadOutlined />} onClick={() => { setSearchInput(''); setAppliedSearch(''); setModeFilter(''); setImageSearchUrl(''); }}>重置</Button>

@@ -18,6 +18,7 @@ import {
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { copyText } from '../utils/clipboard';
+import { dedupePurchaserSuppliers } from '../utils/cooperationDedupe';
 
 const { Text, Title } = Typography;
 
@@ -84,6 +85,8 @@ const PurchaserCooperationManage: React.FC = () => {
 
   const [dataSource, setDataSource] = useState<SupplierEntry[]>(() => {
     try {
+      // 同源去重兜底：与供应商列表页同一合并口径，避免同名供应商多条记录
+      dedupePurchaserSuppliers(username);
       return JSON.parse(localStorage.getItem(storageKey) || '[]');
     } catch {
       return [];

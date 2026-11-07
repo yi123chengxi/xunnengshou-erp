@@ -13,6 +13,7 @@ import {
 import dayjs from 'dayjs';
 import { safeSetItem } from '../utils/storageQuota';
 import { saveDataset } from '../utils/dataStore';
+import { reloadAfterPull } from '../utils/serverSync';
 import { getProvinceOptions, getCityOptions, getDistrictOptions } from '../utils/regions';
 import { syncOrderReserved } from '../utils/orderOccupied';
 import MoldMarketTab from './MoldMarketTab';
@@ -2245,7 +2246,7 @@ const addToCart = useCallback((rec: any, qty?: number) => {
               )}
               <Input placeholder="搜索发布单号/商品简称/款式编码/发布方" allowClear style={{ width: 260 }} value={sKw} onChange={e => setSKw(e.target.value)} onPressEnter={() => setApKw(sKw)} />
               <Select style={{ width: 120 }} value={sStatus} onChange={setSStatus} options={[{ value: 'all', label: '全部状态' }, { value: '待报价', label: '待报价' }, { value: '报价中', label: '报价中' }, { value: '已中标', label: '已中标' }, { value: '已关闭', label: '已关闭' }]} />
-              <Button type="primary" icon={<SearchOutlined />} onClick={() => { reload(); setApKw(sKw); setApStatus(sStatus); }}>查询</Button>
+              <Button type="primary" icon={<SearchOutlined />} onClick={() => { reloadAfterPull(reload); setApKw(sKw); setApStatus(sStatus); }}>查询</Button>
               <Button icon={<ReloadOutlined />} onClick={() => { setSKw(''); setApKw(''); setSStatus('all'); setApStatus('all'); }}>重置</Button>
               {!isFactory && !isPurchaser && (
                 <Button type="primary" icon={<PlusOutlined />} style={{ marginLeft: 'auto' }} onClick={() => { setPubEdit(null); pubForm.resetFields(); setPubImage(''); setPubVisible(true); }}>发布发包订单</Button>
@@ -2416,7 +2417,7 @@ const addToCart = useCallback((rec: any, qty?: number) => {
                   <Button type="text" icon={<CloseOutlined />} size="small" onClick={() => setImageSearchUrl('')} />
                 </Tooltip>
               )}
-              <Button type="primary" icon={<SearchOutlined />} onClick={() => { reload(); setApKw(sKw); setTitleSearch(titleSearchInput); }}>查询</Button>
+              <Button type="primary" icon={<SearchOutlined />} onClick={() => { reloadAfterPull(reload); setApKw(sKw); setTitleSearch(titleSearchInput); }}>查询</Button>
               <Button icon={<ReloadOutlined />} onClick={() => { setSKw(''); setApKw(''); setTitleSearchInput(''); setTitleSearch(''); setImageSearchUrl(''); }}>重置</Button>
             </div>
             {/* 图片搜索参考区 */}
@@ -3522,7 +3523,7 @@ const addToCart = useCallback((rec: any, qty?: number) => {
           <Input placeholder="搜索款式编码" allowClear style={{ width: 160 }} value={manualPublishSearch.styleCode} onChange={e => setManualPublishSearch(prev => ({ ...prev, styleCode: e.target.value }))} />
           <Select placeholder="图片" allowClear style={{ width: 100 }} value={manualPublishSearch.hasImage || undefined} onChange={v => setManualPublishSearch(prev => ({ ...prev, hasImage: v || '' }))} options={[{ value: 'yes', label: '有图片' }, { value: 'no', label: '无图片' }]} />
           <Select placeholder="发布情况" allowClear style={{ width: 120 }} value={manualPublishSearch.published || undefined} onChange={v => setManualPublishSearch(prev => ({ ...prev, published: v || '' }))} options={[{ value: 'yes', label: '已发布' }, { value: 'no', label: '未发布' }]} />
-          <Button type="primary" size="small" icon={<SearchOutlined />} onClick={() => setManualPublishAppliedSearch(manualPublishSearch)}>查询</Button>
+          <Button type="primary" size="small" icon={<SearchOutlined />} onClick={() => { reloadAfterPull(() => { const prods: any[] = loadJson(`pageData_basic-data_product-list_${owner}`, []); setManualPublishProducts(prods.filter((p: any) => p.productType === '成品' && p.styleCode && !String(p.productCode || '').startsWith('SEMI-'))); }); setManualPublishAppliedSearch(manualPublishSearch); }}>查询</Button>
         </div>
         <Table rowKey="styleCode" bordered size="small" dataSource={manualPublishProducts.reduce((acc: any[], p) => {
           const exist = acc.find(x => x.styleCode === p.styleCode);

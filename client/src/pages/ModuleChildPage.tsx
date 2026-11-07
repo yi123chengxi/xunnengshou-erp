@@ -111,7 +111,7 @@ import { buildSupplierReturnRow, buildPurchaserReturnBill, writeReturnStockFlows
 import { appendStockLog, updateProductStock } from '../utils/stockUtils';
 import { loadTenantUsers } from '../utils/tenantUsers';
 import { appendBillLogEntry, readBillLog, billLogColor, resolveOperatorName, diffBillRecords, SUPPLIER_BILL_FIELD_MAP, getCurrentUserDisplayName } from '../utils/billLog';
-import { pullAllDatasets, flushDatasetUploadAsync, ensureDatasetFromServer } from '../utils/serverSync';
+import { pullAllDatasets, flushDatasetUploadAsync, ensureDatasetFromServer, reloadAfterPull } from '../utils/serverSync';
 import { PRESET_PRINT_TEMPLATES, seedPresetPrintTemplates } from '../config/presetPrintTemplates';
 import { refreshCustomerPurchase } from '../utils/paySummary';
 import { loadAllCustomersFromStorage } from './CustomerInfo';
@@ -2829,18 +2829,42 @@ const ModuleChildPage: React.FC = () => {
   const [returnRegVisible, setReturnRegVisible] = useState(false);
   const returnRegCounterpartyOptions = useMemo(() => {
     if (!returnRegVisible) return [];
+    // 仅当前租户的对应采购商：已绑定采购商（boundPurchasers_<owner>，带明确账号）优先，
+    // 再补本租户账单明细/客户信息中出现的客户（同名账号用绑定关系消歧，唯一公司名直接命中）
+    const owner = getDataOwner();
+    const out: { value: string; label: string }[] = [];
+    const seen = new Set<string>();
+    const push = (un: string, label: string) => {
+      if (!un || !label || seen.has(un)) return;
+      seen.add(un);
+      out.push({ value: un, label });
+    };
+    try {
+      const bound: any[] = JSON.parse(localStorage.getItem(`boundPurchasers_${owner}`) || '[]');
+      bound.forEach((bp: any) => push(String(bp.purchaserUsername || ''), String(bp.purchaserName || bp.purchaserUsername || '')));
+    } catch { /* ignore */ }
     const names = new Set<string>();
     dataSource.forEach((r: any) => { if (r && r.customerName) names.add(String(r.customerName)); });
     try {
-      const cust: any[] = JSON.parse(localStorage.getItem(`pageData_customer_customer-info_${getDataOwner()}`) || '[]');
+      const cust: any[] = JSON.parse(localStorage.getItem(`pageData_customer_customer-info_${owner}`) || '[]');
       cust.forEach((c: any) => { if (c && c.name) names.add(String(c.name)); });
     } catch { /* ignore */ }
     let users: any[] = [];
-    try { users = JSON.parse(localStorage.getItem('registeredUsers') || '[]'); } catch { users = []; }
-    return Array.from(names)
-      .map(n => ({ name: n, username: users.find((u: any) => String(u?.companyName || '').trim() === n)?.username || '' }))
-      .filter(x => x.username)
-      .map(x => ({ value: x.username, label: x.name }));
+    try { users = JSON.parse(localStorage.getItem('registeredUsers') || '[]'); } catch { users = [] }
+    const ownCompany = getOwnCompanyName(owner);
+    names.forEach(n => {
+      if (out.some(o => o.label === n)) return;
+      const cands = users.filter((u: any) => String(u?.companyName || '').trim() === n);
+      if (cands.length === 0) return;
+      const hit = cands.find((c: any) => {
+        try {
+          const b: any[] = JSON.parse(localStorage.getItem('boundPurchasers_' + c.username) || '[]');
+          return b.some((bp: any) => bp.purchaserUsername === owner || bp.purchaserName === ownCompany);
+        } catch { return false; }
+      }) || (cands.length === 1 ? cands[0] : null);
+      if (hit) push(hit.username, n);
+    });
+    return out;
   }, [returnRegVisible, dataSource, getDataOwner]);
   const returnRegLinkedOptions = useMemo(() => (dataSource as any[])
     .filter(r => r && r.docType !== 'return' && r.outboundNo)
@@ -7702,16 +7726,19 @@ const ModuleChildPage: React.FC = () => {
 
   // 查询（自动刷新表单数据 + 应用筛选条件）
   const handleSearch = useCallback(() => {
-    // 刷新数据：从 localStorage 重新读取最新数据，确保查询时拿到最新状态
-    try {
-      const stored = localStorage.getItem(sharedDataKey);
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed)) {
-          setDataSource(parsed);
+    // 刷新数据：从 localStorage 重新读取最新数据，确保查询时拿到最新状态；再异步拉服务端二次重载（跨端新增数据立即可见）
+    const reloadFromStorage = () => {
+      try {
+        const stored = localStorage.getItem(sharedDataKey);
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          if (Array.isArray(parsed)) {
+            setDataSource(parsed);
+          }
         }
-      }
-    } catch { /* ignore */ }
+      } catch { /* ignore */ }
+    };
+    reloadAfterPull(reloadFromStorage);
     setAppliedSearchText(searchText);
     setAppliedStatusFilter(statusFilter);
     setAppliedDynamicFilters({ ...dynamicFilterValues });
@@ -12088,6 +12115,9 @@ const handleBatchAttrsConfirm = () => {
               openBillAddNew();
             }}>新增账单</Button>
           </Tooltip>
+          <Tooltip title="登记负数退货账单（自动同步至采购商平台并联动退货仓出入库）">
+            <Button icon={<RollbackOutlined />} style={{ color: '#cf1322', borderColor: '#cf1322' }} onClick={() => setReturnRegVisible(true)}>退货登记</Button>
+          </Tooltip>
           <Tooltip title="对勾选的账单批量发起对账，发送至采购商平台对账管理">
             <Button icon={<SwapOutlined />} onClick={handleBatchInitRecon} style={{ color: '#722ed1', fontWeight: 500 }}>批量发起对账</Button>
           </Tooltip>
@@ -12898,7 +12928,6 @@ const handleBatchAttrsConfirm = () => {
               value={[dayjs(billRange[0]), dayjs(billRange[1])]}
               onChange={v => { if (v && v[0] && v[1]) { setBillRangeQuick('custom'); setBillRange([v[0].format('YYYY-MM-DD'), v[1].format('YYYY-MM-DD')]); } }} />
             {billRangeQuick === 'custom' && <Tag color="blue">自定义区间</Tag>}
-            <Button size="small" icon={<RollbackOutlined />} style={{ marginLeft: 'auto', color: '#cf1322', borderColor: '#cf1322' }} onClick={() => setReturnRegVisible(true)}>退货登记</Button>
           </div>
           <ReturnRegisterModal open={returnRegVisible} onClose={() => setReturnRegVisible(false)} side="supplier"
             counterpartyOptions={returnRegCounterpartyOptions} linkedBillOptions={returnRegLinkedOptions}

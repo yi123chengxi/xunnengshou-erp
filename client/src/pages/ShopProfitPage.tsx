@@ -15,6 +15,7 @@ import * as XLSX from 'xlsx';
 import useResizableColumns from '../hooks/useResizableColumns';
 import { safeSetItem } from '../utils/storageQuota';
 import { saveDataset } from '../utils/dataStore';
+import { reloadAfterPull } from '../utils/serverSync';
 
 const { Text, Title } = Typography;
 const PRIMARY = '#1e4a7e';
@@ -215,7 +216,7 @@ const ShopProfitPage: React.FC = () => {
   const [appliedSearchPerson, setAppliedSearchPerson] = useState<string>('');
   const [appliedSearchPlatform, setAppliedSearchPlatform] = useState<string>('');
   const handleSearch = useCallback(() => {
-    reload(); // 查询时自动刷新表单数据
+    reloadAfterPull(reload); // 查询时自动刷新表单数据（本地+服务端拉取）
     setAppliedFilterShop(filterShop);
     setAppliedFilterMonth(filterMonth);
     setAppliedSearchPerson(searchPerson);

@@ -23,7 +23,9 @@ import type { ReturnRegisterPayload } from '../components/ReturnRegisterModal';
 import { buildPurchaserReturnBill, buildSupplierReturnRow, writeReturnStockFlows, getOwnCompanyName } from '../utils/returnRegister';
 import { safeSetItem } from '../utils/storageQuota';
 import { saveDataset } from '../utils/dataStore';
+import { reloadAfterPull } from '../utils/serverSync';
 import { compressImageFile } from '../utils/imageCompress';
+import { loadSupplierFinishedProducts } from '../utils/supplierProducts';
 
 const { Text } = Typography;
 const PRIMARY = '#1890ff';
@@ -436,16 +438,17 @@ const PurchaserBillPage: React.FC = () => {
     return '';
   };
 
-  // 加载供应商的成品产品列表（从供应商自己的账号读取）
-  const supplierProducts = useMemo(() => {
+  // 加载供应商的成品产品列表（从供应商自己的账号读取；本地缺失时服务端兜底拉取，保证跨浏览器可见）
+  const [supplierProducts, setSupplierProducts] = useState<any[]>([]);
+  useEffect(() => {
+    let cancelled = false;
     const currentSupplier = addProductTarget === 'create' ? supplier : eSupplier;
-    if (!currentSupplier) return [];
-    try {
-      const supplierUser = resolveSupplierUsername(currentSupplier);
-      const productOwner = supplierUser || getDataOwner();
-      const allProducts = JSON.parse(localStorage.getItem(`pageData_basic-data_product-list_${productOwner}`) || '[]');
-      return allProducts.filter((p: any) => p.productType === '成品');
-    } catch { return []; }
+    if (!currentSupplier) { setSupplierProducts([]); return; }
+    const productOwner = resolveSupplierUsername(currentSupplier) || getDataOwner();
+    loadSupplierFinishedProducts(productOwner)
+      .then(list => { if (!cancelled) setSupplierProducts(list); })
+      .catch(() => { if (!cancelled) setSupplierProducts([]); });
+    return () => { cancelled = true; };
   }, [addProductVisible, addProductTab, supplier, eSupplier, addProductTarget]);
 
   // 供应商货品搜索状态（输入不触发，点击查询/回车才生效）
@@ -465,6 +468,7 @@ const PurchaserBillPage: React.FC = () => {
   const [spPageSize, setSpPageSize] = useState(20);
 
   const handleSpSearch = useCallback(() => {
+    reloadAfterPull(reload); // 查询时先本地重载再拉服务端，跨端新增账单立即可见
     setSpAppliedCode(spInputCode); setSpAppliedStyleCode(spInputStyleCode);
     setSpAppliedBrand(spInputBrand); setSpAppliedPriceMin(spInputPriceMin);
     setSpAppliedPriceMax(spInputPriceMax); setSpAppliedStatus(spInputStatus);
@@ -511,6 +515,7 @@ const PurchaserBillPage: React.FC = () => {
   const [spdPageSize, setSpdPageSize] = useState(20);
 
   const handleSpdSearch = useCallback(() => {
+    reloadAfterPull(reload); // 查询时先本地重载再拉服务端，跨端新增账单立即可见
     setSpdAppliedCode(spdInputCode); setSpdAppliedStyleCode(spdInputStyleCode);
     setSpdAppliedBrand(spdInputBrand); setSpdAppliedPriceMin(spdInputPriceMin);
     setSpdAppliedPriceMax(spdInputPriceMax); setSpdAppliedStatus(spdInputStatus);
@@ -671,10 +676,34 @@ const PurchaserBillPage: React.FC = () => {
   const [returnVisible, setReturnVisible] = useState(false);
   const returnCounterpartyOptions = useMemo(() => {
     if (!returnVisible) return [];
+    // 仅当前租户的供应商：取本采购商供应商列表（purchaser_suppliers_<owner>），
+    // 账号优先用条目上的 supplierUsername，缺失时按公司名反查（同名账号用绑定关系消歧）
+    const owner = getDataOwner();
+    const out: { value: string; label: string }[] = [];
+    const seen = new Set<string>();
     try {
+      const list: any[] = JSON.parse(localStorage.getItem(`purchaser_suppliers_${owner}`) || '[]');
       const users: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
-      return users.filter((u: any) => u && u.companyName).map((u: any) => ({ value: u.username, label: u.companyName }));
-    } catch { return []; }
+      list.forEach((s: any) => {
+        if (!s) return;
+        let un = String(s.supplierUsername || '');
+        if (!un) {
+          const name = String(s.supplierName || '');
+          if (!name) return;
+          const cands = users.filter((u: any) => String(u.companyName || '') === name);
+          un = (cands.length === 1 ? cands[0] : cands.find((c: any) => {
+            try {
+              const b: any[] = JSON.parse(localStorage.getItem('boundPurchasers_' + c.username) || '[]');
+              return b.some((bp: any) => bp.purchaserUsername === owner);
+            } catch { return false; }
+          }))?.username || '';
+        }
+        if (!un || seen.has(un)) return;
+        seen.add(un);
+        out.push({ value: un, label: String(s.supplierName || un) });
+      });
+    } catch { /* ignore */ }
+    return out;
   }, [returnVisible]);
   const returnLinkedOptions = useMemo(() => bills.filter(b => (b as any).docType !== 'return' && b.outboundNo).map(b => ({
     value: b.outboundNo,
@@ -1067,7 +1096,7 @@ const PurchaserBillPage: React.FC = () => {
           </Col>
           <Col xs={8} sm={3}>
             <Space size={4}>
-              <Button size="small" type="primary" icon={<SearchOutlined />} onClick={() => setPSearchApplied({ ...pSearch })}>查询</Button>
+              <Button size="small" type="primary" icon={<SearchOutlined />} onClick={() => { reloadAfterPull(reload); setPSearchApplied({ ...pSearch }); }}>查询</Button>
               <Button size="small" icon={<ReloadOutlined />} onClick={() => { setPSearch({ ...emptyPSearch }); setPSearchApplied({ ...emptyPSearch }); }}>重置</Button>
             </Space>
           </Col>
@@ -1526,14 +1555,13 @@ const PurchaserBillPage: React.FC = () => {
           {addProductTab === 'supplier' && (addProductTarget === 'create' ? supplier : eSupplier) && (
             <Button icon={<EyeOutlined />} onClick={() => {
               const cs = addProductTarget === 'create' ? supplier : eSupplier;
-              const supplierUser = resolveSupplierUsername(cs);
-              const productOwner = supplierUser || getDataOwner();
-              let latest: any[] = [];
-              try { latest = JSON.parse(localStorage.getItem(`pageData_basic-data_product-list_${productOwner}`) || '[]'); } catch {}
+              const productOwner = resolveSupplierUsername(cs) || getDataOwner();
               setSpDetailSupplier(cs);
-              setSpDetailData(latest.filter((p: any) => p.productType === '成品'));
+              setSpDetailData([]);
               setSpDetailVisible(true);
               handleSpdReset();
+              // 跨浏览器取数：本地优先，缺失时服务端数据集兜底
+              void loadSupplierFinishedProducts(productOwner).then(list => setSpDetailData(list));
             }}>查看供应商全部货品</Button>
           )}
           {addCheckedKeys.size > 0 && (

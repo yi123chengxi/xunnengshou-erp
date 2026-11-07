@@ -3,6 +3,7 @@ import {
   Card, Table, Button, Input, Select, Space, Modal, Form, DatePicker,
   Tag, message, Typography, Tooltip, Popconfirm, Image,
 } from 'antd';
+import { reloadAfterPull } from '../utils/serverSync';
 import {
   PlusOutlined, SearchOutlined, EditOutlined, StopOutlined,
   DeleteOutlined, ReloadOutlined, ShopOutlined, LinkOutlined, ShoppingCartOutlined,
@@ -112,11 +113,13 @@ const ContractFactoryPage: React.FC<ContractFactoryPageProps> = ({ title = '代�
   const [apStatus, setApStatus] = useState<string>('all');
 
   const handleSearch = useCallback(() => {
-    // 查询时自动刷新表单数据
-    try {
-      const list = JSON.parse(localStorage.getItem(storageKey) || '[]');
-      setDataSource(Array.isArray(list) ? list : []);
-    } catch { setDataSource([]); }
+    // 查询时自动刷新表单数据（本地+服务端拉取）
+    reloadAfterPull(() => {
+      try {
+        const list = JSON.parse(localStorage.getItem(storageKey) || '[]');
+        setDataSource(Array.isArray(list) ? list : []);
+      } catch { setDataSource([]); }
+    });
     setApNo(sNo); setApName(sName); setApShort(sShort);
     setApContact(sContact); setApPhone(sPhone); setApStatus(sStatus);
   }, [sNo, sName, sShort, sContact, sPhone, sStatus, storageKey]);

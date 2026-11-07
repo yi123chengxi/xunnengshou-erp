@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState, useRef, useCallback } from 'react'
 import {
   Table, Button, Space, Input, InputNumber, Modal, Form, Row, Col, Tag, message, Popconfirm, Tooltip, AutoComplete, Image as AntdImage, Select, Card,
 } from 'antd';
+import { reloadAfterPull } from '../utils/serverSync';
 import type { ColumnsType } from 'antd/es/table';
 import {
   PlusOutlined, EditOutlined, DeleteOutlined, ReloadOutlined, SearchOutlined, ToolOutlined, PictureOutlined, SnippetsOutlined,
@@ -133,8 +134,8 @@ const MoldPage: React.FC = () => {
   const [searchFields, setSearchFields] = useState({ moldCode: '', moldName: '', spec: '', status: '', creator: '' });
   const [appliedSearch, setAppliedSearch] = useState({ moldCode: '', moldName: '', spec: '', status: '', creator: '' });
   const handleSearch = useCallback(() => {
-    // 查询时自动刷新表单数据
-    try { setRecords(JSON.parse(localStorage.getItem(storageKey) || '[]')); } catch { /* ignore */ }
+    // 查询时自动刷新表单数据（本地+服务端拉取）
+    reloadAfterPull(() => { try { setRecords(JSON.parse(localStorage.getItem(storageKey) || '[]')); } catch { /* ignore */ } });
     setAppliedSearch({ ...searchFields });
   }, [searchFields, storageKey]);
   const handleReset = useCallback(() => {

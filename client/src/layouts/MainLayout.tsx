@@ -53,6 +53,7 @@ import { isPermAllowed, ECOM_KEY_MIGRATION } from '../utils/devPerms';
 import { getProvinceOptions, getCityOptions, getDistrictOptions } from '../utils/regions';
 import { fetchUnreadCount, onNewMessage as onChatNewMessage, onMarkRead } from '../utils/chatSocket';
 import { compressImageFile } from '../utils/imageCompress';
+import { recordCompanyRename, repairCounterpartyNames } from '../utils/nameSync';
 import { loadUserNotices, markUserNoticeRead, markAllUserNoticesRead, clearUserNotices, USER_NOTICES_EVENT, UserNotice } from '../utils/userNotice';
 
 const { Header, Sider, Content } = Layout;
@@ -547,6 +548,7 @@ const MainLayout: React.FC = () => {
       const username = localStorage.getItem('username');
       if (!username) return;
       const registeredUsers = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+      const oldCompanyName = String(registeredUsers.find((u: any) => u.username === username)?.companyName || '').trim();
       const updated = registeredUsers.map((u: any) => {
         if (u.username === username) {
           return {
@@ -573,6 +575,12 @@ const MainLayout: React.FC = () => {
         return u;
       });
       localStorage.setItem('registeredUsers', JSON.stringify(updated));
+      // 公司名称变更：记录改名（跨浏览器同步）并立即同步本端关联数据名称，避免对手方/本端历史快照联动断裂
+      const newCompanyName = String(values.companyName?.trim() || '').trim();
+      if (oldCompanyName && newCompanyName && oldCompanyName !== newCompanyName) {
+        recordCompanyRename(username, oldCompanyName, newCompanyName);
+      }
+      repairCounterpartyNames();
       setEditProfileVisible(false);
       message.success('企业信息已保存');
     });

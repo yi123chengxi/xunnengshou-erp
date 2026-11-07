@@ -277,9 +277,15 @@ const CooperationManage: React.FC = () => {
           if (approvedApp && approvedApp.purchaserUsername) {
             const purchaserStorageKey = 'purchaser_suppliers_' + approvedApp.purchaserUsername;
             const suppliers: any[] = JSON.parse(localStorage.getItem(purchaserStorageKey) || '[]');
+            const approvedSupplierUsername = (approvedApp as any).supplierUsername || '';
+            // 匹配须兼顾名称/供应商账号回退：本浏览器持有的采购商键副本可能陈旧缺条目，
+            // 仅按 purchaserSupplierEntryId 匹配会落空进而走自动新增，产生同供应商双条目
             const existingIdx = suppliers.findIndex((s: any) => {
-              if (approvedApp.purchaserSupplierEntryId) return s.id === approvedApp.purchaserSupplierEntryId;
-              return s.supplierName === record.supplierName || s.id === approvedApp.targetSupplierId;
+              if (approvedApp.purchaserSupplierEntryId && s.id === approvedApp.purchaserSupplierEntryId) return true;
+              if (s.id === approvedApp.targetSupplierId) return true;
+              if (s.supplierName === record.supplierName) return true;
+              if (approvedSupplierUsername && s.supplierUsername === approvedSupplierUsername) return true;
+              return false;
             });
             if (existingIdx >= 0) {
               suppliers[existingIdx] = {
@@ -293,15 +299,31 @@ const CooperationManage: React.FC = () => {
                 supplierName: record.supplierName || suppliers[existingIdx].supplierName,
               };
             } else {
-              // 采购商侧没有该供应商条目（通过链接直接申请且没有手动新增），自动新增
+              // 采购商侧没有该供应商条目（通过链接直接申请且没有手动新增），自动新增；
+              // 档案字段取供应商注册信息，不得复用采购商联系人（历史缺陷：曾把采购商联系人写入供应商档案）
+              let supUser: any = null;
+              try {
+                const registeredUsers2: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+                const cands = registeredUsers2.filter((u: any) =>
+                  (approvedSupplierUsername && u.username === approvedSupplierUsername) ||
+                  (u.companyName || '') === record.supplierName);
+                // 同名账号消歧：优先取 boundPurchasers 中确实绑定了该采购商的账号
+                supUser = cands.find((c: any) => {
+                  try {
+                    const b: any[] = JSON.parse(localStorage.getItem('boundPurchasers_' + c.username) || '[]');
+                    return b.some((bp: any) => bp.purchaserUsername === approvedApp.purchaserUsername || bp.purchaserName === approvedApp.purchaserCompanyName);
+                  } catch { return false; }
+                }) || cands[0] || null;
+              } catch { /* ignore */ }
               suppliers.unshift({
                 id: approvedApp.purchaserSupplierEntryId || approvedApp.targetSupplierId || `SP-${Date.now()}`,
-                supplierUsername: localStorage.getItem('username') || '',
+                supplierUsername: supUser?.username || approvedSupplierUsername || (localStorage.getItem('username') || ''),
+                supplierNo: supUser?.companyNo || '',
                 supplierName: record.supplierName,
                 shortName: '',
-                contactPerson: record.purchaserContact || '',
-                contactPhone: record.purchaserPhone || '',
-                email: '',
+                contactPerson: supUser?.contactPerson || '',
+                contactPhone: supUser?.phone || '',
+                email: supUser?.email || '',
                 cooperationStatus: 'approved',
                 addedDate: dayjs().format('YYYY-MM-DD HH:mm:ss'),
                 cooperationDate: dayjs().format('YYYY-MM-DD'),

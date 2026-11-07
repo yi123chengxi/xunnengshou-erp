@@ -11,10 +11,11 @@ import { getOriginalSetItem, safeSetItem, emergencyFreeSpace } from './storageQu
 import { API_BASE } from './apiBase';
 import { repairPurchaserSupplierNames } from './cooperationTerminate';
 import { reconcileCooperationPairs } from './cooperationReconcile';
+import { repairCounterpartyNames } from './nameSync';
 
 // 需要同步的业务数据 key 前缀/精确名
-const SYNC_PREFIXES = ['pageData_', 'custom_', 'warehouses_', 'purchaser_suppliers_', 'boundPurchasers_', 'accounts_', 'shop_info_', 'shop_profit_', 'month_end_check_', 'withdrawal_record_', 'dev_', 'hr_', 'newstyle_', 'brandauth_', 'molds_', 'credit_adjustments_', 'published_credit_', 'payment_requests_', 'payment_request_managers_', 'notification_settings_', 'print_template_', 'price_strategy_', 'user_notice_', 'invoice_record_', 'invoice_apply_requests_'];
-const SYNC_EXACT = ['registeredUsers', 'subscription_orders', 'storage_orders', 'market_publish_orders', 'market_ratings', 'market_trade_orders', 'market_visitor_cart_shares', 'market_mold_listings', 'purchaser_pushed_orders', 'cooperation_applications', 'cooperation_invites'];
+const SYNC_PREFIXES = ['pageData_', 'custom_', 'warehouses_', 'purchaser_suppliers_', 'boundPurchasers_', 'accounts_', 'shop_info_', 'shop_profit_', 'month_end_check_', 'withdrawal_record_', 'dev_', 'hr_', 'newstyle_', 'brandauth_', 'molds_', 'credit_adjustments_', 'published_credit_', 'payment_requests_', 'payment_request_managers_', 'notification_settings_', 'print_template_', 'price_strategy_', 'user_notice_', 'invoice_record_', 'invoice_apply_requests_', 'purchaser_bills_'];
+const SYNC_EXACT = ['registeredUsers', 'subscription_orders', 'storage_orders', 'market_publish_orders', 'market_ratings', 'market_trade_orders', 'market_visitor_cart_shares', 'market_mold_listings', 'purchaser_pushed_orders', 'cooperation_applications', 'cooperation_invites', 'recon_records', 'recon_feedback', 'company_renames'];
 // 图片块体积大，不参与跨浏览器同步（各浏览器独立）
 const EXCLUDE_PREFIXES = ['prodImg_', 'thumb_', 'payShot_', 'mold_img_'];
 // 仅上传不拉取的键前缀（这类键有独立的恢复机制，避免 pullAllDatasets 的宽限期竞态覆盖本地新数据）
@@ -51,6 +52,8 @@ function keyOwner(key: string): string | null {
   if (key === 'registeredUsers') return null;
   // 合作申请为双方跨租户协作数据：全局共享同步（并集合并），保证供应商/采购商跨浏览器互见申请与审批结果
   if (key === 'cooperation_applications') return null;
+  // 对账记录/对账反馈/公司改名记录为双方跨租户协作数据：全局共享同步，保证发起方与接收方跨浏览器互见
+  if (key === 'recon_records' || key === 'recon_feedback' || key === 'company_renames') return null;
   // 商机市场相关键为全局共享数据（跨账号可见），返回 null 使所有账号都能同步
   if (key.startsWith('market_')) return null;
   // 打印模板为系统级预设/共享数据：跨账号同步，部署后新浏览器自动拉取
@@ -306,9 +309,20 @@ function mergeRegisteredUsers(serverJson: string): any[] | null {
  * 3. 本地有但服务端没有的 → 自动上传（首次迁移 localStorage 数据到数据库）
  * 4. 拉取完成后派发 sync-data-updated 事件通知已挂载页面刷新
  */
+/* 查询按键统一契约：先同步按本地存储重载（reload 由调用方提供），再异步拉取服务端最新后二次重载，
+ * 保证「点击查询」立即看到本机与他端新增/修改的数据，无需手动刷新浏览器 */
+export const reloadAfterPull = (reload: () => void): void => {
+  try { reload(); } catch { /* ignore */ }
+  void pullAllDatasets()
+    .then(() => { try { reload(); } catch { /* ignore */ } })
+    .catch(() => { /* ignore */ });
+};
+
 export async function pullAllDatasets(): Promise<number> {
   // 合作存量数据修复：采购商侧供应商名称统一为已认证公司全称（轻量，随同步轮询执行）
   try { repairPurchaserSupplierNames(); } catch { /* ignore */ }
+  // 合作方公司名称/信息同步：改名链改写 + 账号名快照修正 + 关联账号信息刷新（随同步轮询执行）
+  try { repairCounterpartyNames(); } catch { /* ignore */ }
   if (!(await serverAvailable())) return 0;
   let meta: Record<string, number> = {};
   try {
@@ -409,6 +423,12 @@ export async function pullAllDatasets(): Promise<number> {
           if (onlyLocal.length > 0 && APPEND_ONLY_GLOBAL_KEYS.includes(key)) {
             void doUpload(key, merged, Date.now()).catch(() => { /* ignore */ });
           }
+        } else if (serverTs > localTs) {
+          // 非数组全局键（如 recon_feedback 对象映射）：无法并集合并，服务端较新时整体覆盖
+          raw(key, rec.json);
+          raw(`${key}_ts`, String(rec.updatedAt));
+          saveDataset(key, rec.json);
+          applied++;
         }
         continue;
       }

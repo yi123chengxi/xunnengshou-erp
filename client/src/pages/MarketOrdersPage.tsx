@@ -6,6 +6,8 @@ import { isAccountingMode, writeAutoEntries, pushBankTransaction } from '../util
 import { isInstallmentOrder, depositAmountOf, sumPayRecords, mergePayRecords, payProgressText, postInstallmentEffects, postShipCostEntry, installmentStatusOf } from '../utils/receiptWrite';
 import type { PayRecord } from '../utils/receiptWrite';
 import { saveDataset } from '../utils/dataStore';
+import { reloadAfterPull } from '../utils/serverSync';
+import { loadSupplierProducts, loadSupplierFinishedProducts } from '../utils/supplierProducts';
 import { QtyTemplateManagerModal, QtyFillConfirmModal, loadQtyTemplates, saveQtyTemplates, QtyTemplate } from '../components/QtyTemplateModals';
 import FieldConfigModal, { FieldConfigItem } from '../components/FieldConfigModal';
 import { getProvinceOptions, getCityOptions, getDistrictOptions } from '../utils/regions';
@@ -329,13 +331,15 @@ const MarketOrdersPage: React.FC = () => {
     } catch { /* ignore */ }
   }, [addSupplier]);
 
-  // 当前供应商的商品列表
-  const supplierProducts = useMemo(() => {
-    if (!addSupplier) return [];
-    try {
-      const products: any[] = JSON.parse(localStorage.getItem(`pageData_basic-data_product-list_${addSupplier}`) || '[]');
-      return products.filter(p => p.productType === '成品');
-    } catch { return []; }
+  // 当前供应商的商品列表（本地优先，缺失时服务端数据集兜底拉取，保证跨浏览器可见）
+  const [supplierProducts, setSupplierProducts] = useState<any[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    if (!addSupplier) { setSupplierProducts([]); return; }
+    loadSupplierFinishedProducts(addSupplier)
+      .then(list => { if (!cancelled) setSupplierProducts(list); })
+      .catch(() => { if (!cancelled) setSupplierProducts([]); });
+    return () => { cancelled = true; };
   }, [addSupplier]);
 
   const filteredProducts = useMemo(() => {
@@ -381,11 +385,10 @@ const MarketOrdersPage: React.FC = () => {
   const getSupplierOwner = (supplierUsername: string): string => supplierUsername;
 
   // 推送校验
-  const validatePush = (order: any): string | null => {
+  const validatePush = async (order: any): Promise<string | null> => {
     if (!order.supplierUsername) return '请先选择供应商';
     const supplierOwner = getSupplierOwner(order.supplierUsername);
-    let supplierProductList: any[] = [];
-    try { supplierProductList = JSON.parse(localStorage.getItem(`pageData_basic-data_product-list_${supplierOwner}`) || '[]'); } catch { /* ignore */ }
+    const supplierProductList = await loadSupplierProducts(supplierOwner);
     if (supplierProductList.length === 0) return `供应商 ${order.supplierCompany} 没有商品列表数据`;
     for (const item of (order.items || [])) {
       const prod = supplierProductList.find((p: any) => p.productCode === item.productCode);
@@ -476,12 +479,12 @@ const MarketOrdersPage: React.FC = () => {
   };
 
   // 推送执行
-  const handlePush = () => {
+  const handlePush = async () => {
     if (selectedRowKeys.length === 0) { message.warning('请先选择需要推送的订单'); return; }
     const toPush = orders.filter(o => selectedRowKeys.includes(o.key) && o.status === '待推送');
     if (toPush.length === 0) { message.warning('选中的订单中没有可推送的（仅"待推送"状态可推送）'); return; }
     for (const order of toPush) {
-      const err = validatePush(order);
+      const err = await validatePush(order);
       if (err) { Modal.error({ title: '推送校验失败', content: `${order.id}: ${err}` }); return; }
     }
     Modal.confirm({
@@ -1299,7 +1302,7 @@ const MarketOrdersPage: React.FC = () => {
               style={{ width: 140 }} value={fieldFilters[d.key] || ''}
               onChange={e => setFieldFilters(prev => ({ ...prev, [d.key]: e.target.value }))} />
           ))}
-          <Button type="primary" icon={<SearchOutlined />} onClick={() => setAppliedFilters({ ...fieldFilters })}>查询</Button>
+          <Button type="primary" icon={<SearchOutlined />} onClick={() => { reloadAfterPull(reload); setAppliedFilters({ ...fieldFilters }); }}>查询</Button>
           <Button icon={<ReloadOutlined />} onClick={() => { setFieldFilters({}); setAppliedFilters({}); setSKw(''); setApKw(''); }}>重置</Button>
           <Button icon={<SettingOutlined />} onClick={() => setListFieldConfigVisible(true)}>显示字段</Button>
           <Button type="primary" icon={<PlusOutlined />} onClick={() => { resetAddForm(); setCreditRefreshKey(k => k + 1); setAddVisible(true); }}>新增</Button>

@@ -40,10 +40,13 @@ import {
 } from '../utils/paySummary';
 import type { SupplierSummaryEntry } from '../utils/paySummary';
 import { writeProductList, loadProductListLatest } from '../utils/dataStore';
+import { reloadAfterPull } from '../utils/serverSync';
 import {
   takePendingInvite, acceptCooperationInvite, rejectCooperationInvite, resolveUserByCompanyNo,
 } from '../utils/cooperationInvite';
 import type { CooperationInvitePayload } from '../utils/cooperationInvite';
+import { dedupePurchaserSuppliers } from '../utils/cooperationDedupe';
+import { loadSupplierFinishedProducts } from '../utils/supplierProducts';
 import { findInviteRecord, markInviteUsed } from '../utils/inviteRegistry';
 import { isAccountingMode, writeAutoEntries, loadSubjectOptions, subjectFilterOption } from '../utils/accountingBridge';
 import { getCurrentUserDisplayName } from '../utils/billLog';
@@ -191,6 +194,7 @@ const PurchaserSupplierList: React.FC = () => {
 
   // 货品列表弹窗 - 查询
   const handlePlSearch = useCallback(() => {
+    reloadAfterPull(() => reloadData()); // 查询时先本地重载再拉服务端，跨端新增数据立即可见
     setPlAppliedCode(plInputCode);
     setPlAppliedStyleCode(plInputStyleCode);
     setPlAppliedBrand(plInputBrand);
@@ -338,6 +342,8 @@ const PurchaserSupplierList: React.FC = () => {
   // 加载并同步数据
   const reloadData = useCallback(() => {
     try {
+      // 同源去重兜底：历史多写点+同步并集合并可能留下同供应商多 id 条目，加载时先合并
+      dedupePurchaserSuppliers(username);
       const data: SupplierEntry[] = JSON.parse(localStorage.getItem(storageKey) || '[]');
       const apps: any[] = JSON.parse(localStorage.getItem(COOPERATION_APPLICATIONS_KEY) || '[]');
       let hasChange = false;
@@ -971,6 +977,27 @@ const PurchaserSupplierList: React.FC = () => {
     return '';
   };
 
+  // 供应商货品计数跨浏览器取数：本地优先、缺失时服务端数据集兜底（避免生产环境计数恒 0）
+  const [spProductCounts, setSpProductCounts] = useState<Record<string, number>>({});
+  useEffect(() => {
+    let cancelled = false;
+    const entries = dataSource.filter(e => e && e.supplierName);
+    if (entries.length === 0) return;
+    Promise.all(entries.map(async e => {
+      const owner = resolveSupplierUsername(e.supplierName);
+      if (!owner) return null;
+      const list = await loadSupplierFinishedProducts(owner);
+      return { name: e.supplierName, count: list.length };
+    })).then(res => {
+      if (cancelled) return;
+      const map: Record<string, number> = {};
+      res.forEach(r => { if (r) map[r.name] = r.count; });
+      setSpProductCounts(prev => ({ ...prev, ...map }));
+    }).catch(() => { /* ignore */ });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dataSource]);
+
   // 填写供应商编号 → 向对应供应商账号发起合作申请（新增/编辑窗口共用）
   const sendCooperationByNo = (entryId: string, noRaw: string): 'none' | 'notfound' | 'exists' | 'sent' => {
     const no = String(noRaw || '').trim();
@@ -1443,25 +1470,18 @@ const PurchaserSupplierList: React.FC = () => {
       render: (_: any, record: SupplierEntry) => { const occ = orderOccupationMap[record.supplierName] ?? 0; if (occ <= 0) return <Text style={{ color: '#999' }}>¥0.00</Text>; return <a style={{ color: '#1890ff', fontWeight: 600 }} onClick={() => { setOccSupplier(record.supplierName); setOccVisible(true); }}>¥{occ.toFixed(2)}</a>; } },
     productList: { title: <Tooltip title="该供应商发布的成品商品数量，点击查看完整商品列表"><span>货品列表 <InfoCircleOutlined style={{ color: '#bbb', fontSize: 12 }} /></span></Tooltip>, key: 'productList', width: 100, align: 'center' as const,
       render: (_: any, record: SupplierEntry) => {
-        // 产品存储在供应商自己的账号下，通过 registeredUsers 解析供应商 username
-        const supplierUser = resolveSupplierUsername(record.supplierName);
-        const productOwner = supplierUser || getDataOwner();
-        let allProducts: any[] = [];
-        try { allProducts = JSON.parse(localStorage.getItem(`pageData_basic-data_product-list_${productOwner}`) || '[]'); } catch {}
-        // 供应商自己的产品列表，只需按 productType 筛选成品
-        const finishedProducts = allProducts.filter((p: any) => p.productType === '成品');
-        const count = finishedProducts.length;
+        // 计数取跨浏览器取数结果（本地优先/服务端兜底），未取到前显示「查看」
+        const count = spProductCounts[record.supplierName] ?? 0;
         return (
           <Button type="link" size="small" icon={<ShoppingCartOutlined />}
             onClick={() => {
-              // 点击时重新读取最新数据
-              let latest: any[] = [];
-              try { latest = JSON.parse(localStorage.getItem(`pageData_basic-data_product-list_${productOwner}`) || '[]'); } catch {}
-              const filtered = latest.filter((p: any) => p.productType === '成品');
+              const productOwner = resolveSupplierUsername(record.supplierName) || getDataOwner();
               setProductListSupplier(record.supplierName);
-              setProductListData(filtered);
+              setProductListData([]);
               setPlSelected([]);
               setProductListVisible(true);
+              // 跨浏览器取数：本地优先，缺失时服务端数据集兜底
+              void loadSupplierFinishedProducts(productOwner).then(list => setProductListData(list));
             }}>
             {count > 0 ? <Tag color="blue">{count}</Tag> : '查看'}
           </Button>

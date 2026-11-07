@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { Card, Table, Tag, Typography, Space, Empty, Input, Select, Button, message, Modal, Form, Popconfirm, Tooltip } from 'antd';
+import { reloadAfterPull } from '../utils/serverSync';
 import { ShopOutlined, PhoneOutlined, UserOutlined, SearchOutlined, ReloadOutlined, SettingOutlined, PlusOutlined, CheckOutlined, CloseOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import FieldConfigModal from '../components/FieldConfigModal';
@@ -115,7 +116,7 @@ const FactoryCooperationPage: React.FC = () => {
   useEffect(() => { load(); }, [load]);
 
   const handleSearch = useCallback(() => {
-    load(); // 查询时自动刷新表单数据
+    reloadAfterPull(load); // 查询时自动刷新表单数据（本地+服务端拉取）
     setApOwner(sOwner); setApName(sName); setApType(sType); setApContact(sContact); setApStatus(sStatus);
   }, [sOwner, sName, sType, sContact, sStatus, load]);
 

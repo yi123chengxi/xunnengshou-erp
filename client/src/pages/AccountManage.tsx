@@ -4,6 +4,7 @@ import {
   Space, Tag, message, Modal, Form, Drawer, Descriptions, Dropdown,
   Popconfirm, DatePicker, Badge, Tooltip, Checkbox, Divider, Upload, Alert,
 } from 'antd';
+import { reloadAfterPull } from '../utils/serverSync';
 import {
   PlusOutlined,
   SearchOutlined,
@@ -909,7 +910,7 @@ const AccountManage: React.FC = () => {
 
   // 搜索和重置（查询时自动刷新表单数据）
   const handleSearch = useCallback(() => {
-    setDataSource(loadAccountsFromStorage());
+    reloadAfterPull(() => setDataSource(loadAccountsFromStorage())); // 查询时先本地重载再拉服务端
     message.info(`找到 ${filteredData.length} 条记录`);
   }, [filteredData.length]);
 

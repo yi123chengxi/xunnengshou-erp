@@ -40,6 +40,7 @@ import { showNativeNotification, showTimedNotification, isNotificationBlocked } 
 import { useDevPermSet, isPermAllowed } from '../utils/devPerms';
 import { menuVisible, menuKeyFromPath, usePermTick } from '../utils/perm';
 import { compressImageFile } from '../utils/imageCompress';
+import { recordCompanyRename, repairCounterpartyNames } from '../utils/nameSync';
 import { Result as AntResult } from 'antd';
 
 const { Header, Sider, Content } = Layout;
@@ -313,6 +314,7 @@ const PurchaserLayout: React.FC = () => {
       const username = localStorage.getItem('username');
       if (!username) return;
       const registeredUsers = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+      const oldCompanyName = String(registeredUsers.find((u: any) => u.username === username)?.companyName || '').trim();
       const updated = registeredUsers.map((u: any) => {
         if (u.username === username) {
           return {
@@ -337,6 +339,12 @@ const PurchaserLayout: React.FC = () => {
         return u;
       });
       localStorage.setItem('registeredUsers', JSON.stringify(updated));
+      // 公司名称变更：记录改名（跨浏览器同步）并立即同步本端关联数据名称，避免对手方/本端历史快照联动断裂
+      const newCompanyName = String(values.companyName?.trim() || '').trim();
+      if (oldCompanyName && newCompanyName && oldCompanyName !== newCompanyName) {
+        recordCompanyRename(username, oldCompanyName, newCompanyName);
+      }
+      repairCounterpartyNames();
       setEditProfileVisible(false);
       message.success('企业信息已保存');
     });

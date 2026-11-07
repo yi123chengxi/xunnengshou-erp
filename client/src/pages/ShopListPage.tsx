@@ -13,6 +13,7 @@ import * as XLSX from 'xlsx-js-style';
 import useResizableColumns from '../hooks/useResizableColumns';
 import { safeSetItem } from '../utils/storageQuota';
 import { saveDataset } from '../utils/dataStore';
+import { reloadAfterPull } from '../utils/serverSync';
 import { loadShopManagerPerms, saveShopManagerPerms, isShopScopeAdmin, scopeShops, canEditShopData, ShopManagerPerm } from '../utils/shopScope';
 import { canField, canFn, usePermTick } from '../utils/perm';
 import { SHOP_MENU_KEY } from '../config/permRegistry';
@@ -190,12 +191,8 @@ const ShopListPage: React.FC = () => {
   // 已应用的搜索条件（点击查询后才生效）
   const [appliedSearch, setAppliedSearch] = useState({ shopName: '', shopNo: '', companyName: '', person: '', phone: '', platform: '' });
   const handleSearch = useCallback(() => {
-    // 查询时自动刷新表单数据
-    try { setShops(JSON.parse(localStorage.getItem(storageKey) || '[]')); } catch { setShops([]); }
-    try {
-      const licenses = JSON.parse(localStorage.getItem(licenseKey) || '[]');
-      setCompanyNames(licenses.map((l: any) => l.companyName).filter(Boolean));
-    } catch { setCompanyNames([]); }
+    // 查询时自动刷新表单数据（本地+服务端拉取）
+    reloadAfterPull(reload);
     setAppliedSearch({
       shopName: searchShopName,
       shopNo: searchShopNo,

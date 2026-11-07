@@ -199,8 +199,9 @@ const PurchaserCooperationConfirmPage: React.FC = () => {
     const storageKey = `purchaser_suppliers_${purchaserUsername}`;
     try {
       const suppliers: any[] = JSON.parse(localStorage.getItem(storageKey) || '[]');
+      // 名称回退匹配：token/条目 id 每次邀约都不同，仅按 id 匹配会为同一供应商重复新建条目
       const existingIdx = suppliers.findIndex(
-        (s: any) => s.cooperationToken === token || s.id === tokenData.supplierId || s.id === purchaserSupplierEntryId
+        (s: any) => s.cooperationToken === token || s.id === tokenData.supplierId || s.id === purchaserSupplierEntryId || s.supplierName === tokenData.supplierName
       );
       if (existingIdx >= 0) {
         suppliers[existingIdx] = {

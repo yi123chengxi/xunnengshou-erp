@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   Table, Button, Space, Input, Select, Modal, Form, Row, Col, Tag, message, Statistic, Image as AntdImage, Upload, Dropdown, AutoComplete, Popover, Tooltip,
 } from 'antd';
+import { reloadAfterPull } from '../utils/serverSync';
 import type { ColumnsType } from 'antd/es/table';
 import {
   PlusOutlined, EditOutlined, DeleteOutlined, ReloadOutlined, FileExcelOutlined, SearchOutlined, QuestionCircleOutlined, SettingOutlined,
@@ -62,7 +63,7 @@ const BrandAuthPage: React.FC<{ embedded?: boolean }> = ({ embedded }) => {
   const EMPTY_BSEARCH = { brand: '', company: '', shop: '', salesperson: '', phone: '', platform: '' };
   const [bInput, setBInput] = useState({ ...EMPTY_BSEARCH });
   const [bApplied, setBApplied] = useState({ ...EMPTY_BSEARCH });
-  const applySearch = () => { reload(); setBApplied({ ...bInput }); };
+  const applySearch = () => { reloadAfterPull(reload); setBApplied({ ...bInput }); };
   const resetSearch = () => {
     setBInput({ ...EMPTY_BSEARCH }); setBApplied({ ...EMPTY_BSEARCH });
     setFStatus(''); setFDepositTo(''); setFDepStatus(''); setFShopType('');
