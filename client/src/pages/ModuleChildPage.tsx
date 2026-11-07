@@ -14132,7 +14132,8 @@ const handleBatchAttrsConfirm = () => {
           ) : null,
           <Button key="close" onClick={() => setEditVisible(false)}>关 闭</Button>,
         ] : undefined}
-        width={isOrderEditCtx ? 'calc(100vw - 80px)' : (isProductList ? 820 : 560)}
+        /* 订单新增/编辑/详情窗口宽度：原 (100vw - 80px) 基础上缩小三分之一 → ×2/3 ≈ 66.67vw - 53px */
+        width={isOrderEditCtx ? 'calc(66.67vw - 53px)' : (isProductList ? 820 : 560)}
         wrapClassName={isOrderEditCtx && orderReadonly ? 'order-readonly-modal' : ''}
         styles={isOrderEditCtx ? { body: { overflowX: 'hidden' } } : undefined}
         destroyOnClose
