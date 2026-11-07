@@ -79,6 +79,8 @@ const ReturnRegisterModal: React.FC<{
   const [linked, setLinked] = useState('');
   const [reason, setReason] = useState('');
   const [items, setItems] = useState<ReturnRegisterItem[]>([emptyRow()]);
+  // 勾选行（数量模版填充仅作用于勾选行，与账单明细新增弹窗口径一致）
+  const [checkedRows, setCheckedRows] = useState<Set<number>>(new Set());
 
   // 显示字段配置（按租户持久化，与新增账单弹窗同形态）
   const [colConfig, setColConfig] = useState<{ keys: string[]; visible: string[] }>(() => {
@@ -135,6 +137,7 @@ const ReturnRegisterModal: React.FC<{
     setLinked('');
     setReason('');
     setItems([emptyRow()]);
+    setCheckedRows(new Set());
   }, [open]);
 
   const updateItem = (idx: number, patch: Partial<ReturnRegisterItem>) => {
@@ -147,6 +150,7 @@ const ReturnRegisterModal: React.FC<{
     const opt = linkedBillOptions.find(o => o.value === v);
     if (opt && opt.items.length > 0) {
       setItems(opt.items.map(it => ({ ...it, quantity: Math.abs(Number(it.quantity) || 0) || 1, unitPrice: Math.abs(Number(it.unitPrice) || 0) })));
+      setCheckedRows(new Set(opt.items.map((_, i) => i))); // 预填明细默认全勾选（与新增账单选单填充口径一致）
     }
   };
 
@@ -179,7 +183,7 @@ const ReturnRegisterModal: React.FC<{
     message.success(`已添加 ${mapped.length} 个商品`);
   };
 
-  // 数量模版填充：按规格/编码匹配明细行，数量=模版数量×倍数
+  // 数量模版填充：按规格/编码匹配勾选明细行，数量=模版数量×倍数（与新增弹窗仅填充勾选行一致）
   const handleQtyFill = () => {
     if (!qtyFillTemplate) return;
     const mult = qtyFillMultiplier || 1;
@@ -190,7 +194,8 @@ const ReturnRegisterModal: React.FC<{
       return spec === pc || spec === sp || (pc && pc.includes(spec)) || (sp && sp.includes(spec));
     });
     let filled = 0;
-    setItems(prev => prev.map(it => {
+    setItems(prev => prev.map((it, idx) => {
+      if (!checkedRows.has(idx)) return it;
       const match = findMatch(it);
       if (match) { filled++; return { ...it, quantity: match.qty * mult }; }
       return it;
@@ -284,8 +289,20 @@ const ReturnRegisterModal: React.FC<{
       <Table bordered size="small" pagination={false} rowKey={(_r, i) => String(i)}
         dataSource={items}
         columns={[
+          {
+            title: <Checkbox
+              checked={items.length > 0 && checkedRows.size === items.length}
+              indeterminate={checkedRows.size > 0 && checkedRows.size < items.length}
+              onChange={e => { if (e.target.checked) setCheckedRows(new Set(items.map((_, i) => i))); else setCheckedRows(new Set()); }}
+            />,
+            width: 36, align: 'center',
+            render: (_v: any, _r: ReturnRegisterItem, i: number) => <Checkbox checked={checkedRows.has(i)} onChange={e => { const s = new Set(checkedRows); if (e.target.checked) s.add(i); else s.delete(i); setCheckedRows(s); }} />,
+          },
           ...colConfig.keys.filter(k => colConfig.visible.includes(k)).map(k => colDefs[k]),
-          { title: '', key: 'op', width: 40, render: (_v: any, _r: ReturnRegisterItem, i: number) => <Button type="text" size="small" danger icon={<DeleteOutlined />} onClick={() => setItems(prev => (prev.length > 1 ? prev.filter((_, x) => x !== i) : prev))} /> },
+          { title: '', key: 'op', width: 40, render: (_v: any, _r: ReturnRegisterItem, i: number) => <Button type="text" size="small" danger icon={<DeleteOutlined />} onClick={() => {
+            setItems(prev => (prev.length > 1 ? prev.filter((_, x) => x !== i) : prev));
+            setCheckedRows(prev => { const s = new Set<number>(); prev.forEach(idx => { if (idx < i) s.add(idx); else if (idx > i) s.add(idx - 1); }); return s; });
+          }} /> },
         ]}
       />
       <div style={{ marginTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -404,15 +421,16 @@ const ReturnRegisterModal: React.FC<{
             <div style={{ background: '#f5f5f5', borderRadius: 6, padding: '12px 16px', marginBottom: 16 }}>
               {qtyFillTemplate.rows.map((r, i) => (
                 <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', fontSize: 13 }}>
-                  <span>规格 {r.spec}</span><span style={{ color: '#1890ff', fontWeight: 600 }}>{r.qty}</span>
+                  <span>规格 {r.spec}</span>
+                  <span>{r.qty} × <Text strong style={{ color: '#1890ff' }}>{qtyFillMultiplier}</Text> = <Text strong style={{ color: '#cf1322' }}>{r.qty * (qtyFillMultiplier || 1)}</Text></span>
                 </div>
               ))}
             </div>
-            <Space>
-              <Text style={{ fontSize: 13 }}>倍数</Text>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Text>填充倍数：</Text>
               <InputNumber size="small" min={1} precision={0} value={qtyFillMultiplier} onChange={v => setQtyFillMultiplier(Number(v) || 1)} style={{ width: 90 }} />
-            </Space>
-            <div style={{ marginTop: 8, fontSize: 12, color: '#999' }}>按规格/商品编码匹配明细行，退货数量 = 模版数量 × 倍数</div>
+            </div>
+            <div style={{ marginTop: 8, fontSize: 12, color: '#999' }}>仅填充勾选的明细行（按规格/商品编码匹配）</div>
           </div>
         )}
       </Modal>
