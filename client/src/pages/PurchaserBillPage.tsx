@@ -209,7 +209,7 @@ const PurchaserBillPage: React.FC = () => {
     const owner = getDataOwner();
     let list: any[] = [];
     try { list = JSON.parse(localStorage.getItem('recon_records') || '[]'); } catch { list = []; }
-    const recs = (Array.isArray(list) ? list : []).filter((r: any) => (r.initiator || 'supplier') === 'supplier' && r.docNo && (!r.customerUsername || r.customerUsername === owner));
+    const recs = (Array.isArray(list) ? list : []).filter((r: any) => !r.delisted && (r.initiator || 'supplier') === 'supplier' && r.docNo && (!r.customerUsername || r.customerUsername === owner));
     setCreateReconOptions(recs.map((r: any) => ({
       value: r.docNo,
       label: (
@@ -561,7 +561,7 @@ const PurchaserBillPage: React.FC = () => {
 
   const reload = useCallback(() => {
     try { setBills(JSON.parse(localStorage.getItem(storageKey) || '[]')); } catch { setBills([]); }
-    try { const rl = JSON.parse(localStorage.getItem('recon_records') || '[]'); setReconRecords(Array.isArray(rl) ? rl : []); } catch { setReconRecords([]); }
+    try { const rl = JSON.parse(localStorage.getItem('recon_records') || '[]'); setReconRecords(Array.isArray(rl) ? rl.filter((r: any) => !r.delisted) : []); } catch { setReconRecords([]); }
   }, [storageKey]);
   useEffect(() => { reload(); }, [reload]);
 
@@ -913,6 +913,9 @@ const PurchaserBillPage: React.FC = () => {
     let reconList: any[] = [];
     try { reconList = JSON.parse(localStorage.getItem('recon_records') || '[]'); } catch { /* ignore */ }
     if (!Array.isArray(reconList)) reconList = [];
+    // 墓碑记录不参与在途判定，但写回时必须保留（防并集合并复活）
+    const reconTombs = reconList.filter((r: any) => r.delisted);
+    reconList = reconList.filter((r: any) => !r.delisted);
     const now = new Date();
     const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
     let added = 0;
@@ -965,7 +968,7 @@ const PurchaserBillPage: React.FC = () => {
       added += 1;
     });
     if (added === 0) { message.warning(skipped > 0 ? '所选账单已对账完成、供应商为空或供应商已发起对账，不能发起对账' : '没有可发起对账的账单'); return; }
-    localStorage.setItem('recon_records', JSON.stringify(reconList));
+    localStorage.setItem('recon_records', JSON.stringify([...reconList, ...reconTombs]));
     // 发起后账单对账结果置为"已发起对账" + 记录日志
     const allBills: BillRecord[] = JSON.parse(localStorage.getItem(storageKey) || '[]');
     localStorage.setItem(storageKey, JSON.stringify(allBills.map(b => initiatedKeys.includes(b.key) ? {
@@ -978,11 +981,11 @@ const PurchaserBillPage: React.FC = () => {
     message.success(`已对 ${added} 条账单发起对账，对账请求已发送至供应商平台${skipped > 0 ? `，跳过 ${skipped} 条（已对账完成或供应商已发起对账）` : ''}`);
   };
 
-  /** 撤回对账：删除本账单的采购商发起对账记录并还原对账结果 */
+  /** 撤回对账：本账单的采购商发起对账记录打墓碑（防旧端复活）并还原对账结果 */
   const withdrawRecon = (r: BillRecord) => {
     let list: any[] = [];
     try { list = JSON.parse(localStorage.getItem('recon_records') || '[]'); } catch { list = []; }
-    const remain = list.filter((x: any) => !(x.source === 'bill' && x.initiator === 'purchaser' && matchPurchaserRecon([x], r)));
+    const remain = list.map((x: any) => (x.source === 'bill' && x.initiator === 'purchaser' && matchPurchaserRecon([x], r)) ? { ...x, delisted: true, delistedAt: new Date().toISOString() } : x);
     localStorage.setItem('recon_records', JSON.stringify(remain));
     const all: any[] = JSON.parse(localStorage.getItem(storageKey) || '[]');
     localStorage.setItem(storageKey, JSON.stringify(all.map(b => b.key === r.key ? {

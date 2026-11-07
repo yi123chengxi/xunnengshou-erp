@@ -1,0 +1,92 @@
+/**
+ * 对账完成联动自愈（对抗并集合并复活）。
+ * 背景：completeRecon 采用「删除对账记录 + 回写双方账单」设计，但数组类同步键在旧端 PUT 时
+ * 走并集合并（同 id incoming 优先），「已删除的记录」与「已回写的对账完成状态」会被未刷新的
+ * 旧标签页复活，导致供应商对账管理长期停留"对方未入账"。服务端合并仅保护 delisted=true 墓碑。
+ * 本模块随同步轮询执行（pullAllDatasets 顶部钩子）：
+ *  1) 采购商终态账单（按供方入账/已对账/对账完成/不相符）→ 断言回写供应商账单明细行为对账完成；
+ *  2) 存活 pending 对账记录若任一侧账单已终态 → 打 delisted 墓碑并补入账日期，
+ *     使记录不可被复活且双方列表自然收敛移除。
+ */
+
+const BILL_TERMINAL = ['按供方入账', '已对账', '对账完成', '不相符'];
+const SUP_ROW_TERMINAL = ['对账完成', '按采方入账'];
+
+const readList = (k: string): any[] => {
+  try {
+    const v = JSON.parse(localStorage.getItem(k) || '[]');
+    return Array.isArray(v) ? v : [];
+  } catch { return []; }
+};
+
+const diffOfBill = (res: string): string =>
+  res === '按供方入账' ? '按供方入账，采购商已确认'
+    : res === '不相符' ? '账单不相符'
+      : '金额一致，双方对账完成';
+
+export function healReconTerminalLinks(): void {
+  try {
+    const billKeys: string[] = [];
+    const detailKeys: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k) continue;
+      if (k.indexOf('purchaser_bills_') === 0) billKeys.push(k);
+      else if (k.indexOf('pageData_customer_bill-detail_') === 0) detailKeys.push(k);
+    }
+    if (billKeys.length === 0 && detailKeys.length === 0) return;
+    const details = detailKeys.map(k => ({ key: k, rows: readList(k) }));
+    const billsAll = billKeys.map(k => readList(k));
+    // 1) 终态账单 → 供应商账单明细行断言回写（对抗旧端复活的回滚）
+    billsAll.forEach(bills => {
+      bills.forEach((b: any) => {
+        const res = String(b?.reconcileResult || '');
+        if (!BILL_TERMINAL.includes(res)) return;
+        const no = String(b?.outboundNo || '').trim();
+        if (!no) return;
+        details.forEach(d => {
+          let ch = false;
+          d.rows = d.rows.map((row: any) => {
+            if (String(row?.outboundNo || '').trim() !== no) return row;
+            if (SUP_ROW_TERMINAL.includes(String(row?.reconResult || ''))) return row;
+            ch = true;
+            return {
+              ...row,
+              reconResult: '对账完成',
+              diffDesc: diffOfBill(res),
+              purchaserReconPerson: row.purchaserReconPerson || b.purchaserReconciler || '',
+              supplierReconPerson: row.supplierReconPerson || b.supplierReconciler || '',
+            };
+          });
+          if (ch) { try { localStorage.setItem(d.key, JSON.stringify(d.rows)); } catch { /* ignore */ } }
+        });
+      });
+    });
+    // 2) 存活 pending 记录 + 任一侧已终态 → delisted 墓碑（服务端合并保护墓碑不被复活）
+    const recs = readList('recon_records');
+    if (recs.length === 0) return;
+    const today = new Date().toISOString().slice(0, 10);
+    let chR = false;
+    const next = recs.map((r: any) => {
+      if (!r || r.delisted || String(r.reconResult || 'pending') !== 'pending') return r;
+      const no = String(r.docNo || '').trim();
+      const billHit = billsAll.some(list => list.some((b: any) =>
+        BILL_TERMINAL.includes(String(b?.reconcileResult || '')) &&
+        ((r.matchedBillKey && b.key === r.matchedBillKey) || (!!no && String(b?.outboundNo || '').trim() === no))));
+      const rowHit = !billHit && details.some(d => d.rows.some((row: any) =>
+        SUP_ROW_TERMINAL.includes(String(row?.reconResult || '')) &&
+        ((r.orderNo && row.id === r.orderNo) || (!!no && String(row?.outboundNo || '').trim() === no))));
+      if (!billHit && !rowHit) return r;
+      chR = true;
+      return {
+        ...r,
+        delisted: true,
+        delistedAt: new Date().toISOString(),
+        reconResult: 'matched',
+        theirEntryDate: !r.theirEntryDate || r.theirEntryDate === '-' ? today : r.theirEntryDate,
+        ourEntryDate: !r.ourEntryDate || r.ourEntryDate === '-' ? today : r.ourEntryDate,
+      };
+    });
+    if (chR) { try { localStorage.setItem('recon_records', JSON.stringify(next)); } catch { /* ignore */ } }
+  } catch { /* ignore */ }
+}

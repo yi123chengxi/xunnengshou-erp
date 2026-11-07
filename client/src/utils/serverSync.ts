@@ -12,6 +12,7 @@ import { API_BASE } from './apiBase';
 import { repairPurchaserSupplierNames } from './cooperationTerminate';
 import { reconcileCooperationPairs } from './cooperationReconcile';
 import { repairCounterpartyNames } from './nameSync';
+import { healReconTerminalLinks } from './reconHeal';
 
 // 需要同步的业务数据 key 前缀/精确名
 const SYNC_PREFIXES = ['pageData_', 'custom_', 'warehouses_', 'purchaser_suppliers_', 'boundPurchasers_', 'accounts_', 'shop_info_', 'shop_profit_', 'month_end_check_', 'withdrawal_record_', 'dev_', 'hr_', 'newstyle_', 'brandauth_', 'molds_', 'credit_adjustments_', 'published_credit_', 'payment_requests_', 'payment_request_managers_', 'notification_settings_', 'print_template_', 'price_strategy_', 'user_notice_', 'invoice_record_', 'invoice_apply_requests_', 'purchaser_bills_'];
@@ -323,6 +324,8 @@ export async function pullAllDatasets(): Promise<number> {
   try { repairPurchaserSupplierNames(); } catch { /* ignore */ }
   // 合作方公司名称/信息同步：改名链改写 + 账号名快照修正 + 关联账号信息刷新（随同步轮询执行）
   try { repairCounterpartyNames(); } catch { /* ignore */ }
+  // 对账完成联动自愈：终态账单断言回写供应商明细行 + pending 记录任一侧终态即打墓碑（对抗并集合并复活）
+  try { healReconTerminalLinks(); } catch { /* ignore */ }
   if (!(await serverAvailable())) return 0;
   let meta: Record<string, number> = {};
   try {

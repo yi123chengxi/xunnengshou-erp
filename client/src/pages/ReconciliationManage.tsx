@@ -88,6 +88,8 @@ interface ReconRecord {
   supplierUsername?: string;  // 供应商账号（发起方）
   supplierName?: string;      // 供应商公司名称
   customerUsername?: string;  // 采购商账号
+  delisted?: boolean;         // 完成墓碑：对账完成后记录不再展示且不可被旧端并集合并复活
+  delistedAt?: string;        // 墓碑时间
   styleCompare?: { styleCode: string; ourQty: number; theirQty: number }[]; // 款式编码汇总核对
   matchedBillKey?: string;    // 已关联的采购账单 key
   orderNo?: string;           // 供应商账单明细行 id
@@ -317,6 +319,18 @@ const ReconciliationManage: React.FC = () => {
       }
     } catch { /* ignore */ }
     setDataSource(prev => prev.filter(x => x.key !== r.key));
+    // 墓碑：完成记录以 delisted 形式留在共享存储（服务端合并保护墓碑），旧端 PUT 的存活版本会被强制降级，杜绝复活
+    const todayStr = new Date().toISOString().slice(0, 10);
+    tombsRef.current.set(r.key, {
+      ...r,
+      delisted: true,
+      delistedAt: new Date().toISOString(),
+      reconResult: 'matched',
+      theirEntryDate: !r.theirEntryDate || r.theirEntryDate === '-' ? todayStr : r.theirEntryDate,
+      ourEntryDate: !r.ourEntryDate || r.ourEntryDate === '-' ? todayStr : r.ourEntryDate,
+      confirmedBy: operatorName || r.confirmedBy,
+      confirmedAt: new Date().toISOString().slice(0, 19).replace('T', ' '),
+    });
   }, []);
 
   // ==================== 对方反馈 / 账单不符弹窗 / 明细显示字段 状态 ====================
@@ -339,17 +353,29 @@ const ReconciliationManage: React.FC = () => {
 
   // 跨标签页同步对方反馈（effect 移至 selectedRecord 声明之后）
 
-  // 对账记录共享存储（供应商发起 → 采购商平台可见）
+  // 对账记录共享存储（供应商发起 → 采购商平台可见）；delisted 墓碑记录不入列表，仅随存储写入防复活
+  const tombsRef = useRef<Map<string, ReconRecord>>(new Map());
   const [dataSource, setDataSource] = useState<ReconRecord[]>(() => {
     try {
       const raw = localStorage.getItem('recon_records');
       if (raw) {
         const arr = JSON.parse(raw);
-        if (Array.isArray(arr)) return arr as ReconRecord[];
+        if (Array.isArray(arr)) return (arr as ReconRecord[]).filter(r => !(r as any).delisted);
       }
     } catch { /* ignore */ }
     return initialReconData;
   });
+  // 挂载时回填墓碑表（保证后续存储写入持续携带墓碑）
+  useEffect(() => {
+    try {
+      const arr = JSON.parse(localStorage.getItem('recon_records') || '[]');
+      if (Array.isArray(arr)) {
+        const m = new Map<string, ReconRecord>();
+        arr.forEach((r: any) => { if (r && r.delisted && r.key) m.set(r.key, r); });
+        tombsRef.current = m;
+      }
+    } catch { /* ignore */ }
+  }, []);
 
   // 自动对账：开关开启时对“完全一致”单据自动完成（completeRecon 会移除记录并回写账单，dataSource 收敛后 effect 自然终止）
   useEffect(() => {
@@ -359,17 +385,47 @@ const ReconciliationManage: React.FC = () => {
     targets.forEach(r => completeRecon(r, 'auto', '系统自动核对'));
   }, [autoRecon, dataSource, completeRecon]);
 
-  // 持久化对账记录（实时同步关闭时：本方为响应方的记录仅本地保留，释放后才写入共享存储）
+  // 持久化对账记录（实时同步关闭时：本方为响应方的记录仅本地保留，释放后才写入共享存储）；
+  // 写入时携带墓碑并对状态中被复活的同 key 记录强制替换为墓碑版本
   useEffect(() => {
     try {
       const gated = (r: ReconRecord) => (isPurchaser ? (r.initiator || 'supplier') === 'supplier' : r.initiator === 'purchaser');
-      const out = realTimeSync
+      const base = realTimeSync
         ? dataSource
         : dataSource.map(r => (gated(r) && !releasedSyncKeys.current.has(r.key) && syncedReconRef.current[r.key]) ? syncedReconRef.current[r.key] : r);
+      const withTombs = base.map(r => (tombsRef.current.has(r.key) ? { ...tombsRef.current.get(r.key)! } : r));
+      const inOut = new Set(withTombs.map(r => r.key));
+      const extra = Array.from(tombsRef.current.values()).filter(t => !inOut.has(t.key));
+      const out = [...withTombs, ...extra];
       localStorage.setItem('recon_records', JSON.stringify(out));
       syncedReconRef.current = Object.fromEntries(out.map(r => [r.key, r]));
     } catch { /* ignore */ }
   }, [dataSource, realTimeSync, isPurchaser]);
+
+  // 订阅同步事件：服务端/他端更新后即时重读共享存储（保留实时同步关闭时本方未释放的本地版本）
+  useEffect(() => {
+    const onUpd = () => {
+      try {
+        const arr = JSON.parse(localStorage.getItem('recon_records') || '[]');
+        if (!Array.isArray(arr)) return;
+        arr.forEach((r: any) => { if (r && r.delisted && r.key) tombsRef.current.set(r.key, r); });
+        const gatedLocal = (r: ReconRecord) => (isPurchaser ? (r.initiator || 'supplier') === 'supplier' : r.initiator === 'purchaser') && !realTimeSync && !releasedSyncKeys.current.has(r.key) && !!syncedReconRef.current[r.key];
+        setDataSource(prev => {
+          // 墓碑 key 的存活版本视为复活残留，不入列表（持久化 effect 会重新压回墓碑）
+          const live = (arr as ReconRecord[]).filter(r => !(r as any).delisted && !tombsRef.current.has(r.key));
+          const byKey = new Map(live.map(r => [r.key, r]));
+          const out = live.map(r => {
+            const local = prev.find(p => p.key === r.key);
+            return local && gatedLocal(local) ? local : r;
+          });
+          prev.forEach(p => { if (!byKey.has(p.key) && gatedLocal(p)) out.push(p); });
+          return out;
+        });
+      } catch { /* ignore */ }
+    };
+    window.addEventListener('sync-data-updated', onUpd);
+    return () => window.removeEventListener('sync-data-updated', onUpd);
+  }, [isPurchaser, realTimeSync]);
   const [activeTab, setActiveTab] = useState<string>('all');
   const [searchText, setSearchText] = useState('');
   const [typeFilter, setTypeFilter] = useState<string>('');
@@ -1643,7 +1699,7 @@ const ReconciliationManage: React.FC = () => {
                   try {
                     const raw = localStorage.getItem('recon_records');
                     const arr = raw ? JSON.parse(raw) : null;
-                    if (Array.isArray(arr)) setDataSource(arr as ReconRecord[]);
+                    if (Array.isArray(arr)) setDataSource((arr as ReconRecord[]).filter(r => !(r as any).delisted));
                   } catch { /* ignore */ }
                 };
                 reloadAfterPull(rl);
@@ -2426,7 +2482,7 @@ const ReconciliationManage: React.FC = () => {
           </Col>
           <Col span={4}>
             <Space size={4}>
-              <Button size="small" type="primary" icon={<SearchOutlined />} onClick={() => { reloadAfterPull(() => { try { const raw = localStorage.getItem('recon_records'); const arr = raw ? JSON.parse(raw) : null; if (Array.isArray(arr)) setDataSource(arr as ReconRecord[]); } catch { /* ignore */ } }); setLinkSearchApplied({ ...linkSearch }); }}>查询</Button>
+              <Button size="small" type="primary" icon={<SearchOutlined />} onClick={() => { reloadAfterPull(() => { try { const raw = localStorage.getItem('recon_records'); const arr = raw ? JSON.parse(raw) : null; if (Array.isArray(arr)) setDataSource((arr as ReconRecord[]).filter(r => !(r as any).delisted)); } catch { /* ignore */ } }); setLinkSearchApplied({ ...linkSearch }); }}>查询</Button>
               <Button size="small" icon={<ReloadOutlined />} onClick={() => { setLinkSearch({ ...emptyLinkSearch }); setLinkSearchApplied({ ...emptyLinkSearch }); setLinkPick(''); }}>重置</Button>
             </Space>
           </Col>
