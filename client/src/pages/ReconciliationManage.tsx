@@ -706,11 +706,19 @@ const ReconciliationManage: React.FC = () => {
   /** 采购商：确认入账（仅金额一致可确认；确认后采购账单对账结果→已对账） */
   const handleConfirmEntry = useCallback((r: ReconRecord) => {
     if (r.reconResult !== 'matched') {
-      Modal.warning({
+      // 拦截弹窗：「知道了」左侧提供「查看明细」直达明细弹窗（内含按供方账单入账/账单不符操作）
+      let inst: ReturnType<typeof Modal.warning> | null = null;
+      inst = Modal.warning({
         title: '无法确认入账',
         content: `当前对账结果为“${resultLabel[r.reconResult]}”，仅“金额一致”的单据可确认无误；存在差异时请在查看明细中使用“按供方账单入账”或标记“账单不符”。`,
         centered: true,
         width: 400,
+        footer: (
+          <div style={{ textAlign: 'right' }}>
+            <Button style={{ marginRight: 8 }} onClick={() => { inst?.destroy(); handleView(r); }}>查看明细</Button>
+            <Button type="primary" onClick={() => inst?.destroy()}>知道了</Button>
+          </div>
+        ),
       });
       return;
     }
@@ -733,7 +741,7 @@ const ReconciliationManage: React.FC = () => {
         message.success(`单据 ${r.docNo} 已完成对账，采购账单对账结果更新为"已对账"`);
       },
     });
-  }, [resultLabel, loadBills, saveBills, findBillIndex, operatorName, completeRecon]);
+  }, [resultLabel, loadBills, saveBills, findBillIndex, operatorName, completeRecon, handleView]);
 
   /** 采购商：账单不符 → 打开账目不符弹窗（原因选项+自定义+备注+图片） */
   const handleBillMismatch = useCallback((r: ReconRecord) => {
