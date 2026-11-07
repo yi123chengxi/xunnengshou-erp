@@ -3204,14 +3204,18 @@ const ModuleChildPage: React.FC = () => {
   const [billAddItems, setBillAddItems] = useState<any[]>([]);
   // 新建/编辑账单单据弹窗-表格显示字段控制（keys=列序、visible=显示；按租户持久化；勾选列与操作列恒显）
   const [billAddColConfig, setBillAddColConfig] = useState<{ keys: string[]; visible: string[] }>(() => {
-    const def = { keys: ['styleCode', 'productCode', 'quantity', 'unitPrice', 'amount'], visible: ['styleCode', 'productCode', 'quantity', 'unitPrice', 'amount'] };
+    const def = {
+      keys: ['styleCode', 'productCode', 'shortName', 'productType', 'color', 'spec', 'quantity', 'unitPrice', 'amount'],
+      visible: ['styleCode', 'productCode', 'shortName', 'productType', 'color', 'spec', 'quantity', 'unitPrice', 'amount'],
+    };
     try {
       const saved = localStorage.getItem(`billAddColConfig_${getDataOwner()}`);
       if (saved) {
         const p = JSON.parse(saved);
         if (Array.isArray(p?.keys) && Array.isArray(p?.visible) && p.keys.length) {
+          // 保留用户已保存的列序与显隐；新版本新增的字段（颜色/规格/产品种类/商品简称）自动补入并默认显示
           const keys = [...p.keys.filter((k: string) => def.keys.includes(k)), ...def.keys.filter(k => !p.keys.includes(k))];
-          const visible = p.visible.filter((k: string) => def.keys.includes(k));
+          const visible = [...p.visible.filter((k: string) => def.keys.includes(k)), ...def.visible.filter(k => !p.keys.includes(k))];
           if (keys.length && visible.length) return { keys, visible };
         }
       }
@@ -4488,7 +4492,11 @@ const ModuleChildPage: React.FC = () => {
     const valid = billAddItems.filter((it: any) => (it.styleCode || '').trim() || (it.productCode || '').trim() || (Number(it.quantity) || 0) > 0 || (Number(it.unitPrice) || 0) > 0);
     const totalQty = valid.reduce((s: number, it: any) => s + (Number(it.quantity) || 0), 0);
     const totalAmount = valid.reduce((s: number, it: any) => s + (Number(it.quantity) || 0) * (Number(it.unitPrice) || 0), 0);
-    const itemsOut = valid.map((it: any) => ({ styleCode: it.styleCode || '', productCode: it.productCode || '', quantity: Number(it.quantity) || 0, price: Number(it.unitPrice) || 0 }));
+    const itemsOut = valid.map((it: any) => ({
+      styleCode: it.styleCode || '', productCode: it.productCode || '',
+      shortName: it.shortName || '', productType: it.productType || '', color: it.color || '', spec: it.spec || '',
+      quantity: Number(it.quantity) || 0, price: Number(it.unitPrice) || 0,
+    }));
     const productDetail = valid.map((it: any) => `${it.productCode || it.styleCode || ''}×${Number(it.quantity) || 0}`).join('，');
     const outboundDate = billAddDate ? billAddDate.format('YYYY-MM-DD') : '';
     // 编辑模式：更新原记录
@@ -4548,7 +4556,7 @@ const ModuleChildPage: React.FC = () => {
       orderStatus: '',
       reconResult: '待对账',
       diffDesc: '',
-      items: valid.map((it: any) => ({ styleCode: it.styleCode || '', productCode: it.productCode || '', quantity: Number(it.quantity) || 0, price: Number(it.unitPrice) || 0 })),
+      items: itemsOut,
       image: billAddImage,
       _manual: true,
       billLog: appendBillLogEntry(undefined, '创建账单'),
@@ -8033,8 +8041,20 @@ const ModuleChildPage: React.FC = () => {
       setBillAddNo(record.outboundNo || '');
       setBillAddCustomer(record.customerName || '');
       setBillAddDate(record.outboundDate ? dayjs(record.outboundDate) : dayjs());
+      const master = loadProductMasterMap(getDataOwner());
       const its = Array.isArray(record.items)
-        ? record.items.map((it: any) => ({ styleCode: it.styleCode || '', productCode: it.productCode || '', quantity: Number(it.quantity) || 0, unitPrice: Number(it.price) || 0 }))
+        ? record.items.map((it: any) => {
+          // 存量明细常缺颜色/规格/简称：自身字段 → 商品主数据 → 商品编码解析 三级回退
+          const cs = resolveItemColorSpec(it, master);
+          const prod = master.get(String(it.productCode || ''));
+          return {
+            styleCode: it.styleCode || '', productCode: it.productCode || '',
+            shortName: it.shortName || cs.productName || '',
+            productType: it.productType || prod?.productType || '',
+            color: it.color || cs.color || '', spec: it.spec || cs.spec || '',
+            quantity: Number(it.quantity) || 0, unitPrice: Number(it.price ?? it.unitPrice) || 0,
+          };
+        })
         : [];
       setBillAddItems(its.length > 0 ? its : Array.from({ length: 5 }, () => ({ styleCode: '', productCode: '', quantity: 0, unitPrice: 0 })));
       setBillAddImage(record.image || '');
@@ -19897,7 +19917,7 @@ tr:nth-child(even) { background: #f5f9ff; }
         onOk={handleBillAddSave}
         okText={billAddEditKey ? '保存修改' : '保存单据'}
         cancelText="取消"
-        width={960}
+        width={1120}
         destroyOnClose
       >
         <Row gutter={12} style={{ marginBottom: 12 }}>
@@ -19916,12 +19936,20 @@ tr:nth-child(even) { background: #f5f9ff; }
                 const recs = loadBillAddReconOptions();
                 const rec = recs.find((r: any) => r.docNo === v);
                 if (!rec) return;
-                const rows = (rec.details || []).map((d: any) => ({
-                  styleCode: d.styleCode || String(d.itemNo || '').split('-')[0],
-                  productCode: d.itemNo || '',
-                  quantity: Number(d.theirQty) || 0,
-                  unitPrice: Number(d.theirPrice) || 0,
-                }));
+                const master = loadProductMasterMap(getDataOwner());
+                const rows = (rec.details || []).map((d: any) => {
+                  const cs = resolveItemColorSpec({ productCode: d.itemNo, color: d.color, spec: d.spec }, master);
+                  const prod = master.get(String(d.itemNo || ''));
+                  return {
+                    styleCode: d.styleCode || String(d.itemNo || '').split('-')[0],
+                    productCode: d.itemNo || '',
+                    shortName: prod?.shortName || prod?.name || cs.productName || '',
+                    productType: prod?.productType || '',
+                    color: cs.color || '', spec: cs.spec || '',
+                    quantity: Number(d.theirQty) || 0,
+                    unitPrice: Number(d.theirPrice) || 0,
+                  };
+                });
                 if (rows.length > 0) {
                   setBillAddItems(rows);
                   setBillAddCheckedRows(new Set(rows.map((_: any, i: number) => i)));
@@ -19962,6 +19990,22 @@ tr:nth-child(even) { background: #f5f9ff; }
               productCode: {
                 title: '商品编码', dataIndex: 'productCode', width: 170,
                 render: (_: any, r: any) => <Input size="small" value={r.productCode} onChange={e => setBillAddItems(prev => prev.map((row, i) => i === r._i ? { ...row, productCode: e.target.value } : row))} />,
+              },
+              shortName: {
+                title: '商品简称', dataIndex: 'shortName', width: 100,
+                render: (_: any, r: any) => <Input size="small" value={r.shortName || ''} onChange={e => setBillAddItems(prev => prev.map((row, i) => i === r._i ? { ...row, shortName: e.target.value } : row))} />,
+              },
+              productType: {
+                title: '产品种类', dataIndex: 'productType', width: 80,
+                render: (_: any, r: any) => <Input size="small" value={r.productType || ''} onChange={e => setBillAddItems(prev => prev.map((row, i) => i === r._i ? { ...row, productType: e.target.value } : row))} />,
+              },
+              color: {
+                title: '颜色', dataIndex: 'color', width: 70,
+                render: (_: any, r: any) => <Input size="small" value={r.color || ''} onChange={e => setBillAddItems(prev => prev.map((row, i) => i === r._i ? { ...row, color: e.target.value } : row))} />,
+              },
+              spec: {
+                title: '规格', dataIndex: 'spec', width: 70,
+                render: (_: any, r: any) => <Input size="small" value={r.spec || ''} onChange={e => setBillAddItems(prev => prev.map((row, i) => i === r._i ? { ...row, spec: e.target.value } : row))} />,
               },
               quantity: {
                 title: '数量', dataIndex: 'quantity', width: 100,
@@ -20024,6 +20068,10 @@ tr:nth-child(even) { background: #f5f9ff; }
               const allCols = [
                 { key: 'styleCode', title: '款式编号' },
                 { key: 'productCode', title: '商品编码' },
+                { key: 'shortName', title: '商品简称' },
+                { key: 'productType', title: '产品种类' },
+                { key: 'color', title: '颜色' },
+                { key: 'spec', title: '规格' },
                 { key: 'quantity', title: '数量' },
                 { key: 'unitPrice', title: '单价' },
                 { key: 'amount', title: '金额' },
@@ -20050,7 +20098,7 @@ tr:nth-child(even) { background: #f5f9ff; }
                     </div>
                   ))}
                   <div style={{ marginTop: 6, borderTop: '1px solid #f0f0f0', paddingTop: 6 }}>
-                    <Button size="small" onClick={() => saveBillAddColConfig({ keys: ['styleCode', 'productCode', 'quantity', 'unitPrice', 'amount'], visible: ['styleCode', 'productCode', 'quantity', 'unitPrice', 'amount'] })}>恢复默认</Button>
+                    <Button size="small" onClick={() => saveBillAddColConfig({ keys: ['styleCode', 'productCode', 'shortName', 'productType', 'color', 'spec', 'quantity', 'unitPrice', 'amount'], visible: ['styleCode', 'productCode', 'shortName', 'productType', 'color', 'spec', 'quantity', 'unitPrice', 'amount'] })}>恢复默认</Button>
                   </div>
                 </div>
               );
@@ -21079,8 +21127,17 @@ tr:nth-child(even) { background: #f5f9ff; }
               };
             });
             if (productSelectTarget === 'billAdd') {
-              // 账单明细新增弹窗：填入明细行（优先填空行）
-              const mapped = selected.map((p: any) => ({ styleCode: p.styleCode || '', productCode: p.productCode || '', quantity: 1, unitPrice: Number(p.suggestedPrice) || 0 }));
+              // 账单明细新增弹窗：填入明细行（优先填空行），同时带出商品简称/产品种类/颜色/规格
+              const mapped = selected.map((p: any) => {
+                const cs = resolveItemColorSpec(p);
+                return {
+                  styleCode: p.styleCode || '', productCode: p.productCode || '',
+                  shortName: p.shortName || p.name || cs.productName || '',
+                  productType: p.productType || '',
+                  color: cs.color || '', spec: cs.spec || '',
+                  quantity: 1, unitPrice: Number(p.suggestedPrice) || 0,
+                };
+              });
               setBillAddItems(prev => {
                 const next = prev.map((r: any) => ({ ...r }));
                 mapped.forEach((m: any) => {
@@ -21690,8 +21747,19 @@ tr:nth-child(even) { background: #f5f9ff; }
             }
             if (newItems.length === 0) { message.warning('请输入有效的商品数据'); return; }
             if (manualAddTarget === 'billAdd') {
-              // 账单明细新建单据：映射为明细行结构（款式编码/商品编码/数量/单价）追加
-              setBillAddItems(prev => [...prev, ...newItems.map((it: any) => ({ styleCode: '', productCode: it.productCode, quantity: it.quantity, unitPrice: it.price }))]);
+              // 账单明细新建单据：映射为明细行结构（款式编码/商品编码/数量/单价），并从商品主数据补全简称/种类/颜色/规格
+              const master = loadProductMasterMap(getDataOwner());
+              setBillAddItems(prev => [...prev, ...newItems.map((it: any) => {
+                const prod = master.get(String(it.productCode || ''));
+                const cs = resolveItemColorSpec({ productCode: it.productCode }, master);
+                return {
+                  styleCode: '', productCode: it.productCode,
+                  shortName: prod?.shortName || prod?.name || cs.productName || '',
+                  productType: prod?.productType || '',
+                  color: cs.color || '', spec: cs.spec || '',
+                  quantity: it.quantity, unitPrice: it.price,
+                };
+              })]);
             } else {
               setOrderEditItems(prev => mergeItemsByCode([...prev, ...newItems]));
             }
