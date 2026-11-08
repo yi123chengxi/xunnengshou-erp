@@ -134,7 +134,7 @@ import { buildOrderOccupiedMap, syncOrderReserved } from '../utils/orderOccupied
 import { isAccountingMode, writeAutoEntries, removeAutoEntries, loadSubjectOptions, subjectFilterOption } from '../utils/accountingBridge';
 import { isInstallmentOrder, depositAmountOf, sumPayRecords, mergePayRecords, payProgressText, postInstallmentEffects, postShipRevenueEntry, installmentStatusOf } from '../utils/receiptWrite';
 import type { PayRecord } from '../utils/receiptWrite';
-import { compressImageFile } from '../utils/imageCompress';
+import { compressImageFile, recompressDataUrl, OVERSIZE_DATAURL_CHARS } from '../utils/imageCompress';
 
 const { Title, Text, Paragraph } = Typography;
 const { RangePicker } = DatePicker;
@@ -2809,6 +2809,8 @@ const ModuleChildPage: React.FC = () => {
           purchaserReconPerson: prev?.purchaserReconPerson || '',
           confirmTime: prev?.confirmTime || '',
           items: rowItems,
+          // 备注图片仅存于账单行自身（非订单字段），重建时必须从旧行带回，否则刷新后丢失
+          image: prev?.image || '',
         };
       })];
   }, [getDataOwner]);
@@ -3300,10 +3302,14 @@ const ModuleChildPage: React.FC = () => {
   });
 
   // 账单明细新增弹窗：图片处理
+  // 单据备案图无透明需求，按 1280px + JPEG 强压并限制体积（约 100~300KB/张），
+  // 否则 base64 写入 localStorage 后按 UTF-16 双字节计，单图可占用数 MB
   const handleBillAddImageFile = useCallback((file: File) => {
     if (!file.type.startsWith('image/')) { message.error('请选择图片文件'); return; }
-    if (file.size > 2 * 1024 * 1024) { message.error('图片不能超过 2MB'); return; }
-    compressImageFile(file).then(dataUrl => setBillAddImage(dataUrl)).catch(() => message.error('图片处理失败'));
+    if (file.size > 10 * 1024 * 1024) { message.error('图片不能超过 10MB'); return; }
+    compressImageFile(file, { maxEdge: 1280, maxChars: 500000, forceJpeg: true })
+      .then(dataUrl => setBillAddImage(dataUrl))
+      .catch(() => message.error('图片处理失败'));
   }, []);
 
   useEffect(() => {
@@ -3341,10 +3347,18 @@ const ModuleChildPage: React.FC = () => {
   const captureBillAddPhoto = useCallback(() => {
     const v = billAddVideoRef.current;
     if (!v || !v.videoWidth) { message.warning('摄像头未就绪'); return; }
+    // 摄像头单帧按 1280px + JPEG 落图：高清摄像头 PNG 单帧可达 1~2MB，是账单图片占空间的主要来源之一
+    const scale = Math.min(1, 1280 / Math.max(v.videoWidth, v.videoHeight));
     const canvas = document.createElement('canvas');
-    canvas.width = v.videoWidth; canvas.height = v.videoHeight;
-    canvas.getContext('2d')?.drawImage(v, 0, 0);
-    setBillAddImage(canvas.toDataURL('image/png'));
+    canvas.width = Math.max(1, Math.round(v.videoWidth * scale));
+    canvas.height = Math.max(1, Math.round(v.videoHeight * scale));
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
+    }
+    setBillAddImage(canvas.toDataURL('image/jpeg', 0.85));
     closeBillAddCamera();
     message.success('已拍摄图片');
   }, [closeBillAddCamera]);
@@ -5947,6 +5961,44 @@ const ModuleChildPage: React.FC = () => {
       }
     } catch { /* ignore */ }
   }, []);
+
+  // 账单明细：历史备注图片自动瘦身
+  // 早期上传的 PNG 单据图未做有效压缩，单张 base64 可达数 MB（localStorage 按 UTF-16 双字节计），
+  // 进页面后后台按 1280px JPEG 回收一次；已处理过的记录记入 ref，不重复压缩
+  const billImageSlimRef = React.useRef<Set<string>>(new Set());
+  React.useEffect(() => {
+    if (moduleKey !== 'customer' || childKey !== 'bill-detail') return;
+    if (dataSource.length === 0) return;
+    const oversized = dataSource.filter((r: any) => {
+      const k = String(r?.key || r?.id || '');
+      return !!k && typeof r?.image === 'string' && r.image.length > OVERSIZE_DATAURL_CHARS && !billImageSlimRef.current.has(k);
+    });
+    if (oversized.length === 0) return;
+    oversized.forEach((r: any) => billImageSlimRef.current.add(String(r.key || r.id)));
+    (async () => {
+      const patch = new Map<string, string>();
+      let savedChars = 0;
+      for (const rec of oversized) {
+        const key = String(rec.key || rec.id || '');
+        try {
+          const out = await recompressDataUrl(rec.image, 1280, 0.82, 500000);
+          if (out && out.length < rec.image.length) {
+            patch.set(key, out);
+            savedChars += rec.image.length - out.length;
+          }
+        } catch { /* 单张失败跳过 */ }
+      }
+      if (patch.size === 0) return;
+      const next = dataSourceRef.current.map((r: any) => {
+        const img = patch.get(String(r.key || r.id || ''));
+        return img ? { ...r, image: img } : r;
+      });
+      setDataSource(next);
+      pushRecordToPage(sharedDataKey, next);
+      // localStorage 按 UTF-16 双字节计，节省的字符数需乘 2 才是实际释放空间
+      message.success(`已自动优化 ${patch.size} 张历史备注图片，释放约 ${((savedChars * 2) / 1024 / 1024).toFixed(1)} MB 本地空间`);
+    })();
+  }, [moduleKey, childKey, dataSource, sharedDataKey, pushRecordToPage]);
 
   // 订单标签弹窗：是否手工订单（手工建单标签不可删除）
   const isManualTagOrder = useCallback((r: any) => r?.payMethod === '手工单' || r?.orderSource === '手工新增' || String(r?.orderTags || '').includes('手工建单') || String(r?.orderTag || '').includes('手工建单'), []);
