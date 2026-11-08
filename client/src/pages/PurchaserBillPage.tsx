@@ -44,6 +44,25 @@ const matchPurchaserRecon = (list: any[], b: { key: string; outboundNo: string }
   x.source === 'bill' && x.initiator === 'purchaser' &&
   ((!!x.orderNo && x.orderNo === b.key) || (!!x.matchedBillKey && x.matchedBillKey === b.key) || (!!b.outboundNo && String(x.docNo || '').trim() === String(b.outboundNo).trim())));
 
+/** 账单创建时间（毫秒）：createdAt 优先（兼容 'YYYY/M/D HH:mm:ss' 与 ISO），缺失时回退 key 内时间戳、账单日期；用于列表按最新创建排前 */
+const billCreatedMs = (b: any): number => {
+  const raw = String(b?.createdAt || '');
+  if (raw) {
+    const parsed = Date.parse(raw);
+    if (!Number.isNaN(parsed)) return parsed;
+    const m = raw.match(/(\d{4})[/-](\d{1,2})[/-](\d{1,2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
+    if (m) {
+      const t = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4] || 0), Number(m[5] || 0), Number(m[6] || 0)).getTime();
+      if (!Number.isNaN(t)) return t;
+    }
+  }
+  const km = String(b?.key || '').match(/(\d{13})/);
+  if (km) return Number(km[1]);
+  const dm = String(b?.date || '').match(/(\d{4})[/-](\d{1,2})[/-](\d{1,2})/);
+  if (dm) return new Date(Number(dm[1]), Number(dm[2]) - 1, Number(dm[3])).getTime();
+  return 0;
+};
+
 // 默认5行空明细
 const emptyRows = (): BillItem[] => Array.from({ length: 5 }, () => ({ styleCode: '', productCode: '', color: '', spec: '', quantity: 0, unitPrice: 0, amount: 0, productType: '' }));
 
@@ -845,7 +864,8 @@ const PurchaserBillPage: React.FC = () => {
   };
   const openDetail = (r: BillRecord) => { setDetailBill(r); setDetailVisible(true); };
 
-  // 搜索过滤后的账单列表（点击查询后按已应用的搜索条件过滤，最新账单排在最上面）
+  // 搜索过滤后的账单列表（点击查询后按已应用的搜索条件过滤，最新创建的账单排在最上面）
+  // 若仅按账单日期排序，同一天的多条会受存储/同步顺序影响，刚新增的不一定在首位，故以创建时间倒序为主
   const filteredBills = useMemo(() => bills.filter(b => {
     const s = pSearchApplied;
     if (s.no.trim() && !String(b.outboundNo || '').includes(s.no.trim())) return false;
@@ -864,7 +884,7 @@ const PurchaserBillPage: React.FC = () => {
     if (s.qty.trim() && !String(Number(b.totalQty) || 0).includes(s.qty.trim())) return false;
     if (s.amount.trim() && !String(Number(b.totalAmount) || 0).includes(s.amount.trim()) && !(Number(b.totalAmount) || 0).toFixed(2).includes(s.amount.trim())) return false;
     return true;
-  }).sort((a, b) => String(b.date || b.createdAt || '').localeCompare(String(a.date || a.createdAt || ''))), [bills, pSearchApplied]);
+  }).sort((a, b) => billCreatedMs(b) - billCreatedMs(a)), [bills, pSearchApplied]);
 
   // 导出明细：按商品编码（逐行）/ 按款式编码（款式汇总，单价取平均价）
   const handleBillExport = useCallback((mode: 'product' | 'style') => {
