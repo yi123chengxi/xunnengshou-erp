@@ -76,6 +76,7 @@ const PaymentRequestPage = React.lazy(() => import('./pages/PaymentRequestPage')
 const InvoiceApplyPage = React.lazy(() => import('./pages/InvoiceApplyPage'));
 const GeneralLedgerPage = React.lazy(() => import('./pages/GeneralLedgerPage'));
 const SimpleLedgerPage = React.lazy(() => import('./pages/SimpleLedgerPage'));
+const BossDashboard = React.lazy(() => import('./pages/BossDashboard'));
 const PurchaseReceivingPage = React.lazy(() => import('./pages/inventory/PurchaseReceivingPage'));
 const InventoryCheckPage = React.lazy(() => import('./pages/inventory/InventoryCheckPage'));
 const InventoryOutboundPage = React.lazy(() => import('./pages/inventory/InventoryOutboundPage'));
@@ -227,6 +228,8 @@ function App() {
           {/* 总账薄 */}
           <Route path="finance/general-ledger" element={<GeneralLedgerPage />} />
           <Route path="finance/simple-ledger" element={<SimpleLedgerPage />} />
+          {/* 老板看板（经营核心指标汇总） */}
+          <Route path="finance/boss-dashboard" element={<BossDashboard />} />
           {/* 人事管理 */}
           <Route path="hr-manage/attendance" element={<AttendancePage />} />
           <Route path="hr-manage/salary" element={<SalaryPage />} />
@@ -295,6 +298,7 @@ function App() {
           <Route path="finance/daily-bookkeeping-stats" element={<BookkeepingStatsPage />} />
           <Route path="finance/general-ledger" element={<GeneralLedgerPage />} />
           <Route path="finance/simple-ledger" element={<SimpleLedgerPage />} />
+          <Route path="finance/boss-dashboard" element={<BossDashboard />} />
           <Route path="finance/:childKey" element={<ModuleChildPage />} />
           {/* 对账管理（菜单已迁至供应商菜单），旧财务路径重定向 */}
           <Route path="suppliers/reconciliation" element={<ReconciliationManage />} />

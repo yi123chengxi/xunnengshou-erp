@@ -128,6 +128,14 @@ export const PERM_V16_DEFAULT_KEYS = [
   'hr-manage/resigned',
 ];
 
+// 权限数据版本哨兵 V17：含此标记的权限数组为「包含财务管理-老板看板菜单」的新版数据；
+// 旧版数据（无此标记）中缺失的老板看板键视为默认放行（供应商+采购商双平台）
+export const PERM_V17 = '__v17';
+export const PERM_V17_DEFAULT_KEYS = [
+  'finance/boss-dashboard',
+  'purchaser/finance/boss-dashboard',
+];
+
 // 电商常用菜单键迁移映射（旧键 → 新键），用于加载旧版权限数据时自动转换
 export const ECOM_KEY_MIGRATION: Record<string, string> = {
   'newstyle/progress': 'ecommerce/progress',
@@ -173,6 +181,7 @@ export const isPermAllowed = (set: Set<string> | null, key: string): boolean => 
   if (!set.has(PERM_V14) && PERM_V14_DEFAULT_KEYS.includes(key)) return true;
   if (!set.has(PERM_V15) && PERM_V15_DEFAULT_KEYS.includes(key)) return true;
   if (!set.has(PERM_V16) && PERM_V16_DEFAULT_KEYS.includes(key)) return true;
+  if (!set.has(PERM_V17) && PERM_V17_DEFAULT_KEYS.includes(key)) return true;
   // 电商常用键迁移兼容：旧版权限数据含旧键时，新键也放行
   const reverseMap: Record<string, string> = {};
   Object.entries(ECOM_KEY_MIGRATION).forEach(([oldK, newK]) => { reverseMap[newK] = oldK; });

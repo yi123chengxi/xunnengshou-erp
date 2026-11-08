@@ -102,6 +102,7 @@ const purchaserMenus = [
     label: '财务管理',
     icon: <DollarOutlined />,
     children: [
+      { key: 'boss-dashboard', label: '老板看板' },
       { key: 'bank-account', label: '银行账户' },
       { key: 'reimbursement', label: '报销' },
       { key: 'payment-request', label: '收/付申请' },

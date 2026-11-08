@@ -74,6 +74,7 @@ export const PERM_MENUS: Record<PermScope, PermMenuGroup[]> = {
     },
     {
       key: 'finance', label: '财务管理', items: [
+        { key: 'finance/boss-dashboard', label: '老板看板' },
         { key: 'finance/bank-account', label: '银行账户' },
         { key: 'finance/reimbursement', label: '报销' },
         { key: 'finance/payment-request', label: '收/付申请' },
@@ -149,6 +150,7 @@ export const PERM_MENUS: Record<PermScope, PermMenuGroup[]> = {
     },
     {
       key: 'finance', label: '财务管理', items: [
+        { key: 'purchaser/finance/boss-dashboard', label: '老板看板' },
         { key: 'purchaser/finance/bank-account', label: '银行账户' },
         { key: 'purchaser/finance/reimbursement', label: '报销' },
         { key: 'purchaser/finance/payment-request', label: '收/付申请' },
