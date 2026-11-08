@@ -3072,6 +3072,7 @@ const ModuleChildPage: React.FC = () => {
       customerName: record.customerName || '',
       customerUsername,
       initiator: 'supplier',
+      supplierReconPerson: getCurrentUserDisplayName(), // 供方发起/对账人姓名（采购商侧账单“供应商对账人”显示源）
       ourAmount: Number(record.totalAmount) || 0,
       theirAmount: 0,
       reconResult: 'pending',

@@ -95,6 +95,34 @@ export function healReconTerminalLinks(): void {
     }
     // 2) 存活 pending 记录 + 任一侧已终态 → delisted 墓碑（服务端合并保护墓碑不被复活）
     const recs = recsAll;
+    // 3) 采购商账单修复：供应商字段误写为本方公司名/简称 → 按对账记录纠正；
+    //    供应商对账人为空或为公司名 → 人名规则（记录供方发起人 → 供应商法人 → 主账号姓名）
+    try {
+      const users: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+      billKeys.forEach((bk, bi) => {
+        const owner = bk.slice('purchaser_bills_'.length);
+        const me = users.find((u: any) => u.username === owner);
+        const ownNames = [me?.companyName, me?.companyShortName].filter(Boolean) as string[];
+        let ch = false;
+        const list = billsAll[bi].map((b: any) => {
+          const rec = recsAll.find((x: any) => x && x.docNo &&
+            ((b.outboundNo && String(x.docNo).trim() === String(b.outboundNo).trim()) || (x.matchedBillKey && x.matchedBillKey === b.key)));
+          const supUser = users.find((u: any) => (rec?.supplierUsername && u.username === rec.supplierUsername) || (rec?.supplierName && u.companyName === rec.supplierName));
+          const person = rec?.supplierReconPerson || supUser?.legalPerson || supUser?.contactPerson || '';
+          let nb = b;
+          if (rec && supUser && (!nb.supplier || ownNames.includes(String(nb.supplier)))) {
+            nb = { ...nb, supplier: supUser.companyName };
+            ch = true;
+          }
+          if (person && (!nb.supplierReconciler || nb.supplierReconciler === supUser?.companyName || nb.supplierReconciler === rec?.supplierName)) {
+            nb = { ...nb, supplierReconciler: person };
+            ch = true;
+          }
+          return nb;
+        });
+        if (ch) { try { localStorage.setItem(bk, JSON.stringify(list)); } catch { /* ignore */ } }
+      });
+    } catch { /* ignore */ }
     if (recs.length === 0) return;
     const today = new Date().toISOString().slice(0, 10);
     let chR = false;

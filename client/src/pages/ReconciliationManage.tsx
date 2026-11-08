@@ -209,6 +209,17 @@ const ReconciliationManage: React.FC = () => {
     return isSub ? (localStorage.getItem('parentAccount') || u) : u;
   }, []);
 
+  // 供应商对账人取值规则：优先记录上供方发起/对账人姓名；系统自动发起或存量缺失时回退供应商法人→主账号姓名
+  const resolveSupplierPerson = useCallback((r: any): string => {
+    if (r?.supplierReconPerson) return String(r.supplierReconPerson);
+    try {
+      const users = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+      const u = users.find((x: any) => (r?.supplierUsername && x.username === r.supplierUsername) || (r?.supplierName && x.companyName === r.supplierName));
+      if (u) return u.legalPerson || u.contactPerson || '';
+    } catch { /* ignore */ }
+    return '';
+  }, []);
+
   // 实时同步开关（按平台+账号存储）：关闭时本方为响应方的对账记录仅本地保留，
   // 待本方对账完成或提交账目不符反馈后再同步给对方
   const realTimeSyncKey = `recon_realtime_sync_${isPurchaser ? 'purchaser' : 'supplier'}_${getOwner()}`;
@@ -313,6 +324,9 @@ const ReconciliationManage: React.FC = () => {
             }
             if (purReconPerson) update.purchaserReconciler = purReconPerson;
             if (supReconPerson) update.supplierReconciler = supReconPerson;
+            // 供应商对账人人名规则兜底：空或为公司名时替换为供方发起人/法人→主账号姓名
+            const supPerson = resolveSupplierPerson(r);
+            if (supPerson && (!bills[idx].supplierReconciler || bills[idx].supplierReconciler === r.supplierName)) update.supplierReconciler = supPerson;
             update.billLog = appendBillLogEntry(bills[idx].billLog, logAction, operatorName, logDetail);
             bills[idx] = { ...bills[idx], ...update };
             localStorage.setItem(key, JSON.stringify(bills));
@@ -338,7 +352,7 @@ const ReconciliationManage: React.FC = () => {
       supPerson: supReconPerson,
       purPerson: purReconPerson,
     } as ReconRecord);
-  }, []);
+  }, [resolveSupplierPerson]);
 
   // ==================== 对方反馈 / 账单不符弹窗 / 明细显示字段 状态 ====================
   const mySide: 'supplier' | 'purchaser' = isPurchaser ? 'purchaser' : 'supplier';
@@ -894,7 +908,17 @@ const ReconciliationManage: React.FC = () => {
     const bills = loadBills();
     const idx = findBillIndex(bills, r);
     if (idx >= 0) {
-      bills[idx] = { ...bills[idx], items: supItems, totalQty, totalAmount: r.ourAmount, reconcileResult: '按供方入账', diffNote: '按供方入账', purchaserReconciler: operatorName };
+      const curSupRec = bills[idx].supplierReconciler || '';
+      bills[idx] = {
+        ...bills[idx],
+        items: supItems,
+        totalQty,
+        totalAmount: r.ourAmount,
+        reconcileResult: '按供方入账',
+        diffNote: '按供方入账',
+        purchaserReconciler: operatorName,
+        supplierReconciler: (curSupRec && curSupRec !== r.supplierName) ? curSupRec : (resolveSupplierPerson(r) || curSupRec),
+      };
       saveBills(bills);
       completeRecon(r, 'entryBySupplier', operatorName);
       message.success(`已按供方账单入账：采购账单 ${bills[idx].outboundNo || r.docNo} 的商品明细与金额已更新`);
@@ -903,7 +927,7 @@ const ReconciliationManage: React.FC = () => {
         key: `bill-recon-${Date.now()}`,
         outboundNo: r.docNo,
         prefix: '',
-        supplier: r.counterparty,
+        supplier: r.supplierName || r.counterparty,
         date: new Date().toISOString().slice(0, 10),
         items: supItems,
         images: [],
@@ -913,7 +937,7 @@ const ReconciliationManage: React.FC = () => {
         totalAmount: r.ourAmount,
         reconcileResult: '按供方入账',
         diffNote: '',
-        supplierReconciler: r.supplierName || r.counterparty,
+        supplierReconciler: resolveSupplierPerson(r),
         purchaserReconciler: operatorName,
         supplierImages: [],
       };
@@ -923,7 +947,7 @@ const ReconciliationManage: React.FC = () => {
       completeRecon(r, 'entryBySupplier', operatorName);
       message.success(`已按供方账单入账：采购账单 ${r.docNo} 已新增`);
     }
-  }, [loadBills, saveBills, findBillIndex, operatorName, completeRecon]);
+  }, [loadBills, saveBills, findBillIndex, operatorName, completeRecon, resolveSupplierPerson]);
 
   /** 录入新单据 */
   const handleEntry = useCallback((type: ReconType) => {
