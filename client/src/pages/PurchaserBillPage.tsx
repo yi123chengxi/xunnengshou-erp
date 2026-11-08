@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import {
   Card, Table, Button, Space, Tag, message, Typography, Modal, Input, InputNumber, DatePicker,
   Row, Col, Image, Popover, Empty, Upload, Select, Descriptions, Checkbox, AutoComplete, Alert, Dropdown,
+  Radio, Tooltip,
 } from 'antd';
 import {
   PlusOutlined, FileTextOutlined, PictureOutlined, DeleteOutlined, TeamOutlined, ReloadOutlined,
@@ -272,6 +273,8 @@ const PurchaserBillPage: React.FC = () => {
   // 详情弹窗
   const [detailVisible, setDetailVisible] = useState(false);
   const [detailBill, setDetailBill] = useState<BillRecord | null>(null);
+  // 详情弹窗货品明细视图：按商品编码（默认明细）/ 按款式编码（汇总）
+  const [detailItemView, setDetailItemView] = useState<'productCode' | 'styleCode'>('productCode');
   // 货品明细弹窗（点击商品编码单元格打开）
   const [billItemDetailVisible, setBillItemDetailVisible] = useState(false);
   const [billItemDetail, setBillItemDetail] = useState<BillRecord | null>(null);
@@ -862,7 +865,7 @@ const PurchaserBillPage: React.FC = () => {
     refreshSupplierPurchase(getDataOwner(), Array.from(new Set([oldRec?.supplier, eSupplier].filter((s): s is string => !!s))));
     reload(); setEditVisible(false); setHighlightCodes(new Set()); message.success('采购账单已更新');
   };
-  const openDetail = (r: BillRecord) => { setDetailBill(r); setDetailVisible(true); };
+  const openDetail = (r: BillRecord) => { setDetailBill(r); setDetailItemView('productCode'); setDetailVisible(true); };
 
   // 搜索过滤后的账单列表（点击查询后按已应用的搜索条件过滤，最新创建的账单排在最上面）
   // 若仅按账单日期排序，同一天的多条会受存储/同步顺序影响，刚新增的不一定在首位，故以创建时间倒序为主
@@ -1462,15 +1465,57 @@ const PurchaserBillPage: React.FC = () => {
               <Descriptions.Item label="总数量">{detailBill.totalQty}</Descriptions.Item>
               <Descriptions.Item label="采购金额"><Text style={{ color: '#f5222d' }}>¥{Number(detailBill.totalAmount || 0).toFixed(2)}</Text></Descriptions.Item>
             </Descriptions>
-            <Table size="small" rowKey={(_, i) => String(i)} pagination={false} bordered dataSource={detailBill.items}
-              columns={[
-                { title: <div style={{ textAlign: 'center' }}>款式编号</div>, dataIndex: 'styleCode', key: 's', align: 'center' as const },
-                { title: <div style={{ textAlign: 'center' }}>商品编码</div>, dataIndex: 'productCode', key: 'p', align: 'center' as const },
-                { title: <div style={{ textAlign: 'center' }}>产品种类</div>, dataIndex: 'productType', key: 'pt', align: 'center' as const, render: (v: string) => v ? <Tag color={v === '原材料' ? 'orange' : 'blue'}>{v}</Tag> : '-' },
-                { title: <div style={{ textAlign: 'center' }}>数量</div>, dataIndex: 'quantity', key: 'q', align: 'center' as const },
-                { title: <div style={{ textAlign: 'center' }}>单价</div>, dataIndex: 'unitPrice', key: 'u', align: 'center' as const },
-                { title: <div style={{ textAlign: 'center' }}>金额</div>, dataIndex: 'amount', key: 'a', align: 'center' as const, render: (v: any) => <Text style={{ color: '#f5222d' }}>{Number(v || 0).toFixed(2)}</Text> },
-              ] as any} />
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+              <Radio.Group size="small" value={detailItemView} onChange={e => setDetailItemView(e.target.value)} optionType="button" buttonStyle="solid">
+                <Radio.Button value="productCode">按商品编码</Radio.Button>
+                <Radio.Button value="styleCode">按款式编码</Radio.Button>
+              </Radio.Group>
+            </div>
+            {detailItemView === 'productCode' ? (
+              <Table size="small" rowKey={(_, i) => String(i)} pagination={false} bordered dataSource={detailBill.items}
+                columns={[
+                  { title: <div style={{ textAlign: 'center' }}>款式编号</div>, dataIndex: 'styleCode', key: 's', align: 'center' as const },
+                  { title: <div style={{ textAlign: 'center' }}>商品编码</div>, dataIndex: 'productCode', key: 'p', align: 'center' as const },
+                  { title: <div style={{ textAlign: 'center' }}>产品种类</div>, dataIndex: 'productType', key: 'pt', align: 'center' as const, render: (v: string) => v ? <Tag color={v === '原材料' ? 'orange' : 'blue'}>{v}</Tag> : '-' },
+                  { title: <div style={{ textAlign: 'center' }}>数量</div>, dataIndex: 'quantity', key: 'q', align: 'center' as const },
+                  { title: <div style={{ textAlign: 'center' }}>单价</div>, dataIndex: 'unitPrice', key: 'u', align: 'center' as const },
+                  { title: <div style={{ textAlign: 'center' }}>金额</div>, dataIndex: 'amount', key: 'a', align: 'center' as const, render: (v: any) => <Text style={{ color: '#f5222d' }}>{Number(v || 0).toFixed(2)}</Text> },
+                ] as any} />
+            ) : (() => {
+              // 按款式编码汇总：数量/金额求和，单价=金额/数量（平均价），并列出该款式包含的商品编码
+              const styleOf = (it: any) => String(it?.styleCode || String(it?.productCode || '').split('-')[0] || '未知款式');
+              const grouped = new Map<string, { styleCode: string; quantity: number; amount: number; codes: string[] }>();
+              (detailBill.items || []).forEach((it: any) => {
+                const sc = styleOf(it);
+                const qty = Number(it.quantity) || 0;
+                const amt = Number(it.amount) || Math.round(qty * (Number(it.unitPrice) || 0) * 100) / 100;
+                const cur = grouped.get(sc);
+                if (cur) {
+                  cur.quantity += qty;
+                  cur.amount += amt;
+                  if (it.productCode && !cur.codes.includes(String(it.productCode))) cur.codes.push(String(it.productCode));
+                } else {
+                  grouped.set(sc, { styleCode: sc, quantity: qty, amount: amt, codes: it.productCode ? [String(it.productCode)] : [] });
+                }
+              });
+              const styleRows = Array.from(grouped.values()).map((g, i) => ({
+                ...g,
+                key: `style-${i}`,
+                price: g.quantity > 0 ? Math.round((g.amount / g.quantity) * 100) / 100 : 0,
+              }));
+              return (
+                <Table size="small" rowKey="key" pagination={false} bordered dataSource={styleRows}
+                  columns={[
+                    { title: <div style={{ textAlign: 'center' }}>款式编码</div>, dataIndex: 'styleCode', key: 'sc', align: 'center' as const },
+                    { title: <div style={{ textAlign: 'center' }}>包含商品</div>, dataIndex: 'codes', key: 'codes', align: 'center' as const, render: (codes: string[]) => (
+                      <Tooltip title={codes.join('、')}><Text style={{ fontSize: 12 }}>{codes.length > 2 ? `${codes.slice(0, 2).join('、')}等${codes.length}项` : codes.join('、')}</Text></Tooltip>
+                    ) },
+                    { title: <div style={{ textAlign: 'center' }}>数量</div>, dataIndex: 'quantity', key: 'q', align: 'center' as const },
+                    { title: <div style={{ textAlign: 'center' }}>单价</div>, dataIndex: 'price', key: 'u', align: 'center' as const, render: (v: number) => Number(v || 0).toFixed(2) },
+                    { title: <div style={{ textAlign: 'center' }}>金额</div>, dataIndex: 'amount', key: 'a', align: 'center' as const, render: (v: number) => <Text style={{ color: '#f5222d' }}>{Number(v || 0).toFixed(2)}</Text> },
+                  ] as any} />
+              );
+            })()}
             {/* 对账明细对比：当账单已关联对账记录时显示本方/对方商品数量、单价、金额对比 */}
             {(() => {
               const recon = reconRecords.find((r: any) =>
