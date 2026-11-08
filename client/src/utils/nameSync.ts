@@ -44,12 +44,43 @@ const SWEEP_PREFIXES = [
 ];
 const SWEEP_EXACT = ['recon_records'];
 
-/** 全量名称同步修复：改名链改写 + 账号名快照修正 + 关联账号信息刷新 */
-export const repairCounterpartyNames = (): void => {
+/**
+ * 解析某公司名称/账号的最新公司名称（注册账号表为唯一真源，其次按改名链归一取链尾）。
+ * 用于列表展示：即使本地镜像/账单快照仍是旧名，也能显示改名后的公司全称。
+ */
+export const resolveLatestCompanyName = (name: string, username?: string): string => {
+  const n = String(name || '').trim();
+  const un = String(username || '').trim();
+  let users: any[] = [];
+  try { users = JSON.parse(localStorage.getItem('registeredUsers') || '[]'); } catch { users = []; }
+  if (!Array.isArray(users)) users = [];
+  let u = un ? users.find(x => x && x.username === un) : null;
+  if (!u && n) {
+    u = users.find(x => x && ((x.companyName || '').trim() === n || (x.companyShortName || '').trim() === n || (x.companyNo || '').trim() === n));
+  }
+  if (u && u.companyName) return String(u.companyName);
+  let renames: any[] = [];
+  try { renames = JSON.parse(localStorage.getItem(RENAME_KEY) || '[]'); } catch { renames = []; }
+  const chain = new Map<string, string>();
+  (Array.isArray(renames) ? renames : []).slice().sort((a, b) => (Number(a?.ts) || 0) - (Number(b?.ts) || 0)).forEach(r => {
+    const on = String(r?.oldName || '').trim();
+    const nn = String(r?.newName || '').trim();
+    if (!on || !nn || on === nn) return;
+    chain.forEach((v, k) => { if (v === on) chain.set(k, nn); });
+    chain.set(on, nn);
+  });
+  let t = n;
+  let g = 0;
+  while (chain.has(t) && g++ < 10) t = chain.get(t) as string;
+  return t || n;
+};
+
+/** 全量名称同步修复：改名链改写 + 账号名快照修正 + 关联账号信息刷新；返回被改写的键 */
+export const repairCounterpartyNames = (): string[] => {
   try {
     let users: any[] = [];
     try { users = JSON.parse(localStorage.getItem('registeredUsers') || '[]'); } catch { users = []; }
-    if (!Array.isArray(users) || !users.length) return;
+    if (!Array.isArray(users) || !users.length) return [];
     const u2c = new Map<string, any>();
     users.forEach(u => { if (u && u.username) u2c.set(String(u.username), u); });
     // 名称/编号 → 账号 反查表（公司全称为准，兼容简称与编号）
@@ -179,5 +210,6 @@ export const repairCounterpartyNames = (): void => {
     if (changed.size > 0) {
       try { window.dispatchEvent(new Event('sync-data-updated')); } catch { /* ignore */ }
     }
-  } catch { /* ignore */ }
+    return Array.from(changed);
+  } catch { return []; }
 };

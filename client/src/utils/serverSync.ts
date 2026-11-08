@@ -408,9 +408,18 @@ export async function pullAllDatasets(): Promise<number> {
         try { serverData = JSON.parse(rec.json); } catch { serverData = []; }
         if (Array.isArray(localData) && Array.isArray(serverData)) {
           const idOf = (r: any) => (r && (r.key || r.id || r.applicationId)) ? String(r.key || r.id || r.applicationId) : null;
-          const sIds = new Set(serverData.map(idOf));
+          // 本地墓碑优先：本地已下架/完成但服务端仍是存活版本的记录，不得被服务端旧版复活
+          const localById = new Map<string, any>();
+          localData.forEach((r: any) => { const id = idOf(r); if (id && r && r.delisted === true) localById.set(id, r); });
+          const serverFixed = serverData.map((r: any) => {
+            const id = idOf(r);
+            const lt = id ? localById.get(id) : null;
+            if (lt && r && r.delisted !== true) return { ...r, delisted: true, delistedAt: lt.delistedAt };
+            return r;
+          });
+          const sIds = new Set(serverFixed.map(idOf));
           const onlyLocal = localData.filter((r: any) => !sIds.has(idOf(r)));
-          const merged = JSON.stringify([...serverData, ...onlyLocal]);
+          const merged = JSON.stringify([...serverFixed, ...onlyLocal]);
           let sameContent = false;
           try { sameContent = localStorage.getItem(key) === merged; } catch { /* ignore */ }
           if (!sameContent) {
@@ -451,6 +460,14 @@ export async function pullAllDatasets(): Promise<number> {
 
   // 拉取完成后再次闭环对账：服务端拉下的镜像若与本地其他镜像状态分叉，立即对齐
   try { reconcileCooperationPairs(); } catch { /* ignore */ }
+
+  // 拉取后再执行名称/对账终态自愈：服务端旧快照刚覆盖本地，必须立即回写最新公司名与
+  // 墓碑回写断言，否则「打开显示新名、点击查询后回到旧名」且供应商侧收不到对账结果
+  let postFixed = 0;
+  try { repairPurchaserSupplierNames(); } catch { /* ignore */ }
+  try { postFixed += repairCounterpartyNames().length; } catch { /* ignore */ }
+  try { if (healReconTerminalLinks()) postFixed++; } catch { /* ignore */ }
+  if (postFixed > 0) applied++;
 
   // 第二步：本地有但服务端没有的数据集 → 自动上传（首次迁移，仅限当前账号）
   try {

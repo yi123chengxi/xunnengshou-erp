@@ -24,7 +24,8 @@ const diffOfBill = (res: string): string =>
     : res === '不相符' ? '账单不相符'
       : '金额一致，双方对账完成';
 
-export function healReconTerminalLinks(): void {
+export function healReconTerminalLinks(): boolean {
+  let wrote = false;
   try {
     const billKeys: string[] = [];
     const detailKeys: string[] = [];
@@ -34,7 +35,7 @@ export function healReconTerminalLinks(): void {
       if (k.indexOf('purchaser_bills_') === 0) billKeys.push(k);
       else if (k.indexOf('pageData_customer_bill-detail_') === 0) detailKeys.push(k);
     }
-    if (billKeys.length === 0 && detailKeys.length === 0) return;
+    if (billKeys.length === 0 && detailKeys.length === 0) return false;
     const details = detailKeys.map(k => ({ key: k, rows: readList(k) }));
     const billsAll = billKeys.map(k => readList(k));
     // 全局键墓碑（双端必拉）：携带供应商侧回写断言，使供应商浏览器无需采购商账单键也能自愈明细行
@@ -67,7 +68,7 @@ export function healReconTerminalLinks(): void {
               supplierReconPerson: row.supplierReconPerson || tomb?.supPerson || b.supplierReconciler || '',
             };
           });
-          if (ch) { try { localStorage.setItem(d.key, JSON.stringify(d.rows)); } catch { /* ignore */ } }
+          if (ch) { try { localStorage.setItem(d.key, JSON.stringify(d.rows)); wrote = true; } catch { /* ignore */ } }
         });
       });
     });
@@ -90,7 +91,7 @@ export function healReconTerminalLinks(): void {
             supplierReconPerson: row.supplierReconPerson || tomb.supPerson || '',
           };
         });
-        if (ch) { try { localStorage.setItem(d.key, JSON.stringify(d.rows)); } catch { /* ignore */ } }
+        if (ch) { try { localStorage.setItem(d.key, JSON.stringify(d.rows)); wrote = true; } catch { /* ignore */ } }
       });
     }
     // 2) 存活 pending 记录 + 任一侧已终态 → delisted 墓碑（服务端合并保护墓碑不被复活）
@@ -120,15 +121,51 @@ export function healReconTerminalLinks(): void {
           }
           return nb;
         });
-        if (ch) { try { localStorage.setItem(bk, JSON.stringify(list)); } catch { /* ignore */ } }
+        if (ch) { try { localStorage.setItem(bk, JSON.stringify(list)); wrote = true; } catch { /* ignore */ } }
       });
     } catch { /* ignore */ }
-    if (recs.length === 0) return;
+    if (recs.length === 0) return wrote;
     const today = new Date().toISOString().slice(0, 10);
+    // 单据键：同一单据可能因多次发起生成不同 key 的重复记录，墓碑归属需按单据+双方凭证判定
+    const pairOf = (r: any): string => [
+      String(r?.docNo || '').trim(),
+      String(r?.supplierUsername || r?.supplierName || '').trim(),
+      String(r?.customerUsername || r?.customerName || '').trim(),
+    ].join('|');
+    // key 内置时间戳（recon-<doc>-<ts>），用于区分「历史重复记录」与「完成后重新发起」
+    const keyTs = (k: any): number => {
+      const m = String(k || '').match(/(\d{12,})$/);
+      return m ? Number(m[1]) : 0;
+    };
+    const tombByPair = new Map<string, any>();
+    recs.forEach((r: any) => {
+      if (!r || !r.delisted || !r.docNo) return;
+      const ts = keyTs(r.key) || (Date.parse(String(r.delistedAt || '')) || 0);
+      const pk = pairOf(r);
+      const prev = tombByPair.get(pk);
+      if (!prev || ts >= (prev.__ts || 0)) tombByPair.set(pk, { ...r, __ts: ts });
+    });
     let chR = false;
     const next = recs.map((r: any) => {
       if (!r || r.delisted || String(r.reconResult || 'pending') !== 'pending') return r;
       const no = String(r.docNo || '').trim();
+      // 同单据同双方已存在更新的完成墓碑 → 本次为旧端重复记录，直接补齐墓碑，避免「删除后刷新又出现」
+      const dupTomb = tombByPair.get(pairOf(r));
+      if (dupTomb && (keyTs(r.key) || 0) <= (dupTomb.__ts || 0)) {
+        chR = true;
+        return {
+          ...r,
+          delisted: true,
+          delistedAt: new Date().toISOString(),
+          reconResult: 'matched',
+          theirEntryDate: !r.theirEntryDate || r.theirEntryDate === '-' ? (dupTomb.theirEntryDate || today) : r.theirEntryDate,
+          ourEntryDate: !r.ourEntryDate || r.ourEntryDate === '-' ? (dupTomb.ourEntryDate || today) : r.ourEntryDate,
+          supResult: dupTomb.supResult || '对账完成',
+          supDiff: dupTomb.supDiff || '',
+          purPerson: dupTomb.purPerson || '',
+          supPerson: dupTomb.supPerson || '',
+        };
+      }
       const hitBill = billsAll.map(list => list.find((b: any) =>
         BILL_TERMINAL.includes(String(b?.reconcileResult || '')) &&
         ((r.matchedBillKey && b.key === r.matchedBillKey) || (!!no && String(b?.outboundNo || '').trim() === no)))).find(Boolean) as any;
@@ -152,6 +189,7 @@ export function healReconTerminalLinks(): void {
         supPerson: hitBill?.supplierReconciler || '',
       };
     });
-    if (chR) { try { localStorage.setItem('recon_records', JSON.stringify(next)); } catch { /* ignore */ } }
+    if (chR) { try { localStorage.setItem('recon_records', JSON.stringify(next)); wrote = true; } catch { /* ignore */ } }
   } catch { /* ignore */ }
+  return wrote;
 }

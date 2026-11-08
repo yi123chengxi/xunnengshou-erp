@@ -39,6 +39,7 @@ import { useParams, useLocation } from 'react-router-dom';
 import type { ColumnsType } from 'antd/es/table';
 import { appendBillLogEntry } from '../utils/billLog';
 import { compressImageFile } from '../utils/imageCompress';
+import { resolveLatestCompanyName } from '../utils/nameSync';
 
 const { Title, Text, Paragraph } = Typography;
 const { Option } = Select;
@@ -95,6 +96,7 @@ interface ReconRecord {
   orderNo?: string;           // 供应商账单明细行 id
   initiator?: 'supplier' | 'purchaser'; // 发起人：供应商 / 采购商
   customerName?: string;      // 采购商公司名称
+  customerNo?: string;        // 采购商公司编号（改名不影响的对账凭证）
   source?: 'bill' | 'entry';  // 来源：账单明细发起 / 手动录入
 }
 
@@ -489,19 +491,40 @@ const ReconciliationManage: React.FC = () => {
   const [linkSearch, setLinkSearch] = useState({ ...emptyLinkSearch });
   const [linkSearchApplied, setLinkSearchApplied] = useState({ ...emptyLinkSearch });
 
-  // 当前角色可见的对账记录：供应商看自己发起的；采购商看发给自己的（含公司名兜底匹配）
-  const myCompanyName = useMemo(() => {
+  // 当前账号可见的对账记录：以凭证（账号 → 公司编号）优先，名称（含改名链归一）兜底。
+  // 改名/重复账号/快照滞后时不会再出现「供应商发来的对账单搜不到」
+  const myProfile = useMemo(() => {
     try {
       const users = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
-      const u = users.find((x: any) => x.username === getOwner());
-      return u?.companyName || '';
-    } catch { return ''; }
+      const owner = getOwner();
+      const u = users.find((x: any) => x.username === owner);
+      return { username: owner, name: String(u?.companyName || '').trim(), no: String(u?.companyNo || '').trim() };
+    } catch { return { username: getOwner(), name: '', no: '' }; }
   }, [getOwner]);
+  const myCompanyName = myProfile.name;
+  const latestNameOf = useCallback((n?: string) => resolveLatestCompanyName(String(n || ''), ''), []);
 
-  const roleData = useMemo(() => dataSource.filter(r => (isPurchaser
-    ? r.customerUsername === getOwner() || (!r.customerUsername && !!myCompanyName && r.counterparty === myCompanyName)
-    : r.supplierUsername === getOwner()
-  )), [dataSource, isPurchaser, getOwner, myCompanyName]);
+  const isMineAsSupplier = useCallback((r: ReconRecord) => {
+    if (r.supplierUsername && r.supplierUsername === myProfile.username) return true;
+    if (myProfile.name && !!r.supplierName && latestNameOf(r.supplierName) === latestNameOf(myProfile.name)) return true;
+    if (!r.supplierUsername && myProfile.name && !!r.counterparty && latestNameOf(r.counterparty) === latestNameOf(myProfile.name)) return true;
+    return false;
+  }, [myProfile.username, myProfile.name, latestNameOf]);
+
+  const isMineAsPurchaser = useCallback((r: ReconRecord) => {
+    if (r.customerUsername && r.customerUsername === myProfile.username) return true;
+    if (r.customerNo && myProfile.no && String(r.customerNo).trim() === myProfile.no) return true;
+    if (myProfile.name && !!r.customerName && latestNameOf(r.customerName) === latestNameOf(myProfile.name)) return true;
+    if (!r.customerUsername && !r.customerNo && myProfile.name && !!r.counterparty && latestNameOf(r.counterparty) === latestNameOf(myProfile.name)) return true;
+    return false;
+  }, [myProfile.username, myProfile.no, myProfile.name, latestNameOf]);
+
+  const roleData = useMemo(() => dataSource.filter(r => (isPurchaser ? isMineAsPurchaser(r) : isMineAsSupplier(r))), [dataSource, isPurchaser, isMineAsPurchaser, isMineAsSupplier]);
+
+  // 供应商平台进入时：本账号作为采购商被发起对账的记录（动作/金额口径属采购商视角，须到采购商平台处理）
+  const purchaserSideRecords = useMemo(
+    () => (isPurchaser ? [] : dataSource.filter(r => isMineAsPurchaser(r) && !isMineAsSupplier(r))),
+    [dataSource, isPurchaser, isMineAsPurchaser, isMineAsSupplier]);
 
   // ==================== 统计 ====================
   const stats = useMemo(() => {
@@ -546,14 +569,13 @@ const ReconciliationManage: React.FC = () => {
     // 逐键更新映射：最终用函数式 setDataSource 应用，避免同提交内自动对账删除的记录被直接值覆盖复活
     const updMap = new Map<string, ReconRecord>();
     dataSource.forEach(r => {
-      const mineByUser = r.customerUsername === owner;
-      const mineByCompany = !r.customerUsername && !!myCompanyName && r.counterparty === myCompanyName;
-      if ((!mineByUser && !mineByCompany) || r.source !== 'bill') return r;
+      // 归属判定与列表同口径（账号/公司编号/名称含改名链归一），改名或重复账号不影响自动核对
+      if (!isMineAsPurchaser(r) || r.source !== 'bill') return r;
       // 采购商发起的对账请求：供方数据未回填前不参与本方自动核对
       if (r.initiator === 'purchaser' && (Number(r.ourAmount) || 0) === 0) return r;
       // 对方校验：采购账单的供应商须与本对账记录的供应商一致，避免同号跨供应商误匹配（凭证优先：账号一致即通过，名称快照改名滞后不影响）
       const cpSupplier = String(r.supplierName || (r.initiator === 'purchaser' ? r.counterparty : '') || '').trim();
-      const sameCp = (b: any) => !cpSupplier || String(b.supplier || '').trim() === cpSupplier || (!!r.supplierUsername && b.supplierUsername === r.supplierUsername);
+      const sameCp = (b: any) => !cpSupplier || String(b.supplier || '').trim() === cpSupplier || latestNameOf(b.supplier || '') === latestNameOf(cpSupplier) || (!!r.supplierUsername && b.supplierUsername === r.supplierUsername);
       // 匹配采购账单：优先 matchedBillKey，其次单据编号 outboundNo，再次辅助单据号 auxDocNo（均需通过对方校验）
       const bill = (r.matchedBillKey ? bills.find(b => b.key === r.matchedBillKey && sameCp(b)) : undefined)
         || bills.find(b => sameCp(b) && b.outboundNo && String(b.outboundNo).trim() === String(r.docNo || '').trim())
@@ -632,7 +654,7 @@ const ReconciliationManage: React.FC = () => {
       } catch { /* ignore */ }
     }
     if (changed) setDataSource(prev => prev.map(x => updMap.get(x.key) || x));
-  }, [isPurchaser, dataSource, getOwner, myCompanyName]);
+  }, [isPurchaser, dataSource, getOwner, myCompanyName, isMineAsPurchaser]);
 
   // 供应商平台：采购商发起的对账请求，按单据编号匹配供应商账单明细自动回填供方数据并核对
   useEffect(() => {
@@ -646,10 +668,14 @@ const ReconciliationManage: React.FC = () => {
     // 逐键更新映射：函数式应用，保留同提交内自动对账的删除结果
     const updMap = new Map<string, ReconRecord>();
     dataSource.forEach(r => {
-      if (r.initiator !== 'purchaser' || r.supplierUsername !== owner) return r;
+      if (r.initiator !== 'purchaser' || !isMineAsSupplier(r)) return r;
       // 对方校验：供应商账单明细的采购商须与本对账记录的采购商一致，避免同号跨采购商误匹配
+      // （凭证优先：账号/公司编号一致即通过，名称按改名链归一后比较）
       const cpCustomer = String(r.customerName || '').trim();
-      const sameCp = (x: any) => !cpCustomer || String(x.customerName || '').trim() === cpCustomer;
+      const sameCp = (x: any) => !cpCustomer
+        || latestNameOf(x.customerName || '') === latestNameOf(cpCustomer)
+        || (!!r.customerUsername && x.customerUsername === r.customerUsername)
+        || (!!r.customerNo && x.customerNo === r.customerNo);
       // 匹配供应商账单明细：优先 orderNo/id，其次 outboundNo/docNo，再次辅助单据号 auxDocNo（均需通过对方校验）
       const row = rows.find(x => sameCp(x) && ((!!r.orderNo && x.id === r.orderNo) || (!!x.outboundNo && String(x.outboundNo).trim() === String(r.docNo || '').trim())))
         || rows.find(x => sameCp(x) && x.auxDocNo && String(x.auxDocNo).trim() === String(r.docNo || '').trim());
@@ -714,7 +740,7 @@ const ReconciliationManage: React.FC = () => {
       } catch { /* ignore */ }
     }
     if (changed) setDataSource(prev => prev.map(x => updMap.get(x.key) || x));
-  }, [isPurchaser, dataSource, getOwner]);
+  }, [isPurchaser, dataSource, getOwner, isMineAsSupplier, latestNameOf]);
 
   // ==================== 操作函数 ====================
 
@@ -1612,6 +1638,22 @@ const ReconciliationManage: React.FC = () => {
           </Col>
         </Row>
       </Card>
+
+      {/* 跨角色提示：本账号作为采购商被发起的对账记录，需在采购商平台处理 */}
+      {!isPurchaser && purchaserSideRecords.length > 0 && (
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message={`有 ${purchaserSideRecords.length} 条对账单是其他供应商向本账号发起的，需要以“采购商”身份处理`}
+          description="当前为供应商平台，这些单据的本方/对方金额、按供方入账等操作均以采购商视角为准，请在采购商平台查看与操作。"
+          action={
+            <Button size="small" type="primary" onClick={() => { window.location.href = '/purchaser/suppliers/reconciliation'; }}>
+              去采购商平台对账
+            </Button>
+          }
+        />
+      )}
 
       {/* 统计卡片 */}
       <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>

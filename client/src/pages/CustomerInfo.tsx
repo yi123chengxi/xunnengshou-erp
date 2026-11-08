@@ -52,6 +52,7 @@ import { buildInviteLink } from '../utils/cooperationInvite';
 import { createInviteRecord, findUnusedInviteForCustomer, findInviteRecord, buildCustomerInviteLink } from '../utils/inviteRegistry';
 import type { InviteRecord } from '../utils/inviteRegistry';
 import { startCooperationTermination, cancelCooperationTermination, TERMINATE_GRACE_MS } from '../utils/cooperationTerminate';
+import { resolveLatestCompanyName } from '../utils/nameSync';
 import { reconcileCooperationPairs } from '../utils/cooperationReconcile';
 import { copyText } from '../utils/clipboard';
 
@@ -485,7 +486,8 @@ export const loadAllCustomersFromStorage = (): CustomerRecord[] => {
     const pAcc = findPurchaserAccount(bp);
     const isTerminated = bp.status === 'terminated';
     const isTerminating = bp.status === 'terminating' || hasPendingPurchaserTerminate(bp);
-    const rowName = bp.purchaserName;
+    // 名称以注册账号为真源（改名后即使合作镜像/客户档案快照仍旧名，列表也显示最新公司全称）
+    const rowName = resolveLatestCompanyName(bp.purchaserName, bp.purchaserUsername);
     return {
       key: bp.key || bp.id || `purchaser-key-${i}`,
       id: linkedDirect?.id || bp.id,
@@ -1031,9 +1033,10 @@ const CustomerInfo: React.FC = () => {
       const pAcc = findPurchaserAccount(bp);
       const isTerminated = bp.status === 'terminated';
       const isTerminating = bp.status === 'terminating' || hasPendingPurchaserTerminate(bp);
-      const rowName = bp.purchaserName;
+      const rowName = resolveLatestCompanyName(bp.purchaserName, bp.purchaserUsername);
       // 合并行债务口径：直接客户旧名下的历史订单/收款一并计入
-      const extraName = linkedDirect && linkedDirect.name !== rowName ? linkedDirect.name : '';
+      // （比对用合作镜像快照名，避免展示名已刷新后与 bp.purchaserName 重复计入）
+      const extraName = linkedDirect && linkedDirect.name !== bp.purchaserName ? linkedDirect.name : '';
       return {
         key: bp.key || bp.id || `purchaser-key-${i}`,
         id: linkedDirect?.id || bp.id,
