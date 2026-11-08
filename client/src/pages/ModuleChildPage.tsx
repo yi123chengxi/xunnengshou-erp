@@ -3053,8 +3053,8 @@ const ModuleChildPage: React.FC = () => {
       const su = users.find((x: any) => x.username === owner);
       if (su) supplierName = su.companyName || su.contactPerson || owner;
     } catch { /* ignore */ }
-    // 客户行仍缺失时，直接用合作镜像（双凭证：账号/公司编号，名称兜底）判定合作关系
-    if (!cust) {
+    // 客户行缺失或不是采购商行（可能是同名直接客户）时，用合作镜像（双凭证：账号/公司编号，名称兜底）判定合作关系
+    if (!cust || cust.type !== 'purchaser') {
       try {
         const bps: any[] = JSON.parse(localStorage.getItem(`boundPurchasers_${owner}`) || '[]');
         boundRec = bps.find(bp => {
@@ -3068,7 +3068,8 @@ const ModuleChildPage: React.FC = () => {
     }
     const coopFromCust = !!cust && cust.type === 'purchaser' && cust.bindStatus !== '已解除合作';
     const coopFromBound = !!boundRec && boundRec.status !== 'terminated' && boundRec.status !== 'terminating';
-    const isCoopPurchaser = cust ? coopFromCust : coopFromBound;
+    // 采购商客户行优先（含已解除合作否定）；否则以合作镜像为准
+    const isCoopPurchaser = cust && cust.type === 'purchaser' ? coopFromCust : coopFromBound;
     if (!isCoopPurchaser) {
       const typeLabel = cust ? (cust.type === 'direct' ? '直接客户' : '合作过（已解除合作）') : (boundRec ? '合作已终止' : '未合作客户');
       const reason = `客户类型为${typeLabel}，仅已合作采购商可发起对账`;
