@@ -551,9 +551,9 @@ const ReconciliationManage: React.FC = () => {
       if ((!mineByUser && !mineByCompany) || r.source !== 'bill') return r;
       // 采购商发起的对账请求：供方数据未回填前不参与本方自动核对
       if (r.initiator === 'purchaser' && (Number(r.ourAmount) || 0) === 0) return r;
-      // 对方校验：采购账单的供应商须与本对账记录的供应商一致，避免同号跨供应商误匹配
+      // 对方校验：采购账单的供应商须与本对账记录的供应商一致，避免同号跨供应商误匹配（凭证优先：账号一致即通过，名称快照改名滞后不影响）
       const cpSupplier = String(r.supplierName || (r.initiator === 'purchaser' ? r.counterparty : '') || '').trim();
-      const sameCp = (b: any) => !cpSupplier || String(b.supplier || '').trim() === cpSupplier;
+      const sameCp = (b: any) => !cpSupplier || String(b.supplier || '').trim() === cpSupplier || (!!r.supplierUsername && b.supplierUsername === r.supplierUsername);
       // 匹配采购账单：优先 matchedBillKey，其次单据编号 outboundNo，再次辅助单据号 auxDocNo（均需通过对方校验）
       const bill = (r.matchedBillKey ? bills.find(b => b.key === r.matchedBillKey && sameCp(b)) : undefined)
         || bills.find(b => sameCp(b) && b.outboundNo && String(b.outboundNo).trim() === String(r.docNo || '').trim())

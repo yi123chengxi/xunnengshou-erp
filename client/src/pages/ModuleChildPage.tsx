@@ -2993,7 +2993,11 @@ const ModuleChildPage: React.FC = () => {
       return { ok: false, reason };
     }
     // 客户类型校验：仅客户类型显示为“已合作采购商”才可发起对账
-    const cust = loadAllCustomersFromStorage().find((c: any) => (c.name || '').trim() === String(record.customerName || '').trim());
+    // 凭证优先：名称快照可能因改名滞后，按 customerUsername/customerNo（公司编号）匹配合作镜像，改名不影响发起对账
+    const cust = loadAllCustomersFromStorage().find((c: any) =>
+      (c.name || '').trim() === String(record.customerName || '').trim() ||
+      (!!record.customerUsername && (c.purchaserUsername === record.customerUsername || c.username === record.customerUsername)) ||
+      (!!record.customerNo && (c.purchaserNo === record.customerNo || c.companyNo === record.customerNo)));
     const isCoopPurchaser = !!cust && cust.type === 'purchaser' && cust.bindStatus !== '已解除合作';
     if (!isCoopPurchaser) {
       const typeLabel = !cust ? '未合作客户' : cust.type === 'direct' ? '直接客户' : '合作过（已解除合作）';
@@ -3017,13 +3021,14 @@ const ModuleChildPage: React.FC = () => {
       return { ok: false, reason };
     }
     let supplierName = owner;
-    let customerUsername = cust.purchaserUsername || '';
+    let customerUsername = cust?.purchaserUsername || record.customerUsername || '';
     try {
       const users = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
       const su = users.find((x: any) => x.username === owner);
       if (su) supplierName = su.companyName || su.contactPerson || owner;
       if (!customerUsername) {
-        const cu = users.find((x: any) => x.companyName === record.customerName);
+        const cu = users.find((x: any) => x.companyName === record.customerName ||
+          (record.customerNo && (x.companyNo === record.customerNo || x.companyShortName === record.customerNo)));
         if (cu) customerUsername = cu.username || '';
       }
     } catch { /* ignore */ }

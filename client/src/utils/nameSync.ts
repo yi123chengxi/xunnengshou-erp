@@ -34,7 +34,7 @@ export const recordCompanyRename = (username: string, oldName: string, newName: 
 };
 
 // 业务数据集中的名称快照字段（按对手方/本公司公司名存储，改名时需同步改写）
-const NAME_FIELDS = ['customerName', 'supplierName', 'purchaserName', 'applicantCompany', 'counterparty', 'supplier', 'customer', 'companyName'];
+const NAME_FIELDS = ['customerName', 'supplierName', 'purchaserName', 'applicantCompany', 'counterparty', 'supplier', 'customer', 'companyName', 'purchaserCompanyName', 'targetSupplierName'];
 
 // 需要名称同步的数据集（合作方镜像卡片 / 客户档案 / 双端账单 / 订单 / 开票 / 营业执照 / 对账记录）
 const SWEEP_PREFIXES = [
@@ -52,6 +52,14 @@ export const repairCounterpartyNames = (): void => {
     if (!Array.isArray(users) || !users.length) return;
     const u2c = new Map<string, any>();
     users.forEach(u => { if (u && u.username) u2c.set(String(u.username), u); });
+    // 名称/编号 → 账号 反查表（公司全称为准，兼容简称与编号）
+    const name2u = new Map<string, any>();
+    users.forEach(u => {
+      if (!u) return;
+      if (u.companyName) name2u.set(String(u.companyName), u);
+      if (u.companyShortName) name2u.set(String(u.companyShortName), u);
+      if (u.companyNo) name2u.set(String(u.companyNo), u);
+    });
 
     // 改名链：按时间序折叠（A→B→C 折叠为 A→C、B→C）
     let renames: CompanyRename[] = [];
@@ -73,6 +81,12 @@ export const repairCounterpartyNames = (): void => {
       if (u && u.companyName && u.companyName !== v) return u.companyName;
       return v;
     };
+    // 按名称（含改名链）反查账号：名称快照 → 唯一凭证（账号/公司编号）
+    const resolveUserByName = (n: string): any => {
+      const t = String(n || '').trim();
+      if (!t) return null;
+      return name2u.get(t) || (chain.has(t) ? name2u.get(chain.get(t) as string) : null) || null;
+    };
 
     const keys: string[] = [];
     for (let i = 0; i < localStorage.length; i++) {
@@ -91,6 +105,26 @@ export const repairCounterpartyNames = (): void => {
         const nr: any = { ...rec };
         let rc = false;
         NAME_FIELDS.forEach(f => { const nv = fix(nr[f]); if (nv !== nr[f]) { nr[f] = nv; rc = true; } });
+        // 合作凭证回填：仅存名称快照的历史记录按名称（含改名链）反查账号，
+        // 补 purchaserUsername/supplierUsername/customerUsername + 公司编号，后续联动一律以凭证为准、不受改名影响
+        const keyOwnerM = key.match(/^(?:purchaser_bills|pageData_customer_bill-detail|boundPurchasers|purchaser_suppliers)_(.+)$/);
+        const keyOwner = keyOwnerM ? keyOwnerM[1] : '';
+        if (!nr.purchaserUsername && typeof nr.purchaserName === 'string' && nr.purchaserName) {
+          const u = resolveUserByName(nr.purchaserName);
+          if (u && u.username !== keyOwner) { nr.purchaserUsername = u.username; if (!nr.purchaserNo && u.companyNo) nr.purchaserNo = u.companyNo; rc = true; }
+        }
+        if (!nr.supplierUsername && typeof nr.supplierName === 'string' && nr.supplierName) {
+          const u = resolveUserByName(nr.supplierName);
+          if (u && u.username !== keyOwner) { nr.supplierUsername = u.username; if (!nr.supplierNo && u.companyNo) nr.supplierNo = u.companyNo; rc = true; }
+        }
+        if (key.startsWith('pageData_customer_bill-detail_') && !nr.customerUsername && typeof nr.customerName === 'string' && nr.customerName) {
+          const u = resolveUserByName(nr.customerName);
+          if (u && u.username !== keyOwner) { nr.customerUsername = u.username; if (!nr.customerNo && u.companyNo) nr.customerNo = u.companyNo; rc = true; }
+        }
+        if (key.startsWith('purchaser_bills_') && !nr.supplierUsername && typeof nr.supplier === 'string' && nr.supplier) {
+          const u = resolveUserByName(nr.supplier);
+          if (u && u.username !== keyOwner) { nr.supplierUsername = u.username; rc = true; }
+        }
         // 合作镜像卡片/客户档案：按关联账号刷新公司名称与联系信息等信息
         const su = nr.supplierUsername ? u2c.get(String(nr.supplierUsername)) : null;
         if (su) {
@@ -106,11 +140,20 @@ export const repairCounterpartyNames = (): void => {
           if (pu.contactPerson && nr.purchaserContact !== pu.contactPerson) { nr.purchaserContact = pu.contactPerson; rc = true; }
           if (pu.phone && nr.purchaserPhone !== pu.phone) { nr.purchaserPhone = pu.phone; rc = true; }
           if (pu.companyNo && nr.purchaserNo !== pu.companyNo) { nr.purchaserNo = pu.companyNo; rc = true; }
+          if (pu.companyName && nr.purchaserCompanyName && nr.purchaserCompanyName !== pu.companyName) { nr.purchaserCompanyName = pu.companyName; rc = true; }
           if (key.startsWith('customers_')) {
             if (pu.legalPerson && nr.legalPerson !== pu.legalPerson) { nr.legalPerson = pu.legalPerson; rc = true; }
             if (pu.businessAddress && nr.businessAddress !== pu.businessAddress) { nr.businessAddress = pu.businessAddress; rc = true; }
             if (pu.wechatQr && nr.wechatQr !== pu.wechatQr) { nr.wechatQr = pu.wechatQr; rc = true; }
           }
+        }
+        if (su && su.companyName && nr.targetSupplierName && nr.targetSupplierName !== su.companyName) { nr.targetSupplierName = su.companyName; rc = true; }
+        // 对账记录：双方名称与 counterparty 按凭证刷新（counterparty 语义=发起方的对手方）
+        if (key === 'recon_records') {
+          if (su && su.companyName && nr.supplierName !== su.companyName) { nr.supplierName = su.companyName; rc = true; }
+          if (pu && pu.companyName && nr.customerName !== pu.companyName) { nr.customerName = pu.companyName; rc = true; }
+          const cp = nr.initiator === 'purchaser' ? nr.supplierName : nr.customerName;
+          if (cp && nr.counterparty !== cp) { nr.counterparty = cp; rc = true; }
         }
         if (rc) ch = true;
         return rc ? nr : rec;
