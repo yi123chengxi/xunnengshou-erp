@@ -2994,15 +2994,83 @@ const ModuleChildPage: React.FC = () => {
       if (!silent) message.warning(reason);
       return { ok: false, reason };
     }
-    // 客户类型校验：仅客户类型显示为“已合作采购商”才可发起对账
-    // 凭证优先：名称快照可能因改名滞后，按 customerUsername/customerNo（公司编号）匹配合作镜像，改名不影响发起对账
-    const cust = loadAllCustomersFromStorage().find((c: any) =>
-      (c.name || '').trim() === String(record.customerName || '').trim() ||
-      (!!record.customerUsername && (c.purchaserUsername === record.customerUsername || c.username === record.customerUsername)) ||
-      (!!record.customerNo && (c.purchaserNo === record.customerNo || c.companyNo === record.customerNo)));
-    const isCoopPurchaser = !!cust && cust.type === 'purchaser' && cust.bindStatus !== '已解除合作';
+    // 客户类型校验：仅“已合作采购商”可发起对账。
+    // 凭证优先 + 改名兼容：名称快照可能因改名滞后，先按名称/账号/公司编号直配客户行；
+    // 未命中再按名称（含 company_renames 改名链）反查注册账号，用账号/公司编号二次匹配客户行；
+    // 最后回退 boundPurchasers 合作镜像判定合作状态，确保改名后仍可发起对账
+    const customers = loadAllCustomersFromStorage();
+    const recName = String(record.customerName || '').trim();
+    const recUser = String(record.customerUsername || '').trim();
+    const recNo = String(record.customerNo || '').trim();
+    const nameOfCust = (c: any) => String(c?.name || '').trim();
+    let cust: any = customers.find(c => nameOfCust(c) === recName)
+      || customers.find(c => !!recUser && (c.purchaserUsername === recUser || (c as any).username === recUser))
+      || customers.find(c => !!recNo && (c.purchaserNo === recNo || (c as any).companyNo === recNo))
+      || null;
+    let cpUser: any = null;   // 对手方注册账号（真实凭证来源）
+    let boundRec: any = null; // 供应商侧合作镜像（boundPurchasers_<owner>）
+    let supplierName = owner;
+    try {
+      const users: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+      // 改名链折叠：任意历史名 → 最新名（A→B→C 折叠为 A→C、B→C）
+      let renames: any[] = [];
+      try { renames = JSON.parse(localStorage.getItem('company_renames') || '[]'); } catch { renames = []; }
+      const chain = new Map<string, string>();
+      (Array.isArray(renames) ? renames : []).slice().sort((a: any, b: any) => (Number(a?.ts) || 0) - (Number(b?.ts) || 0)).forEach((r: any) => {
+        const on = String(r?.oldName || '').trim();
+        const nn = String(r?.newName || '').trim();
+        if (!on || !nn || on === nn) return;
+        chain.forEach((v, k) => { if (v === on) chain.set(k, nn); });
+        chain.set(on, nn);
+      });
+      const latestName = (n: string): string => {
+        let t = String(n || '').trim();
+        let guard = 0;
+        while (chain.has(t) && guard++ < 10) t = chain.get(t) as string;
+        return t;
+      };
+      const findUser = (n: string): any => {
+        const t = String(n || '').trim();
+        if (!t) return null;
+        const ln = latestName(t);
+        return users.find(x => String(x?.companyName || '').trim() === t)
+          || users.find(x => String(x?.companyName || '').trim() === ln)
+          || users.find(x => String(x?.companyShortName || '').trim() === t)
+          || users.find(x => String(x?.companyNo || '').trim() === t)
+          || null;
+      };
+      cpUser = findUser(recName)
+        || (recUser ? users.find(x => x.username === recUser) : null)
+        || (recNo ? users.find(x => String(x.companyNo || '') === recNo || String(x.companyShortName || '') === recNo) : null)
+        || null;
+      // 已命中未合作的客户行不回退，避免把直接客户误判为采购商
+      if (!cust || cust.type !== 'purchaser') {
+        cust = customers.find(c => !!cpUser?.username && c.purchaserUsername === cpUser.username)
+          || customers.find(c => !!cpUser?.companyNo && c.purchaserNo === cpUser.companyNo)
+          || customers.find(c => !!cpUser?.companyName && nameOfCust(c) === String(cpUser.companyName).trim())
+          || cust;
+      }
+      const su = users.find((x: any) => x.username === owner);
+      if (su) supplierName = su.companyName || su.contactPerson || owner;
+    } catch { /* ignore */ }
+    // 客户行仍缺失时，直接用合作镜像（双凭证：账号/公司编号，名称兜底）判定合作关系
+    if (!cust) {
+      try {
+        const bps: any[] = JSON.parse(localStorage.getItem(`boundPurchasers_${owner}`) || '[]');
+        boundRec = bps.find(bp => {
+          if (!bp) return false;
+          if (cpUser && ((!!cpUser.username && bp.purchaserUsername === cpUser.username) || (!!cpUser.companyNo && bp.purchaserNo === cpUser.companyNo))) return true;
+          if (recUser && bp.purchaserUsername === recUser) return true;
+          if (recNo && bp.purchaserNo === recNo) return true;
+          return !!recName && String(bp.purchaserName || '').trim() === recName;
+        }) || null;
+      } catch { /* ignore */ }
+    }
+    const coopFromCust = !!cust && cust.type === 'purchaser' && cust.bindStatus !== '已解除合作';
+    const coopFromBound = !!boundRec && boundRec.status !== 'terminated' && boundRec.status !== 'terminating';
+    const isCoopPurchaser = cust ? coopFromCust : coopFromBound;
     if (!isCoopPurchaser) {
-      const typeLabel = !cust ? '未合作客户' : cust.type === 'direct' ? '直接客户' : '合作过（已解除合作）';
+      const typeLabel = cust ? (cust.type === 'direct' ? '直接客户' : '合作过（已解除合作）') : (boundRec ? '合作已终止' : '未合作客户');
       const reason = `客户类型为${typeLabel}，仅已合作采购商可发起对账`;
       if (!silent) {
         // 正方形提示窗口：屏幕上下左右居中显示
@@ -3022,18 +3090,11 @@ const ModuleChildPage: React.FC = () => {
       }
       return { ok: false, reason };
     }
-    let supplierName = owner;
-    let customerUsername = cust?.purchaserUsername || record.customerUsername || '';
-    try {
-      const users = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
-      const su = users.find((x: any) => x.username === owner);
-      if (su) supplierName = su.companyName || su.contactPerson || owner;
-      if (!customerUsername) {
-        const cu = users.find((x: any) => x.companyName === record.customerName ||
-          (record.customerNo && (x.companyNo === record.customerNo || x.companyShortName === record.customerNo)));
-        if (cu) customerUsername = cu.username || '';
-      }
-    } catch { /* ignore */ }
+    // 凭证落定：账号 > 客户行镜像 > 记录快照；编号同理（公司编号/采购商编号）
+    const customerUsername = cust?.purchaserUsername || cpUser?.username || recUser || '';
+    const customerNo = recNo || cust?.purchaserNo || cpUser?.companyNo || '';
+    // 客户名称以注册账号真源为准（改名后镜像/快照可能滞后）
+    const resolvedCustomerName = String(cpUser?.companyName || cust?.name || record.customerName || '').trim();
     let products: any[] = [];
     try { products = JSON.parse(localStorage.getItem(`pageData_basic-data_product-list_${owner}`) || '[]'); } catch { /* ignore */ }
     const nameOf = (code: string) => {
@@ -3076,8 +3137,9 @@ const ModuleChildPage: React.FC = () => {
       counterpartyCode: customerUsername,
       supplierUsername: owner,
       supplierName,
-      customerName: record.customerName || '',
+      customerName: resolvedCustomerName,
       customerUsername,
+      customerNo,
       initiator: 'supplier',
       supplierReconPerson: getCurrentUserDisplayName(), // 供方发起/对账人姓名（采购商侧账单“供应商对账人”显示源）
       ourAmount: Number(record.totalAmount) || 0,
@@ -3113,11 +3175,18 @@ const ModuleChildPage: React.FC = () => {
         if (idx >= 0) {
           data[idx].billLog = newBillLog;
           data[idx].supplierReconciler = getCurrentUserDisplayName();
+          // 凭证回填：改名导致名称快照与客户档案分叉时，后续联动一律以账号/公司编号为准
+          if (customerUsername) data[idx].customerUsername = customerUsername;
+          if (customerNo) data[idx].customerNo = customerNo;
+          if (resolvedCustomerName && data[idx].customerName !== resolvedCustomerName) data[idx].customerName = resolvedCustomerName;
           localStorage.setItem(storageKey, JSON.stringify(data));
         }
       }
     } catch { /* ignore */ }
-    setDataSource(prev => prev.map(r => r.key === record.key ? { ...r, reconResult: '已发起对账', supplierReconciler: getCurrentUserDisplayName(), billLog: newBillLog } : r));
+    setDataSource(prev => prev.map(r => r.key === record.key ? {
+      ...r, reconResult: '已发起对账', supplierReconciler: getCurrentUserDisplayName(), billLog: newBillLog,
+      customerName: resolvedCustomerName, customerUsername, customerNo,
+    } : r));
     if (!silent) message.success(`已发起对账，单据编号 ${rec.docNo} 已发送至采购商对账管理`);
     return { ok: true, reason: '' };
   }, [getDataOwner]);

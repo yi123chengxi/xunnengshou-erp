@@ -82,10 +82,20 @@ export const repairCounterpartyNames = (): void => {
       return v;
     };
     // 按名称（含改名链）反查账号：名称快照 → 唯一凭证（账号/公司编号）
+    const latestName = (n: string): string => {
+      let t = String(n || '').trim();
+      let guard = 0;
+      while (chain.has(t) && guard++ < 10) t = chain.get(t) as string;
+      return t;
+    };
     const resolveUserByName = (n: string): any => {
       const t = String(n || '').trim();
       if (!t) return null;
-      return name2u.get(t) || (chain.has(t) ? name2u.get(chain.get(t) as string) : null) || null;
+      return name2u.get(t)
+        || (chain.has(t) ? name2u.get(chain.get(t) as string) : null)
+        // 反向兼容：快照已是新名、但账号里仍是旧名（另一端未刷新）时，按改名链归一后反查
+        || users.find(u => u && u.companyName && latestName(u.companyName) === latestName(t))
+        || null;
     };
 
     const keys: string[] = [];
@@ -148,6 +158,9 @@ export const repairCounterpartyNames = (): void => {
           }
         }
         if (su && su.companyName && nr.targetSupplierName && nr.targetSupplierName !== su.companyName) { nr.targetSupplierName = su.companyName; rc = true; }
+        // 客户名称按 customerUsername（公司编号/账号凭证）刷新：改名后账单快照与客户档案不再分叉
+        const cu = nr.customerUsername ? u2c.get(String(nr.customerUsername)) : null;
+        if (cu && cu.companyName && nr.customerName !== cu.companyName) { nr.customerName = cu.companyName; rc = true; }
         // 对账记录：双方名称与 counterparty 按凭证刷新（counterparty 语义=发起方的对手方）
         if (key === 'recon_records') {
           if (su && su.companyName && nr.supplierName !== su.companyName) { nr.supplierName = su.companyName; rc = true; }
