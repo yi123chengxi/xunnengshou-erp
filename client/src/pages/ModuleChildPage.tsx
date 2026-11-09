@@ -111,7 +111,7 @@ import { buildSupplierReturnRow, buildPurchaserReturnBill, writeReturnStockFlows
 import { appendStockLog, updateProductStock } from '../utils/stockUtils';
 import { loadTenantUsers } from '../utils/tenantUsers';
 import { appendBillLogEntry, readBillLog, billLogColor, resolveOperatorName, diffBillRecords, SUPPLIER_BILL_FIELD_MAP, getCurrentUserDisplayName } from '../utils/billLog';
-import { pullAllDatasets, flushDatasetUploadAsync, ensureDatasetFromServer, reloadAfterPull } from '../utils/serverSync';
+import { pullAllDatasets, flushDatasetUploadAsync, ensureDatasetFromServer, reloadAfterPull, appendRowsToRemoteKey } from '../utils/serverSync';
 import { PRESET_PRINT_TEMPLATES, seedPresetPrintTemplates } from '../config/presetPrintTemplates';
 import { refreshCustomerPurchase } from '../utils/paySummary';
 import { loadAllCustomersFromStorage } from './CustomerInfo';
@@ -2780,10 +2780,11 @@ const ModuleChildPage: React.FC = () => {
     try { orders = JSON.parse(localStorage.getItem(`pageData_sales_order-manage_${owner}`) || '[]'); } catch { /* ignore */ }
     if (!Array.isArray(orders)) orders = [];
     const existMap = new Map(existing.map(r => [r.id, r]));
-    // 手动新增的账单行（非订单生成）：保留在列表顶部，避免重载后丢失
+    // 存量行全量保留（防擦除不变量）：凡不在订单集合中的已有行（手工新增/退货登记/历史行）一律保留在列表顶部。
+    // 不能只保留 _manual 行——否则订单键暂缺（未拉取/owner 不一致）时重建会把订单派生行与历史行全部丢弃并上传擦除。
     const orderIds = new Set(orders.map((o: any) => o.id));
-    const manualRows = existing.filter((r: any) => r && r.id && r._manual && !orderIds.has(r.id));
-    return [...manualRows, ...orders
+    const preservedRows = existing.filter((r: any) => r && r.id && !orderIds.has(r.id));
+    return [...preservedRows, ...orders
       .filter((o: any) => o && o.id && (o.orderStatus === '已发货' || o.orderStatus === '已完成') && (o.payMethod === '余额支付' || String(o.orderTags || '').includes('余额支付') || String(o.orderTag || '').includes('余额支付')))
       .sort((a: any, b: any) => String(b.createTime || '').localeCompare(String(a.createTime || '')))
       .map((o: any) => {
@@ -2895,18 +2896,8 @@ const ModuleChildPage: React.FC = () => {
     const json = JSON.stringify(updated);
     safeSetItem(storageKey, json);
     saveDataset(storageKey, json);
-    // 镜像同步采购商平台采购账单（负数退货账单，走相同对账流程）
-    if (p.counterpartyUsername) {
-      const purKey = `purchaser_bills_${p.counterpartyUsername}`;
-      let list: any[] = [];
-      try { list = JSON.parse(localStorage.getItem(purKey) || '[]'); if (!Array.isArray(list)) list = []; } catch { list = []; }
-      if (!list.some((b: any) => b.key === `bill-${p.returnNo}` || b.outboundNo === p.returnNo)) {
-        const bill = buildPurchaserReturnBill(p, { operator, supplierName: getOwnCompanyName(owner), now });
-        const pjson = JSON.stringify([bill, ...list]);
-        safeSetItem(purKey, pjson);
-        saveDataset(purKey, pjson);
-      }
-    }
+    // 不再即时镜像写采购商采购账单：退货与正常账单一致走对账管理流程，
+    // 对方负数账单由对账完成（completeRecon）时在本端自建（避免跨端整键覆盖擦除对方数据）
     // 库存联动：供应商侧退货仓入库 + 采购商侧退货出库
     writeReturnStockFlows(p, {
       supplierOwner: owner, purchaserOwner: p.counterpartyUsername, operator,
@@ -3175,6 +3166,20 @@ const ModuleChildPage: React.FC = () => {
       return { ok: false, reason: '已发起对账，请勿重复发起' };
     }
     upsertRecords([rec]);
+    // 退货单走对账管理：仅当发起对账时才在采购商采购账单创建负数退货单（安全追加并集，不擦除对方存量数据）；
+    // 登记时不再即时镜像，避免退货未经对账就出现在对方账单
+    if (customerUsername && ((record as any).docType === 'return' || String((record as any).billSource || '') === '退货登记')) {
+      const purBill = {
+        key: `bill-${record.outboundNo || record.id}`, outboundNo: record.outboundNo || record.id, prefix: 'RT',
+        supplier: supplierName, date: (record as any).outboundDate || '',
+        items: (Array.isArray(record.items) ? record.items : []).map((it: any) => ({ styleCode: String(it.productCode || '').split('-')[0], productCode: it.productCode || '', productName: it.productName || '', color: it.color || '', spec: it.spec || '', quantity: Number(it.quantity) || 0, unitPrice: Number(it.price ?? it.unitPrice) || 0, amount: Number(it.amount) || 0, productType: '' })),
+        images: [], recorder: getCurrentUserDisplayName(), totalQty: Number(record.totalCount) || 0, totalAmount: Number(record.totalAmount) || 0,
+        reconcileResult: '', diffNote: '', supplierReconciler: '', purchaserReconciler: '', supplierImages: [], purchaserImages: [],
+        createdAt: (record as any).createdAt || new Date().toLocaleString('zh-CN'), billSource: '退货登记', docType: 'return',
+        returnNo: record.outboundNo || record.id, linkedOutboundNo: (record as any).linkedOutboundNo || '', returnReason: (record as any).returnReason || '',
+      };
+      void appendRowsToRemoteKey(`purchaser_bills_${customerUsername}`, [purBill], (bb: any) => String(bb?.key || bb?.outboundNo || ''));
+    }
     // 记录发起对账日志
     let newBillLog = (record as any).billLog;
     try {
@@ -7631,10 +7636,10 @@ const ModuleChildPage: React.FC = () => {
               safeSetItem('purchaser_pushed_orders_ts', String(Date.now()));
             } catch { /* ignore */ }
             // 自动写入采购商账单（幂等：同一订单已有账单时不再重复写入）
+            // 防擦除不变量：采购商私有键在本供应商浏览器通常不存在，禁止 read-local→push→saveDataset（基为空会整键擦除对方全部账单），
+            // 改走 appendRowsToRemoteKey：先取服务端现有账单做并集再仅追加本单
             try {
               const billKey = `purchaser_bills_${purchaserUsername}`;
-              const bills: any[] = JSON.parse(localStorage.getItem(billKey) || '[]');
-              if (bills.some((b: any) => b && b.orderId === order.id)) return;
               let rawItems: any[] = [];
               try { rawItems = JSON.parse(order.orderItems || '[]'); } catch { /* ignore */ }
               const billNo = `MC-PUSH-${dayjs().format('YYYYMMDD')}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`;
@@ -7673,11 +7678,7 @@ const ModuleChildPage: React.FC = () => {
                 diffNote: '订单推送',
                 createTime: now,
               };
-              bills.push(newBill);
-              localStorage.setItem(billKey, JSON.stringify(bills));
-              safeSetItem(billKey, JSON.stringify(bills));
-              saveDataset(billKey, JSON.stringify(bills));
-              safeSetItem(`${billKey}_ts`, String(Date.now()));
+              void appendRowsToRemoteKey(billKey, [newBill], (b: any) => (b && b.orderId ? 'ord:' + String(b.orderId) : String(b?.key || b?.outboundNo || '')));
             } catch { /* ignore */ }
           }
         });

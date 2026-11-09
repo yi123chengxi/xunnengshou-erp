@@ -7,6 +7,7 @@
  *   并经 updateProductStock 同步实际库存与库存变化日志；按退货单号幂等，重复登记不重复写流水。
  */
 import { updateProductStock } from './stockUtils';
+import { appendRowsToRemoteKey } from './serverSync';
 import type { ReturnRegisterPayload } from '../components/ReturnRegisterModal';
 
 /** 按公司名称反查注册账号 username（registeredUsers 全量账号池） */
@@ -32,7 +33,6 @@ export const getOwnCompanyName = (owner: string): string => {
 const readList = (key: string): any[] => {
   try { const l = JSON.parse(localStorage.getItem(key) || '[]'); return Array.isArray(l) ? l : []; } catch { return []; }
 };
-const writeList = (key: string, list: any[]) => { localStorage.setItem(key, JSON.stringify(list)); };
 
 const negSupplierItems = (p: ReturnRegisterPayload) => p.items.map(it => ({
   productCode: it.productCode,
@@ -132,12 +132,12 @@ export const writeReturnStockFlows = (p: ReturnRegisterPayload, opts: {
           relatedDocNo: p.returnNo, operator: opts.operator, remark: '退货入库（退货仓）',
         }, opts.supplierOwner);
       });
-      writeList(recvKey, [{
+      void appendRowsToRemoteKey(recvKey, [{
         key: p.returnNo, docNo: p.returnNo, type: '退货入库', supplierName: opts.purchaserCompanyName,
         items: p.items.map(it => ({ productCode: it.productCode, productName: it.productName || '', unit: '', spec: it.spec || '', quantity: it.quantity, price: it.unitPrice, remark: '退货入库' })),
         operator: opts.operator, createTime: now, status: '已入库',
         remark: `退货入库（退货仓）${p.linkedOutboundNo ? ` 原单 ${p.linkedOutboundNo}` : ''}${p.reason ? ` 原因：${p.reason}` : ''}`,
-      }, ...recv]);
+      }], (r: any) => String(r?.key || r?.docNo || ''));
     }
   }
   // 采购商侧：退货出库（inventory_outbound_ 流水 + 实际库存扣减）
@@ -154,12 +154,12 @@ export const writeReturnStockFlows = (p: ReturnRegisterPayload, opts: {
           relatedDocNo: p.returnNo, operator: opts.operator, remark: '退货出库至供应商',
         }, opts.purchaserOwner);
       });
-      writeList(outKey, [{
+      void appendRowsToRemoteKey(outKey, [{
         key: p.returnNo, docNo: p.returnNo, type: '退货出库',
         items: p.items.map(it => ({ productCode: it.productCode, productName: it.productName || '', unit: '', spec: it.spec || '', currentStock: Number(prodsFind(prods, it.productCode)) || 0, quantity: it.quantity, remark: '退货出库' })),
         operator: opts.operator, createTime: now, status: '已出库',
         remark: `退货出库至供应商 ${opts.supplierCompanyName}${p.linkedOutboundNo ? ` 原单 ${p.linkedOutboundNo}` : ''}${p.reason ? ` 原因：${p.reason}` : ''}`,
-      }, ...out]);
+      }], (r: any) => String(r?.key || r?.docNo || ''));
     }
   }
 };

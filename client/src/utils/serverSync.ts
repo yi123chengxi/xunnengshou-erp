@@ -27,6 +27,9 @@ const APPEND_ONLY_GLOBAL_KEYS = ['market_trade_orders', 'purchaser_pushed_orders
 // 带下架语义的全局列表键：并集合并会在查看端复活已删除记录并回传服务器，
 // 拉取时改为“服务端不旧于本地则整体替换；本地有更新写入则保留本地但同步服务端墓碑”
 const REPLACE_PULL_GLOBAL_KEYS = ['market_publish_orders'];
+// 一次性 salvage 回灌的账单类私有键前缀：这些键曾被跨端镜像整键覆盖擦除，
+// 升级后首轮拉取把「本地有、服务端缺失」的行并集回灌服务端（仅一次，避免长期破坏删除语义）
+const SALVAGE_UNION_PREFIXES = ['purchaser_bills_', 'pageData_customer_bill-detail_'];
 
 export function isSyncKey(key: string): boolean {
   if (!key || key.endsWith('_ts')) return false;
@@ -266,6 +269,34 @@ export async function fetchServerDataset(key: string): Promise<{ json: string; u
   }
 }
 
+/**
+ * 跨租户键安全追加（防擦除不变量）：
+ * 先取服务端现有内容，与本地、待追加行按 id 做并集（服务端行优先保留、仅补缺失行），
+ * 再整键落本地并上传。杜绝「本端浏览器不持有对方私有键→基为空数组→整键覆盖上传擦除对方全部历史数据」。
+ * 任何需要写入「非本账号私有键」的场景都必须走本函数，禁止直接 read-local→push→saveDataset。
+ */
+export async function appendRowsToRemoteKey(key: string, rows: any[], idOf: (r: any) => string | null): Promise<boolean> {
+  try {
+    let server: any[] = [];
+    const rec = await fetchServerDataset(key);
+    if (rec && rec.json) { try { const a = JSON.parse(rec.json); if (Array.isArray(a)) server = a; } catch { /* ignore */ } }
+    let local: any[] = [];
+    try { const a = JSON.parse(localStorage.getItem(key) || '[]'); if (Array.isArray(a)) local = a; } catch { /* ignore */ }
+    const merged: any[] = [...server];
+    const seen = new Set<string>();
+    server.forEach((r: any) => { const id = idOf(r); if (id) seen.add(id); });
+    local.forEach((r: any) => { const id = idOf(r); if (!id || seen.has(id)) return; seen.add(id); merged.push(r); });
+    let added = 0;
+    (rows || []).forEach((r: any) => { const id = idOf(r); if (!id || seen.has(id)) return; seen.add(id); merged.push(r); added++; });
+    const json = JSON.stringify(merged);
+    const raw = getOriginalSetItem();
+    raw(key, json);
+    raw(`${key}_ts`, String(Date.now()));
+    saveDataset(key, json);
+    return added > 0;
+  } catch { return false; }
+}
+
 async function localTimestamp(key: string): Promise<number> {
   let ts = 0;
   try {
@@ -455,6 +486,33 @@ export async function pullAllDatasets(): Promise<number> {
       if (sameContent) {
         raw(`${key}_ts`, String(rec.updatedAt));
         continue;
+      }
+      // 一次性 salvage 回灌：账单类私有键曾被跨端镜像整键覆盖擦除；升级后首轮拉取把
+      // 「本地有、服务端缺失」的行并集回灌服务端（仅一次，避免长期破坏删除语义），尽可能找回历史账单
+      if (SALVAGE_UNION_PREFIXES.some(pfx => key.indexOf(pfx) === 0)) {
+        const salvageFlag = `salvage_billunion_v1_${key}`;
+        if (!localStorage.getItem(salvageFlag)) {
+          try {
+            localStorage.setItem(salvageFlag, String(Date.now()));
+            let localData: any[] = [];
+            try { localData = JSON.parse(localStorage.getItem(key) || '[]'); } catch { localData = []; }
+            let serverData: any[] = [];
+            try { serverData = JSON.parse(rec.json || '[]'); } catch { serverData = []; }
+            if (Array.isArray(localData) && Array.isArray(serverData)) {
+              const idOfS = (r: any) => (r && (r.key || r.id)) ? String(r.key || r.id) : null;
+              const sIds = new Set(serverData.map(idOfS));
+              const onlyLocal = localData.filter((r: any) => { const id = idOfS(r); return !!id && !sIds.has(id); });
+              if (onlyLocal.length > 0) {
+                const mergedSalvage = JSON.stringify([...serverData, ...onlyLocal]);
+                raw(key, mergedSalvage);
+                raw(`${key}_ts`, String(rec.updatedAt));
+                void doUpload(key, mergedSalvage, Date.now()).catch(() => { /* ignore */ });
+                applied++;
+                continue;
+              }
+            }
+          } catch { /* ignore */ }
+        }
       }
       raw(key, rec.json);
       raw(`${key}_ts`, String(rec.updatedAt));
