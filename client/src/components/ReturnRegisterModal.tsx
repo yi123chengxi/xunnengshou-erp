@@ -17,6 +17,7 @@ import dayjs from 'dayjs';
 import { generateDocNo } from '../utils/stockUtils';
 import { getDataOwner } from '../utils/brandAuth';
 import { loadProductMasterMap, resolveItemColorSpec } from '../utils/billItemsExport';
+import { loadSupplierFinishedProducts } from '../utils/supplierProducts';
 import ProductPickModal from './ProductPickModal';
 
 const { Text } = Typography;
@@ -106,6 +107,8 @@ const ReturnRegisterModal: React.FC<{
   const [pickVisible, setPickVisible] = useState(false);
   const [pickSelected, setPickSelected] = useState<string[]>([]);
   const [pickSearch, setPickSearch] = useState('');
+  // 添加商品弹窗当前数据源：本方商品 / 供应商货品
+  const [pickSource, setPickSource] = useState<'own' | 'supplier'>('own');
 
   // 数量模版（与账单明细新增弹窗共用模版库 billQtyTemplates_<owner>）
   const [qtyTemplates, setQtyTemplates] = useState<QtyTemplate[]>(() => {
@@ -154,10 +157,17 @@ const ReturnRegisterModal: React.FC<{
     }
   };
 
-  // 添加商品：从本租户商品主数据多选带入（优先填空行）
-  const handlePickOk = () => {
+  // 添加商品：从本租户商品主数据或供应商货品多选带入（优先填空行）
+  const handlePickOk = async () => {
     if (pickSelected.length === 0) { message.warning('请选择至少一个商品'); return; }
-    const master = loadProductMasterMap(owner);
+    // 供应商货品模式：用供应商成品列表解析名称/颜色/规格/建议价；否则用本方商品主数据
+    let master: Map<string, any>;
+    if (pickSource === 'supplier' && counterparty) {
+      const supProds = await loadSupplierFinishedProducts(counterparty);
+      master = new Map((Array.isArray(supProds) ? supProds : []).map((p: any) => [String(p.productCode || ''), p]));
+    } else {
+      master = loadProductMasterMap(owner);
+    }
     const mapped = pickSelected.map(code => {
       const p = master.get(String(code || ''));
       const cs = resolveItemColorSpec(p || { productCode: code }, master);
@@ -307,7 +317,7 @@ const ReturnRegisterModal: React.FC<{
       />
       <div style={{ marginTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
         <Button size="small" icon={<PlusOutlined />} onClick={() => setItems(prev => [...prev, emptyRow()])}>添加明细行</Button>
-        <Button size="small" icon={<ShoppingOutlined />} onClick={() => { setPickSelected([]); setPickSearch(''); setPickVisible(true); }}>添加商品</Button>
+        <Button size="small" icon={<ShoppingOutlined />} onClick={() => { setPickSelected([]); setPickSearch(''); setPickSource('own'); setPickVisible(true); }}>添加商品</Button>
         {/* 显示字段控制：勾选显隐 + ▲▼调序 + 恢复默认，按租户持久化 */}
         <Popover
           open={colPopover}
@@ -361,8 +371,10 @@ const ReturnRegisterModal: React.FC<{
         </Space>
       </div>
 
-      {/* 添加商品：本租户商品主数据多选 */}
+      {/* 添加商品：本租户商品主数据多选；采购商侧可切换“供应商货品”加载对应供应商成品列表 */}
       <ProductPickModal open={pickVisible} title="选择商品编码（可多选）" mode="code" owner={owner}
+        supplierUsername={side === 'purchaser' ? counterparty : undefined}
+        onSourceChange={setPickSource}
         selected={pickSelected} setSelected={setPickSelected}
         search={pickSearch} setSearch={setPickSearch}
         onClose={() => setPickVisible(false)} onOk={handlePickOk} />

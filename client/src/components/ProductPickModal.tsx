@@ -4,9 +4,10 @@
  * - 每页默认 20 行，表体固定高度，超出 20 行出现上下滚动条；
  * - 复选多选 + 搜索过滤，确定后回传所选编码数组。
  */
-import React, { useMemo } from 'react';
-import { Modal, Input, Table } from 'antd';
-import { SearchOutlined } from '@ant-design/icons';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Modal, Input, Table, Button } from 'antd';
+import { SearchOutlined, ShopOutlined } from '@ant-design/icons';
+import { loadSupplierFinishedProducts } from '../utils/supplierProducts';
 
 export interface ProductPickRow {
   key: string;
@@ -26,10 +27,27 @@ const ProductPickModal: React.FC<{
   setSearch: (v: string) => void;
   onClose: () => void;
   onOk: () => void;
-}> = ({ open, title, mode, owner, selected, setSelected, search, setSearch, onClose, onOk }) => {
+  /** 可选：对应供应商账号；提供时弹窗内显示“供应商货品”切换按键，点击加载该供应商成品列表 */
+  supplierUsername?: string;
+  onSourceChange?: (src: 'own' | 'supplier') => void;
+}> = ({ open, title, mode, owner, selected, setSelected, search, setSearch, onClose, onOk, supplierUsername, onSourceChange }) => {
+  const [useSupplier, setUseSupplier] = useState(false);
+  const [supplierProds, setSupplierProds] = useState<any[]>([]);
+  // 打开或切换供应商时重置为本方商品，避免残留上一供应商货品
+  useEffect(() => { setUseSupplier(false); setSupplierProds([]); }, [open, supplierUsername]);
+  useEffect(() => {
+    let alive = true;
+    if (!useSupplier || !supplierUsername) { setSupplierProds([]); return; }
+    loadSupplierFinishedProducts(supplierUsername).then(list => { if (alive) setSupplierProds(Array.isArray(list) ? list : []); });
+    return () => { alive = false; };
+  }, [useSupplier, supplierUsername]);
   const rows = useMemo<ProductPickRow[]>(() => {
     let prods: any[] = [];
-    try { prods = JSON.parse(localStorage.getItem(`pageData_basic-data_product-list_${owner}`) || '[]'); } catch { /* ignore */ }
+    if (useSupplier && supplierUsername) {
+      prods = supplierProds;
+    } else {
+      try { prods = JSON.parse(localStorage.getItem(`pageData_basic-data_product-list_${owner}`) || '[]'); } catch { /* ignore */ }
+    }
     const seen = new Set<string>();
     const out: ProductPickRow[] = [];
     prods.forEach((p: any) => {
@@ -39,7 +57,7 @@ const ProductPickModal: React.FC<{
       out.push({ key: code, code, name: p.shortName || p.name || '', style: p.styleCode || '' });
     });
     return out;
-  }, [owner, mode]);
+  }, [owner, mode, useSupplier, supplierUsername, supplierProds]);
 
   const filtered = useMemo(() => {
     const kw = search.trim().toLowerCase();
@@ -49,8 +67,16 @@ const ProductPickModal: React.FC<{
 
   return (
     <Modal title={title} open={open} onCancel={onClose} onOk={onOk} okText="确定" cancelText="取消" width={600} zIndex={1200}>
-      <Input placeholder="搜索编码/名称" allowClear prefix={<SearchOutlined style={{ color: '#b0bec5' }} />}
-        value={search} onChange={e => setSearch(e.target.value)} style={{ marginBottom: 12 }} />
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }}>
+        <Input placeholder="搜索编码/名称" allowClear prefix={<SearchOutlined style={{ color: '#b0bec5' }} />}
+          value={search} onChange={e => setSearch(e.target.value)} style={{ flex: 1 }} />
+        {supplierUsername && (
+          <Button size="small" type={useSupplier ? 'primary' : 'default'} icon={<ShopOutlined />}
+            onClick={() => { const next = !useSupplier; setUseSupplier(next); if (onSourceChange) onSourceChange(next ? 'supplier' : 'own'); }}>
+            {useSupplier ? '本方商品' : '供应商货品'}
+          </Button>
+        )}
+      </div>
       <Table size="small" bordered rowKey="key"
         pagination={{ defaultPageSize: 20, pageSizeOptions: ['20', '50', '100'], showSizeChanger: true, size: 'small', showTotal: t => `共 ${t} 条` }}
         scroll={{ y: 780 }}
