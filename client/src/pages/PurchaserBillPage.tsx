@@ -1065,10 +1065,13 @@ const PurchaserBillPage: React.FC = () => {
       if (ch) { try { localStorage.setItem(rk, JSON.stringify(nextRows)); } catch { /* ignore */ } }
     });
     const all: any[] = JSON.parse(localStorage.getItem(storageKey) || '[]');
+    // 撤回即取消对账请求：无条件还原为未对账（不再仅限“已发起对账”），
+    // 避免陈旧终态值残留后被 reload/同步重建读回“对账完成”
     localStorage.setItem(storageKey, JSON.stringify(all.map(b => b.key === r.key ? {
       ...b,
-      reconcileResult: b.reconcileResult === '已发起对账' ? '' : b.reconcileResult,
-      purchaserReconciler: b.reconcileResult === '已发起对账' ? '' : b.purchaserReconciler,
+      reconcileResult: '',
+      purchaserReconciler: '',
+      diffNote: '',
       billLog: appendBillLogEntry(b.billLog, '撤回对账'),
     } : b)));
     reload();

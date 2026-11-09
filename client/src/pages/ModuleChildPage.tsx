@@ -4750,12 +4750,19 @@ const ModuleChildPage: React.FC = () => {
             const idx = data.findIndex((r: any) => r.id === record.id || r.key === record.key);
             if (idx >= 0) {
               data[idx].billLog = newBillLog;
+              // 撤回必须把“待对账”恢复态一并落库：buildBillDetailRows 重载时按 prev.reconResult 回填，
+              // 若只改内存不落库，同步/多标签重建会从陈旧存储读回“对账完成”（表现为撤回后过一会自动完成、刷新才恢复）
+              data[idx].reconResult = '待对账';
+              data[idx].diffDesc = '';
               data[idx].supplierReconciler = '';
+              data[idx].supplierReconPerson = '';
+              data[idx].purchaserReconPerson = '';
+              data[idx].confirmTime = '';
               localStorage.setItem(storageKey, JSON.stringify(data));
             }
           }
         } catch { /* ignore */ }
-        setDataSource(prev => prev.map(r => (r.key === record.key ? { ...r, reconResult: '待对账', diffDesc: '', supplierReconciler: '', billLog: newBillLog } : r)));
+        setDataSource(prev => prev.map(r => (r.key === record.key ? { ...r, reconResult: '待对账', diffDesc: '', supplierReconciler: '', supplierReconPerson: '', purchaserReconPerson: '', confirmTime: '', billLog: newBillLog } : r)));
         message.success(`账单 ${record.outboundNo || record.id} 的对账已撤回`);
       },
     });
