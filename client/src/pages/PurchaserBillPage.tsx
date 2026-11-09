@@ -27,7 +27,7 @@ import { saveDataset } from '../utils/dataStore';
 import { reloadAfterPull } from '../utils/serverSync';
 import { compressImageFile } from '../utils/imageCompress';
 import { loadSupplierFinishedProducts } from '../utils/supplierProducts';
-import { loadRoleRecords, loadRoleAll, upsertRecords } from '../utils/reconStore';
+import { loadRoleRecords, loadRoleAll, upsertRecords, loadAllReconRecordsUnion } from '../utils/reconStore';
 import { resolveLatestCompanyName } from '../utils/nameSync';
 
 const { Text } = Typography;
@@ -588,10 +588,51 @@ const PurchaserBillPage: React.FC = () => {
   }, [addProductVisible, addProductTab]);
 
   const reload = useCallback(() => {
-    try { setBills(JSON.parse(localStorage.getItem(storageKey) || '[]')); } catch { setBills([]); }
+    try {
+      let list: any[] = JSON.parse(localStorage.getItem(storageKey) || '[]');
+      if (!Array.isArray(list)) list = [];
+      // 闭环自愈：供应商确认/按采方入账后对账记录已打完成墓碑，但采购账单可能仍停在“已发起对账”
+      // （对方浏览器回写未覆盖本端 / 开放页签陈旧）。此处按完成墓碑把在途账单收敛到终态并落库。
+      try {
+        const all = loadAllReconRecordsUnion();
+        const tombs = all.filter((t: any) => t && t.delisted === true && t.withdrawn !== true &&
+          (String(t.supResult || '') !== '' || String(t.reconResult || '') === 'matched' || !!t.confirmedAt));
+        const alive = all.filter((t: any) => t && !t.delisted);
+        if (tombs.length) {
+          let ch = false;
+          list = list.map((b: any) => {
+            const cur = String(b?.reconcileResult || '');
+            if (RECON_DONE.includes(cur) || cur === '不相符') return b;
+            const hitT = (x: any) => (x.matchedBillKey && x.matchedBillKey === b.key) || (x.orderNo && x.orderNo === b.key) || (!!x.docNo && !!b.outboundNo && String(x.docNo).trim() === String(b.outboundNo).trim());
+            // 新周期保护：仍存在存活对账记录（完成后重新发起）→ 不收敛
+            if (alive.some(hitT)) return b;
+            const t = tombs.find(hitT);
+            if (!t) return b;
+            ch = true;
+            return {
+              ...b,
+              reconcileResult: String(t.supResult || '') === '不相符' ? '不相符' : '已对账',
+              diffNote: t.supDiff || b.diffNote || '',
+              supplierReconciler: b.supplierReconciler || t.supPerson || '',
+              purchaserReconciler: b.purchaserReconciler || t.purPerson || '',
+            };
+          });
+          if (ch) localStorage.setItem(storageKey, JSON.stringify(list));
+        }
+      } catch { /* ignore */ }
+      setBills(list);
+    } catch { setBills([]); }
     try { setReconRecords(loadRoleRecords('purchaser', getDataOwner())); } catch { setReconRecords([]); }
   }, [storageKey]);
   useEffect(() => { reload(); }, [reload]);
+  // 开放页签实时收敛：同步完成（含自愈回写）或其他标签页写入本账单键时重载，避免显示陈旧对账结果
+  useEffect(() => {
+    const onUpd = () => reload();
+    const onStorage = (e: StorageEvent) => { if (e.key === storageKey) reload(); };
+    window.addEventListener('sync-data-updated', onUpd);
+    window.addEventListener('storage', onStorage);
+    return () => { window.removeEventListener('sync-data-updated', onUpd); window.removeEventListener('storage', onStorage); };
+  }, [reload, storageKey]);
 
   // ==== 会计账薄联动：对账结果变更为终态时自动生成会计分录（借：原材料/自定义科目，贷：应付账款）====
   const [acctDebitSubject, setAcctDebitSubject] = useState<string>(() => {
