@@ -63,9 +63,48 @@ export function healReconTerminalLinks(): boolean {
       const m = String(k || '').match(/(\d{12,})$/);
       return m ? Number(m[1]) : 0;
     };
-    const matchRow = (t: any, row: any): boolean =>
-      (t.orderNo && row.id === t.orderNo) ||
-      (!!row.outboundNo && String(row.outboundNo).trim() === String(t.docNo || '').trim());
+    // 同号消歧：同一客户下出库单号可能重复（历史脏数据），仅凭 docNo 无法定位唯一行。
+    // 有 orderNo（供应商行 id）时精确定位；否则仅当该 docNo 在该客户行中唯一时才按单号回写，
+    // 重复时返回 null（跳过自动回写），避免把另一张同号单误写/双写为对账完成。
+    const custOf = (row: any): string => String(row?.customerUsername || row?.customerName || '').trim();
+    const targetRowIdCache = new Map<string, string | null>();
+    const resolveTargetRowId = (t: any, custHint?: string): string | null => {
+      if (t?.orderNo) {
+        const hit = details.some(d => d.rows.some((r: any) => r.id === t.orderNo));
+        return hit ? String(t.orderNo) : null;
+      }
+      const ck = custHint || String(t?.customerUsername || t?.customerName || '').trim();
+      const cacheKey = String(t?.key || '') + '#' + ck;
+      if (targetRowIdCache.has(cacheKey)) return targetRowIdCache.get(cacheKey) || null;
+      let id: string | null = null;
+      if (t?.docNo) {
+        const cands = new Set<string>();
+        details.forEach(d => d.rows.forEach((r: any) => {
+          if (!r?.outboundNo || String(r.outboundNo).trim() !== String(t.docNo).trim()) return;
+          if (ck && custOf(r) && custOf(r) !== ck) return;
+          cands.add(String(r.id));
+        }));
+        if (cands.size === 1) id = Array.from(cands)[0];
+      }
+      targetRowIdCache.set(cacheKey, id);
+      return id;
+    };
+    const matchRow = (t: any, row: any): boolean => {
+      if (t?.orderNo && row?.id === t.orderNo) return true;
+      const tid = resolveTargetRowId(t, custOf(row));
+      return !!tid && row?.id === tid;
+    };
+    // 终态采购账单→供应商行回写前的同号消歧：同客户下该单号唯一才允许回写
+    const uniqueRowIdFor = (no: string, owner: string): string | null => {
+      const cands = new Set<string>();
+      details.forEach(d => d.rows.forEach((r: any) => {
+        if (!r?.outboundNo || String(r.outboundNo).trim() !== no) return;
+        const cu = String(r.customerUsername || '').trim();
+        if (owner && cu && cu !== owner) return;
+        cands.add(String(r.id));
+      }));
+      return cands.size === 1 ? Array.from(cands)[0] : null;
+    };
     const completionTombOfRow = (row: any): any => tombs.find((t: any) => isCompletionTomb(t) && matchRow(t, row)) || null;
     const withdrawTombOfRow = (row: any): any => tombs.find((t: any) => t.delisted && !isCompletionTomb(t) && matchRow(t, row)) || null;
     const aliveRecs = recsAll.filter((r: any) => r && !r.delisted);
@@ -83,16 +122,21 @@ export function healReconTerminalLinks(): boolean {
       return null;
     };
     // 1) 终态账单/完成墓碑 → 供应商账单明细行断言回写（对抗旧端复活的回滚）
-    billsAll.forEach(bills => {
+    billsAll.forEach((bills, bi) => {
+      const owner = billKeys[bi].slice('purchaser_bills_'.length);
       bills.forEach((b: any) => {
         const res = String(b?.reconcileResult || '');
         if (!BILL_TERMINAL.includes(res)) return;
         const no = String(b?.outboundNo || '').trim();
         if (!no) return;
+        // 同号消歧：同客户下该出库单号唯一才回写；重复时跳过，避免误写另一张同号单
+        const uid = uniqueRowIdFor(no, owner);
+        if (!uid) return;
         details.forEach(d => {
           let ch = false;
           d.rows = d.rows.map((row: any) => {
             if (String(row?.outboundNo || '').trim() !== no) return row;
+            if (row.id !== uid) return row;
             if (SUP_ROW_TERMINAL.includes(String(row?.reconResult || ''))) return row;
             const tomb = completionTombOfRow(row);
             // 新周期保护：存在比完成墓碑更新的存活记录（完成后重新发起）→ 不回写旧周期结果
@@ -148,9 +192,12 @@ export function healReconTerminalLinks(): boolean {
         let ch = false;
         billsAll[bi] = bills.map((b: any) => {
           if (BILL_TERMINAL.includes(String(b?.reconcileResult || ''))) return b;
+          // 同号消歧：本账号下该出库单号重复时不用 docNo 回退匹配（避免两张同号单都被置终态），仅认 matchedBillKey
+          const no = String(b?.outboundNo || '').trim();
+          const dupDoc = !!no && bills.filter((x: any) => String(x?.outboundNo || '').trim() === no).length > 1;
           const t = compTombs.find((x: any) =>
             (x.matchedBillKey && x.matchedBillKey === b.key) ||
-            (!!x.docNo && !!b.outboundNo && String(x.docNo).trim() === String(b.outboundNo).trim()));
+            (!dupDoc && !!x.docNo && !!no && String(x.docNo).trim() === no));
           if (!t) return b;
           ch = true;
           return {

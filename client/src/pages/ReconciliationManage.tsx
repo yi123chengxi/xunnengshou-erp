@@ -260,12 +260,18 @@ const ReconciliationManage: React.FC = () => {
   const saveBills = useCallback((list: any[]) => {
     localStorage.setItem('purchaser_bills_' + getOwner(), JSON.stringify(list));
   }, [getOwner]);
-  const findBillIndex = useCallback((bills: any[], r: ReconRecord) => bills.findIndex(b =>
-    (((!!r.matchedBillKey && b.key === r.matchedBillKey) ||
-    (!!b.outboundNo && String(b.outboundNo).trim() === String(r.docNo || '').trim()))) &&
-    // 对方主体校验：同号跨供应商不误回写（凭证优先，名称精确兜底）
-    (!String(r.supplierName || '').trim() || String(b.supplier || '').trim() === String(r.supplierName || '').trim() || (!!r.supplierUsername && b.supplierUsername === r.supplierUsername))
-  ), []);
+  const findBillIndex = useCallback((bills: any[], r: ReconRecord) => {
+    const cpOk = (b: any) =>
+      (!String(r.supplierName || '').trim() || String(b.supplier || '').trim() === String(r.supplierName || '').trim() || (!!r.supplierUsername && b.supplierUsername === r.supplierUsername));
+    // 1) 凭证精确匹配（matchedBillKey）优先
+    if (r.matchedBillKey) { const i = bills.findIndex(b => b.key === r.matchedBillKey && cpOk(b)); if (i >= 0) return i; }
+    // 2) 单号回退：仅当该单号在候选中唯一时才回写；同号重复时放弃，避免误写另一张
+    if (r.docNo) {
+      const hits = bills.map((b, i) => ({ b, i })).filter(e => !!e.b.outboundNo && String(e.b.outboundNo).trim() === String(r.docNo || '').trim() && cpOk(e.b));
+      if (hits.length === 1) return hits[0].i;
+    }
+    return -1;
+  }, []);
 
   /** 对账完成：回传供应商账单明细“对账完成” + 采购商账单“已对账” + 双方对账管理自动移除该笔对账 */
   const completeRecon = useCallback((r: ReconRecord, action?: string, operatorName?: string) => {
@@ -308,10 +314,15 @@ const ReconciliationManage: React.FC = () => {
         const key = `pageData_customer_bill-detail_${supOwner}`;
         const rows: any[] = JSON.parse(localStorage.getItem(key) || '[]');
         if (Array.isArray(rows)) {
-          const idx = rows.findIndex(x =>
-            (((!!r.orderNo && x.id === r.orderNo) || (!!x.outboundNo && String(x.outboundNo).trim() === String(r.docNo || '').trim()))) &&
-            // 对方主体校验：同号跨采购商不误回写
-            (!String(r.customerName || '').trim() || String(x.customerName || '').trim() === String(r.customerName || '').trim() || (!!r.customerUsername && x.customerUsername === r.customerUsername) || (!!r.customerNo && x.customerNo === r.customerNo)));
+          const cpOkRow = (x: any) =>
+            (!String(r.customerName || '').trim() || String(x.customerName || '').trim() === String(r.customerName || '').trim() || (!!r.customerUsername && x.customerUsername === r.customerUsername) || (!!r.customerNo && x.customerNo === r.customerNo));
+          // 1) 凭证精确匹配（orderNo=供应商行 id）优先；2) 单号回退仅当唯一，同号重复时放弃
+          let idx = -1;
+          if (r.orderNo) idx = rows.findIndex(x => x.id === r.orderNo && cpOkRow(x));
+          if (idx < 0 && r.docNo) {
+            const hits = rows.map((x, i) => ({ x, i })).filter(e => !!e.x.outboundNo && String(e.x.outboundNo).trim() === String(r.docNo || '').trim() && cpOkRow(e.x));
+            if (hits.length === 1) idx = hits[0].i;
+          }
           if (idx >= 0) {
             const supResult = action === 'entryByPurchaser' ? '按采方入账' : (action === 'mismatch' ? '不相符' : '对账完成');
             rows[idx] = {

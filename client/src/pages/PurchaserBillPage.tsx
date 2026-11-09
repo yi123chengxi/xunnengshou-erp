@@ -38,17 +38,23 @@ const hasData = (it: BillItem) => (it.styleCode || '').trim() || (it.productCode
 
 // 对账完成终态（对账完成/已对账/按供方入账）
 const RECON_DONE = ['对账完成', '已对账', '按供方入账'];
-// 对账记录列表中是否存在供应商发起的记录（按账单 key/出库单号匹配）
-const matchSupplierRecon = (list: any[], b: { key: string; outboundNo: string }) => list.some((x: any) =>
-  (x.initiator || (x.source === 'bill' ? 'supplier' : '')) === 'supplier' &&
-  // 对方主体校验：同号跨供应商不误匹配（凭证优先，名称精确兜底）
-  (!x.supplierName || !(b as any).supplier || String(x.supplierName).trim() === String((b as any).supplier).trim() || (!!x.supplierUsername && x.supplierUsername === (b as any).supplierUsername)) &&
-  ((!!x.orderNo && x.orderNo === b.key) || (!!x.matchedBillKey && x.matchedBillKey === b.key) || (!!b.outboundNo && String(x.docNo || '').trim() === String(b.outboundNo).trim())));
-// 对账记录列表中是否存在采购商发起的记录（按账单 key/出库单号匹配）
-const matchPurchaserRecon = (list: any[], b: { key: string; outboundNo: string }) => list.some((x: any) =>
-  x.source === 'bill' && x.initiator === 'purchaser' &&
-  (!x.supplierName || !(b as any).supplier || String(x.supplierName).trim() === String((b as any).supplier).trim() || (!!x.supplierUsername && x.supplierUsername === (b as any).supplierUsername)) &&
-  ((!!x.orderNo && x.orderNo === b.key) || (!!x.matchedBillKey && x.matchedBillKey === b.key) || (!!b.outboundNo && String(x.docNo || '').trim() === String(b.outboundNo).trim())));
+// 对账记录列表中是否存在供应商发起的记录（凭证优先；单号回退仅当同号唯一，防同号重复误判）
+const matchSupplierRecon = (list: any[], b: { key: string; outboundNo: string }) => {
+  const base = (x: any) => (x.initiator || (x.source === 'bill' ? 'supplier' : '')) === 'supplier' &&
+    // 对方主体校验：同号跨供应商不误匹配（凭证优先，名称精确兜底）
+    (!x.supplierName || !(b as any).supplier || String(x.supplierName).trim() === String((b as any).supplier).trim() || (!!x.supplierUsername && x.supplierUsername === (b as any).supplierUsername));
+  if (list.some((x: any) => base(x) && ((!!x.orderNo && x.orderNo === b.key) || (!!x.matchedBillKey && x.matchedBillKey === b.key)))) return true;
+  const byDoc = list.filter((x: any) => base(x) && !!b.outboundNo && String(x.docNo || '').trim() === String(b.outboundNo).trim());
+  return byDoc.length === 1;
+};
+// 对账记录列表中是否存在采购商发起的记录（凭证优先；单号回退仅当同号唯一）
+const matchPurchaserRecon = (list: any[], b: { key: string; outboundNo: string }) => {
+  const base = (x: any) => x.source === 'bill' && x.initiator === 'purchaser' &&
+    (!x.supplierName || !(b as any).supplier || String(x.supplierName).trim() === String((b as any).supplier).trim() || (!!x.supplierUsername && x.supplierUsername === (b as any).supplierUsername));
+  if (list.some((x: any) => base(x) && ((!!x.orderNo && x.orderNo === b.key) || (!!x.matchedBillKey && x.matchedBillKey === b.key)))) return true;
+  const byDoc = list.filter((x: any) => base(x) && !!b.outboundNo && String(x.docNo || '').trim() === String(b.outboundNo).trim());
+  return byDoc.length === 1;
+};
 
 /** 账单创建时间（毫秒）：createdAt 优先（兼容 'YYYY/M/D HH:mm:ss' 与 ISO），缺失时回退 key 内时间戳、账单日期；用于列表按最新创建排前 */
 const billCreatedMs = (b: any): number => {
@@ -603,7 +609,11 @@ const PurchaserBillPage: React.FC = () => {
           list = list.map((b: any) => {
             const cur = String(b?.reconcileResult || '');
             if (RECON_DONE.includes(cur) || cur === '不相符') return b;
-            const hitT = (x: any) => (x.matchedBillKey && x.matchedBillKey === b.key) || (x.orderNo && x.orderNo === b.key) || (!!x.docNo && !!b.outboundNo && String(x.docNo).trim() === String(b.outboundNo).trim());
+            const byKeyT = (x: any) => (x.matchedBillKey && x.matchedBillKey === b.key) || (x.orderNo && x.orderNo === b.key);
+            const byDocT = (x: any) => !!x.docNo && !!b.outboundNo && String(x.docNo).trim() === String(b.outboundNo).trim();
+            // 同号消歧：本账号下该出库单号重复时不用 docNo 回退（避免两张同号单都被收敛），仅认凭证
+            const dupDoc = !!b.outboundNo && list.filter((y: any) => String(y?.outboundNo || '').trim() === String(b.outboundNo).trim()).length > 1;
+            const hitT = (x: any) => byKeyT(x) || (!dupDoc && byDocT(x));
             // 新周期保护：仍存在存活对账记录（完成后重新发起）→ 不收敛
             if (alive.some(hitT)) return b;
             const t = tombs.find(hitT);
