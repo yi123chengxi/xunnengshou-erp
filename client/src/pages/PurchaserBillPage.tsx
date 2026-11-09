@@ -730,6 +730,21 @@ const PurchaserBillPage: React.FC = () => {
   // 保存单据
   const handleSave = () => {
     if (!outboundNo.trim()) { message.warning('请填写出库单号'); return; }
+    // 源头防重：同供应商下出库单号已存在时强提示；若已对账完成则禁止新增
+    // （避免新增账单复用历史已对账单号，被旧对账证据经单号回写感染为「自动对账完成」）
+    try {
+      let existBills: any[] = [];
+      try { const arr = JSON.parse(localStorage.getItem(storageKey) || '[]'); if (Array.isArray(arr)) existBills = arr; } catch { existBills = []; }
+      const noTrim = String(outboundNo).trim();
+      const supTrim = String(supplier || '').trim();
+      const dups = existBills.filter((b: any) => String(b?.outboundNo || '').trim() === noTrim &&
+        (!supTrim || String(b?.supplier || '').trim() === supTrim));
+      if (dups.length) {
+        const doneBill = dups.find((b: any) => RECON_DONE.includes(String(b?.reconcileResult || '')) || String(b?.reconcileResult || '') === '不相符');
+        if (doneBill) { message.error(`出库单号 ${noTrim} 在该供应商下已存在且已对账完成，不能重复新增；如需再次对账请先在原账单撤回对账`); return; }
+        message.warning(`出库单号 ${noTrim} 在该供应商下已存在 ${dups.length} 张账单，继续新增将产生同号账单，对账时需手动关联`);
+      }
+    } catch { /* ignore */ }
     const validItems = mergeDuplicateItems(items.filter(hasData));
     const rec: BillRecord = {
       key: `bill-${Date.now()}`,

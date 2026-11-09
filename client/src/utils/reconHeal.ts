@@ -63,6 +63,25 @@ export function healReconTerminalLinks(): boolean {
       const m = String(k || '').match(/(\d{12,})$/);
       return m ? Number(m[1]) : 0;
     };
+    // 行创建时间保护：目标行/账单的创建时间（供应商明细行取 createdAt=订单支付/创建时间；
+    // 采购账单取 key 内 bill-<ts> 时间戳）。当完成证据（墓碑/终态账单）的时间早于目标创建时间时，
+    // 说明目标是证据之后新增、仅复用了同一出库单号的新单，绝不能把旧周期的对账完成结果回写到它身上
+    // （对抗「新增账单复用历史已对账单号 → 自动对账完成」的感染）。
+    const rowCreatedTs = (row: any): number => {
+      const raw = String(row?.createdAt || row?.createTime || '').trim();
+      const t = raw ? Date.parse(raw) : NaN;
+      return Number.isFinite(t) ? t : 0;
+    };
+    // 证据时间早于目标创建时间 → 目标为证据之后新建，跳过回写（0 表示时间不可知，不拦截）
+    const evidencePrecedesRow = (evTs: number, row: any): boolean => {
+      const rc = rowCreatedTs(row);
+      return !!evTs && !!rc && evTs < rc;
+    };
+    // 证据时间早于目标采购账单创建时间（bill-<ts>）→ 账单为证据之后新建，跳过回写
+    const evidencePrecedesBill = (evTs: number, bill: any): boolean => {
+      const bc = keyTs(bill?.key);
+      return !!evTs && !!bc && evTs < bc;
+    };
     // 同号消歧：同一客户下出库单号可能重复（历史脏数据），仅凭 docNo 无法定位唯一行。
     // 有 orderNo（供应商行 id）时精确定位；否则仅当该 docNo 在该客户行中唯一时才按单号回写，
     // 重复时返回 null（跳过自动回写），避免把另一张同号单误写/双写为对账完成。
@@ -141,8 +160,10 @@ export function healReconTerminalLinks(): boolean {
             const tomb = completionTombOfRow(row);
             // 新周期保护：存在比完成墓碑更新的存活记录（完成后重新发起）→ 不回写旧周期结果
             const ct1 = tomb;
-            const evTs1 = ct1 ? (keyTs(ct1.key) || (Date.parse(String(ct1.delistedAt || '')) || 0)) : 0;
+            const evTs1 = ct1 ? (keyTs(ct1.key) || (Date.parse(String(ct1.delistedAt || '')) || 0)) : keyTs(b.key);
             if (evTs1 && hasNewerAlive(row, evTs1)) return row;
+            // 行创建时间保护：终态证据早于本供应商行创建时间 → 本行为证据之后新增（复用旧单号），不回写
+            if (evidencePrecedesRow(evTs1, row)) return row;
             const alignAmt = res === '不相符' ? 0 : (Number(tomb ? (tomb.supResult === '按采方入账' ? tomb.theirAmount : tomb.ourAmount) : b.totalAmount) || 0);
             ch = true;
             return {
@@ -170,6 +191,8 @@ export function healReconTerminalLinks(): boolean {
           if (!tomb) return row;
           const tTs = keyTs(tomb.key) || (Date.parse(String(tomb.delistedAt || '')) || 0);
           if (tTs && hasNewerAlive(row, tTs)) return row;
+          // 行创建时间保护：完成墓碑早于本行创建时间 → 本行为墓碑之后新增（复用旧单号），不回写
+          if (evidencePrecedesRow(tTs, row)) return row;
           const alignAmt = Number(tomb.supResult === '按采方入账' ? tomb.theirAmount : tomb.ourAmount) || 0;
           ch = true;
           return {
@@ -199,6 +222,9 @@ export function healReconTerminalLinks(): boolean {
             (x.matchedBillKey && x.matchedBillKey === b.key) ||
             (!dupDoc && !!x.docNo && !!no && String(x.docNo).trim() === no));
           if (!t) return b;
+          // 行创建时间保护：完成墓碑早于本采购账单创建时间（bill-<ts>）→ 账单为墓碑之后新增（复用旧单号），不回写
+          const tTs12 = keyTs(t.key) || (Date.parse(String(t.delistedAt || '')) || 0);
+          if (evidencePrecedesBill(tTs12, b)) return b;
           ch = true;
           return {
             ...b,
@@ -227,6 +253,58 @@ export function healReconTerminalLinks(): boolean {
           purchaserReconPerson: '',
           supplierReconPerson: '',
           billLog: appendBillLogEntry(row.billLog, '撤回对账', undefined, '自愈修复：撤回后被误置的对账完成状态已还原为待对账'),
+        };
+      });
+      if (ch) { try { localStorage.setItem(d.key, JSON.stringify(d.rows)); wrote = true; } catch { /* ignore */ } }
+    });
+    // 1.8) 复用旧单号感染还原：新增账单行复用了历史已对账的出库单号，被「早于本行创建时间」的
+    //      旧终态证据（完成墓碑/终态采购账单，经同客户 docNo 匹配）误置为对账完成 → 还原为待对账。
+    //      严格门禁（避免误伤历史正常完成行）：①本行创建时间可解析；②本行无自身凭证级完成墓碑
+    //      （orderNo === row.id）；③仅存在早于本行创建的同客户旧证据，且不存在时间一致/更新的合法证据。
+    details.forEach(d => {
+      let ch = false;
+      d.rows = d.rows.map((row: any) => {
+        if (!SUP_ROW_TERMINAL.includes(String(row?.reconResult || ''))) return row;
+        const rc = rowCreatedTs(row);
+        const no = String(row?.outboundNo || '').trim();
+        if (!rc || !no) return row;
+        const rowCust = custOf(row);
+        // 本行自身凭证级完成证据（orderNo 精确匹配的完成墓碑）→ 合法完成，不动
+        const ownTomb = tombs.find((t: any) => isCompletionTomb(t) && t.orderNo && String(t.orderNo) === String(row.id));
+        if (ownTomb) return row;
+        // 经同客户 docNo 匹配到本行的终态证据，按时间分为「旧证据（早于本行创建）」与「合法证据（>= 本行创建）」
+        let oldEv = false; let validEv = false;
+        compTombs.forEach((t: any) => {
+          if (!t.docNo || String(t.docNo).trim() !== no) return;
+          const tc = custOf(t);
+          if (rowCust && tc && tc !== rowCust) return; // 跨客户同号证据不算本行证据
+          const ts = keyTs(t.key) || (Date.parse(String(t.delistedAt || '')) || 0);
+          if (!ts) return;
+          if (ts < rc) oldEv = true; else validEv = true;
+        });
+        billsAll.forEach((list: any[], bi: number) => {
+          const owner = billKeys[bi].slice('purchaser_bills_'.length);
+          const rowCustUser = String(row?.customerUsername || '').trim();
+          list.forEach((b: any) => {
+            if (!BILL_TERMINAL.includes(String(b?.reconcileResult || ''))) return;
+            if (String(b?.outboundNo || '').trim() !== no) return;
+            if (rowCustUser && owner && owner !== rowCustUser) return; // 账单归属采购商 != 本行客户 → 非本行证据
+            const ts = keyTs(b.key);
+            if (!ts) return;
+            if (ts < rc) oldEv = true; else validEv = true;
+          });
+        });
+        // 仅当存在旧证据感染且无任何时间合法证据时还原（无证据的历史完成行不动，避免数据丢失）
+        if (!oldEv || validEv) return row;
+        ch = true;
+        return {
+          ...row,
+          reconResult: '待对账',
+          diffDesc: '',
+          purchaserReconPerson: '',
+          supplierReconPerson: '',
+          confirmTime: '',
+          billLog: appendBillLogEntry(row.billLog, '撤回对账', undefined, '自愈修复：本行复用了历史已对账单号，被旧对账证据误置为完成，已还原为待对账'),
         };
       });
       if (ch) { try { localStorage.setItem(d.key, JSON.stringify(d.rows)); wrote = true; } catch { /* ignore */ } }

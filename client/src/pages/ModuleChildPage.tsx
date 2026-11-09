@@ -4662,6 +4662,23 @@ const ModuleChildPage: React.FC = () => {
       message.success(`单据 ${no} 已保存修改`);
       return;
     }
+    // 源头防重：同客户下出库单号已存在时强提示；若已对账完成则禁止新增
+    // （避免新增账单复用历史已对账单号，被旧对账证据经单号回写感染为「自动对账完成」）
+    try {
+      const ownerDup = getDataOwner();
+      const dupStorageKey = `pageData_customer_bill-detail_${ownerDup}`;
+      let existingRows: any[] = [];
+      try { const arr = JSON.parse(localStorage.getItem(dupStorageKey) || '[]'); if (Array.isArray(arr)) existingRows = arr; } catch { existingRows = []; }
+      const SUP_DONE = ['对账完成', '按采方入账', '不相符'];
+      const cust = String(billAddCustomer || '').trim();
+      const dups = existingRows.filter((r: any) => String(r?.outboundNo || '').trim() === no &&
+        (!cust || String(r?.customerName || '').trim() === cust || String(r?.customerUsername || '').trim() === cust));
+      if (dups.length) {
+        const doneRow = dups.find((r: any) => SUP_DONE.includes(String(r?.reconResult || '')));
+        if (doneRow) { message.error(`单据编号 ${no} 在该客户下已存在且已对账完成，不能重复新增；如需再次对账请先在原账单撤回对账`); return; }
+        message.warning(`单据编号 ${no} 在该客户下已存在 ${dups.length} 张账单，继续新增将产生同号账单，对账时需手动关联`);
+      }
+    } catch { /* ignore */ }
     const record: Record<string, any> = {
       key: `bill-manual-${Date.now()}`,
       id: `SD-${String(Date.now()).slice(-8)}`,
