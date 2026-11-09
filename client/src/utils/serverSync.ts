@@ -11,11 +11,12 @@ import { getOriginalSetItem, safeSetItem, emergencyFreeSpace } from './storageQu
 import { API_BASE } from './apiBase';
 import { repairPurchaserSupplierNames } from './cooperationTerminate';
 import { reconcileCooperationPairs } from './cooperationReconcile';
+import { migrateLegacyReconRecords } from './reconStore';
 import { repairCounterpartyNames } from './nameSync';
 import { healReconTerminalLinks } from './reconHeal';
 
 // 需要同步的业务数据 key 前缀/精确名
-const SYNC_PREFIXES = ['pageData_', 'custom_', 'warehouses_', 'purchaser_suppliers_', 'boundPurchasers_', 'accounts_', 'shop_info_', 'shop_profit_', 'month_end_check_', 'withdrawal_record_', 'dev_', 'hr_', 'newstyle_', 'brandauth_', 'molds_', 'credit_adjustments_', 'published_credit_', 'payment_requests_', 'payment_request_managers_', 'notification_settings_', 'print_template_', 'price_strategy_', 'user_notice_', 'invoice_record_', 'invoice_apply_requests_', 'purchaser_bills_'];
+const SYNC_PREFIXES = ['pageData_', 'custom_', 'warehouses_', 'purchaser_suppliers_', 'boundPurchasers_', 'accounts_', 'shop_info_', 'shop_profit_', 'month_end_check_', 'withdrawal_record_', 'dev_', 'hr_', 'newstyle_', 'brandauth_', 'molds_', 'credit_adjustments_', 'published_credit_', 'payment_requests_', 'payment_request_managers_', 'notification_settings_', 'print_template_', 'price_strategy_', 'user_notice_', 'invoice_record_', 'invoice_apply_requests_', 'purchaser_bills_', 'recon_db_'];
 const SYNC_EXACT = ['registeredUsers', 'subscription_orders', 'storage_orders', 'market_publish_orders', 'market_ratings', 'market_trade_orders', 'market_visitor_cart_shares', 'market_mold_listings', 'purchaser_pushed_orders', 'cooperation_applications', 'cooperation_invites', 'recon_records', 'recon_feedback', 'company_renames'];
 // 图片块体积大，不参与跨浏览器同步（各浏览器独立）
 const EXCLUDE_PREFIXES = ['prodImg_', 'thumb_', 'payShot_', 'mold_img_'];
@@ -55,6 +56,8 @@ function keyOwner(key: string): string | null {
   if (key === 'cooperation_applications') return null;
   // 对账记录/对账反馈/公司改名记录为双方跨租户协作数据：全局共享同步，保证发起方与接收方跨浏览器互见
   if (key === 'recon_records' || key === 'recon_feedback' || key === 'company_renames') return null;
+  // 分平台对账独立库（recon_db_supplier_<账号> / recon_db_purchaser_<账号>）：跨租户协作数据，全局同步
+  if (key.startsWith('recon_db_')) return null;
   // 商机市场相关键为全局共享数据（跨账号可见），返回 null 使所有账号都能同步
   if (key.startsWith('market_')) return null;
   // 打印模板为系统级预设/共享数据：跨账号同步，部署后新浏览器自动拉取
@@ -320,6 +323,8 @@ export const reloadAfterPull = (reload: () => void): void => {
 };
 
 export async function pullAllDatasets(): Promise<number> {
+  // 对账记录旧全局键 → 分平台独立库的存量迁移（幂等，墓碑优先）
+  try { migrateLegacyReconRecords(); } catch { /* ignore */ }
   // 合作存量数据修复：采购商侧供应商名称统一为已认证公司全称（轻量，随同步轮询执行）
   try { repairPurchaserSupplierNames(); } catch { /* ignore */ }
   // 合作方公司名称/信息同步：改名链改写 + 账号名快照修正 + 关联账号信息刷新（随同步轮询执行）

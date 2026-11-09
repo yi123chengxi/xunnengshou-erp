@@ -19,6 +19,9 @@ const APPEND_ONLY_KEYS = ['market_trade_orders', 'purchaser_pushed_orders'];
 // 这类键的删除/完成靠 delisted 墓碑表达，整体替换会让未同步墓碑的旧端（如另一端浏览器）
 // 把已完成/已删除的对账记录重新写回，导致「刷新后又出现」「对账结果不回写」。
 const MERGE_ALWAYS_KEYS = ['recon_records'];
+// 墓碑语义键前缀：分平台对账独立库（recon_db_supplier_<账号> / recon_db_purchaser_<账号>）
+const MERGE_ALWAYS_PREFIXES = ['recon_db_'];
+const isMergeAlwaysKey = (key: string): boolean => MERGE_ALWAYS_KEYS.includes(key) || MERGE_ALWAYS_PREFIXES.some(p => key.startsWith(p));
 
 // ============ 收/付申请待处理推送（系统级 Web Push，浏览器关闭仍可提醒） ============
 const payReqPushThrottle = new Map<string, number>();
@@ -138,7 +141,7 @@ router.put('/dataset', async (req: Request, res: Response) => {
     if (Number(baseTs) === row.updated_at) {
       // 只增不删键/墓碑语义键：即使客户端自认为最新，也强制记录级并集合并，
       // 防止本地缺数据的客户端清空服务端记录或复活已墓碑的记录
-      if (APPEND_ONLY_KEYS.includes(key) || MERGE_ALWAYS_KEYS.includes(key)) {
+      if (APPEND_ONLY_KEYS.includes(key) || isMergeAlwaysKey(key)) {
         const guarded = mergeArrayDatasets(row.dataset_json, json);
         if (guarded) {
           const gTs = Math.max(ts, row.updated_at);

@@ -41,6 +41,7 @@ const SWEEP_PREFIXES = [
   'purchaser_suppliers_', 'boundPurchasers_', 'customers_', 'purchaser_bills_',
   'pageData_customer_bill-detail_', 'pageData_sales_order-manage_',
   'invoice_record_', 'invoice_apply_requests_', 'business_license_',
+  'recon_db_',
 ];
 const SWEEP_EXACT = ['recon_records'];
 
@@ -193,7 +194,7 @@ export const repairCounterpartyNames = (): string[] => {
         const cu = nr.customerUsername ? u2c.get(String(nr.customerUsername)) : null;
         if (cu && cu.companyName && nr.customerName !== cu.companyName) { nr.customerName = cu.companyName; rc = true; }
         // 对账记录：双方名称与 counterparty 按凭证刷新（counterparty 语义=发起方的对手方）
-        if (key === 'recon_records') {
+        if (key === 'recon_records' || key.indexOf('recon_db_') === 0) {
           if (su && su.companyName && nr.supplierName !== su.companyName) { nr.supplierName = su.companyName; rc = true; }
           if (pu && pu.companyName && nr.customerName !== pu.companyName) { nr.customerName = pu.companyName; rc = true; }
           const cp = nr.initiator === 'purchaser' ? nr.supplierName : nr.customerName;

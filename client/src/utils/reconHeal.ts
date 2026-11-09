@@ -12,6 +12,8 @@
 const BILL_TERMINAL = ['按供方入账', '已对账', '对账完成', '不相符'];
 const SUP_ROW_TERMINAL = ['对账完成', '按采方入账'];
 
+import { loadAllReconRecordsUnion, upsertRecords } from './reconStore';
+
 const readList = (k: string): any[] => {
   try {
     const v = JSON.parse(localStorage.getItem(k) || '[]');
@@ -39,7 +41,8 @@ export function healReconTerminalLinks(): boolean {
     const details = detailKeys.map(k => ({ key: k, rows: readList(k) }));
     const billsAll = billKeys.map(k => readList(k));
     // 全局键墓碑（双端必拉）：携带供应商侧回写断言，使供应商浏览器无需采购商账单键也能自愈明细行
-    const recsAll = readList('recon_records');
+    // 分平台独立库 + 旧全局键的并集（同 key 墓碑优先）
+    const recsAll = loadAllReconRecordsUnion();
     const tombs = recsAll.filter((r: any) => r && r.delisted && r.docNo);
     const tombOfRow = (row: any): any => tombs.find((t: any) =>
       (t.orderNo && row.id === t.orderNo) ||
@@ -146,14 +149,15 @@ export function healReconTerminalLinks(): boolean {
       if (!prev || ts >= (prev.__ts || 0)) tombByPair.set(pk, { ...r, __ts: ts });
     });
     let chR = false;
-    const next = recs.map((r: any) => {
+    const changedRecs: any[] = [];
+    recs.forEach((r: any) => {
       if (!r || r.delisted || String(r.reconResult || 'pending') !== 'pending') return r;
       const no = String(r.docNo || '').trim();
       // 同单据同双方已存在更新的完成墓碑 → 本次为旧端重复记录，直接补齐墓碑，避免「删除后刷新又出现」
       const dupTomb = tombByPair.get(pairOf(r));
       if (dupTomb && (keyTs(r.key) || 0) <= (dupTomb.__ts || 0)) {
         chR = true;
-        return {
+        const tombRec = {
           ...r,
           delisted: true,
           delistedAt: new Date().toISOString(),
@@ -165,6 +169,8 @@ export function healReconTerminalLinks(): boolean {
           purPerson: dupTomb.purPerson || '',
           supPerson: dupTomb.supPerson || '',
         };
+        changedRecs.push(tombRec);
+        return tombRec;
       }
       const hitBill = billsAll.map(list => list.find((b: any) =>
         BILL_TERMINAL.includes(String(b?.reconcileResult || '')) &&
@@ -175,7 +181,7 @@ export function healReconTerminalLinks(): boolean {
         ((r.orderNo && row.id === r.orderNo) || (!!no && String(row?.outboundNo || '').trim() === no))));
       if (!billHit && !rowHit) return r;
       chR = true;
-      return {
+      const healed = {
         ...r,
         delisted: true,
         delistedAt: new Date().toISOString(),
@@ -188,8 +194,10 @@ export function healReconTerminalLinks(): boolean {
         purPerson: hitBill?.purchaserReconciler || '',
         supPerson: hitBill?.supplierReconciler || '',
       };
+      changedRecs.push(healed);
+      return healed;
     });
-    if (chR) { try { localStorage.setItem('recon_records', JSON.stringify(next)); wrote = true; } catch { /* ignore */ } }
+    if (chR) { upsertRecords(changedRecs); wrote = true; }
   } catch { /* ignore */ }
   return wrote;
 }

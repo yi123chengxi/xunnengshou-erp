@@ -40,6 +40,7 @@ import type { ColumnsType } from 'antd/es/table';
 import { appendBillLogEntry } from '../utils/billLog';
 import { compressImageFile } from '../utils/imageCompress';
 import { resolveLatestCompanyName } from '../utils/nameSync';
+import { reconDbKey, loadRoleAll, loadRoleRecords, upsertRecords, migrateLegacyReconRecords } from '../utils/reconStore';
 
 const { Title, Text, Paragraph } = Typography;
 const { Option } = Select;
@@ -376,27 +377,32 @@ const ReconciliationManage: React.FC = () => {
 
   // 跨标签页同步对方反馈（effect 移至 selectedRecord 声明之后）
 
-  // 对账记录共享存储（供应商发起 → 采购商平台可见）；delisted 墓碑记录不入列表，仅随存储写入防复活
+  // 对账记录分平台独立存储：供应商平台读 recon_db_supplier_<账号>，采购商平台读 recon_db_purchaser_<账号>；
+  // delisted 墓碑记录不入列表，仅随存储写入防复活
   const tombsRef = useRef<Map<string, ReconRecord>>(new Map());
   const [dataSource, setDataSource] = useState<ReconRecord[]>(() => {
     try {
-      const raw = localStorage.getItem('recon_records');
-      if (raw) {
-        const arr = JSON.parse(raw);
-        if (Array.isArray(arr)) return (arr as ReconRecord[]).filter(r => !(r as any).delisted);
-      }
+      const role = location.pathname.startsWith('/purchaser') ? 'purchaser' : 'supplier';
+      const u0 = localStorage.getItem('username') || '';
+      const owner0 = localStorage.getItem('isSubAccount') === 'true' ? (localStorage.getItem('parentAccount') || u0) : u0;
+      // 本平台库尚不存在时先做旧全局键存量迁移（幂等）
+      if (!localStorage.getItem(reconDbKey(role, owner0))) migrateLegacyReconRecords();
+      const all = loadRoleAll(role, owner0);
+      if (all.length > 0) return (all as ReconRecord[]).filter(r => !(r as any).delisted);
+      if (localStorage.getItem('recon_records')) return [];
     } catch { /* ignore */ }
     return initialReconData;
   });
   // 挂载时回填墓碑表（保证后续存储写入持续携带墓碑）
   useEffect(() => {
     try {
-      const arr = JSON.parse(localStorage.getItem('recon_records') || '[]');
-      if (Array.isArray(arr)) {
-        const m = new Map<string, ReconRecord>();
-        arr.forEach((r: any) => { if (r && r.delisted && r.key) m.set(r.key, r); });
-        tombsRef.current = m;
-      }
+      const role = location.pathname.startsWith('/purchaser') ? 'purchaser' : 'supplier';
+      const u0 = localStorage.getItem('username') || '';
+      const owner0 = localStorage.getItem('isSubAccount') === 'true' ? (localStorage.getItem('parentAccount') || u0) : u0;
+      const arr = loadRoleAll(role, owner0);
+      const m = new Map<string, ReconRecord>();
+      arr.forEach((r: any) => { if (r && r.delisted && r.key) m.set(r.key, r); });
+      tombsRef.current = m;
     } catch { /* ignore */ }
   }, []);
 
@@ -420,7 +426,8 @@ const ReconciliationManage: React.FC = () => {
       const inOut = new Set(withTombs.map(r => r.key));
       const extra = Array.from(tombsRef.current.values()).filter(t => !inOut.has(t.key));
       const out = [...withTombs, ...extra];
-      localStorage.setItem('recon_records', JSON.stringify(out));
+      // 分平台库落库：记录同时写入供应商侧与采购商侧库（墓碑优先、按 key 覆盖）
+      upsertRecords(out);
       syncedReconRef.current = Object.fromEntries(out.map(r => [r.key, r]));
     } catch { /* ignore */ }
   }, [dataSource, realTimeSync, isPurchaser]);
@@ -429,7 +436,10 @@ const ReconciliationManage: React.FC = () => {
   useEffect(() => {
     const onUpd = () => {
       try {
-        const arr = JSON.parse(localStorage.getItem('recon_records') || '[]');
+        const role = isPurchaser ? 'purchaser' : 'supplier';
+        const u0 = localStorage.getItem('username') || '';
+        const owner0 = localStorage.getItem('isSubAccount') === 'true' ? (localStorage.getItem('parentAccount') || u0) : u0;
+        const arr = loadRoleAll(role, owner0);
         if (!Array.isArray(arr)) return;
         arr.forEach((r: any) => { if (r && r.delisted && r.key) tombsRef.current.set(r.key, r); });
         const gatedLocal = (r: ReconRecord) => (isPurchaser ? (r.initiator || 'supplier') === 'supplier' : r.initiator === 'purchaser') && !realTimeSync && !releasedSyncKeys.current.has(r.key) && !!syncedReconRef.current[r.key];
@@ -520,11 +530,6 @@ const ReconciliationManage: React.FC = () => {
   }, [myProfile.username, myProfile.no, myProfile.name, latestNameOf]);
 
   const roleData = useMemo(() => dataSource.filter(r => (isPurchaser ? isMineAsPurchaser(r) : isMineAsSupplier(r))), [dataSource, isPurchaser, isMineAsPurchaser, isMineAsSupplier]);
-
-  // 供应商平台进入时：本账号作为采购商被发起对账的记录（动作/金额口径属采购商视角，须到采购商平台处理）
-  const purchaserSideRecords = useMemo(
-    () => (isPurchaser ? [] : dataSource.filter(r => isMineAsPurchaser(r) && !isMineAsSupplier(r))),
-    [dataSource, isPurchaser, isMineAsPurchaser, isMineAsSupplier]);
 
   // ==================== 统计 ====================
   const stats = useMemo(() => {
@@ -1639,22 +1644,6 @@ const ReconciliationManage: React.FC = () => {
         </Row>
       </Card>
 
-      {/* 跨角色提示：本账号作为采购商被发起的对账记录，需在采购商平台处理 */}
-      {!isPurchaser && purchaserSideRecords.length > 0 && (
-        <Alert
-          type="info"
-          showIcon
-          style={{ marginBottom: 16 }}
-          message={`有 ${purchaserSideRecords.length} 条对账单是其他供应商向本账号发起的，需要以“采购商”身份处理`}
-          description="当前为供应商平台，这些单据的本方/对方金额、按供方入账等操作均以采购商视角为准，请在采购商平台查看与操作。"
-          action={
-            <Button size="small" type="primary" onClick={() => { window.location.href = '/purchaser/suppliers/reconciliation'; }}>
-              去采购商平台对账
-            </Button>
-          }
-        />
-      )}
-
       {/* 统计卡片 */}
       <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
         <Col xs={12} sm={4}>
@@ -1777,11 +1766,8 @@ const ReconciliationManage: React.FC = () => {
               <Button type="primary" icon={<SearchOutlined />} onClick={() => {
                 // 查询时自动刷新表单数据（重读对账记录共享存储）+ 拉服务端兼顾跨端新增
                 const rl = () => {
-                  try {
-                    const raw = localStorage.getItem('recon_records');
-                    const arr = raw ? JSON.parse(raw) : null;
-                    if (Array.isArray(arr)) setDataSource((arr as ReconRecord[]).filter(r => !(r as any).delisted));
-                  } catch { /* ignore */ }
+                  // 重读本平台独立库（供应商平台=供方身份记录，采购商平台=采方身份记录）
+                  setDataSource(loadRoleRecords(isPurchaser ? 'purchaser' : 'supplier', getOwner()) as ReconRecord[]);
                 };
                 reloadAfterPull(rl);
               }}>查询</Button>
@@ -2563,7 +2549,7 @@ const ReconciliationManage: React.FC = () => {
           </Col>
           <Col span={4}>
             <Space size={4}>
-              <Button size="small" type="primary" icon={<SearchOutlined />} onClick={() => { reloadAfterPull(() => { try { const raw = localStorage.getItem('recon_records'); const arr = raw ? JSON.parse(raw) : null; if (Array.isArray(arr)) setDataSource((arr as ReconRecord[]).filter(r => !(r as any).delisted)); } catch { /* ignore */ } }); setLinkSearchApplied({ ...linkSearch }); }}>查询</Button>
+              <Button size="small" type="primary" icon={<SearchOutlined />} onClick={() => { reloadAfterPull(() => { setDataSource(loadRoleRecords(isPurchaser ? 'purchaser' : 'supplier', getOwner()) as ReconRecord[]); }); setLinkSearchApplied({ ...linkSearch }); }}>查询</Button>
               <Button size="small" icon={<ReloadOutlined />} onClick={() => { setLinkSearch({ ...emptyLinkSearch }); setLinkSearchApplied({ ...emptyLinkSearch }); setLinkPick(''); }}>重置</Button>
             </Space>
           </Col>

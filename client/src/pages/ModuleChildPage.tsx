@@ -115,6 +115,7 @@ import { pullAllDatasets, flushDatasetUploadAsync, ensureDatasetFromServer, relo
 import { PRESET_PRINT_TEMPLATES, seedPresetPrintTemplates } from '../config/presetPrintTemplates';
 import { refreshCustomerPurchase } from '../utils/paySummary';
 import { loadAllCustomersFromStorage } from './CustomerInfo';
+import { loadRoleRecords, loadRoleAll, upsertRecords } from '../utils/reconStore';
 import { resolveCustomerPrice, resolveCustomerRef } from '../utils/priceStrategy';
 import { loadPoTemplates, poToWfOrder as corePoToWfOrder, buildPoWfPatch, poPlanQty } from '../utils/poWorkflow';
 import { canFn, canField, usePermTick } from '../utils/perm';
@@ -3155,15 +3156,13 @@ const ModuleChildPage: React.FC = () => {
       source: 'bill',
       ...(matchedBillKey ? { matchedBillKey } : {}),
     };
-    let list: any[] = [];
-    try { list = JSON.parse(localStorage.getItem('recon_records') || '[]'); } catch { /* ignore */ }
-    if (!Array.isArray(list)) list = [];
-    if (list.some((r: any) => !r.delisted && r.source === 'bill' && r.orderNo === record.id)) {
+    // 供应商平台独立对账库查重 + 落库（同时写入采购商侧库，保证双端可见）
+    const existingRecons = loadRoleRecords('supplier', String(rec.supplierUsername || owner));
+    if (existingRecons.some((r: any) => r.source === 'bill' && r.orderNo === record.id)) {
       if (!silent) message.warning('该账单已发起对账，请勿重复发起');
       return { ok: false, reason: '已发起对账，请勿重复发起' };
     }
-    list = [rec, ...list];
-    try { localStorage.setItem('recon_records', JSON.stringify(list)); } catch { /* ignore */ }
+    upsertRecords([rec]);
     // 记录发起对账日志
     let newBillLog = (record as any).billLog;
     try {
@@ -3351,8 +3350,9 @@ const ModuleChildPage: React.FC = () => {
     const isSub = localStorage.getItem('isSubAccount') === 'true';
     const owner = isSub ? (localStorage.getItem('parentAccount') || localStorage.getItem('username') || '') : (localStorage.getItem('username') || '');
     let list: any[] = [];
-    try { list = JSON.parse(localStorage.getItem('recon_records') || '[]'); } catch { list = []; }
-    const recs = (Array.isArray(list) ? list : []).filter((r: any) => !r.delisted && r.initiator === 'purchaser' && r.docNo && (!r.supplierUsername || r.supplierUsername === owner));
+    // 供应商平台独立对账库：本账号以供应商身份参与的记录（含采购商发起）
+    try { list = loadRoleRecords('supplier', owner); } catch { list = []; }
+    const recs = (Array.isArray(list) ? list : []).filter((r: any) => r.initiator === 'purchaser' && r.docNo && (!r.supplierUsername || r.supplierUsername === owner));
     setBillAddReconOptions(recs.map((r: any) => ({
       value: r.docNo,
       label: (
@@ -4690,10 +4690,12 @@ const ModuleChildPage: React.FC = () => {
       cancelText: '取消',
       onOk: () => {
         try {
-          let list: any[] = JSON.parse(localStorage.getItem('recon_records') || '[]');
+          const uname0 = localStorage.getItem('username') || '';
+          const owner0 = localStorage.getItem('isSubAccount') === 'true' ? (localStorage.getItem('parentAccount') || uname0) : uname0;
+          let list: any[] = loadRoleAll('supplier', owner0);
           if (!Array.isArray(list)) list = [];
           const nextList = list.map((r: any) => (r.source === 'bill' && r.orderNo === record.id) ? { ...r, delisted: true, delistedAt: new Date().toISOString() } : r);
-          localStorage.setItem('recon_records', JSON.stringify(nextList));
+          upsertRecords(nextList);
         } catch { /* ignore */ }
         // 记录撤回对账日志
         let newBillLog = (record as any).billLog;
@@ -19742,7 +19744,9 @@ tr:nth-child(even) { background: #f5f9ff; }
           let reconRecord: any = null;
           if (isReconDetail) {
             try {
-              const allRecons = JSON.parse(localStorage.getItem('recon_records') || '[]');
+              const uname1 = localStorage.getItem('username') || '';
+              const owner1 = localStorage.getItem('isSubAccount') === 'true' ? (localStorage.getItem('parentAccount') || uname1) : uname1;
+              const allRecons = loadRoleAll('supplier', owner1);
               reconRecord = allRecons.find((r: any) =>
                 r.orderNo === billDetailRecord.id ||
                 (r.docNo && billDetailRecord.outboundNo && String(r.docNo).trim() === String(billDetailRecord.outboundNo).trim())
