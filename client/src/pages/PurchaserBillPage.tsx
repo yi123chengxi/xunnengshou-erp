@@ -1010,7 +1010,7 @@ const PurchaserBillPage: React.FC = () => {
     const owner0 = localStorage.getItem('isSubAccount') === 'true' ? (localStorage.getItem('parentAccount') || uname0) : uname0;
     let list: any[] = [];
     try { list = loadRoleAll('purchaser', owner0); } catch { list = []; }
-    const remain = list.map((x: any) => (x.source === 'bill' && x.initiator === 'purchaser' && matchPurchaserRecon([x], r)) ? { ...x, delisted: true, delistedAt: new Date().toISOString() } : x);
+    const remain = list.map((x: any) => (x.source === 'bill' && x.initiator === 'purchaser' && matchPurchaserRecon([x], r)) ? { ...x, delisted: true, delistedAt: new Date().toISOString(), withdrawn: true } : x);
     upsertRecords(remain);
     const all: any[] = JSON.parse(localStorage.getItem(storageKey) || '[]');
     localStorage.setItem(storageKey, JSON.stringify(all.map(b => b.key === r.key ? {

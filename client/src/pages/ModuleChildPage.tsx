@@ -4694,7 +4694,7 @@ const ModuleChildPage: React.FC = () => {
           const owner0 = localStorage.getItem('isSubAccount') === 'true' ? (localStorage.getItem('parentAccount') || uname0) : uname0;
           let list: any[] = loadRoleAll('supplier', owner0);
           if (!Array.isArray(list)) list = [];
-          const nextList = list.map((r: any) => (r.source === 'bill' && r.orderNo === record.id) ? { ...r, delisted: true, delistedAt: new Date().toISOString() } : r);
+          const nextList = list.map((r: any) => (r.source === 'bill' && r.orderNo === record.id) ? { ...r, delisted: true, delistedAt: new Date().toISOString(), withdrawn: true } : r);
           upsertRecords(nextList);
         } catch { /* ignore */ }
         // 记录撤回对账日志

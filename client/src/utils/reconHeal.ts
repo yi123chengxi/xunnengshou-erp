@@ -13,6 +13,7 @@ const BILL_TERMINAL = ['按供方入账', '已对账', '对账完成', '不相�
 const SUP_ROW_TERMINAL = ['对账完成', '按采方入账'];
 
 import { loadAllReconRecordsUnion, upsertRecords } from './reconStore';
+import { appendBillLogEntry } from './billLog';
 
 const readList = (k: string): any[] => {
   try {
@@ -44,9 +45,35 @@ export function healReconTerminalLinks(): boolean {
     // 分平台独立库 + 旧全局键的并集（同 key 墓碑优先）
     const recsAll = loadAllReconRecordsUnion();
     const tombs = recsAll.filter((r: any) => r && r.delisted && r.docNo);
-    const tombOfRow = (row: any): any => tombs.find((t: any) =>
+    // 区分「完成墓碑」与「撤回墓碑」：完成墓碑携带回写断言（supResult）或确认时间；
+    // 撤回墓碑（withdrawn=true 或无断言的 pending 墓碑）仅表示取消对账请求，
+    // 绝不能把账单行回写为对账完成（否则「撤回后过一会自动完成」）
+    const isCompletionTomb = (t: any): boolean => !!t && t.delisted === true && t.withdrawn !== true &&
+      (String(t.supResult || '') !== '' || String(t.reconResult || '') === 'matched' || !!t.confirmedAt);
+    // key 内置时间戳（recon-<doc>-<ts> / bill-<ts>），用于区分「历史证据」与「重新发起的新周期」
+    const keyTs = (k: any): number => {
+      const m = String(k || '').match(/(\d{12,})$/);
+      return m ? Number(m[1]) : 0;
+    };
+    const matchRow = (t: any, row: any): boolean =>
       (t.orderNo && row.id === t.orderNo) ||
-      (!!row.outboundNo && String(row.outboundNo).trim() === String(t.docNo).trim())) || null;
+      (!!row.outboundNo && String(row.outboundNo).trim() === String(t.docNo || '').trim());
+    const completionTombOfRow = (row: any): any => tombs.find((t: any) => isCompletionTomb(t) && matchRow(t, row)) || null;
+    const withdrawTombOfRow = (row: any): any => tombs.find((t: any) => t.delisted && !isCompletionTomb(t) && matchRow(t, row)) || null;
+    const aliveRecs = recsAll.filter((r: any) => r && !r.delisted);
+    // 重新发起保护：该账单行存在比证据时间戳更新的存活对账记录 → 新对账周期进行中，
+    // 旧周期的终态证据不得回写/墓碑新周期
+    const hasNewerAlive = (row: any, evidenceTs: number): boolean => aliveRecs.some((r: any) =>
+      ((r.orderNo && row.id === r.orderNo) || (!!r.docNo && !!row.outboundNo && String(r.docNo).trim() === String(row.outboundNo).trim())) &&
+      keyTs(r.key) > evidenceTs);
+    const terminalBillOfRow = (row: any): any => {
+      for (const list of billsAll) {
+        const b = list.find((x: any) => BILL_TERMINAL.includes(String(x?.reconcileResult || '')) &&
+          !!row.outboundNo && String(x?.outboundNo || '').trim() === String(row.outboundNo).trim());
+        if (b) return b;
+      }
+      return null;
+    };
     // 1) 终态账单/完成墓碑 → 供应商账单明细行断言回写（对抗旧端复活的回滚）
     billsAll.forEach(bills => {
       bills.forEach((b: any) => {
@@ -59,7 +86,11 @@ export function healReconTerminalLinks(): boolean {
           d.rows = d.rows.map((row: any) => {
             if (String(row?.outboundNo || '').trim() !== no) return row;
             if (SUP_ROW_TERMINAL.includes(String(row?.reconResult || ''))) return row;
-            const tomb = tombOfRow(row);
+            const tomb = completionTombOfRow(row);
+            // 新周期保护：存在比完成墓碑更新的存活记录（完成后重新发起）→ 不回写旧周期结果
+            const ct1 = tomb;
+            const evTs1 = ct1 ? (keyTs(ct1.key) || (Date.parse(String(ct1.delistedAt || '')) || 0)) : 0;
+            if (evTs1 && hasNewerAlive(row, evTs1)) return row;
             const alignAmt = res === '不相符' ? 0 : (Number(tomb ? (tomb.supResult === '按采方入账' ? tomb.theirAmount : tomb.ourAmount) : b.totalAmount) || 0);
             ch = true;
             return {
@@ -69,20 +100,24 @@ export function healReconTerminalLinks(): boolean {
               totalAmount: alignAmt > 0 ? alignAmt : row.totalAmount,
               purchaserReconPerson: row.purchaserReconPerson || tomb?.purPerson || b.purchaserReconciler || '',
               supplierReconPerson: row.supplierReconPerson || tomb?.supPerson || b.supplierReconciler || '',
+              // 自愈回写补账单日志（对方浏览器完成时本端缺少操作记录）
+              billLog: appendBillLogEntry(row.billLog, '对账完成', tomb?.purPerson || b.purchaserReconciler || undefined, tomb?.supDiff || diffOfBill(res)),
             };
           });
           if (ch) { try { localStorage.setItem(d.key, JSON.stringify(d.rows)); wrote = true; } catch { /* ignore */ } }
         });
       });
     });
-    // 1.5) 仅有墓碑（账单键不在本端，如供应商浏览器）也断言回写明细行
+    // 1.5) 仅有完成墓碑（账单键不在本端，如供应商浏览器）也断言回写明细行；撤回墓碑不参与
     if (tombs.length > 0) {
       details.forEach(d => {
         let ch = false;
         d.rows = d.rows.map((row: any) => {
           if (SUP_ROW_TERMINAL.includes(String(row?.reconResult || ''))) return row;
-          const tomb = tombOfRow(row);
+          const tomb = completionTombOfRow(row);
           if (!tomb) return row;
+          const tTs = keyTs(tomb.key) || (Date.parse(String(tomb.delistedAt || '')) || 0);
+          if (tTs && hasNewerAlive(row, tTs)) return row;
           const alignAmt = Number(tomb.supResult === '按采方入账' ? tomb.theirAmount : tomb.ourAmount) || 0;
           ch = true;
           return {
@@ -92,11 +127,31 @@ export function healReconTerminalLinks(): boolean {
             totalAmount: alignAmt > 0 ? alignAmt : row.totalAmount,
             purchaserReconPerson: row.purchaserReconPerson || tomb.purPerson || '',
             supplierReconPerson: row.supplierReconPerson || tomb.supPerson || '',
+            billLog: appendBillLogEntry(row.billLog, '对账完成', tomb.purPerson || undefined, tomb.supDiff || '对账完成，对方已确认'),
           };
         });
         if (ch) { try { localStorage.setItem(d.key, JSON.stringify(d.rows)); wrote = true; } catch { /* ignore */ } }
       });
     }
+    // 1.6) 误置状态修复：被撤回墓碑误回写为终态的账单行（无完成墓碑、无终态账单）还原为待对账
+    details.forEach(d => {
+      let ch = false;
+      d.rows = d.rows.map((row: any) => {
+        if (!SUP_ROW_TERMINAL.includes(String(row?.reconResult || ''))) return row;
+        if (completionTombOfRow(row) || terminalBillOfRow(row)) return row;
+        if (!withdrawTombOfRow(row)) return row;
+        ch = true;
+        return {
+          ...row,
+          reconResult: '待对账',
+          diffDesc: '',
+          purchaserReconPerson: '',
+          supplierReconPerson: '',
+          billLog: appendBillLogEntry(row.billLog, '撤回对账', undefined, '自愈修复：撤回后被误置的对账完成状态已还原为待对账'),
+        };
+      });
+      if (ch) { try { localStorage.setItem(d.key, JSON.stringify(d.rows)); wrote = true; } catch { /* ignore */ } }
+    });
     // 2) 存活 pending 记录 + 任一侧已终态 → delisted 墓碑（服务端合并保护墓碑不被复活）
     const recs = recsAll;
     // 3) 采购商账单修复：供应商字段误写为本方公司名/简称 → 按对账记录纠正；
@@ -135,14 +190,10 @@ export function healReconTerminalLinks(): boolean {
       String(r?.supplierUsername || r?.supplierName || '').trim(),
       String(r?.customerUsername || r?.customerName || '').trim(),
     ].join('|');
-    // key 内置时间戳（recon-<doc>-<ts>），用于区分「历史重复记录」与「完成后重新发起」
-    const keyTs = (k: any): number => {
-      const m = String(k || '').match(/(\d{12,})$/);
-      return m ? Number(m[1]) : 0;
-    };
     const tombByPair = new Map<string, any>();
     recs.forEach((r: any) => {
-      if (!r || !r.delisted || !r.docNo) return;
+      // 仅完成墓碑参与重复记录收敛；撤回墓碑不得把存活记录置为完成
+      if (!r || !r.delisted || !r.docNo || !isCompletionTomb(r)) return;
       const ts = keyTs(r.key) || (Date.parse(String(r.delistedAt || '')) || 0);
       const pk = pairOf(r);
       const prev = tombByPair.get(pk);
@@ -175,10 +226,16 @@ export function healReconTerminalLinks(): boolean {
       const hitBill = billsAll.map(list => list.find((b: any) =>
         BILL_TERMINAL.includes(String(b?.reconcileResult || '')) &&
         ((r.matchedBillKey && b.key === r.matchedBillKey) || (!!no && String(b?.outboundNo || '').trim() === no)))).find(Boolean) as any;
-      const billHit = !!hitBill;
-      const rowHit = !billHit && details.some(d => d.rows.some((row: any) =>
+      const rowHitPlain = !hitBill && details.some(d => d.rows.some((row: any) =>
         SUP_ROW_TERMINAL.includes(String(row?.reconResult || '')) &&
         ((r.orderNo && row.id === r.orderNo) || (!!no && String(row?.outboundNo || '').trim() === no))));
+      // 新周期保护：同单据已存在比本存活记录更早的完成墓碑 → 完成后重新发起的新对账，不得被旧证据收敛
+      const ct = tombs.find((t: any) => isCompletionTomb(t) &&
+        ((t.orderNo && r.orderNo && t.orderNo === r.orderNo) || (!!t.docNo && !!no && String(t.docNo).trim() === no))) || null;
+      const evTs = ct ? (keyTs(ct.key) || (Date.parse(String(ct.delistedAt || '')) || 0)) : 0;
+      const reInitiated = !!ct && (keyTs(r.key) || 0) > evTs;
+      const billHit = !!hitBill && !reInitiated;
+      const rowHit = !billHit && rowHitPlain && !reInitiated;
       if (!billHit && !rowHit) return r;
       chR = true;
       const healed = {
