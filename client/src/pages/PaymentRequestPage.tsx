@@ -968,6 +968,15 @@ const PaymentRequestPage: React.FC = () => {
 
     // 更新状态为已确认
     const confirmedBy = getDisplayName();
+    // 生产完成判定：订单已完工（新单看 productionCompleted 标记，历史单反查生产订单 completed）
+    const isProdDone = (o: any): boolean => {
+      if (!o) return false;
+      if (o.productionCompleted === true || o.productionCompleted === 'true') return true;
+      try {
+        const poList: any[] = JSON.parse(localStorage.getItem(`pageData_production_production-order_${owner}`) || '[]');
+        return (Array.isArray(poList) ? poList : []).some((p: any) => p && p.status === 'completed' && String(p.orderId || p.salesOrderId || '') === String(o.id));
+      } catch { return false; }
+    };
     // 分段付款尾款收款确认：回写订单分期明细（待确认→已确认）并计入累计已收、推进订单状态
     if (r.orderId) {
       try {
@@ -995,6 +1004,11 @@ const PaymentRequestPage: React.FC = () => {
             }
             const logs: any[] = (() => { try { return JSON.parse(ord.orderLog || '[]'); } catch { return []; } })();
             logs.push({ time: nowStr, action: '收款确认', operator: confirmedBy, detail: `分段付款收款 ¥${Number(r.amount).toFixed(2)} 收款确认，累计已收 ¥${paidNow.toFixed(2)}${patch.orderStatus ? `，订单状态变更为${patch.orderStatus}` : ''}` });
+            // 生产已完成且仍在「生产排期」：尾款收清后自动转「已审核」进入打单拣货（拣货准入仍需已付款，不放宽）
+            if (stNow === '已付款' && String(ord.auditStatus || '') === '生产排期' && isProdDone(ord)) {
+              patch.auditStatus = '已审核';
+              logs.push({ time: nowStr, action: '生产完成自动审核', operator: confirmedBy, detail: '货款已结清，生产已完成，订单自动转入打单拣货待发货' });
+            }
             const updatedOrd = { ...ord, ...patch, orderLog: JSON.stringify(logs) };
             const omJson = JSON.stringify(omList.map((o: any) => (o.id === ord.id ? updatedOrd : o)));
             safeSetItem(omKey, omJson);
@@ -1007,7 +1021,7 @@ const PaymentRequestPage: React.FC = () => {
             try {
               const pk = 'purchaser_pushed_orders';
               const pushed: any[] = JSON.parse(localStorage.getItem(pk) || '[]');
-              const pJson = JSON.stringify(pushed.map((po: any) => po.id === ord.id ? { ...po, payRecords: recs, paidAmount: paidNow, ...(patch.orderStatus ? { orderStatus: patch.orderStatus } : {}) } : po));
+              const pJson = JSON.stringify(pushed.map((po: any) => po.id === ord.id ? { ...po, payRecords: recs, paidAmount: paidNow, ...(patch.orderStatus ? { orderStatus: patch.orderStatus } : {}), ...(patch.auditStatus ? { auditStatus: patch.auditStatus } : {}) } : po));
               safeSetItem(pk, pJson);
               saveDataset(pk, pJson);
             } catch { /* ignore */ }
@@ -1024,6 +1038,9 @@ const PaymentRequestPage: React.FC = () => {
         if (ord) {
           const logs: any[] = (() => { try { return JSON.parse(ord.orderLog || '[]'); } catch { return []; } })();
           logs.push({ time: nowStr, action: '收款确认', operator: confirmedBy, detail: `银行转账收款 ¥${Number(r.amount).toFixed(2)} 已确认到账，订单转为已付款并提交财务审核` });
+          // 生产已完成且仍在「生产排期」：货款收清后直接转「已审核」，无需再走一次财审
+          const prodDoneToAudit = String(ord.auditStatus || '') === '生产排期' && isProdDone(ord);
+          if (prodDoneToAudit) logs.push({ time: nowStr, action: '生产完成自动审核', operator: confirmedBy, detail: '货款已结清，生产已完成，订单自动转入打单拣货待发货' });
           const patch: any = {
             payConfirmed: true, payConfirmedAt: nowStr, payConfirmedBy: confirmedBy,
             paidAmount: Number(r.amount) || Number(ord.paidAmount) || 0,
@@ -1031,6 +1048,7 @@ const PaymentRequestPage: React.FC = () => {
           };
           if (ord.orderStatus === '待付款') patch.orderStatus = '已付款';
           if (!ord.auditStatus) patch.auditStatus = '待财务审核';
+          else if (prodDoneToAudit) patch.auditStatus = '已审核';
           // 自动提交财务审核（与订单管理「审核」→ 银行转账链路一致），保证财务审核页可见
           try {
             const faKey = `pageData_sales_finance-audit_${owner}`;

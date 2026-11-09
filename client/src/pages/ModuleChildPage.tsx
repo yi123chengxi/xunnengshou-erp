@@ -1877,6 +1877,11 @@ const ModuleChildPage: React.FC = () => {
   // 打单拣货：点击订单编号/出库单号打开订单详情（复用订单管理编辑弹窗上下文，仅查看）
   const [pickOrderDetailMode, setPickOrderDetailMode] = useState(false);
   const isOrderEditCtx = pageConfig?.title === '订单管理' || pickOrderDetailMode;
+  // 只读详情补收款：已审核/生产排期但货款未收清的订单允许在只读详情内补做「确认收款」，
+  // 否则「已审核待发货」却因未付款进不了打单拣货、且订单只读无法补收款，形成死结（不放宽拣货准入）
+  const postAuditCollectable = isOrderEditCtx && orderReadonly && !!selectedRecord
+    && (selectedRecord.auditStatus === '已审核' || selectedRecord.auditStatus === '生产排期')
+    && (selectedRecord.orderStatus === '待付款' || selectedRecord.orderStatus === '部分付款');
   // 订单编辑窗口：运费（货品明细汇总处手动输入）
   const [editFreight, setEditFreight] = useState<number>(0);
 
@@ -6085,6 +6090,55 @@ const ModuleChildPage: React.FC = () => {
     try { window.dispatchEvent(new CustomEvent('order-data-updated', { detail: { owner, key: omKey } })); } catch { /* ignore */ }
   }, [pageConfig?.title, dataSource.length, syncVersion, getDataOwner]);
 
+  // 生产已完成但货款未结清而停留在「生产排期」的订单：收清货款后自动转「已审核」进入打单拣货
+  // 不放宽打单拣货准入（仍需 orderStatus 为已付款），此处只推进审核状态；兼容历史无 productionCompleted 标记的单据
+  React.useEffect(() => {
+    const t = pageConfig?.title;
+    if (t !== '订单管理' && t !== '打单拣货') return;
+    const owner = getDataOwner();
+    const omKey = `pageData_sales_order-manage_${owner}`;
+    let omList: any[] = [];
+    let poList: any[] = [];
+    try {
+      omList = JSON.parse(localStorage.getItem(omKey) || '[]');
+      poList = JSON.parse(localStorage.getItem(`pageData_production_production-order_${owner}`) || '[]');
+    } catch { return; }
+    if (!Array.isArray(omList) || omList.length === 0) return;
+    const poDone = new Set((Array.isArray(poList) ? poList : [])
+      .filter((p: any) => p && p.status === 'completed')
+      .map((p: any) => String(p.orderId || p.salesOrderId || ''))
+      .filter(Boolean));
+    const nowStr = new Date().toLocaleString('zh-CN');
+    let changed = false;
+    const updated = omList.map((o: any) => {
+      if (!o || o.auditStatus !== '生产排期') return o;
+      const prodDone = o.productionCompleted === true || o.productionCompleted === 'true' || poDone.has(String(o.id));
+      if (!prodDone) return o;
+      const total = Math.round((Number(o.productAmount) || calcOrderDueAmount(o)) * 100) / 100;
+      const paid = isInstallmentOrder(o) ? sumPayRecords(o.payRecords) : (Number(o.paidAmount) || 0);
+      const settled = String(o.orderStatus || '') === '已付款' || (total > 0 && paid + 0.01 >= total);
+      if (!settled) return o;
+      changed = true;
+      let logs: any[] = [];
+      try { logs = JSON.parse(o.orderLog || '[]'); } catch { logs = []; }
+      if (!logs.some((l: any) => l.action === '生产完成自动审核')) {
+        logs.push({ time: nowStr, action: '生产完成自动审核', operator: getCurrentUserDisplayName(), detail: '货款已结清，生产已完成，订单自动转入打单拣货待发货' });
+      }
+      return { ...o, auditStatus: '已审核', productionCompleted: true, orderLog: JSON.stringify(logs) };
+    });
+    if (!changed) return;
+    const json = JSON.stringify(updated);
+    safeSetItem(omKey, json);
+    saveDataset(omKey, json);
+    safeSetItem(`${omKey}_ts`, String(Date.now()));
+    // 同步内存：订单管理页与打单拣货页都能立即看到
+    setDataSource(prev => prev.map((r: any) => {
+      const hit = updated.find((o: any) => o.id === r.id);
+      return hit ? { ...r, ...hit } : r;
+    }));
+    try { window.dispatchEvent(new CustomEvent('order-data-updated', { detail: { owner, key: omKey } })); } catch { /* ignore */ }
+  }, [pageConfig?.title, dataSource, syncVersion, getDataOwner]);
+
   // 跨页面数据注入助手：同时更新 localStorage + IndexedDB + 时间戳，防止目标页面读取旧数据
   const pushRecordToPage = useCallback((key: string, list: any[]) => {
     try {
@@ -8019,9 +8073,9 @@ const ModuleChildPage: React.FC = () => {
             // 第二次财审：保留原始 financeAuditedAmount，更新已付金额为货品总额
             if (r.financeAudited && (Number(r.financeAuditedAmount) || 0) > 0) {
               const productAmt = Number(r.productAmount) || calcOrderDueAmount(r);
-              return { ...r, auditStatus: '生产排期', paidAmount: productAmt, financeAuditedDue: calcOrderDueAmount(r), orderTag: t1.join(','), orderTags: t2.join(',') };
+              return { ...r, auditStatus: '生产排期', orderStatus: !isInstallmentOrder(r) && (r.orderStatus === '待付款' || r.orderStatus === '部分付款') ? '已付款' : r.orderStatus, paidAmount: productAmt, financeAuditedDue: calcOrderDueAmount(r), orderTag: t1.join(','), orderTags: t2.join(',') };
             }
-            return { ...r, auditStatus: '生产排期', financeAudited: true, financeAuditedAmount: Number(r.paidAmount) || 0, financeAuditedDue: calcOrderDueAmount(r), orderTag: t1.join(','), orderTags: t2.join(',') };
+            return { ...r, auditStatus: '生产排期', orderStatus: !isInstallmentOrder(r) && (r.orderStatus === '待付款' || r.orderStatus === '部分付款') ? '已付款' : r.orderStatus, financeAudited: true, financeAuditedAmount: Number(r.paidAmount) || 0, financeAuditedDue: calcOrderDueAmount(r), orderTag: t1.join(','), orderTags: t2.join(',') };
           });
           pushRecordToPage(omKey, updated);
         }
@@ -8046,9 +8100,9 @@ const ModuleChildPage: React.FC = () => {
             // 第二次财审：保留原始 financeAuditedAmount，更新已付金额为货品总额
             if (r.financeAudited && (Number(r.financeAuditedAmount) || 0) > 0) {
               const productAmt = Number(r.productAmount) || calcOrderDueAmount(r);
-              return { ...r, auditStatus: '已审核', paidAmount: productAmt, financeAuditedDue: calcOrderDueAmount(r), orderTag: t1.join(','), orderTags: t2.join(',') };
+              return { ...r, auditStatus: '已审核', orderStatus: !isInstallmentOrder(r) && (r.orderStatus === '待付款' || r.orderStatus === '部分付款') ? '已付款' : r.orderStatus, paidAmount: productAmt, financeAuditedDue: calcOrderDueAmount(r), orderTag: t1.join(','), orderTags: t2.join(',') };
             }
-            return { ...r, auditStatus: '已审核', financeAudited: true, financeAuditedAmount: Number(r.paidAmount) || 0, financeAuditedDue: calcOrderDueAmount(r), orderTag: t1.join(','), orderTags: t2.join(',') };
+            return { ...r, auditStatus: '已审核', orderStatus: !isInstallmentOrder(r) && (r.orderStatus === '待付款' || r.orderStatus === '部分付款') ? '已付款' : r.orderStatus, financeAudited: true, financeAuditedAmount: Number(r.paidAmount) || 0, financeAuditedDue: calcOrderDueAmount(r), orderTag: t1.join(','), orderTags: t2.join(',') };
           });
           pushRecordToPage(omKey, updated);
         }
@@ -10708,7 +10762,9 @@ const handleBatchAttrsConfirm = () => {
             if (pageConfig?.title === '订单管理' && col.dataIndex === 'orderStatus' && record?.auditStatus) {
               if (record.auditStatus === '待财务审核') return <Tag color="purple">已审核待财审</Tag>;
               if (record.auditStatus === '已审核') return <Tag style={{ background: '#52c41a', color: '#fff', border: 'none', fontWeight: 500 }}>已审核待发货</Tag>;
-              if (record.auditStatus === '生产排期') return <Tag style={{ background: '#52c41a', color: '#fff', border: 'none', fontWeight: 500 }}>已审核待生产</Tag>;
+              if (record.auditStatus === '生产排期') return (record.productionCompleted === true || record.productionCompleted === 'true')
+                ? <Tag style={{ background: '#fa8c16', color: '#fff', border: 'none', fontWeight: 500 }} title="生产已完成但货款未结清，收清后自动转入打单拣货">生产完成待收款</Tag>
+                : <Tag style={{ background: '#52c41a', color: '#fff', border: 'none', fontWeight: 500 }}>已审核待生产</Tag>;
               if (record.auditStatus === '已合并') return <Tag style={{ background: '#8c8c8c', color: '#fff', border: 'none', fontWeight: 500 }}>已合并</Tag>;
               if (record.auditStatus === '已取消') return <Tag style={{ background: '#8c8c8c', color: '#fff', border: 'none', fontWeight: 500 }}>已取消</Tag>;
             }
@@ -12673,28 +12729,41 @@ const handleBatchAttrsConfirm = () => {
             if (!tags1.includes('生产完成')) tags1.push('生产完成');
             const tags2 = String(so.orderTags || '').split(',').filter(Boolean).filter((t: string) => t !== '生产' && t !== '正在生产');
             if (!tags2.includes('生产完成')) tags2.push('生产完成');
-            patchOrderInStorage(oid, { auditStatus: '已审核', orderTag: tags1.join(','), orderTags: tags2.join(',') });
-            appendOrderLog(oid, '生产完成', `生产订单 ${record.id} 生产完成：完工数量已流转至生产入库统计并增加商品实际库存，订单标签更新为「生产完成」`);
-            appendOrderLog(oid, '生产完成自动审核', `生产订单 ${record.id} 生产完成，自动审核通过，订单进入打单拣货待发货`);
-            // 回写采购商推送订单状态（safeSetItem 触发跨浏览器同步）
-            const pushedKey = 'purchaser_pushed_orders';
-            const pushed: any[] = JSON.parse(localStorage.getItem(pushedKey) || '[]');
-            let ch = false;
-            const upd = pushed.map((po: any) => {
-              if (po.id !== oid || po.status === '已推送待发货') return po;
-              ch = true;
-              let logs: any[] = []; try { logs = JSON.parse(po.orderLog || '[]'); } catch { logs = []; }
-              if (!logs.some((l: any) => l.action === '供应商审核')) logs.push({ time: nowStr, action: '供应商审核', operator: getCurrentUserDisplayName(), detail: '供应商生产完成自动审核通过，订单状态变更为已推送待发货' });
-              return { ...po, status: '已推送待发货', orderLog: JSON.stringify(logs) };
-            });
-            if (ch) {
-              const json = JSON.stringify(upd);
-              localStorage.setItem(pushedKey, json);
-              safeSetItem(pushedKey, json);
-              saveDataset(pushedKey, json);
-              safeSetItem(`${pushedKey}_ts`, String(Date.now()));
+            // 付款足额校验：打单拣货准入为「已审核 + 已付款」，货款未结清不得放行（不放宽拣货准入）
+            const soTotal = Math.round((Number(so.productAmount) || calcOrderDueAmount(so)) * 100) / 100;
+            const soPaid = isInstallmentOrder(so) ? sumPayRecords(so.payRecords) : (Number(so.paidAmount) || 0);
+            const soSettled = String(so.orderStatus || '') === '已付款' || (soTotal > 0 && soPaid + 0.01 >= soTotal);
+            if (!soSettled) {
+              // 货款未结清：保留「生产排期」只打生产完成标记；收清后由收款回写/自愈自动转「已审核」
+              const diff = Math.round(Math.max(0, soTotal - soPaid) * 100) / 100;
+              patchOrderInStorage(oid, { productionCompleted: true, productionCompleteTime: nowStr, orderTag: tags1.join(','), orderTags: tags2.join(',') });
+              appendOrderLog(oid, '生产完成', `生产订单 ${record.id} 生产完成：完工数量已流转至生产入库统计并增加商品实际库存，订单标签更新为「生产完成」`);
+              appendOrderLog(oid, '生产完成待收款', `货款未结清（应付 ¥${soTotal.toFixed(2)} / 已收 ¥${soPaid.toFixed(2)} / 差额 ¥${diff.toFixed(2)}），订单保持「生产排期」，暂不进入打单拣货；收清后自动转入`);
+              message.warning(`生产完成：订单 ${oid} 货款未结清（差额 ¥${diff.toFixed(2)}），暂不进入打单拣货，收清后自动转入`);
+            } else {
+              patchOrderInStorage(oid, { auditStatus: '已审核', productionCompleted: true, productionCompleteTime: nowStr, orderTag: tags1.join(','), orderTags: tags2.join(',') });
+              appendOrderLog(oid, '生产完成', `生产订单 ${record.id} 生产完成：完工数量已流转至生产入库统计并增加商品实际库存，订单标签更新为「生产完成」`);
+              appendOrderLog(oid, '生产完成自动审核', `生产订单 ${record.id} 生产完成，货款已结清，自动审核通过，订单进入打单拣货待发货`);
+              // 回写采购商推送订单状态（safeSetItem 触发跨浏览器同步）
+              const pushedKey = 'purchaser_pushed_orders';
+              const pushed: any[] = JSON.parse(localStorage.getItem(pushedKey) || '[]');
+              let ch = false;
+              const upd = pushed.map((po: any) => {
+                if (po.id !== oid || po.status === '已推送待发货') return po;
+                ch = true;
+                let logs: any[] = []; try { logs = JSON.parse(po.orderLog || '[]'); } catch { logs = []; }
+                if (!logs.some((l: any) => l.action === '供应商审核')) logs.push({ time: nowStr, action: '供应商审核', operator: getCurrentUserDisplayName(), detail: '供应商生产完成自动审核通过，订单状态变更为已推送待发货' });
+                return { ...po, status: '已推送待发货', orderLog: JSON.stringify(logs) };
+              });
+              if (ch) {
+                const json = JSON.stringify(upd);
+                localStorage.setItem(pushedKey, json);
+                safeSetItem(pushedKey, json);
+                saveDataset(pushedKey, json);
+                safeSetItem(`${pushedKey}_ts`, String(Date.now()));
+              }
+              message.success(`生产完成：订单 ${oid} 已自动审核，进入打单拣货待发货`);
             }
-            message.success(`生产完成：订单 ${oid} 已自动审核，进入打单拣货待发货`);
           }
         } catch { /* ignore */ }
       }
@@ -15229,8 +15298,9 @@ const handleBatchAttrsConfirm = () => {
                             </Form.Item>
                           </div>
                           {wPayMethod !== '分段付款' && (
+                          <ConfigProvider componentDisabled={postAuditCollectable ? false : undefined}>
                           <div style={{ alignSelf: 'flex-end', paddingBottom: 4 }}>
-                            <Tooltip title={payConfirmLocked ? '已确认收款；如需重新确认，请修改已付金额/收款账户/付款截图' : '确认收款：订单状态置为已付款并填充付款时间'}>
+                            <Tooltip title={payConfirmLocked ? '已确认收款；如需重新确认，请修改已付金额/收款账户/付款截图' : postAuditCollectable ? '补做收款确认：订单货款收清后状态置为已付款，即可进入打单拣货' : '确认收款：订单状态置为已付款并填充付款时间'}>
                             <Button
                               type="primary"
                               disabled={payConfirmLocked}
@@ -15266,8 +15336,33 @@ const handleBatchAttrsConfirm = () => {
                                 // 自动填充应付总金额到已付金额
                                 editForm.setFieldsValue({ paidAmount: totalDue });
                                 if (selectedRecord?.id) {
-                                  patchOrderInStorage(selectedRecord.id, { orderStatus: '已付款', payTime: nowStr });
-                                  setPayConfirmedPending(true);
+                                  if (postAuditCollectable) {
+                                    // 只读详情补收款：弹窗无“保存”按钮，必须即时落盘（含已付金额/收款账户/截图）
+                                    const patch: Record<string, any> = {
+                                      orderStatus: '已付款', payTime: nowStr, paidAmount: totalDue,
+                                      payMethod: payMethod || selectedRecord.payMethod || '银行转账',
+                                      payAccount: payAccount || selectedRecord.payAccount || '',
+                                      payScreenshot: payScreenshot || selectedRecord.payScreenshot || '',
+                                    };
+                                    // 生产已完成且仍停在「生产排期」：货款结清后同步转「已审核」进入打单拣货
+                                    let prodDone = selectedRecord.productionCompleted === true || selectedRecord.productionCompleted === 'true';
+                                    if (!prodDone) {
+                                      try {
+                                        const poList: any[] = JSON.parse(localStorage.getItem(`pageData_production_production-order_${getDataOwner()}`) || '[]');
+                                        prodDone = (Array.isArray(poList) ? poList : []).some((p: any) => p && p.status === 'completed' && String(p.orderId || p.salesOrderId || '') === String(selectedRecord.id));
+                                      } catch { /* ignore */ }
+                                    }
+                                    const toAudit = String(selectedRecord.auditStatus || '') === '生产排期' && prodDone;
+                                    if (toAudit) patch.auditStatus = '已审核';
+                                    patchOrderInStorage(selectedRecord.id, patch);
+                                    appendOrderLog(selectedRecord.id, '补录收款', `订单详情补做收款确认：已付金额 ¥${totalDue.toFixed(2)}，订单状态变更为已付款${toAudit ? '，生产已完成，自动转入打单拣货待发货' : ''}`);
+                                    if (toAudit) appendOrderLog(selectedRecord.id, '生产完成自动审核', '货款已结清，生产已完成，订单自动转入打单拣货待发货');
+                                    writeBackPushedPayRecords(selectedRecord.id, selectedRecord.payRecords || [], totalDue, true);
+                                    setPayConfirmedPending(false);
+                                  } else {
+                                    patchOrderInStorage(selectedRecord.id, { orderStatus: '已付款', payTime: nowStr });
+                                    setPayConfirmedPending(true);
+                                  }
                                 }
                                 setPayConfirmedSnap(JSON.stringify([totalDue, payAccount ?? '', payScreenshot ?? '']));
                                 showCenterMessage('已确认收款', 'success');
@@ -15275,6 +15370,7 @@ const handleBatchAttrsConfirm = () => {
                             >确认收款</Button>
                             </Tooltip>
                           </div>
+                          </ConfigProvider>
                           )}
                           {wPayMethod === '分段付款' && editMode && (
                             <ConfigProvider componentDisabled={false}>
