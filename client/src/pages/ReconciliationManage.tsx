@@ -114,17 +114,27 @@ interface FeedbackEntry {
 
 const FEEDBACK_KEY = 'recon_feedback';
 const MISMATCH_REASONS = ['金额不一致', '款式数量不相等', '商品编码不一致', '单价不一致', '缺少明细项', '重复入账', '其他'];
-const loadFeedbackThread = (docNo: string): FeedbackEntry[] => {
-  try { const m = JSON.parse(localStorage.getItem(FEEDBACK_KEY) || '{}'); return Array.isArray(m[docNo]) ? m[docNo] : []; } catch { return []; }
+// 反馈线程隔离键：出库单号会在不同对手方之间重复，recon_feedback 又是全局同步键，
+// 仅按 docNo 存储会让「同号跨供应商/采购商」的反馈串到同一线程（跨租户串读）。
+// 改用「单号 + 供方 + 采方」组合键；双端保存的是同一条记录、字段一致，故两侧算出
+// 同一 tid，既能共享同一反馈线程又互不串扰。
+const feedbackThreadId = (r: any): string => {
+  if (!r) return '';
+  const sup = String(r.supplierUsername || r.supplierName || '').trim();
+  const cus = String(r.customerUsername || r.customerName || '').trim();
+  return [String(r.docNo || '').trim(), sup, cus].join('|');
 };
-const saveFeedbackThread = (docNo: string, entries: FeedbackEntry[]) => {
-  try { const m = JSON.parse(localStorage.getItem(FEEDBACK_KEY) || '{}'); m[docNo] = entries; localStorage.setItem(FEEDBACK_KEY, JSON.stringify(m)); } catch { /* ignore */ }
+const loadFeedbackThread = (tid: string): FeedbackEntry[] => {
+  try { const m = JSON.parse(localStorage.getItem(FEEDBACK_KEY) || '{}'); return Array.isArray(m[tid]) ? m[tid] : []; } catch { return []; }
 };
-const getFeedbackSeen = (side: string, docNo: string): string => {
-  try { const m = JSON.parse(localStorage.getItem('recon_feedback_seen_' + side) || '{}'); return m[docNo] || ''; } catch { return ''; }
+const saveFeedbackThread = (tid: string, entries: FeedbackEntry[]) => {
+  try { const m = JSON.parse(localStorage.getItem(FEEDBACK_KEY) || '{}'); m[tid] = entries; localStorage.setItem(FEEDBACK_KEY, JSON.stringify(m)); } catch { /* ignore */ }
 };
-const setFeedbackSeen = (side: string, docNo: string) => {
-  try { const m = JSON.parse(localStorage.getItem('recon_feedback_seen_' + side) || '{}'); m[docNo] = new Date().toISOString(); localStorage.setItem('recon_feedback_seen_' + side, JSON.stringify(m)); } catch { /* ignore */ }
+const getFeedbackSeen = (side: string, tid: string): string => {
+  try { const m = JSON.parse(localStorage.getItem('recon_feedback_seen_' + side) || '{}'); return m[tid] || ''; } catch { return ''; }
+};
+const setFeedbackSeen = (side: string, tid: string) => {
+  try { const m = JSON.parse(localStorage.getItem('recon_feedback_seen_' + side) || '{}'); m[tid] = new Date().toISOString(); localStorage.setItem('recon_feedback_seen_' + side, JSON.stringify(m)); } catch { /* ignore */ }
 };
 
 // ==================== 模拟数据 ====================
@@ -251,8 +261,10 @@ const ReconciliationManage: React.FC = () => {
     localStorage.setItem('purchaser_bills_' + getOwner(), JSON.stringify(list));
   }, [getOwner]);
   const findBillIndex = useCallback((bills: any[], r: ReconRecord) => bills.findIndex(b =>
-    (!!r.matchedBillKey && b.key === r.matchedBillKey) ||
-    (!!b.outboundNo && String(b.outboundNo).trim() === String(r.docNo || '').trim())
+    (((!!r.matchedBillKey && b.key === r.matchedBillKey) ||
+    (!!b.outboundNo && String(b.outboundNo).trim() === String(r.docNo || '').trim()))) &&
+    // 对方主体校验：同号跨供应商不误回写（凭证优先，名称精确兜底）
+    (!String(r.supplierName || '').trim() || String(b.supplier || '').trim() === String(r.supplierName || '').trim() || (!!r.supplierUsername && b.supplierUsername === r.supplierUsername))
   ), []);
 
   /** 对账完成：回传供应商账单明细“对账完成” + 采购商账单“已对账” + 双方对账管理自动移除该笔对账 */
@@ -285,14 +297,23 @@ const ReconciliationManage: React.FC = () => {
     const purReconPerson = (action === 'confirm' || action === 'entryBySupplier' || action === 'mismatch' || action === 'auto') ? reconcilerDisplay : '';
     // 更新供应商账单明细
     try {
-      const supOwner = r.supplierUsername || '';
+      // 凭证兜底：存量/改名记录缺账号时按公司名/编号反查注册账号，避免回写静默跳过形成死锁
+      const users0: any[] = (() => { try { return JSON.parse(localStorage.getItem('registeredUsers') || '[]'); } catch { return []; } })();
+      const byCo = (n: any): any => {
+        const t = String(n || '').trim();
+        return t ? users0.find((u: any) => u && (String(u.companyName || '').trim() === t || String(u.companyShortName || '').trim() === t || String(u.companyNo || '').trim() === t)) || null : null;
+      };
+      const supOwner = r.supplierUsername || byCo(r.supplierName)?.username || '';
       if (supOwner) {
         const key = `pageData_customer_bill-detail_${supOwner}`;
         const rows: any[] = JSON.parse(localStorage.getItem(key) || '[]');
         if (Array.isArray(rows)) {
-          const idx = rows.findIndex(x => (!!r.orderNo && x.id === r.orderNo) || (!!x.outboundNo && String(x.outboundNo).trim() === String(r.docNo || '').trim()));
+          const idx = rows.findIndex(x =>
+            (((!!r.orderNo && x.id === r.orderNo) || (!!x.outboundNo && String(x.outboundNo).trim() === String(r.docNo || '').trim()))) &&
+            // 对方主体校验：同号跨采购商不误回写
+            (!String(r.customerName || '').trim() || String(x.customerName || '').trim() === String(r.customerName || '').trim() || (!!r.customerUsername && x.customerUsername === r.customerUsername) || (!!r.customerNo && x.customerNo === r.customerNo)));
           if (idx >= 0) {
-            const supResult = action === 'entryByPurchaser' ? '按采方入账' : '对账完成';
+            const supResult = action === 'entryByPurchaser' ? '按采方入账' : (action === 'mismatch' ? '不相符' : '对账完成');
             rows[idx] = {
               ...rows[idx],
               reconResult: supResult,
@@ -310,15 +331,17 @@ const ReconciliationManage: React.FC = () => {
     } catch { /* ignore */ }
     // 更新采购商账单对账结果
     try {
-      const purOwner = r.customerUsername || '';
+      const users1: any[] = (() => { try { return JSON.parse(localStorage.getItem('registeredUsers') || '[]'); } catch { return []; } })();
+      const byCo1 = (n: any): any => {
+        const t = String(n || '').trim();
+        return t ? users1.find((u: any) => u && (String(u.companyName || '').trim() === t || String(u.companyShortName || '').trim() === t || String(u.companyNo || '').trim() === t)) || null : null;
+      };
+      const purOwner = r.customerUsername || byCo1(r.customerName)?.username || (r.customerNo ? byCo1(r.customerNo)?.username : '') || '';
       if (purOwner) {
         const key = `purchaser_bills_${purOwner}`;
         const bills: any[] = JSON.parse(localStorage.getItem(key) || '[]');
         if (Array.isArray(bills)) {
-          const idx = bills.findIndex(b =>
-            (r.matchedBillKey && b.key === r.matchedBillKey) ||
-            (b.outboundNo && String(b.outboundNo).trim() === String(r.docNo || '').trim())
-          );
+          const idx = findBillIndex(bills, r);
           if (idx >= 0) {
             const cur = bills[idx].reconcileResult || '';
             const update: any = { diffNote: purDiff };
@@ -350,12 +373,12 @@ const ReconciliationManage: React.FC = () => {
       ourEntryDate: !r.ourEntryDate || r.ourEntryDate === '-' ? todayStr : r.ourEntryDate,
       confirmedBy: operatorName || r.confirmedBy,
       confirmedAt: new Date().toISOString().slice(0, 19).replace('T', ' '),
-      supResult: action === 'entryByPurchaser' ? '按采方入账' : '对账完成',
+      supResult: action === 'entryByPurchaser' ? '按采方入账' : (action === 'mismatch' ? '不相符' : '对账完成'),
       supDiff,
       supPerson: supReconPerson,
       purPerson: purReconPerson,
     } as ReconRecord);
-  }, [resolveSupplierPerson]);
+  }, [resolveSupplierPerson, findBillIndex]);
 
   // ==================== 对方反馈 / 账单不符弹窗 / 明细显示字段 状态 ====================
   const mySide: 'supplier' | 'purchaser' = isPurchaser ? 'purchaser' : 'supplier';
@@ -473,7 +496,7 @@ const ReconciliationManage: React.FC = () => {
   useEffect(() => {
     const onStorage = (e: StorageEvent) => {
       if (e.key === FEEDBACK_KEY) {
-        if (feedbackVisible && selectedRecord) setFeedbackEntries(loadFeedbackThread(selectedRecord.docNo));
+        if (feedbackVisible && selectedRecord) setFeedbackEntries(loadFeedbackThread(feedbackThreadId(selectedRecord)));
         setFeedbackTick(t => t + 1);
       }
     };
@@ -832,9 +855,9 @@ const ReconciliationManage: React.FC = () => {
         }
       }
     } catch { /* ignore */ }
-    const entries = loadFeedbackThread(r.docNo);
+    const entries = loadFeedbackThread(feedbackThreadId(r));
     entries.push({ id: `fb-${Date.now()}`, side: 'purchaser', author: operatorName, reasons: mismatchReasons, note: mismatchNote.trim(), images: mismatchImage ? [mismatchImage] : [], time: new Date().toISOString() });
-    saveFeedbackThread(r.docNo, entries);
+    saveFeedbackThread(feedbackThreadId(r), entries);
     setMismatchVisible(false);
     setFeedbackTick(t => t + 1);
     // 触发 gating effect 重新运行，将账目不符状态同步到对方
@@ -872,26 +895,26 @@ const ReconciliationManage: React.FC = () => {
   const openFeedback = useCallback((r: ReconRecord) => {
     // 同步选中记录：弹窗标题/提交按钮依赖 selectedRecord（表格列入口未经过查看明细）
     setSelectedRecord(r);
-    setFeedbackEntries(loadFeedbackThread(r.docNo));
+    setFeedbackEntries(loadFeedbackThread(feedbackThreadId(r)));
     setFeedbackReasons([]);
     setFeedbackNote('');
     setFeedbackImage('');
     setFeedbackVisible(true);
-    setFeedbackSeen(mySide, r.docNo);
+    setFeedbackSeen(mySide, feedbackThreadId(r));
     setFeedbackTick(t => t + 1);
   }, [mySide]);
 
   const submitFeedback = useCallback((r: ReconRecord) => {
     if (feedbackReasons.length === 0 && !feedbackNote.trim() && !feedbackImage) { message.warning('请填写反馈内容（原因/备注/图片任一）'); return; }
     releaseSync(r.key);
-    const entries = loadFeedbackThread(r.docNo);
+    const entries = loadFeedbackThread(feedbackThreadId(r));
     entries.push({ id: `fb-${Date.now()}`, side: mySide, author: operatorName, reasons: feedbackReasons, note: feedbackNote.trim(), images: feedbackImage ? [feedbackImage] : [], time: new Date().toISOString() });
-    saveFeedbackThread(r.docNo, entries);
+    saveFeedbackThread(feedbackThreadId(r), entries);
     setFeedbackEntries(entries);
     setFeedbackReasons([]);
     setFeedbackNote('');
     setFeedbackImage('');
-    setFeedbackSeen(mySide, r.docNo);
+    setFeedbackSeen(mySide, feedbackThreadId(r));
     setFeedbackTick(t => t + 1);
     // 触发 gating effect 重新运行，将反馈状态同步到对方
     setDataSource(prev => [...prev]);
@@ -899,8 +922,8 @@ const ReconciliationManage: React.FC = () => {
   }, [feedbackReasons, feedbackNote, feedbackImage, mySide, operatorName]);
 
   const unseenFeedbackCount = useCallback((r: ReconRecord) => {
-    const seen = getFeedbackSeen(mySide, r.docNo);
-    return loadFeedbackThread(r.docNo).filter(e => e.side !== mySide && e.time > seen).length;
+    const seen = getFeedbackSeen(mySide, feedbackThreadId(r));
+    return loadFeedbackThread(feedbackThreadId(r)).filter(e => e.side !== mySide && e.time > seen).length;
   }, [mySide]);
 
   /** 采购商：按供方账单入账（不一致→用供方明细覆盖采购账单明细；本方未入账→自动新增采购账单） */
@@ -1256,16 +1279,24 @@ const ReconciliationManage: React.FC = () => {
       // 已对账完成的账单（已对账/按供方入账）不显示在手动关联窗口中
       bills = bills.filter(b => !['已对账', '按供方入账', '已发起对账'].includes(String(b.reconcileResult || '')));
       // 对方校验：仅显示供应商与本对账记录一致的采购账单，避免手动关联到其它供应商的账单
+      // 放宽口径：凭证（supplierUsername）优先 + 名称含改名链归一，避免改名后正确账单被过滤掉无法关联
       const cpSupplier = String(record.supplierName || (record.initiator === 'purchaser' ? record.counterparty : '') || '').trim();
-      if (cpSupplier) bills = bills.filter(b => String(b.supplier || '').trim() === cpSupplier);
+      const cpSupUser = String(record.supplierUsername || '').trim();
+      if (cpSupplier || cpSupUser) bills = bills.filter(b =>
+        (!!cpSupUser && String(b.supplierUsername || '').trim() === cpSupUser) ||
+        (!!cpSupplier && (String(b.supplier || '').trim() === cpSupplier || latestNameOf(b.supplier || '') === latestNameOf(cpSupplier))));
     } else {
       try { bills = JSON.parse(localStorage.getItem(`pageData_customer_bill-detail_${getOwner()}`) || '[]'); } catch { /* ignore */ }
       if (!Array.isArray(bills)) bills = [];
       // 仅显示未完成对账的供应商账单
       bills = bills.filter(b => !['对账完成', '按采方入账'].includes(String(b.reconResult || '')));
       // 对方校验：仅显示采购商与本对账记录一致的供应商账单明细，避免手动关联到其它采购商的账单
+      // 放宽口径：凭证（customerUsername）优先 + 名称含改名链归一，避免改名后正确账单被过滤掉无法关联
       const cpCustomer = String(record.customerName || '').trim();
-      if (cpCustomer) bills = bills.filter(b => String(b.customerName || '').trim() === cpCustomer);
+      const cpCusUser = String(record.customerUsername || '').trim();
+      if (cpCustomer || cpCusUser) bills = bills.filter(b =>
+        (!!cpCusUser && String(b.customerUsername || '').trim() === cpCusUser) ||
+        (!!cpCustomer && (String(b.customerName || '').trim() === cpCustomer || latestNameOf(b.customerName || '') === latestNameOf(cpCustomer))));
     }
     setLinkBills(bills);
     setLinkSearch({ ...emptyLinkSearch });
@@ -1273,7 +1304,7 @@ const ReconciliationManage: React.FC = () => {
     setLinkPick(record.matchedBillKey || record.orderNo || '');
     setLinkRecord(record);
     setLinkVisible(true);
-  }, [getOwner, isPurchaser]);
+  }, [getOwner, isPurchaser, latestNameOf]);
 
   // 手动关联弹窗：按字段搜索过滤（点击查询后生效）
   const linkQtyOf = (b: any) => Number(b.totalQty) || (Array.isArray(b.items) ? b.items.reduce((s: number, it: any) => s + (Number(it.quantity) || 0), 0) : 0);
@@ -1313,7 +1344,7 @@ const ReconciliationManage: React.FC = () => {
           // 写入新关联账单的辅助单据号，并存储供应商账单ID用于重新发起时恢复
           const idx = bills.findIndex(b => b.key === linkPick);
           if (idx >= 0) {
-            bills[idx] = { ...bills[idx], auxDocNo: linkRecord.docNo || '', linkedSupplierBillId: linkRecord.orderNo || '' };
+            bills[idx] = { ...bills[idx], auxDocNo: linkRecord.docNo || '', linkedSupplierBillId: linkRecord.orderNo || '', billLog: appendBillLogEntry(bills[idx].billLog, '关联对账', operatorName, `手动关联供应商单据 ${linkRecord.docNo || ''}`) };
             localStorage.setItem(key, JSON.stringify(bills));
           }
         }
@@ -1334,7 +1365,7 @@ const ReconciliationManage: React.FC = () => {
           // 写入新关联账单的辅助单据号，并存储采购商账单key用于重新发起时恢复
           const idx = rows.findIndex(x => x.id === linkPick);
           if (idx >= 0) {
-            rows[idx] = { ...rows[idx], auxDocNo: linkRecord.docNo || '', matchedPurchaserBillKey: linkRecord.matchedBillKey || '' };
+            rows[idx] = { ...rows[idx], auxDocNo: linkRecord.docNo || '', matchedPurchaserBillKey: linkRecord.matchedBillKey || '', billLog: appendBillLogEntry(rows[idx].billLog, '关联对账', operatorName, `手动关联采购账单 ${linkRecord.docNo || ''}`) };
             localStorage.setItem(key, JSON.stringify(rows));
           }
         }
@@ -1342,7 +1373,7 @@ const ReconciliationManage: React.FC = () => {
     } catch { /* ignore */ }
     setLinkVisible(false);
     message.success('已关联单据，系统正在自动核对明细与总金额');
-  }, [linkRecord, linkPick, isPurchaser, getOwner]);
+  }, [linkRecord, linkPick, isPurchaser, getOwner, operatorName]);
 
   /** 导出 */
   const handleExport = useCallback(() => {
@@ -1443,7 +1474,7 @@ const ReconciliationManage: React.FC = () => {
       // 对方反馈独立列（差异说明右侧）：显示反馈条数，对方新增内容数量闪烁提示
       title: '对方反馈', key: 'feedback', width: 110, align: 'center',
       render: (_: unknown, record: ReconRecord) => {
-        const count = loadFeedbackThread(record.docNo).length;
+        const count = loadFeedbackThread(feedbackThreadId(record)).length;
         const unseen = unseenFeedbackCount(record);
         return (
           <Badge count={unseen} className={unseen > 0 ? 'recon-badge-blink' : ''}>

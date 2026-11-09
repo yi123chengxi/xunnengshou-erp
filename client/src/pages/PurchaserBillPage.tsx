@@ -28,6 +28,7 @@ import { reloadAfterPull } from '../utils/serverSync';
 import { compressImageFile } from '../utils/imageCompress';
 import { loadSupplierFinishedProducts } from '../utils/supplierProducts';
 import { loadRoleRecords, loadRoleAll, upsertRecords } from '../utils/reconStore';
+import { resolveLatestCompanyName } from '../utils/nameSync';
 
 const { Text } = Typography;
 const PRIMARY = '#1890ff';
@@ -40,10 +41,13 @@ const RECON_DONE = ['对账完成', '已对账', '按供方入账'];
 // 对账记录列表中是否存在供应商发起的记录（按账单 key/出库单号匹配）
 const matchSupplierRecon = (list: any[], b: { key: string; outboundNo: string }) => list.some((x: any) =>
   (x.initiator || (x.source === 'bill' ? 'supplier' : '')) === 'supplier' &&
+  // 对方主体校验：同号跨供应商不误匹配（凭证优先，名称精确兜底）
+  (!x.supplierName || !(b as any).supplier || String(x.supplierName).trim() === String((b as any).supplier).trim() || (!!x.supplierUsername && x.supplierUsername === (b as any).supplierUsername)) &&
   ((!!x.orderNo && x.orderNo === b.key) || (!!x.matchedBillKey && x.matchedBillKey === b.key) || (!!b.outboundNo && String(x.docNo || '').trim() === String(b.outboundNo).trim())));
 // 对账记录列表中是否存在采购商发起的记录（按账单 key/出库单号匹配）
 const matchPurchaserRecon = (list: any[], b: { key: string; outboundNo: string }) => list.some((x: any) =>
   x.source === 'bill' && x.initiator === 'purchaser' &&
+  (!x.supplierName || !(b as any).supplier || String(x.supplierName).trim() === String((b as any).supplier).trim() || (!!x.supplierUsername && x.supplierUsername === (b as any).supplierUsername)) &&
   ((!!x.orderNo && x.orderNo === b.key) || (!!x.matchedBillKey && x.matchedBillKey === b.key) || (!!b.outboundNo && String(x.docNo || '').trim() === String(b.outboundNo).trim())));
 
 /** 账单创建时间（毫秒）：createdAt 优先（兼容 'YYYY/M/D HH:mm:ss' 与 ISO），缺失时回退 key 内时间戳、账单日期；用于列表按最新创建排前 */
@@ -615,13 +619,26 @@ const PurchaserBillPage: React.FC = () => {
         if (IN.includes(cur) && !IN.includes(old)) {
           let debit = '原材料';
           try { debit = localStorage.getItem(`purchbill_debit_subject_${owner}`) || '原材料'; } catch { /* 兜底原材料 */ }
-          writeAutoEntries(owner, {
+          const voucherNo = writeAutoEntries(owner, {
             sourceKey: srcKey,
             debitSubject: debit,
             creditSubject: '应付账款',
             amount: Number(b.totalAmount) || 0,
             summary: `采购供应商「${b.supplier || '-'}」原材料（单据${b.outboundNo || b.key}）对账结果：${cur === '已对账' ? '对账完成' : cur}`,
           });
+          // 统计留痕：把自动生成的会计凭证号写入账单日志，建立“对账完成 → 会计凭证”审计链
+          if (voucherNo) {
+            try {
+              const raw = JSON.parse(localStorage.getItem(storageKey) || '[]');
+              if (Array.isArray(raw)) {
+                const bi = raw.findIndex((x: any) => x.key === b.key);
+                if (bi >= 0) {
+                  raw[bi] = { ...raw[bi], billLog: appendBillLogEntry(raw[bi].billLog, '生成会计凭证', undefined, `对账完成自动生成会计凭证 ${voucherNo}（借：${debit}／贷：应付账款）`)};
+                  localStorage.setItem(storageKey, JSON.stringify(raw));
+                }
+              }
+            } catch { /* ignore */ }
+          }
         } else if (!IN.includes(cur) && IN.includes(old)) {
           removeAutoEntries(owner, srcKey);
         }
@@ -949,7 +966,7 @@ const PurchaserBillPage: React.FC = () => {
       // 已对账完成或供应商已发起对账的账单不再发起
       if (RECON_DONE.includes(String(b.reconcileResult || '')) || matchSupplierRecon(reconList, b)) { skipped += 1; return; }
       if (reconList.some((r: any) => r.source === 'bill' && r.initiator === 'purchaser' && (r.orderNo === b.key || (!!r.docNo && r.docNo === b.outboundNo)))) { skipped += 1; return; }
-      const supUser = users.find((x: any) => x.companyName === b.supplier);
+      const supUser = users.find((x: any) => x.companyName === b.supplier) || users.find((x: any) => x.companyName === resolveLatestCompanyName(b.supplier || '', ''));
       // 重新发起对账时恢复旧的关联状态（orderNo 使用之前关联的供应商账单ID）
       const orderNo = b.linkedSupplierBillId || b.key;
       reconList.unshift({
@@ -1010,8 +1027,43 @@ const PurchaserBillPage: React.FC = () => {
     const owner0 = localStorage.getItem('isSubAccount') === 'true' ? (localStorage.getItem('parentAccount') || uname0) : uname0;
     let list: any[] = [];
     try { list = loadRoleAll('purchaser', owner0); } catch { list = []; }
-    const remain = list.map((x: any) => (x.source === 'bill' && x.initiator === 'purchaser' && matchPurchaserRecon([x], r)) ? { ...x, delisted: true, delistedAt: new Date().toISOString(), withdrawn: true } : x);
+    // 撤回校验：对方（供应商）已确认/完成的对账不可撤回，避免回滚对方已入账结果、造成状态不一致
+    const matchedAlive = list.filter((x: any) => x.source === 'bill' && x.initiator === 'purchaser' && !x.delisted && matchPurchaserRecon([x], r));
+    const doneByCp = matchedAlive.find((x: any) => String(x.reconResult || '') === 'matched' || String(x.supResult || '').trim() !== '' || !!x.confirmedAt);
+    if (doneByCp) {
+      message.error('供应商已完成/确认该对账，无法撤回；请刷新后按对账完成结果处理');
+      return;
+    }
+    const tombRecs: any[] = [];
+    const remain = list.map((x: any) => {
+      if (x.source === 'bill' && x.initiator === 'purchaser' && !x.delisted && matchPurchaserRecon([x], r)) {
+        const t = { ...x, delisted: true, delistedAt: new Date().toISOString(), withdrawn: true };
+        tombRecs.push(t);
+        return t;
+      }
+      return x;
+    });
     upsertRecords(remain);
+    // 闭环：供应商侧镜像状态回滚（“已发起对账”行还原待对账、清辅助单据号、补日志）
+    tombRecs.forEach((m: any) => {
+      const su = String(m.supplierUsername || '');
+      if (!su) return;
+      const rk = `pageData_customer_bill-detail_${su}`;
+      let rows: any[] = [];
+      try { rows = JSON.parse(localStorage.getItem(rk) || '[]'); } catch { return; }
+      if (!Array.isArray(rows)) return;
+      let ch = false;
+      const nextRows = rows.map((row: any) => {
+        const hit = (m.orderNo && row.id === m.orderNo) || (!!m.docNo && !!row.outboundNo && String(m.docNo).trim() === String(row.outboundNo).trim());
+        if (!hit) return row;
+        ch = true;
+        const base: any = { ...row, auxDocNo: row.auxDocNo === m.docNo ? '' : row.auxDocNo };
+        if (String(row.reconResult || '') === '已发起对账') { base.reconResult = '待对账'; base.diffDesc = ''; base.purchaserReconPerson = ''; base.supplierReconPerson = ''; }
+        base.billLog = appendBillLogEntry(row.billLog, '撤回对账', undefined, '采购商撤回对账，供应商账单状态已还原');
+        return base;
+      });
+      if (ch) { try { localStorage.setItem(rk, JSON.stringify(nextRows)); } catch { /* ignore */ } }
+    });
     const all: any[] = JSON.parse(localStorage.getItem(storageKey) || '[]');
     localStorage.setItem(storageKey, JSON.stringify(all.map(b => b.key === r.key ? {
       ...b,
@@ -1089,7 +1141,18 @@ const PurchaserBillPage: React.FC = () => {
         {!hideInitiate && <Button type="link" size="small" icon={<SwapOutlined />} style={{ color: '#722ed1' }} onClick={() => initiateReconForBills([r])}>发起对账</Button>}
         {initiated && !locked && <Button type="link" size="small" icon={<UndoOutlined />} style={{ color: '#fa8c16' }} onClick={() => withdrawRecon(r)}>撤回对账</Button>}
         {!locked && !initiated && <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openEdit(r)}>编辑</Button>}
-        {!locked && !initiated && !isAutoBill && <Button type="link" size="small" danger icon={<DeleteOutlined />} onClick={() => { const all = bills.filter(b => b.key !== r.key); localStorage.setItem(storageKey, JSON.stringify(all)); refreshSupplierPurchase(getDataOwner(), [r.supplier]); reload(); message.success('已删除'); }}>删除</Button>}
+        {!locked && !initiated && !isAutoBill && <Button type="link" size="small" danger icon={<DeleteOutlined />} onClick={() => { const all = bills.filter(b => b.key !== r.key); localStorage.setItem(storageKey, JSON.stringify(all));
+                  // 闭环：删除账单同时墓碑化关联的存活对账记录（撤回语义），避免对方平台残留孤儿在途对账
+                  try {
+                    const uname0 = localStorage.getItem('username') || '';
+                    const owner0 = localStorage.getItem('isSubAccount') === 'true' ? (localStorage.getItem('parentAccount') || uname0) : uname0;
+                    const rl0 = loadRoleAll('purchaser', owner0);
+                    const rm0 = rl0.map((x: any) => (!x.delisted && x.source === 'bill' && ((r.outboundNo && String(x.docNo || '').trim() === String(r.outboundNo).trim()) || x.orderNo === r.key || x.matchedBillKey === r.key)) ? { ...x, delisted: true, delistedAt: new Date().toISOString(), withdrawn: true } : x);
+                    upsertRecords(rm0);
+                  } catch { /* ignore */ }
+                  // 桥时序：删除账单同时清理其可能残留的自动会计分录（防止孤儿凭证导致账实不平）
+                  try { removeAutoEntries(getDataOwner(), `purchbill-recon-${r.key}`); } catch { /* ignore */ }
+                  refreshSupplierPurchase(getDataOwner(), [r.supplier]); reload(); message.success('已删除'); }}>删除</Button>}
       </Space>
     );
   } };

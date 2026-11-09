@@ -44,6 +44,9 @@ export const resolveRecordSides = (r: any): { sup: string; pur: string } => {
   let pur = String(r.customerUsername || '').trim();
   if (!pur) pur = userByCompany(users, r.customerName)?.username || '';
   if (!pur && r.customerNo) pur = userByCompany(users, r.customerNo)?.username || '';
+  // 兜底：仅有对手方名称快照时按发起方语义解析（供应商发起→对手方为采购商，反之亦然）
+  if (!pur && String(r.initiator || '') === 'supplier') pur = userByCompany(users, r.counterparty)?.username || '';
+  if (!sup && String(r.initiator || '') === 'purchaser') sup = userByCompany(users, r.counterparty)?.username || '';
   return { sup, pur };
 };
 

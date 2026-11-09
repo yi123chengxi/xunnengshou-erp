@@ -10,7 +10,7 @@
  */
 
 const BILL_TERMINAL = ['按供方入账', '已对账', '对账完成', '不相符'];
-const SUP_ROW_TERMINAL = ['对账完成', '按采方入账'];
+const SUP_ROW_TERMINAL = ['对账完成', '按采方入账', '不相符'];
 
 import { loadAllReconRecordsUnion, upsertRecords } from './reconStore';
 import { appendBillLogEntry } from './billLog';
@@ -30,6 +30,14 @@ const diffOfBill = (res: string): string =>
 export function healReconTerminalLinks(): boolean {
   let wrote = false;
   try {
+    // 清理历史孤儿键（空 owner 的账单明细键）：该键会被所有租户拉取，存在跨租户串读风险
+    try {
+      if (localStorage.getItem('pageData_customer_bill-detail_') !== null) {
+        localStorage.removeItem('pageData_customer_bill-detail_');
+        localStorage.removeItem('pageData_customer_bill-detail__ts');
+        wrote = true;
+      }
+    } catch { /* ignore */ }
     const billKeys: string[] = [];
     const detailKeys: string[] = [];
     for (let i = 0; i < localStorage.length; i++) {
@@ -133,6 +141,30 @@ export function healReconTerminalLinks(): boolean {
         if (ch) { try { localStorage.setItem(d.key, JSON.stringify(d.rows)); wrote = true; } catch { /* ignore */ } }
       });
     }
+    // 1.2) 完成墓碑 → 采购商账单断言回写（completeRecon 因凭证缺失未能写采购商账单时，采购商浏览器自愈闭环）
+    const compTombs = tombs.filter((t: any) => isCompletionTomb(t));
+    if (compTombs.length > 0) {
+      billsAll.forEach((bills, bi) => {
+        let ch = false;
+        billsAll[bi] = bills.map((b: any) => {
+          if (BILL_TERMINAL.includes(String(b?.reconcileResult || ''))) return b;
+          const t = compTombs.find((x: any) =>
+            (x.matchedBillKey && x.matchedBillKey === b.key) ||
+            (!!x.docNo && !!b.outboundNo && String(x.docNo).trim() === String(b.outboundNo).trim()));
+          if (!t) return b;
+          ch = true;
+          return {
+            ...b,
+            reconcileResult: '已对账',
+            diffNote: t.supDiff || '金额一致，双方对账完成',
+            purchaserReconciler: b.purchaserReconciler || t.purPerson || '',
+            supplierReconciler: b.supplierReconciler || t.supPerson || '',
+            billLog: appendBillLogEntry(b.billLog, '对账完成', t.purPerson || undefined, t.supDiff || '金额一致，双方对账完成'),
+          };
+        });
+        if (ch) { try { localStorage.setItem(billKeys[bi], JSON.stringify(billsAll[bi])); wrote = true; } catch { /* ignore */ } }
+      });
+    }
     // 1.6) 误置状态修复：被撤回墓碑误回写为终态的账单行（无完成墓碑、无终态账单）还原为待对账
     details.forEach(d => {
       let ch = false;
@@ -151,6 +183,50 @@ export function healReconTerminalLinks(): boolean {
         };
       });
       if (ch) { try { localStorage.setItem(d.key, JSON.stringify(d.rows)); wrote = true; } catch { /* ignore */ } }
+    });
+    // 1.7) 孤儿在途状态还原：账单行/采购账单停留“已发起对账”等在途态但对账记录已不存在（仅有墓碑）→ 还原初始态
+    const liveOfRow = (row: any): boolean => aliveRecs.some((r: any) =>
+      (r.orderNo && row.id === r.orderNo) || (!!r.docNo && !!row.outboundNo && String(r.docNo).trim() === String(row.outboundNo).trim()));
+    const tombOfRowAny = (row: any): boolean => tombs.some((t: any) => matchRow(t, row));
+    details.forEach(d => {
+      let ch = false;
+      d.rows = d.rows.map((row: any) => {
+        if (String(row?.reconResult || '') !== '已发起对账') return row;
+        if (liveOfRow(row) || !tombOfRowAny(row)) return row;
+        ch = true;
+        return {
+          ...row,
+          reconResult: '待对账',
+          diffDesc: '',
+          purchaserReconPerson: '',
+          supplierReconPerson: '',
+          billLog: appendBillLogEntry(row.billLog, '撤回对账', undefined, '自愈修复：对账记录已不存在，恢复待对账'),
+        };
+      });
+      if (ch) { try { localStorage.setItem(d.key, JSON.stringify(d.rows)); wrote = true; } catch { /* ignore */ } }
+    });
+    const liveOfBill = (b: any): boolean => aliveRecs.some((r: any) =>
+      (r.matchedBillKey && r.matchedBillKey === b.key) || (r.orderNo && r.orderNo === b.key) ||
+      (!!r.docNo && !!b.outboundNo && String(r.docNo).trim() === String(b.outboundNo).trim()));
+    const tombOfBillAny = (b: any): boolean => tombs.some((t: any) =>
+      (t.matchedBillKey && t.matchedBillKey === b.key) || (t.orderNo && t.orderNo === b.key) ||
+      (!!t.docNo && !!b.outboundNo && String(t.docNo).trim() === String(b.outboundNo).trim()));
+    billsAll.forEach((bills, bi) => {
+      let ch = false;
+      billsAll[bi] = bills.map((b: any) => {
+        const cur = String(b?.reconcileResult || '');
+        if (!['已发起对账', '一致', '不一致'].includes(cur)) return b;
+        if (liveOfBill(b) || !tombOfBillAny(b)) return b;
+        ch = true;
+        return {
+          ...b,
+          reconcileResult: '',
+          diffNote: '',
+          auxDocNo: '',
+          billLog: appendBillLogEntry(b.billLog, '撤回对账', undefined, '自愈修复：对账记录已不存在，恢复未对账'),
+        };
+      });
+      if (ch) { try { localStorage.setItem(billKeys[bi], JSON.stringify(billsAll[bi])); wrote = true; } catch { /* ignore */ } }
     });
     // 2) 存活 pending 记录 + 任一侧已终态 → delisted 墓碑（服务端合并保护墓碑不被复活）
     const recs = recsAll;

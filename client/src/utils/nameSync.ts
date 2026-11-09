@@ -12,6 +12,8 @@
 
 const RENAME_KEY = 'company_renames';
 
+import { upsertRecords } from './reconStore';
+
 export interface CompanyRename {
   key: string;
   username: string;
@@ -137,6 +139,7 @@ export const repairCounterpartyNames = (): string[] => {
       if (SWEEP_EXACT.includes(k) || SWEEP_PREFIXES.some(p => k.startsWith(p))) keys.push(k);
     }
     const changed = new Set<string>();
+    const reconChanged: any[] = [];
     keys.forEach(key => {
       let list: any[] = [];
       try { list = JSON.parse(localStorage.getItem(key) || '[]'); } catch { return; }
@@ -199,8 +202,20 @@ export const repairCounterpartyNames = (): string[] => {
           if (pu && pu.companyName && nr.customerName !== pu.companyName) { nr.customerName = pu.companyName; rc = true; }
           const cp = nr.initiator === 'purchaser' ? nr.supplierName : nr.customerName;
           if (cp && nr.counterparty !== cp) { nr.counterparty = cp; rc = true; }
+          // 凭证回填：缺账号的对账记录按名称（含改名链）反查补全，保证分平台库归属可解析
+          if (!nr.supplierUsername && typeof nr.supplierName === 'string' && nr.supplierName) {
+            const u = resolveUserByName(nr.supplierName);
+            if (u) { nr.supplierUsername = u.username; rc = true; }
+          }
+          if (!nr.customerUsername && typeof nr.customerName === 'string' && nr.customerName) {
+            const u = resolveUserByName(nr.customerName) || (nr.customerNo ? name2u.get(String(nr.customerNo)) : null);
+            if (u) { nr.customerUsername = u.username; rc = true; }
+          }
         }
-        if (rc) ch = true;
+        if (rc) {
+          ch = true;
+          if (key === 'recon_records' || key.indexOf('recon_db_') === 0) reconChanged.push(nr);
+        }
         return rc ? nr : rec;
       });
       if (ch) {
@@ -210,6 +225,10 @@ export const repairCounterpartyNames = (): string[] => {
     // 通知已挂载页面重读存储（账单/对账/客户列表立即呈现新名称）
     if (changed.size > 0) {
       try { window.dispatchEvent(new Event('sync-data-updated')); } catch { /* ignore */ }
+    }
+    // 对账记录凭证/名称变更后重新投递分平台库：改名后的记录补投到对方身份库，闭环跨库可见性
+    if (reconChanged.length > 0) {
+      try { upsertRecords(reconChanged); } catch { /* ignore */ }
     }
     return Array.from(changed);
   } catch { return []; }

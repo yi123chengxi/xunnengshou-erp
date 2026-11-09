@@ -2946,9 +2946,16 @@ const ModuleChildPage: React.FC = () => {
               data[idx].diffDesc = '';
               data[idx].supplierReconPerson = displayName;
               data[idx].confirmTime = now;
+              data[idx].billLog = appendBillLogEntry(data[idx].billLog, '确认无误', displayName, `账单 ${record.id} 供应商确认无误`);
               localStorage.setItem(storageKey, JSON.stringify(data));
             }
           }
+        } catch { /* ignore */ }
+        // 闭环：在途对账记录携带“供应商已确认”标记（同步至采购商侧可见）
+        try {
+          const owner1 = getDataOwner();
+          const live0 = loadRoleRecords('supplier', owner1).filter((x: any) => (record.id && x.orderNo === record.id) || (record.outboundNo && String(x.docNo || '').trim() === String(record.outboundNo).trim()));
+          if (live0.length) upsertRecords(live0.map((x: any) => ({ ...x, supplierConfirmed: true, supplierConfirmedBy: displayName, supplierConfirmedAt: now })));
         } catch { /* ignore */ }
         message.success(`账单 ${record.id} 已确认无误`);
       },
@@ -4694,8 +4701,42 @@ const ModuleChildPage: React.FC = () => {
           const owner0 = localStorage.getItem('isSubAccount') === 'true' ? (localStorage.getItem('parentAccount') || uname0) : uname0;
           let list: any[] = loadRoleAll('supplier', owner0);
           if (!Array.isArray(list)) list = [];
-          const nextList = list.map((r: any) => (r.source === 'bill' && r.orderNo === record.id) ? { ...r, delisted: true, delistedAt: new Date().toISOString(), withdrawn: true } : r);
+          // 撤回校验：对方（采购商）已确认/完成的对账不可撤回，避免回滚对方已入账结果、造成状态不一致
+          const matchedAlive = list.filter((r: any) => r.source === 'bill' && r.orderNo === record.id && !r.delisted);
+          const doneByCp = matchedAlive.find((r: any) => String(r.reconResult || '') === 'matched' || !!r.confirmedAt || String(r.purResult || '').trim() !== '');
+          if (doneByCp) {
+            message.error('采购商已完成/确认该对账，无法撤回；请刷新后按对账完成结果处理');
+            return;
+          }
+          const tombRecs: any[] = [];
+          const nextList = list.map((r: any) => {
+            if (r.source === 'bill' && r.orderNo === record.id && !r.delisted) {
+              const t = { ...r, delisted: true, delistedAt: new Date().toISOString(), withdrawn: true };
+              tombRecs.push(t);
+              return t;
+            }
+            return r;
+          });
           upsertRecords(nextList);
+          // 闭环：采购商侧镜像状态回滚（采购账单在途对账结果还原、清辅助单据号、补日志）
+          tombRecs.forEach((m: any) => {
+            const cu = String(m.customerUsername || '');
+            if (!cu) return;
+            const bk = `purchaser_bills_${cu}`;
+            let bills: any[] = [];
+            try { bills = JSON.parse(localStorage.getItem(bk) || '[]'); } catch { return; }
+            if (!Array.isArray(bills)) return;
+            let ch = false;
+            const nextBills = bills.map((b: any) => {
+              const hit = (m.matchedBillKey && b.key === m.matchedBillKey) || (m.orderNo && b.key === m.orderNo) || (!!m.docNo && !!b.outboundNo && String(m.docNo).trim() === String(b.outboundNo).trim());
+              if (!hit) return b;
+              const inFlight = ['已发起对账', '一致', '不一致'].includes(String(b.reconcileResult || ''));
+              if (!inFlight && b.auxDocNo !== m.docNo) return b;
+              ch = true;
+              return { ...b, reconcileResult: inFlight ? '' : b.reconcileResult, diffNote: inFlight ? '' : b.diffNote, auxDocNo: b.auxDocNo === m.docNo ? '' : b.auxDocNo, billLog: appendBillLogEntry(b.billLog, '撤回对账', undefined, '供应商撤回对账，采购账单状态已还原') };
+            });
+            if (ch) { try { localStorage.setItem(bk, JSON.stringify(nextBills)); } catch { /* ignore */ } }
+          });
         } catch { /* ignore */ }
         // 记录撤回对账日志
         let newBillLog = (record as any).billLog;
@@ -8951,6 +8992,14 @@ const ModuleChildPage: React.FC = () => {
     setDataSource(prev => prev.filter(item => item.key !== record.key));
     // 订单管理：删除订单后同步订单占用数到商品列表
     if (pageConfig?.title === '订单管理') syncOrderReserved(getDataOwner());
+    // 账单明细：删除账单行同时墓碑化关联的存活对账记录（撤回语义），避免采购商平台残留孤儿在途对账
+    if (pageConfig?.title === '账单明细') {
+      try {
+        const list0 = loadRoleAll('supplier', getDataOwner());
+        const next0 = list0.map((x: any) => (!x.delisted && x.source === 'bill' && ((record.id && x.orderNo === record.id) || (record.outboundNo && String(x.docNo || '').trim() === String(record.outboundNo).trim()))) ? { ...x, delisted: true, delistedAt: new Date().toISOString(), withdrawn: true } : x);
+        upsertRecords(next0);
+      } catch { /* ignore */ }
+    }
     message.success('删除成功');
   }, [moduleKey, childKey, pageConfig, getDataOwner]);
 
@@ -11777,7 +11826,7 @@ const handleBatchAttrsConfirm = () => {
                 </Tooltip>
               )}
               {/* 账单明细：已发起对账/确认无误/对账完成/按采方入账后隐藏编辑/删除；财务审核：不显示编辑/删除；采购申请单已拆分或已完成或已取消：隐藏；加工订单已拆分：隐藏 */}
-              {(pageConfig?.title !== '账单明细' || !['已发起对账', '确认无误', '对账完成', '按采方入账'].includes(record.reconResult)) && pageConfig?.title !== '财务审核' && !(pageConfig?.title === '采购申请单' && ['已拆分', '已完成', '已取消'].includes(record.status)) && !(pageConfig?.title === '加工订单' && record.status === '已拆分') && (
+              {(pageConfig?.title !== '账单明细' || !['已发起对账', '确认无误', '对账完成', '按采方入账', '不相符'].includes(record.reconResult)) && pageConfig?.title !== '财务审核' && !(pageConfig?.title === '采购申请单' && ['已拆分', '已完成', '已取消'].includes(record.status)) && !(pageConfig?.title === '加工订单' && record.status === '已拆分') && (
                 <Tooltip title="编辑">
                   <Button
                     type="link"
@@ -11868,7 +11917,7 @@ const handleBatchAttrsConfirm = () => {
                     style={{ color: PRIMARY, fontWeight: 500 }}>反取消</Button>
                 </Tooltip>
               )}
-              {(pageConfig?.title !== '账单明细' || !['已发起对账', '确认无误', '对账完成', '按采方入账'].includes(record.reconResult)) && pageConfig?.title !== '财务审核' && !(pageConfig?.title === '采购申请单' && ['已拆分', '已完成', '已取消'].includes(record.status)) && pageConfig?.title !== '采购申请单' && pageConfig?.title !== '加工订单' && (
+              {(pageConfig?.title !== '账单明细' || !['已发起对账', '确认无误', '对账完成', '按采方入账', '不相符'].includes(record.reconResult)) && pageConfig?.title !== '财务审核' && !(pageConfig?.title === '采购申请单' && ['已拆分', '已完成', '已取消'].includes(record.status)) && pageConfig?.title !== '采购申请单' && pageConfig?.title !== '加工订单' && (
               <Popconfirm
                 title="确认删除"
                 description="删除后不可恢复，确定要删除吗？"

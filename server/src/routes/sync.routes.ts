@@ -142,7 +142,7 @@ router.put('/dataset', async (req: Request, res: Response) => {
       // 只增不删键/墓碑语义键：即使客户端自认为最新，也强制记录级并集合并，
       // 防止本地缺数据的客户端清空服务端记录或复活已墓碑的记录
       if (APPEND_ONLY_KEYS.includes(key) || isMergeAlwaysKey(key)) {
-        const guarded = mergeArrayDatasets(row.dataset_json, json);
+        const guarded = mergeArrayDatasets(row.dataset_json, json, isMergeAlwaysKey(key));
         if (guarded) {
           const gTs = Math.max(ts, row.updated_at);
           await store.forceUpsertDataset(key, guarded, owner, gTs);
@@ -161,7 +161,7 @@ router.put('/dataset', async (req: Request, res: Response) => {
       return;
     }
     // 客户端已过期 → 并集合并，防止旧数据删除新增记录
-    const merged = mergeArrayDatasets(row.dataset_json, json);
+    const merged = mergeArrayDatasets(row.dataset_json, json, isMergeAlwaysKey(key));
     const finalJson = merged || json;
     const finalTs = Math.max(ts, row.updated_at);
     await store.forceUpsertDataset(key, finalJson, owner, finalTs);
@@ -174,8 +174,12 @@ router.put('/dataset', async (req: Request, res: Response) => {
   }
 });
 
-/** 数组数据集并集合并：incoming 版本优先，existing 中 incoming 不认识的记录追加保留 */
-function mergeArrayDatasets(existingJson: string, incomingJson: string): string | null {
+/** 数组数据集并集合并：incoming 版本优先，existing 中 incoming 不认识的记录追加保留
+ * fieldLevel=true（对账类键 recon_records / recon_db_*）：同一记录按字段并集合并，
+ * 保留 existing 中 incoming 未携带的字段。对账记录由供应商/采购商双端各写不同断言字段
+ * （supResult/supPerson vs purResult/purPerson），整条覆盖会互相抹除对方刚写入的结果；
+ * 字段级并集让两端贡献共存，incoming 显式携带的字段（含清空为 ''）仍以 incoming 为准。 */
+function mergeArrayDatasets(existingJson: string, incomingJson: string, fieldLevel = false): string | null {
   try {
     const a = JSON.parse(existingJson);
     const b = JSON.parse(incomingJson);
@@ -189,8 +193,11 @@ function mergeArrayDatasets(existingJson: string, incomingJson: string): string 
     const bFixed = b.map((r: any) => {
       const id = idOf(r);
       const av = id ? aById.get(id) : null;
-      if (av && av.delisted === true && r.delisted !== true) return { ...r, delisted: true, delistedAt: av.delistedAt };
-      return r;
+      if (!av) return r;
+      // 字段级并集：existing 为底、incoming 覆盖其上（incoming 省略的字段保留 existing 值）
+      const base = fieldLevel ? { ...av, ...r } : r;
+      if (av.delisted === true && base.delisted !== true) return { ...base, delisted: true, delistedAt: av.delistedAt };
+      return base;
     });
     const aOnly = a.filter((r: any) => !bIds.has(idOf(r)));
     if (aOnly.length === 0) return JSON.stringify(bFixed);
