@@ -1016,7 +1016,9 @@ const PurchaserBillPage: React.FC = () => {
       if (!b.supplier || !String(b.supplier).trim()) { skipped += 1; return; }
       // 已对账完成或供应商已发起对账的账单不再发起
       if (RECON_DONE.includes(String(b.reconcileResult || '')) || matchSupplierRecon(reconList, b)) { skipped += 1; return; }
-      if (reconList.some((r: any) => r.source === 'bill' && r.initiator === 'purchaser' && (r.orderNo === b.key || (!!r.docNo && r.docNo === b.outboundNo)))) { skipped += 1; return; }
+      // 按凭证（本方账单 key）去重：同号重复的两张账单各自持有唯一 key，允许分别发起；
+      // 不再按 docNo 去重，否则第二张同号单会被误判“已发起”而无法发起
+      if (reconList.some((r: any) => r.source === 'bill' && r.initiator === 'purchaser' && (r.orderNo === b.key || (!!r.matchedBillKey && r.matchedBillKey === b.key)))) { skipped += 1; return; }
       const supUser = users.find((x: any) => x.companyName === b.supplier) || users.find((x: any) => x.companyName === resolveLatestCompanyName(b.supplier || '', ''));
       // 重新发起对账时恢复旧的关联状态（orderNo 使用之前关联的供应商账单ID）
       const orderNo = b.linkedSupplierBillId || b.key;

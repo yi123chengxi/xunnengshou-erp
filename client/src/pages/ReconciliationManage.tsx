@@ -615,10 +615,15 @@ const ReconciliationManage: React.FC = () => {
       // 对方校验：采购账单的供应商须与本对账记录的供应商一致，避免同号跨供应商误匹配（凭证优先：账号一致即通过，名称快照改名滞后不影响）
       const cpSupplier = String(r.supplierName || (r.initiator === 'purchaser' ? r.counterparty : '') || '').trim();
       const sameCp = (b: any) => !cpSupplier || String(b.supplier || '').trim() === cpSupplier || latestNameOf(b.supplier || '') === latestNameOf(cpSupplier) || (!!r.supplierUsername && b.supplierUsername === r.supplierUsername);
-      // 匹配采购账单：优先 matchedBillKey，其次单据编号 outboundNo，再次辅助单据号 auxDocNo（均需通过对方校验）
-      const bill = (r.matchedBillKey ? bills.find(b => b.key === r.matchedBillKey && sameCp(b)) : undefined)
-        || bills.find(b => sameCp(b) && b.outboundNo && String(b.outboundNo).trim() === String(r.docNo || '').trim())
-        || bills.find(b => sameCp(b) && b.auxDocNo && String(b.auxDocNo).trim() === String(r.docNo || '').trim());
+      // 匹配采购账单：凭证优先（采购商发起时 orderNo 即本方账单 key；其次 matchedBillKey），
+      // 单号/辅助单号回退仅当同号唯一；重复时不链（留待手动关联），避免两张同号单误链同一张
+      const byCredential = (r.orderNo ? bills.find(b => b.key === r.orderNo && sameCp(b)) : undefined)
+        || (r.matchedBillKey ? bills.find(b => b.key === r.matchedBillKey && sameCp(b)) : undefined);
+      const docHits = bills.filter(b => sameCp(b) && b.outboundNo && String(b.outboundNo).trim() === String(r.docNo || '').trim());
+      const auxHits = bills.filter(b => sameCp(b) && b.auxDocNo && String(b.auxDocNo).trim() === String(r.docNo || '').trim());
+      const bill = byCredential
+        || (docHits.length === 1 ? docHits[0] : undefined)
+        || (auxHits.length === 1 ? auxHits[0] : undefined);
       if (!bill) {
         const upd: ReconRecord = { ...r, customerUsername: r.customerUsername || owner, matchedBillKey: undefined, theirAmount: 0, theirEntryDate: '-', reconResult: 'pending', diffDesc: '未匹配到采购账单，可手动关联单据' };
         if (JSON.stringify(upd) !== JSON.stringify(r)) { changed = true; return upd; }
@@ -715,9 +720,14 @@ const ReconciliationManage: React.FC = () => {
         || latestNameOf(x.customerName || '') === latestNameOf(cpCustomer)
         || (!!r.customerUsername && x.customerUsername === r.customerUsername)
         || (!!r.customerNo && x.customerNo === r.customerNo);
-      // 匹配供应商账单明细：优先 orderNo/id，其次 outboundNo/docNo，再次辅助单据号 auxDocNo（均需通过对方校验）
-      const row = rows.find(x => sameCp(x) && ((!!r.orderNo && x.id === r.orderNo) || (!!x.outboundNo && String(x.outboundNo).trim() === String(r.docNo || '').trim())))
-        || rows.find(x => sameCp(x) && x.auxDocNo && String(x.auxDocNo).trim() === String(r.docNo || '').trim());
+      // 匹配供应商账单明细：凭证优先 orderNo/id 精确；单号/辅助单号回退仅当同号唯一，
+      // 重复时不链（留待手动关联），避免两张同号行误链同一行
+      const byId = r.orderNo ? rows.find(x => x.id === r.orderNo && sameCp(x)) : undefined;
+      const docHits = rows.filter(x => sameCp(x) && !!x.outboundNo && String(x.outboundNo).trim() === String(r.docNo || '').trim());
+      const auxHits = rows.filter(x => sameCp(x) && x.auxDocNo && String(x.auxDocNo).trim() === String(r.docNo || '').trim());
+      const row = byId
+        || (docHits.length === 1 ? docHits[0] : undefined)
+        || (auxHits.length === 1 ? auxHits[0] : undefined);
       if (!row) return r;
       const rowItems: any[] = Array.isArray(row.items) ? row.items : [];
       const ourByCode = new Map<string, { qty: number; price: number }>();
