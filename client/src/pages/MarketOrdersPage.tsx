@@ -2,7 +2,6 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { Card, Table, Tag, Typography, Empty, Input, Button, Modal, Descriptions, Image, InputNumber, Select, Space, message, Radio, Upload, Tooltip } from 'antd';
 import { SearchOutlined, ReloadOutlined, EyeOutlined, PlusOutlined, SendOutlined, DeleteOutlined, UploadOutlined, FileTextOutlined, SettingOutlined, RollbackOutlined, EditOutlined, DollarOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import { isAccountingMode, writeAutoEntries, pushBankTransaction } from '../utils/accountingBridge';
 import { isInstallmentOrder, depositAmountOf, sumPayRecords, mergePayRecords, payProgressText, postInstallmentEffects, postShipCostEntry, installmentStatusOf } from '../utils/receiptWrite';
 import type { PayRecord } from '../utils/receiptWrite';
 import { saveDataset } from '../utils/dataStore';
@@ -507,14 +506,17 @@ const MarketOrdersPage: React.FC = () => {
           const omKey = `pageData_sales_order-manage_${supplierOwner}`;
           let omList: any[] = [];
           try { omList = JSON.parse(localStorage.getItem(omKey) || '[]'); } catch { /* ignore */ }
+          // 银行转账：货款尚未经供应商确认到账，先置待付款；由供应商侧自动生成收款确认单，确认到账后才写银行流水/分录并转为已付款
+          const isBankTransfer = !isInstallmentOrder(order) && String(order.payMethod || '') === '银行转账';
           const supplierOrder = {
             key: `push_${order.key}`,
             id: order.id,
             customerName: order.purchaserCompany,
-            // 推送即视为已付款：余额支付直接已付款；银行转账也显已付款但须进入供应商财务审核流程；分段付款保持待付款、按分期台账收款并跳过财审
-            orderStatus: isInstallmentOrder(order) ? '待付款' : '已付款',
-            paidAmount: isInstallmentOrder(order) ? sumPayRecords(order.payRecords) : (Number(order.totalAmount) || 0),
-            auditStatus: isInstallmentOrder(order) ? '' : (String(order.payMethod || '余额支付') === '余额支付' ? '' : '待财务审核'),
+            // 余额支付直接已付款；分段付款保持待付款按分期台账收款；银行转账待确认到账
+            orderStatus: isInstallmentOrder(order) || isBankTransfer ? '待付款' : '已付款',
+            paidAmount: isInstallmentOrder(order) ? sumPayRecords(order.payRecords) : (isBankTransfer ? 0 : Number(order.totalAmount) || 0),
+            auditStatus: isInstallmentOrder(order) || isBankTransfer ? '' : (String(order.payMethod || '余额支付') === '余额支付' ? '' : '待财务审核'),
+            payConfirmed: isBankTransfer ? false : undefined,
             payPlan: isInstallmentOrder(order) ? 'installment' : 'full',
             depositRatio: order.depositRatio || 30,
             payRecords: order.payRecords || [],
@@ -550,6 +552,8 @@ const MarketOrdersPage: React.FC = () => {
             // 付款截图：取采购商上传的第一张付款截图，财务审核弹窗可见
             payScreenshot: (Array.isArray(order.payScreenshots) && order.payScreenshots.length > 0) ? order.payScreenshots[0] : '',
           };
+          // 幂等：同一采购商订单重复推送时覆盖旧副本，避免供应商端出现重复订单
+          omList = omList.filter((x: any) => x && x.id !== order.id);
           omList.push(supplierOrder);
           safeSetItem(omKey, JSON.stringify(omList));
         });
@@ -605,7 +609,7 @@ const MarketOrdersPage: React.FC = () => {
           if (existIdx >= 0) {
             const baseOrder = pushed[existIdx];
             const wLogs: any[] = (() => { try { return JSON.parse(baseOrder.orderLog || '[]'); } catch { return []; } })();
-            wLogs.push({ time: new Date().toLocaleString('zh-CN'), action: '撤回推单', operator: currentDisplayName, detail: `撤回推送至供应商 ${order.supplierCompany || order.supplierUsername || ''}` });
+            wLogs.push({ time: new Date().toLocaleString('zh-CN'), action: '撤回推单', operator: currentDisplayName, detail: `撤回推送至供应商 ${order.supplierCompany || order.supplierUsername || ''}，释放额度占用 ¥${(Number(order.totalAmount) || 0).toFixed(2)}` });
             pushed[existIdx] = { ...baseOrder, status: '待推送', withdrawTime: now, orderLog: JSON.stringify(wLogs) };
           }
           // 2. 删除供应商端对应订单
@@ -614,6 +618,23 @@ const MarketOrdersPage: React.FC = () => {
             let omList: any[] = JSON.parse(localStorage.getItem(omKey) || '[]');
             omList = omList.filter((r: any) => r.id !== order.id);
             safeSetItem(omKey, JSON.stringify(omList));
+          } catch { /* ignore */ }
+          // 2b. 作废供应商侧该订单待确认的收款确认单，避免撤回后仍可确认到账（额度/应收随撤回同步回退）
+          try {
+            const prKey = `payment_requests_${supplierOwner}`;
+            const prList: any[] = JSON.parse(localStorage.getItem(prKey) || '[]');
+            let prChanged = false;
+            const prNext = prList.map((r: any) => {
+              if (!r || r.orderId !== order.id || r.status !== 'pending_confirm') return r;
+              prChanged = true;
+              return { ...r, status: 'rejected', rejectReason: '采购商撤回订单，收款作废', updatedAt: new Date().toISOString() };
+            });
+            if (prChanged) {
+              const prJson = JSON.stringify(prNext);
+              safeSetItem(prKey, prJson);
+              saveDataset(prKey, prJson);
+              safeSetItem(`${prKey}_ts`, String(Date.now()));
+            }
           } catch { /* ignore */ }
         });
         safeSetItem(PUSHED_KEY, JSON.stringify(pushed));
@@ -670,7 +691,7 @@ const MarketOrdersPage: React.FC = () => {
           });
         }
         if (!so) return;
-        if (so.orderStatus !== '已发货') {
+        if (so.orderStatus !== '已发货' && so.orderStatus !== '已完成') {
           // 供应商审核/安排生产节点跟随：已审核→已推送待发货，生产排期→已推送待生产（幂等）
           const targetStatus = so.auditStatus === '生产排期' ? '已推送待生产' : so.auditStatus === '已审核' ? '已推送待发货' : null;
           if (targetStatus && po.status !== targetStatus) {
@@ -685,7 +706,10 @@ const MarketOrdersPage: React.FC = () => {
           }
           return;
         }
-        po.status = '已发货'; po.shipTime = so.shipTime || po.shipTime || ''; pushedChanged = true;
+        po.status = so.orderStatus === '已完成' ? '已完成' : '已发货';
+        po.shipTime = so.shipTime || po.shipTime || '';
+        if (so.orderStatus === '已完成') po.completeTime = so.completeTime || so.shipTime || po.shipTime || '';
+        pushedChanged = true;
         // 分段付款：供应商发货后采购商结转 借库存商品/贷预付账款（会计账薄模式，sourceKey 幂等）
         if (isInstallmentOrder(po)) {
           const ownerShip = localStorage.getItem('isSubAccount') === 'true' ? (localStorage.getItem('parentAccount') || username) : username;
@@ -694,7 +718,12 @@ const MarketOrdersPage: React.FC = () => {
         // 订单日志：补记供应商发货痕迹（幂等）
         const poLogs: any[] = (() => { try { return JSON.parse(po.orderLog || '[]'); } catch { return []; } })();
         if (!poLogs.some((l: any) => l.action === '供应商发货')) {
-          poLogs.push({ time: so.shipTime || new Date().toLocaleString('zh-CN'), action: '供应商发货', operator: po.supplierCompany || '供应商', detail: '供应商平台已发货，订单状态同步为已发货' });
+          poLogs.push({ time: so.shipTime || new Date().toLocaleString('zh-CN'), action: '供应商发货', operator: po.supplierCompany || '供应商', detail: so.orderStatus === '已完成' ? '供应商已发货，交易完成' : '供应商平台已发货，订单状态同步为已发货' });
+          po.orderLog = JSON.stringify(poLogs);
+        }
+        // 发货即完成：补记交易完成日志（幂等）
+        if (so.orderStatus === '已完成' && !poLogs.some((l: any) => l.action === '交易完成')) {
+          poLogs.push({ time: so.completeTime || so.shipTime || new Date().toLocaleString('zh-CN'), action: '交易完成', operator: po.supplierCompany || '供应商', detail: '供应商已发货，订单交易自动完成' });
           po.orderLog = JSON.stringify(poLogs);
         }
         if (!myBills.some((b: any) => b.orderId === po.id)) {
@@ -761,7 +790,9 @@ const MarketOrdersPage: React.FC = () => {
             const src = byOwner[owner].find((p: any) => p.id === r.id);
             if (!src) return r;
             const patch: any = {};
-            if (r.orderStatus === '待付款' && !isInstallmentOrder(src)) {
+            // 银行转账尚未确认到账时不自动转已付款（由供应商收款确认单驱动）
+            const bankUnconfirmed = String(src.payMethod || '') === '银行转账' && src.payConfirmed !== true;
+            if (r.orderStatus === '待付款' && !isInstallmentOrder(src) && !bankUnconfirmed) {
               patch.orderStatus = '已付款';
               patch.paidAmount = Number(src.totalAmount) || Number(r.totalAmount) || 0;
               patch.auditStatus = String(src.payMethod || '余额支付') === '余额支付' ? (r.auditStatus || '') : '待财务审核';
@@ -892,7 +923,6 @@ const MarketOrdersPage: React.FC = () => {
     const now = dayjs().format('YYYY-MM-DD HH:mm');
     const id = `PO-${dayjs().format('YYYYMMDDHHmm')}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`;
     const key = `push-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-    const selectedBankAcc = bankAccounts.find(b => b.name === addSelectedBank || b.shortName === addSelectedBank);
     // 银行转账时根据勾选的收款方式写入 payAccount
     const payAccountText = addPayMethod === '银行转账'
       ? (addPayChannel === 'bank' ? (addSupplierPayBankInfo || '') : '收款码收款')
@@ -935,55 +965,8 @@ const MarketOrdersPage: React.FC = () => {
     pushed.push(newOrder);
     safeSetItem(PUSHED_KEY, JSON.stringify(pushed));
 
-    // 银行转账模式：写入银行明细 + 账薄联动
-    if (addPayMethod === '银行转账' && selectedBankAcc) {
-      const owner = localStorage.getItem('isSubAccount') === 'true'
-        ? (localStorage.getItem('parentAccount') || username) : username;
-      const bankName = selectedBankAcc.name || selectedBankAcc.shortName || '';
-      const remark = `采购订单-${id}（${supplierOpt?.label || addSupplier}）`;
-      // 写入银行账户明细
-      pushBankTransaction(owner, bankName, 'out', roundedAmount, remark, username);
-      if (isAccountingMode(owner)) {
-        // 会计账薄：借方预付账款，贷方银行存款
-        writeAutoEntries(owner, {
-          sourceKey: key,
-          debitSubject: '预付账款',
-          creditSubject: '银行存款',
-          amount: roundedAmount,
-          summary: `采购付款 ${id}（${supplierOpt?.label || addSupplier}）`,
-          bookkeeper: username,
-        });
-      } else {
-        // 简易账薄：写入日常记账支出
-        const bkKey = `daily_bookkeeping_${owner}`;
-        const books: any[] = JSON.parse(localStorage.getItem(bkKey) || '[]');
-        const today = new Date().toISOString().slice(0, 10);
-        const prefix = `PZ-${today.replace(/-/g, '')}`;
-        const seqs = books.map(b => String(b.voucherNo || '')).filter(v => v.startsWith(prefix)).map(v => parseInt(v.slice(-3), 10) || 0);
-        const rec: any = {
-          key: `bk-purchase-${key}`,
-          voucherNo: `${prefix}-${String((seqs.length ? Math.max(...seqs) : 0) + 1).padStart(3, '0')}`,
-          bookDate: today,
-          bookType: '支出',
-          category: '主营业务成本-采购成本',
-          amount: roundedAmount,
-          counterparty: supplierOpt?.label || addSupplier,
-          remark: `采购订单-${id}`,
-          person: username,
-          payAccount: bankName,
-          payBank: selectedBankAcc.bankName || '',
-          recvAccount: '',
-          recvBank: '',
-          image: addPayScreenshots[0] || '',
-          isPersonalAdvance: false,
-          isReturn: false,
-          advanceRecvAccount: '',
-          autoSourceKey: `bk-purchase-${key}`,
-        };
-        books.unshift(rec);
-        safeSetItem(bkKey, JSON.stringify(books));
-      }
-    }
+    // 银行转账：下单不再即时写银行流水/会计分录。订单推送后由供应商侧自动生成「收款确认单」，
+    // 供应商财务在「财务管理 - 收/付申请 - 收款确认」确认到账时，才写入银行明细与会计分录（以银行流水为准）
 
     setAddVisible(false);
     resetAddForm();
@@ -1588,6 +1571,7 @@ const MarketOrdersPage: React.FC = () => {
               {detail.shipTime && <Descriptions.Item label="发货时间">{detail.shipTime}</Descriptions.Item>}
               {detail.status === '已取消' && <Descriptions.Item label="取消原因" span={2}>{detail.cancelReason || '—'}</Descriptions.Item>}
               {detail.contactPerson && <Descriptions.Item label="收货人">{detail.contactPerson} {detail.contactPhone}</Descriptions.Item>}
+              {!detail.contactPerson && (detail.receiverName || detail.receiverPhone) && <Descriptions.Item label="收货人">{detail.receiverName || '—'} {detail.receiverPhone || ''}</Descriptions.Item>}
               {detail.address && <Descriptions.Item label="收货地址" span={2}>{detail.address}</Descriptions.Item>}
               <Descriptions.Item label="唛头">{detail.shippingMark || '—'}</Descriptions.Item>
               <Descriptions.Item label="创建人">{detail.creator || '—'}</Descriptions.Item>

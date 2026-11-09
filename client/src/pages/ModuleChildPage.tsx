@@ -2913,8 +2913,8 @@ const ModuleChildPage: React.FC = () => {
 
   // 账单明细：确认无误
   const handleBillConfirm = useCallback((record: Record<string, any>) => {
-    // 账单来源于订单时，仅已发货状态允许确认无误
-    if (record.billSource === '订单' && record.orderStatus !== '已发货') {
+    // 账单来源于订单时，仅已发货/已完成状态允许确认无误
+    if (record.billSource === '订单' && record.orderStatus !== '已发货' && record.orderStatus !== '已完成') {
       message.warning(`订单状态为“${record.orderStatus || '未知'}”，仅“已发货”状态可确认无误`);
       return;
     }
@@ -2996,9 +2996,9 @@ const ModuleChildPage: React.FC = () => {
       if (!silent) message.warning(reason);
       return { ok: false, reason };
     }
-    // 账单来源于订单时，仅已发货状态允许发起对账
-    if (record.billSource === '订单' && record.orderStatus !== '已发货') {
-      const reason = `订单状态为“${record.orderStatus || '未知'}”，仅“已发货”状态可发起对账`;
+    // 账单来源于订单时，仅已发货/已完成状态允许发起对账
+    if (record.billSource === '订单' && record.orderStatus !== '已发货' && record.orderStatus !== '已完成') {
+      const reason = `订单状态为“${record.orderStatus || '未知'}”，仅“已发货/已完成”状态可发起对账`;
       if (!silent) message.warning(reason);
       return { ok: false, reason };
     }
@@ -6448,8 +6448,27 @@ const ModuleChildPage: React.FC = () => {
     const ids = targets.map((r: any) => r.id);
     setDataSource(prev => prev.map(r => ids.includes(r.id) ? { ...r, auditStatus: '已取消', _cancelledProductAmount: Number(r.productAmount) || 0, productAmount: 0, cancelReason: reason, cancelTime: now } : r));
     targets.forEach((rec: any) => {
-      patchOrderInStorage(rec.id, { auditStatus: '已取消', _cancelledProductAmount: Number(rec.productAmount) || 0, productAmount: 0, cancelReason: reason, cancelTime: now });
-      appendOrderLog(rec.id, '取消订单', `订单 ${rec.id} 已取消，取消原因：${reason}`);
+      // 已收货款（分段确认收款 / 银行转账确认到账）：取消后转为待退回挂账，以银行流水为准不生成会计凭证
+      const refundAmt = Math.round(((isInstallmentOrder(rec) ? sumPayRecords(rec.payRecords) : (rec.payConfirmed ? Number(rec.paidAmount) || 0 : 0)) || 0) * 100) / 100;
+      patchOrderInStorage(rec.id, { auditStatus: '已取消', _cancelledProductAmount: Number(rec.productAmount) || 0, productAmount: 0, cancelReason: reason, cancelTime: now, ...(refundAmt > 0 ? { refundPending: refundAmt } : {}) });
+      appendOrderLog(rec.id, '取消订单', `订单 ${rec.id} 已取消，取消原因：${reason}${refundAmt > 0 ? `；已收 ¥${refundAmt.toFixed(2)} 转为待退回挂账（按银行流水核对退款）` : ''}`);
+      // 取消后作废该订单待确认的收款单，避免取消后仍可确认到账
+      try {
+        const prKey = `payment_requests_${getDataOwner()}`;
+        const prList: any[] = JSON.parse(localStorage.getItem(prKey) || '[]');
+        let prChanged = false;
+        const prNext = prList.map((r: any) => {
+          if (!r || r.orderId !== rec.id || r.status !== 'pending_confirm') return r;
+          prChanged = true;
+          return { ...r, status: 'rejected', rejectReason: '订单已取消，收款作废', updatedAt: new Date().toISOString() };
+        });
+        if (prChanged) {
+          const prJson = JSON.stringify(prNext);
+          safeSetItem(prKey, prJson);
+          saveDataset(prKey, prJson);
+          safeSetItem(`${prKey}_ts`, String(Date.now()));
+        }
+      } catch { /* ignore */ }
       // 采购商推送订单取消联动：状态已取消 + 释放额度占用 + 取消原因与日志回传采购商订单日志
       if (rec.orderSource === '采购商推送' && rec.pushRef) {
         const [orderKey] = rec.pushRef.split('@');
@@ -6459,7 +6478,7 @@ const ModuleChildPage: React.FC = () => {
             if (po.key !== orderKey) return po;
             let logs: any[] = []; try { logs = JSON.parse(po.orderLog || '[]'); } catch { logs = []; }
             if (!logs.some((l: any) => l.action === '供应商取消')) logs.push({ time: now, action: '供应商取消', operator: getCurrentUserDisplayName(), detail: `供应商取消订单，原因：${reason}` });
-            return { ...po, status: '已取消', cancelReason: reason, cancelTime: now, orderLog: JSON.stringify(logs) };
+            return { ...po, status: '已取消', cancelReason: reason, cancelTime: now, ...(refundAmt > 0 ? { refundPending: refundAmt } : {}), orderLog: JSON.stringify(logs) };
           }));
           localStorage.setItem('purchaser_pushed_orders', updatedJson);
           safeSetItem('purchaser_pushed_orders', updatedJson);
@@ -6473,7 +6492,7 @@ const ModuleChildPage: React.FC = () => {
     setCancelReasonTargets([]);
     setSelectedRowKeys([]);
     message.success(`已取消 ${ids.length} 个订单，取消原因已回传采购商订单日志`);
-  }, [cancelReasonTargets, cancelReasonText, appendOrderLog, getCurrentUserDisplayName, patchOrderInStorage]);
+  }, [cancelReasonTargets, cancelReasonText, appendOrderLog, getCurrentUserDisplayName, patchOrderInStorage, getDataOwner]);
 
   // 采购商推送订单状态跟随：供应商处理节点（审核/安排生产/发货/取消）变更时，
   // 实时回写采购商推送订单状态与订单日志（safeSetItem 触发跨浏览器同步）
@@ -6485,6 +6504,7 @@ const ModuleChildPage: React.FC = () => {
       if (!pushed.length) return;
       const targetOf = (r: any): { status: string; action: string; detail: string } | null => {
         if (r.auditStatus === '已取消') return { status: '已取消', action: '供应商取消', detail: '供应商取消订单' };
+        if (r.orderStatus === '已完成') return { status: '已完成', action: '交易完成', detail: '供应商已发货，订单交易自动完成' };
         if (r.orderStatus === '已发货') return { status: '已发货', action: '供应商发货', detail: '供应商发货完成，订单状态变更为已发货' };
         if (r.auditStatus === '生产排期') return { status: '已推送待生产', action: '供应商安排生产', detail: '供应商安排生产，订单状态变更为已推送待生产' };
         if (r.auditStatus === '已审核') return { status: '已推送待发货', action: '供应商审核', detail: '供应商审核通过，订单状态变更为已推送待发货' };
@@ -6557,7 +6577,7 @@ const ModuleChildPage: React.FC = () => {
               postInstallmentEffects({ owner: getDataOwner(), side: 'supplier', orderId: r.id, record: rec, counterparty: r.customerName || '', customerId: r.customerId || '' });
             }
           });
-          if (r.orderStatus === '已发货') {
+          if (r.orderStatus === '已发货' || r.orderStatus === '已完成') {
             postShipRevenueEntry(getDataOwner(), r.id, sumPayRecords(r.payRecords) || Number(r.productAmount) || 0, getCurrentUserDisplayName());
           }
         });
@@ -6683,6 +6703,81 @@ const ModuleChildPage: React.FC = () => {
       window.dispatchEvent(new CustomEvent('payment-requests-updated', { detail: { owner, key: prKey } }));
     } catch { /* ignore */ }
   }, [getDataOwner]);
+
+  // 银行转账推送单：自动生成待确认收款单（财务管理 - 收/付申请 - 收款确认）。
+  // 下单当刻不记账，收款确认到账时才写银行明细/会计分录并把订单推进为已付款（以银行流水为准）
+  const ensureBankTransferReceipt = useCallback((order: any) => {
+    if (!order || order.orderSource !== '采购商推送') return;
+    if (String(order.payMethod || '') !== '银行转账') return;
+    if (isInstallmentOrder(order) || order.payConfirmed) return;
+    // 仅对尚未确认到账（待付款）的订单补建，避免历史已付款/已审核订单被追溯生成收款单
+    if (String(order.orderStatus || '') !== '待付款' || order.auditStatus === '已取消') return;
+    const amount = Math.round(((Number(order.productAmount) || 0) + (Number(order.freight) || 0)) * 100) / 100
+      || (Number(order.totalAmount) || 0);
+    if (amount <= 0) return;
+    const owner = getDataOwner();
+    const prKey = `payment_requests_${owner}`;
+    let prList: any[] = [];
+    try { prList = JSON.parse(localStorage.getItem(prKey) || '[]'); if (!Array.isArray(prList)) prList = []; } catch { prList = []; }
+    // 幂等：同一订单只保留一条有效收款确认单（已作废的允许重建）
+    if (prList.some((r: any) => r && r.orderId === order.id && r.source === 'order-bank-transfer' && r.status !== 'rejected')) return;
+    const skPrefix = `SK${dayjs().format('YYYYMMDD')}`;
+    const seqs = prList.filter((r: any) => String(r.requestNo || '').startsWith(skPrefix)).map((r: any) => parseInt(String(r.requestNo).slice(-3), 10) || 0);
+    const requestNo = `${skPrefix}${String((seqs.length ? Math.max(...seqs) : 0) + 1).padStart(3, '0')}`;
+    // 收款账户：优先按采购商填写的付款账户名称匹配，其次仅有一个启用账户时默认选中（否则由财务确认时选择）
+    let recvBankKey = '';
+    try {
+      const bas: any[] = JSON.parse(localStorage.getItem(`pageData_finance_bank-account_${owner}`) || '[]');
+      const active = (Array.isArray(bas) ? bas : []).filter((b: any) => !b.status || b.status !== 'disabled');
+      const hit = active.find((b: any) => (b.name || b.shortName || '') === String(order.payAccount || ''));
+      recvBankKey = (hit || (active.length === 1 ? active[0] : null))?.key || '';
+    } catch { /* ignore */ }
+    const un = localStorage.getItem('username') || '';
+    let applicantName = un;
+    try {
+      const u = (JSON.parse(localStorage.getItem('registeredUsers') || '[]') as any[]).find((x: any) => x.username === un);
+      applicantName = u?.displayName || u?.contactPerson || u?.name || un;
+    } catch { /* ignore */ }
+    prList.unshift({
+      key: `recvreq-bank-${order.id}-${Date.now()}`,
+      requestNo,
+      amount,
+      category: '收款',
+      description: `订单 ${order.id} 银行转账收款（待确认到账）`,
+      recvType: 'bank',
+      recvAccountName: order.customerName || '',
+      source: 'order-bank-transfer',
+      status: 'pending_confirm',
+      recordType: 'receipt',
+      payerName: order.customerName || '',
+      customerId: order.customerId || '',
+      recvBankKey: recvBankKey || undefined,
+      debitSubject: '银行存款',
+      creditSubject: '预收账款',
+      orderId: order.id,
+      payScreenshot: order.payScreenshot || '',
+      applicant: un,
+      applicantName,
+      applyDate: dayjs().format('YYYY-MM-DD'),
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    const json = JSON.stringify(prList);
+    try {
+      safeSetItem(prKey, json);
+      saveDataset(prKey, json);
+      safeSetItem(`${prKey}_ts`, String(Date.now()));
+      window.dispatchEvent(new CustomEvent('payment-requests-updated', { detail: { owner, key: prKey } }));
+    } catch { /* ignore */ }
+  }, [getDataOwner]);
+
+  // 订单管理页挂载/刷新时：为银行转账推送单补建待确认收款单（幂等，已存在则跳过）
+  useEffect(() => {
+    if (pageConfig?.title !== '订单管理') return;
+    dataSource
+      .filter((r: any) => r && r.orderSource === '采购商推送' && String(r.payMethod || '') === '银行转账')
+      .forEach((r: any) => ensureBankTransferReceipt(r));
+  }, [dataSource, pageConfig, ensureBankTransferReceipt]);
 
   // 分段付款：登记本期收款（追加台账 + 累加 paidAmount + 收满自动置已付款；双侧账套联动）
   const handleRegisterInstallment = useCallback(() => {
@@ -7007,6 +7102,21 @@ const ModuleChildPage: React.FC = () => {
           pushRecordToPage(omKey, updated);
         }
       } catch { /* ignore */ }
+      // 财审驳回回传采购商：标记异常 + 驳回原因 + 订单日志（幂等），避免采购商端看不到驳回
+      try {
+        const pk = 'purchaser_pushed_orders';
+        const pushedList: any[] = JSON.parse(localStorage.getItem(pk) || '[]');
+        let pChg = false;
+        const detail = `财务审核驳回，原因：${rejectReason.trim()}${rejectDesc.trim() ? '（' + rejectDesc.trim() + '）' : ''}`;
+        const pNext = pushedList.map((po: any) => {
+          if (!ids.has(po.id)) return po;
+          pChg = true;
+          let logs: any[] = []; try { logs = JSON.parse(po.orderLog || '[]'); } catch { logs = []; }
+          if (!logs.some((l: any) => l.action === '财务驳回' && l.detail === detail)) logs.push({ time: new Date().toLocaleString('zh-CN'), action: '财务驳回', operator: getCurrentUserDisplayName(), detail });
+          return { ...po, auditStatus: '异常', rejectReason: rejectReason.trim(), rejectDesc: rejectDesc.trim(), orderLog: JSON.stringify(logs) };
+        });
+        if (pChg) { const pj = JSON.stringify(pNext); safeSetItem(pk, pj); saveDataset(pk, pj); safeSetItem(`${pk}_ts`, String(Date.now())); }
+      } catch { /* ignore */ }
       setDataSource(prev => prev.filter(r => !keys.has(r.key)));
       // 财审驳回：移除该订单此前自动记录的银行收入明细
       targets.forEach((t: any) => removeBankTransByOrder(t.orderId || t.id));
@@ -7127,7 +7237,7 @@ const ModuleChildPage: React.FC = () => {
 
   const openShortageSplit = useCallback((rec: any) => {
     const order = readOrderFromStorage(rec.orderId || rec.id) || rec;
-    if (order.orderStatus === '已发货' || order.orderStatus === '已取消') { message.error(`订单 ${order.id} 已${order.orderStatus}，不可拆分`); return; }
+    if (order.orderStatus === '已发货' || order.orderStatus === '已完成' || order.orderStatus === '已取消') { message.error(`订单 ${order.id} 已${order.orderStatus}，不可拆分`); return; }
     if (isInstallmentOrder(order)) { message.warning('分段付款订单的分期台账跨端幂等，一期不支持缺货拆分'); return; }
     const items = parseOrderItems(order);
     if (!items.length) { message.warning('该订单无结构化货品明细，无法拆分'); return; }
@@ -7163,7 +7273,7 @@ const ModuleChildPage: React.FC = () => {
     const slim: any = {
       orderItems: JSON.stringify(origItems), productDetail: itemsDetailStr(origItems),
       palletCount: origItems.reduce((s: number, x: any) => s + (Number(x.quantity) || 0), 0),
-      productAmount: sp.origTotal, freight: sp.freightOrig, paidAmount: sp.origPaid,
+      productAmount: sp.origTotal, totalAmount: sp.origTotal, freight: sp.freightOrig, paidAmount: sp.origPaid,
       orderStatus: sp.origPaid >= sp.origTotal - 0.01 ? '已付款' : base.orderStatus,
       splitChildren: [...(Array.isArray(base.splitChildren) ? base.splitChildren : []), childId],
       orderTag: addTag(base.orderTag), orderTags: addTags(base.orderTags),
@@ -7172,7 +7282,7 @@ const ModuleChildPage: React.FC = () => {
       ...base, key: `so-split-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, id: childId,
       orderItems: JSON.stringify(childItems), productDetail: itemsDetailStr(childItems),
       palletCount: childItems.reduce((s: number, x: any) => s + (Number(x.quantity) || 0), 0),
-      productAmount: sp.childTotal, freight: sp.freightChild, paidAmount: sp.childPaid,
+      productAmount: sp.childTotal, totalAmount: sp.childTotal, freight: sp.freightChild, paidAmount: sp.childPaid,
       orderStatus: sp.childPaid >= sp.childTotal - 0.01 ? '已付款' : '待付款',
       auditStatus: '已审核', splitFromId: base.id, splitSeq: seq, splitChildren: undefined,
       orderTag: addTag(base.orderTag), orderTags: addTags(base.orderTags),
@@ -7197,11 +7307,11 @@ const ModuleChildPage: React.FC = () => {
           const childKey = hit ? `${hit.key}-${seq}` : `${base.id}-${seq}`;
           const childPushed = hit ? {
             ...hit, key: childKey, id: childId, orderItems: child.orderItems, productDetail: child.productDetail,
-            palletCount: child.palletCount, productAmount: sp.childTotal, freight: sp.freightChild, paidAmount: sp.childPaid,
+            palletCount: child.palletCount, productAmount: sp.childTotal, totalAmount: sp.childTotal, freight: sp.freightChild, paidAmount: sp.childPaid,
             splitFromId: base.id, splitSeq: seq, pushRef: `${childKey}@${purchaserUsername}`,
             orderLog: mirrorLog(hit, '供应商缺货拆分', `供应商拆分订单：子单 ${childId} 总额 ¥${sp.childTotal.toFixed(2)}、已付 ¥${sp.childPaid.toFixed(2)}`),
           } : null;
-          const nextPushed = pushed.map((p: any) => p === hit ? { ...p, orderItems: slim.orderItems, productDetail: slim.productDetail, palletCount: slim.palletCount, productAmount: sp.origTotal, freight: sp.freightOrig, paidAmount: sp.origPaid, orderLog: mirrorLog(p, '供应商缺货拆分', `供应商拆分订单：原单保留发货部分总额 ¥${sp.origTotal.toFixed(2)}，拆出子单 ${childId}`) } : p).concat(childPushed ? [childPushed] : []);
+          const nextPushed = pushed.map((p: any) => p === hit ? { ...p, orderItems: slim.orderItems, productDetail: slim.productDetail, palletCount: slim.palletCount, productAmount: sp.origTotal, totalAmount: sp.origTotal, freight: sp.freightOrig, paidAmount: sp.origPaid, orderLog: mirrorLog(p, '供应商缺货拆分', `供应商拆分订单：原单保留发货部分总额 ¥${sp.origTotal.toFixed(2)}，拆出子单 ${childId}`) } : p).concat(childPushed ? [childPushed] : []);
           const pj = JSON.stringify(nextPushed);
           localStorage.setItem('purchaser_pushed_orders', pj); safeSetItem('purchaser_pushed_orders', pj); saveDataset('purchaser_pushed_orders', pj); safeSetItem('purchaser_pushed_orders_ts', String(Date.now()));
         } catch { /* ignore */ }
@@ -7235,9 +7345,9 @@ const ModuleChildPage: React.FC = () => {
     const orig = list.find((o: any) => o.id === origId); if (!orig) { message.error(`未找到原单 ${origId}`); return; }
     const childIds: string[] = (Array.isArray(orig.splitChildren) && orig.splitChildren.length ? orig.splitChildren : [row.id]).filter((cid: string) => cid !== orig.id);
     const children = childIds.map((cid: string) => list.find((o: any) => o.id === cid)).filter(Boolean) as any[];
-    if (orig.orderStatus === '已发货') { message.error(`原单 ${orig.id} 已发货，禁止撤回拆分`); return; }
+    if (orig.orderStatus === '已发货' || orig.orderStatus === '已完成') { message.error(`原单 ${orig.id} 已发货/已完成，禁止撤回拆分`); return; }
     if (orig.orderStatus === '已取消') { message.error(`原单 ${orig.id} 已取消，禁止撤回拆分`); return; }
-    const bad = children.filter((c: any) => c.orderStatus === '已发货' || c.orderStatus === '已取消' || (Array.isArray(c.splitChildren) && c.splitChildren.length));
+    const bad = children.filter((c: any) => c.orderStatus === '已发货' || c.orderStatus === '已完成' || c.orderStatus === '已取消' || (Array.isArray(c.splitChildren) && c.splitChildren.length));
     if (bad.length) { message.error(`子单 ${bad.map((c: any) => c.id).join('、')} 已发货/已取消或存在二次拆分，禁止撤回`); return; }
     const doWithdraw = () => {
       const now = new Date().toLocaleString('zh-CN');
@@ -7255,7 +7365,7 @@ const ModuleChildPage: React.FC = () => {
       const upd: any = {
         orderItems: JSON.stringify(mergedItems), productDetail: itemsDetailStr(mergedItems),
         palletCount: mergedItems.reduce((s: number, x: any) => s + (Number(x.quantity) || 0), 0),
-        productAmount: total, freight, paidAmount: paid,
+        productAmount: total, totalAmount: total, freight, paidAmount: paid,
         orderStatus: paid >= total - 0.01 ? '已付款' : orig.orderStatus,
         splitChildren: undefined, orderTag: rmTag(orig.orderTag),
         orderTags: Array.isArray(orig.orderTags) ? orig.orderTags.filter((t: string) => t !== '缺货拆分') : orig.orderTags,
@@ -7396,11 +7506,14 @@ const ModuleChildPage: React.FC = () => {
           });
         });
         try { localStorage.setItem(soKey, JSON.stringify([...newOutbounds, ...soList])); } catch { /* ignore */ }
-        // 订单管理：变更为已发货并清除审核状态（已发货订单不可再操作），派生视图下拣货列表自动移除
-        pushRecordToPage(omKey, omList.map((o: any) => ids.has(o.id) ? { ...o, orderStatus: '已发货', auditStatus: '', shipTime: now } : o));
-        setDataSource(prev => prev.map(r => ids.has(r.id) ? { ...r, orderStatus: '已发货', auditStatus: '', shipTime: now } : r));
-        // 写入订单操作日志：发货痕迹（含出库单号）
-        shippedDocs.forEach(d => appendOrderLog(d.id, '订单发货', `打单拣货发货：生成出库单 ${d.docNo}，订单状态变更为已发货`));
+        // 订单管理：发货即完成交易（状态直达「已完成」）并清除审核状态，派生视图下拣货列表自动移除
+        pushRecordToPage(omKey, omList.map((o: any) => ids.has(o.id) ? { ...o, orderStatus: '已完成', auditStatus: '', shipTime: now, completeTime: now } : o));
+        setDataSource(prev => prev.map(r => ids.has(r.id) ? { ...r, orderStatus: '已完成', auditStatus: '', shipTime: now, completeTime: now } : r));
+        // 写入订单操作日志：发货痕迹（含出库单号）+ 交易完成
+        shippedDocs.forEach(d => {
+          appendOrderLog(d.id, '订单发货', `打单拣货发货：生成出库单 ${d.docNo}，订单状态变更为已完成`);
+          appendOrderLog(d.id, '交易完成', '供应商已发货，订单交易自动完成');
+        });
         // 分段付款订单：发货后结转 借预收账款/贷主营业务收入（会计账薄模式，sourceKey 幂等）
         shippedDocs.forEach(d => {
           const o = omList.find((x: any) => x.id === d.id);
@@ -7429,15 +7542,16 @@ const ModuleChildPage: React.FC = () => {
               } catch { /* ignore */ }
             }
             if (!purchaserUsername) return;
-            // 更新 purchaser_pushed_orders 状态为已发货
+            // 更新 purchaser_pushed_orders 状态为已完成（发货即完成交易）
             try {
               const pushedOrders: any[] = JSON.parse(localStorage.getItem('purchaser_pushed_orders') || '[]');
               const updated = pushedOrders.map((po: any) => {
                 if (po.key !== orderKey) return po;
                 // 采购商订单日志：续写供应商发货痕迹（幂等）
                 let logs: any[] = []; try { logs = JSON.parse(po.orderLog || '[]'); } catch { logs = []; }
-                if (!logs.some((l: any) => l.action === '供应商发货')) logs.push({ time: now, action: '供应商发货', operator: getCurrentUserDisplayName(), detail: '供应商平台发货完成，订单状态变更为已发货' });
-                return { ...po, status: '已发货', shipTime: now, orderLog: JSON.stringify(logs) };
+                if (!logs.some((l: any) => l.action === '供应商发货')) logs.push({ time: now, action: '供应商发货', operator: getCurrentUserDisplayName(), detail: '供应商平台发货完成，订单状态变更为已完成' });
+                if (!logs.some((l: any) => l.action === '交易完成')) logs.push({ time: now, action: '交易完成', operator: getCurrentUserDisplayName(), detail: '供应商已发货，订单交易自动完成' });
+                return { ...po, status: '已完成', shipTime: now, completeTime: now, orderLog: JSON.stringify(logs) };
               });
               localStorage.setItem('purchaser_pushed_orders', JSON.stringify(updated));
               // 跨浏览器同步：safeSetItem 触发上传，采购商浏览器轮询拉取后立即看到已发货
@@ -7445,10 +7559,11 @@ const ModuleChildPage: React.FC = () => {
               saveDataset('purchaser_pushed_orders', JSON.stringify(updated));
               safeSetItem('purchaser_pushed_orders_ts', String(Date.now()));
             } catch { /* ignore */ }
-            // 自动写入采购商账单
+            // 自动写入采购商账单（幂等：同一订单已有账单时不再重复写入）
             try {
               const billKey = `purchaser_bills_${purchaserUsername}`;
               const bills: any[] = JSON.parse(localStorage.getItem(billKey) || '[]');
+              if (bills.some((b: any) => b && b.orderId === order.id)) return;
               let rawItems: any[] = [];
               try { rawItems = JSON.parse(order.orderItems || '[]'); } catch { /* ignore */ }
               const billNo = `MC-PUSH-${dayjs().format('YYYYMMDD')}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`;
@@ -8988,6 +9103,11 @@ const ModuleChildPage: React.FC = () => {
   // 删除
   const handleDelete = useCallback((record: Record<string, any>) => {
     if (!fnOk('delete')) { message.warning('无删除权限'); return; }
+    // 采购商推送订单：源头在采购商，供应商删除会导致采购商端订单悬空，只允许取消不允许删除
+    if (pageConfig?.title === '订单管理' && record.orderSource === '采购商推送') {
+      message.warning('采购商推送的订单不允许删除，如需终止请在操作列取消订单');
+      return;
+    }
     // 银行账户：余额不为0时禁止删除
     if (moduleKey === 'finance' && childKey === 'bank-account') {
       const balance = Number(record.balance) || 0;
@@ -10125,9 +10245,11 @@ const ModuleChildPage: React.FC = () => {
         break;
       }
       case 'batch-delete':
-        // 订单管理：已发货订单不可删除
+        // 订单管理：采购商推送订单不可删除；已发货/已完成订单不可删除
         if (pageConfig?.title === '订单管理') {
-          const shippedRows = filteredData.filter(r => selectedRowKeys.includes(r.key) && r.orderStatus === '已发货');
+          const pushedRows = filteredData.filter(r => selectedRowKeys.includes(r.key) && r.orderSource === '采购商推送');
+          if (pushedRows.length > 0) { message.warning(`选中记录中包含 ${pushedRows.length} 个采购商推送订单，推送订单不可删除，请取消勾选后重试`); return; }
+          const shippedRows = filteredData.filter(r => selectedRowKeys.includes(r.key) && (r.orderStatus === '已发货' || r.orderStatus === '已完成'));
           if (shippedRows.length > 0) { message.warning(`选中记录中包含 ${shippedRows.length} 个已发货订单，已发货订单不能进行操作`); return; }
         }
         Modal.confirm({
@@ -11924,7 +12046,7 @@ const handleBatchAttrsConfirm = () => {
                     style={{ color: PRIMARY, fontWeight: 500 }}>反取消</Button>
                 </Tooltip>
               )}
-              {(pageConfig?.title !== '账单明细' || !['已发起对账', '确认无误', '对账完成', '按采方入账', '不相符'].includes(record.reconResult)) && pageConfig?.title !== '财务审核' && !(pageConfig?.title === '采购申请单' && ['已拆分', '已完成', '已取消'].includes(record.status)) && pageConfig?.title !== '采购申请单' && pageConfig?.title !== '加工订单' && (
+              {(pageConfig?.title !== '账单明细' || !['已发起对账', '确认无误', '对账完成', '按采方入账', '不相符'].includes(record.reconResult)) && pageConfig?.title !== '财务审核' && !(pageConfig?.title === '采购申请单' && ['已拆分', '已完成', '已取消'].includes(record.status)) && pageConfig?.title !== '采购申请单' && pageConfig?.title !== '加工订单' && !(pageConfig?.title === '订单管理' && record.orderSource === '采购商推送') && (
               <Popconfirm
                 title="确认删除"
                 description="删除后不可恢复，确定要删除吗？"

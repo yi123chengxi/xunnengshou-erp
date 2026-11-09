@@ -53,7 +53,7 @@ interface PaymentRequestRec {
   recvBranchName?: string;     // 支行名称
   recvBankAccount?: string;    // 银行账户
   recvQrcode?: string;         // 收款码图片
-  source: 'manual' | 'supplier' | 'order-installment';
+  source: 'manual' | 'supplier' | 'order-installment' | 'order-bank-transfer';
   supplierName?: string;
   status: 'pending_review' | 'approved' | 'rejected' | 'paid' | 'pending_confirm' | 'confirmed';
   rejectReason?: string;
@@ -1012,6 +1012,55 @@ const PaymentRequestPage: React.FC = () => {
               saveDataset(pk, pJson);
             } catch { /* ignore */ }
           }
+        }
+      } catch { /* ignore */ }
+    }
+    // 银行转账推送单：确认到账后回写订单为已付款并提交财务审核（银行明细/会计分录已在上方写入）
+    if (r.orderId && r.source === 'order-bank-transfer') {
+      try {
+        const omKey = `pageData_sales_order-manage_${owner}`;
+        const omList: any[] = JSON.parse(localStorage.getItem(omKey) || '[]');
+        const ord = Array.isArray(omList) ? omList.find((o: any) => o.id === r.orderId || o.key === r.orderId) : null;
+        if (ord) {
+          const logs: any[] = (() => { try { return JSON.parse(ord.orderLog || '[]'); } catch { return []; } })();
+          logs.push({ time: nowStr, action: '收款确认', operator: confirmedBy, detail: `银行转账收款 ¥${Number(r.amount).toFixed(2)} 已确认到账，订单转为已付款并提交财务审核` });
+          const patch: any = {
+            payConfirmed: true, payConfirmedAt: nowStr, payConfirmedBy: confirmedBy,
+            paidAmount: Number(r.amount) || Number(ord.paidAmount) || 0,
+            orderLog: JSON.stringify(logs),
+          };
+          if (ord.orderStatus === '待付款') patch.orderStatus = '已付款';
+          if (!ord.auditStatus) patch.auditStatus = '待财务审核';
+          // 自动提交财务审核（与订单管理「审核」→ 银行转账链路一致），保证财务审核页可见
+          try {
+            const faKey = `pageData_sales_finance-audit_${owner}`;
+            const faList: any[] = JSON.parse(localStorage.getItem(faKey) || '[]');
+            if (!faList.some((f: any) => (f.orderId || f.id) === ord.id && f.status === 'pending')) {
+              faList.push({
+                ...ord, key: `fa-${Date.now()}`, id: `FA-${String(Date.now()).slice(-6)}`, orderId: ord.id,
+                auditType: '银行转账审核', status: 'pending', submitTime: nowTime,
+                auditor: '', auditTime: '', auditOpinion: '',
+              });
+              const faJson = JSON.stringify(faList);
+              safeSetItem(faKey, faJson);
+              saveDataset(faKey, faJson);
+            }
+          } catch { /* ignore */ }
+          const updatedOrd = { ...ord, ...patch };
+          const omJson = JSON.stringify(omList.map((o: any) => (o.id === ord.id ? updatedOrd : o)));
+          safeSetItem(omKey, omJson);
+          // IndexedDB 同步 + 立即上传：防止刷新或服务端拉取时用旧订单数据回灌覆盖
+          saveDataset(omKey, omJson);
+          void flushDatasetUploadAsync(omKey, omJson);
+          try { window.dispatchEvent(new CustomEvent('order-data-updated', { detail: { owner, key: omKey, orderId: ord.id } })); } catch { /* ignore */ }
+          // 推送单回写：采购商端同步看到已确认到账
+          try {
+            const pk = 'purchaser_pushed_orders';
+            const pushed: any[] = JSON.parse(localStorage.getItem(pk) || '[]');
+            const pJson = JSON.stringify(pushed.map((po: any) => po.id === ord.id ? { ...po, payConfirmed: true, payConfirmedAt: nowStr } : po));
+            safeSetItem(pk, pJson);
+            saveDataset(pk, pJson);
+          } catch { /* ignore */ }
         }
       } catch { /* ignore */ }
     }

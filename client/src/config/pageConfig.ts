@@ -718,6 +718,7 @@ export const salesPages: Record<string, ChildPageConfig> = {
         { label: '电话订购', value: '电话订购' },
         { label: '展会', value: '展会' },
         { label: '老客户介绍', value: '老客户介绍' },
+        { label: '采购商推送', value: '采购商推送' },
       ], label: '订单来源' },
     ],
     mockData: Array.from({ length: 0 }, (_, i) => { // 演示数据已下线：生产环境不预置测试数据
