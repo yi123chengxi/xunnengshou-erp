@@ -1499,7 +1499,7 @@ const ReconciliationManage: React.FC = () => {
       render: (v: number, r: ReconRecord) => (
         v === 0
           ? (r.initiator === 'purchaser' ? <span /> : <Text type="secondary">{zeroOurField}</Text>)
-          : <Text style={{ fontFamily: 'monospace' }}>¥{v.toLocaleString()}</Text>
+          : <Text style={{ fontFamily: 'monospace', fontSize: 16, color: v > 0 ? '#52c41a' : '#ff4d4f' }}>¥{v.toLocaleString()}</Text>
       ),
     },
     {
@@ -1507,7 +1507,7 @@ const ReconciliationManage: React.FC = () => {
       render: (v: number, r: ReconRecord) => (
         v === 0
           ? (r.initiator === 'supplier' ? <span /> : <Text type="secondary">{zeroTheirField}</Text>)
-          : <Text style={{ fontFamily: 'monospace', color: v === r.ourAmount ? '#52c41a' : '#ff4d4f' }}>
+          : <Text style={{ fontFamily: 'monospace', fontSize: 16, color: v > 0 ? '#52c41a' : '#ff4d4f' }}>
               ¥{v.toLocaleString()}
             </Text>
       ),
