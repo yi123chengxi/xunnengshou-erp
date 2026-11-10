@@ -1593,7 +1593,7 @@ const ReconciliationManage: React.FC = () => {
             fontWeight: v === r.ourQty ? undefined : 'bold',
           }}
         >
-          {selectedRecord?.reconResult === 'pending' ? '-' : v}
+          {v}
         </Text>
       ),
     },
@@ -1613,7 +1613,7 @@ const ReconciliationManage: React.FC = () => {
             fontWeight: v === r.ourPrice ? undefined : 'bold',
           }}
         >
-          {selectedRecord?.reconResult === 'pending' ? '-' : `¥${v.toLocaleString()}`}
+          {`¥${v.toLocaleString()}`}
         </Text>
       ),
     },
@@ -1633,7 +1633,7 @@ const ReconciliationManage: React.FC = () => {
             fontWeight: v === r.ourSubTotal ? undefined : 'bold',
           }}
         >
-          {selectedRecord?.reconResult === 'pending' ? '-' : `¥${v.toLocaleString()}`}
+          {`¥${v.toLocaleString()}`}
         </Text>
       ),
     },
@@ -2166,7 +2166,7 @@ const ReconciliationManage: React.FC = () => {
                         </Table.Summary.Cell>
                         <Table.Summary.Cell index={4} align="center">
                           <div style={{ background: theirBg, padding: '4px 8px' }}>
-                            <Text strong style={{ fontFamily: 'monospace' }}>{selectedRecord.reconResult === 'pending' ? '-' : selectedRecord.details.reduce((s, d) => s + d.theirQty, 0)}</Text>
+                            <Text strong style={{ fontFamily: 'monospace' }}>{selectedRecord.details.reduce((s, d) => s + d.theirQty, 0)}</Text>
                           </div>
                         </Table.Summary.Cell>
                         <Table.Summary.Cell index={5} align="center">
@@ -2186,7 +2186,7 @@ const ReconciliationManage: React.FC = () => {
                               fontFamily: 'monospace',
                               color: ourTotal === theirTotal ? '#52c41a' : '#ff4d4f',
                             }}>
-                              {selectedRecord.reconResult === 'pending' ? '-' : `¥${theirTotal.toLocaleString()}`}
+                              {`¥${theirTotal.toLocaleString()}`}
                             </Text>
                           </div>
                         </Table.Summary.Cell>
