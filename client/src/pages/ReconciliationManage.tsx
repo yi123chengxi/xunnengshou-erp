@@ -357,8 +357,8 @@ const ReconciliationManage: React.FC = () => {
               billLog: appendBillLogEntry(rows[idx].billLog, logAction, operatorName, logDetail),
             };
             localStorage.setItem(key, JSON.stringify(rows));
-          } else if (isReturn && !rows.some((x: any) => x.id === r.docNo || String(x.outboundNo || '').trim() === String(r.docNo || '').trim())) {
-            // 退货单：对账完成时才在确认方本端补建负数退货行（走对账管理流程，不在发起/登记时镜像，避免镜像自匹配触发自动完成）
+          } else if (isReturn && action === 'entryBySupplier' && !rows.some((x: any) => x.id === r.docNo || String(x.outboundNo || '').trim() === String(r.docNo || '').trim())) {
+            // 退货单：仅「按供方入账」完成时才在确认方本端补建负数退货行（发起/登记/其他完成动作均不建单，避免发起即出现对方账单）
             const payload = returnPayloadFromRecord(r, 'supplier');
             if (payload) {
               rows.unshift(buildSupplierReturnRow(payload, { customerName: String(r.customerName || ''), counterpartyUsername: String(r.customerUsername || ''), now: new Date().toLocaleString('zh-CN') }) as any);
@@ -395,8 +395,8 @@ const ReconciliationManage: React.FC = () => {
             update.billLog = appendBillLogEntry(bills[idx].billLog, logAction, operatorName, logDetail);
             bills[idx] = { ...bills[idx], ...update };
             localStorage.setItem(key, JSON.stringify(bills));
-          } else if (isReturn && !bills.some((b: any) => b.key === `bill-${r.docNo}` || String(b.outboundNo || '').trim() === String(r.docNo || '').trim())) {
-            // 退货单：对账完成时才在确认方本端补建负数退货账单（走对账管理流程，不在发起/登记时镜像）
+          } else if (isReturn && action === 'entryBySupplier' && !bills.some((b: any) => b.key === `bill-${r.docNo}` || String(b.outboundNo || '').trim() === String(r.docNo || '').trim())) {
+            // 退货单：仅「按供方入账」完成时才在确认方本端补建负数退货账单（发起对账/登记/确认对账/按采方入账/不相符均不建单）
             const payload = returnPayloadFromRecord(r, 'purchaser');
             if (payload) {
               bills.unshift(buildPurchaserReturnBill(payload, { operator: operatorName || '', supplierName: String(r.supplierName || ''), now: new Date().toLocaleString('zh-CN') }) as any);
