@@ -24,7 +24,7 @@ import type { ReturnRegisterPayload } from '../components/ReturnRegisterModal';
 import { buildPurchaserReturnBill, writeReturnStockFlows, getOwnCompanyName } from '../utils/returnRegister';
 import { safeSetItem } from '../utils/storageQuota';
 import { saveDataset } from '../utils/dataStore';
-import { reloadAfterPull, appendRowsToRemoteKey } from '../utils/serverSync';
+import { reloadAfterPull, appendRowsToRemoteKey, declareShrink } from '../utils/serverSync';
 import { compressImageFile } from '../utils/imageCompress';
 import { loadSupplierFinishedProducts } from '../utils/supplierProducts';
 import { loadRoleRecords, loadRoleAll, upsertRecords, loadAllReconRecordsUnion } from '../utils/reconStore';
@@ -1218,7 +1218,7 @@ const PurchaserBillPage: React.FC = () => {
         {!hideInitiate && <Button type="link" size="small" icon={<SwapOutlined />} style={{ color: '#722ed1' }} onClick={() => initiateReconForBills([r])}>发起对账</Button>}
         {initiated && !locked && <Button type="link" size="small" icon={<UndoOutlined />} style={{ color: '#fa8c16' }} onClick={() => withdrawRecon(r)}>撤回对账</Button>}
         {!locked && !initiated && <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openEdit(r)}>编辑</Button>}
-        {!locked && !initiated && !isAutoBill && <Button type="link" size="small" danger icon={<DeleteOutlined />} onClick={() => { const all = bills.filter(b => b.key !== r.key); localStorage.setItem(storageKey, JSON.stringify(all));
+        {!locked && !initiated && !isAutoBill && <Button type="link" size="small" danger icon={<DeleteOutlined />} onClick={() => { declareShrink(storageKey, [r.key]); const all = bills.filter(b => b.key !== r.key); localStorage.setItem(storageKey, JSON.stringify(all));
                   // 闭环：删除账单同时墓碑化关联的存活对账记录（撤回语义），避免对方平台残留孤儿在途对账
                   try {
                     const uname0 = localStorage.getItem('username') || '';

@@ -117,14 +117,26 @@ const pending = new Map<string, { timer: any; value: string; ts: number }>();
 // 客户端已知的服务端版本（meta 时间戳）：上传时携带 baseTs 供服务端乐观并发判断
 const knownTs = new Map<string, number>();
 
+// 显式删除申报：删除操作在写存储前调用 declareShrink 登记被删行 id，
+// 本次上传随 body 携带 removedIds，服务端据此才允许从「永不缩水键」中移除这些行；
+// 未申报的缩水（镜像/重建丢行等意外）在服务端被并集保留，物理杜绝误擦除。
+const pendingRemovedIds = new Map<string, string[]>();
+export function declareShrink(key: string, removedIds: string[]): void {
+  if (!removedIds || removedIds.length === 0) return;
+  const prev = pendingRemovedIds.get(key) || [];
+  pendingRemovedIds.set(key, Array.from(new Set([...prev, ...removedIds])));
+}
+
 async function doUpload(key: string, json: string, ts?: number, baseTs?: number): Promise<void> {
   if (!(await serverAvailable())) return;
+  const removedIds = pendingRemovedIds.get(key);
+  if (removedIds) pendingRemovedIds.delete(key);
   try {
     const res = await fetchWithTimeout(`${API_BASE}/sync/dataset`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      // 上传数据本身的写入时间戳（而非上传时刻）+ 已知服务端版本 baseTs
-      body: JSON.stringify({ key, json, updatedAt: ts || Date.now(), baseTs: baseTs ?? knownTs.get(key) ?? 0 }),
+      // 上传数据本身的写入时间戳（而非上传时刻）+ 已知服务端版本 baseTs + 显式删除申报 removedIds
+      body: JSON.stringify({ key, json, updatedAt: ts || Date.now(), baseTs: baseTs ?? knownTs.get(key) ?? 0, ...(removedIds && removedIds.length ? { removedIds } : {}) }),
     });
     if (res.ok) {
       const data = await res.json().catch(() => null);

@@ -22,6 +22,11 @@ const MERGE_ALWAYS_KEYS = ['recon_records'];
 // 墓碑语义键前缀：分平台对账独立库（recon_db_supplier_<账号> / recon_db_purchaser_<账号>）
 const MERGE_ALWAYS_PREFIXES = ['recon_db_'];
 const isMergeAlwaysKey = (key: string): boolean => MERGE_ALWAYS_KEYS.includes(key) || MERGE_ALWAYS_PREFIXES.some(p => key.startsWith(p));
+// 永不缩水键前缀（租户核心账单数据，丢失即信任事故）：PUT 一律改为「incoming 并集 + 仅按显式 removedIds 删除」，
+// 绝不整键替换。未申报 removedIds 的缩水（跨端镜像空基覆盖/派生重建丢行等意外）在服务端被并集保留，物理杜绝误擦除；
+// 合法删除由客户端删除操作随 body 申报 removedIds 生效。
+const NEVER_SHRINK_PREFIXES = ['purchaser_bills_', 'pageData_customer_bill-detail_'];
+const isNeverShrinkKey = (key: string): boolean => NEVER_SHRINK_PREFIXES.some(p => key.startsWith(p));
 
 // ============ 收/付申请待处理推送（系统级 Web Push，浏览器关闭仍可提醒） ============
 const payReqPushThrottle = new Map<string, number>();
@@ -139,6 +144,17 @@ router.put('/dataset', async (req: Request, res: Response) => {
       return;
     }
     if (Number(baseTs) === row.updated_at) {
+      // 永不缩水键：即使客户端自认为最新，也仅允许「并集 + 显式 removedIds 删除」，禁止整键替换擦除存量行
+      if (isNeverShrinkKey(key)) {
+        const guarded = mergeWithExplicitRemovals(row.dataset_json, json, req.body.removedIds);
+        if (guarded) {
+          const gTs = Math.max(ts, row.updated_at);
+          await store.forceUpsertDataset(key, guarded, owner, gTs);
+          await applyUsageDeltaForWrite(key, row.dataset_json, guarded);
+          res.json({ saved: true, merged: true, newTs: gTs });
+          return;
+        }
+      }
       // 只增不删键/墓碑语义键：即使客户端自认为最新，也强制记录级并集合并，
       // 防止本地缺数据的客户端清空服务端记录或复活已墓碑的记录
       if (APPEND_ONLY_KEYS.includes(key) || isMergeAlwaysKey(key)) {
@@ -161,7 +177,9 @@ router.put('/dataset', async (req: Request, res: Response) => {
       return;
     }
     // 客户端已过期 → 并集合并，防止旧数据删除新增记录
-    const merged = mergeArrayDatasets(row.dataset_json, json, isMergeAlwaysKey(key));
+    const merged = isNeverShrinkKey(key)
+      ? (mergeWithExplicitRemovals(row.dataset_json, json, req.body.removedIds) || mergeArrayDatasets(row.dataset_json, json, isMergeAlwaysKey(key)))
+      : mergeArrayDatasets(row.dataset_json, json, isMergeAlwaysKey(key));
     const finalJson = merged || json;
     const finalTs = Math.max(ts, row.updated_at);
     await store.forceUpsertDataset(key, finalJson, owner, finalTs);
@@ -202,6 +220,31 @@ function mergeArrayDatasets(existingJson: string, incomingJson: string, fieldLev
     const aOnly = a.filter((r: any) => !bIds.has(idOf(r)));
     if (aOnly.length === 0) return JSON.stringify(bFixed);
     return JSON.stringify([...bFixed, ...aOnly]);
+  } catch { return null; }
+}
+
+/** 永不缩水键合并：incoming 行优先保留，existing 中 incoming 未携带的行仅当其 id 在显式 removedIds 中才丢弃，
+ * 否则一律追加保留（意外缩水被服务端拦截）。incoming 含无 key/id 行时无法安全合并，返回 null 回退原语义。
+ * 安全加固（L3）：removedIds 仅认可「确实存在于该键存量行」的 id（交集），并设单次上限，越界/不存在部分忽略，
+ * 防止伪造/超量 removedIds 删除非预期行。 */
+const MAX_EXPLICIT_REMOVALS = 200;
+function mergeWithExplicitRemovals(existingJson: string, incomingJson: string, removedIds: any): string | null {
+  try {
+    const a = JSON.parse(existingJson);
+    const b = JSON.parse(incomingJson);
+    if (!Array.isArray(a) || !Array.isArray(b)) return null;
+    const idOf = (r: any) => (r && (r.key || r.id)) ? String(r.key || r.id) : null;
+    if (b.some((r: any) => !idOf(r))) return null;
+    const aIds = new Set<string>(a.map(idOf).filter((x: any): x is string => !!x));
+    let rmList = (Array.isArray(removedIds) ? removedIds : []).map((x: any) => String(x)).filter((id: string) => aIds.has(id));
+    if (rmList.length > MAX_EXPLICIT_REMOVALS) rmList = rmList.slice(0, MAX_EXPLICIT_REMOVALS);
+    const rm = new Set<string>(rmList);
+    const bIds = new Set(b.map(idOf));
+    const keepFromExisting = a.filter((r: any) => {
+      const id = idOf(r);
+      return !!id && !bIds.has(id) && !rm.has(id);
+    });
+    return JSON.stringify([...b, ...keepFromExisting]);
   } catch { return null; }
 }
 
