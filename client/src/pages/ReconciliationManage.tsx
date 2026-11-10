@@ -338,10 +338,12 @@ const ReconciliationManage: React.FC = () => {
           const cpOkRow = (x: any) =>
             (!String(r.customerName || '').trim() || String(x.customerName || '').trim() === String(r.customerName || '').trim() || (!!r.customerUsername && x.customerUsername === r.customerUsername) || (!!r.customerNo && x.customerNo === r.customerNo));
           // 1) 凭证精确匹配（orderNo=供应商行 id）优先；2) 单号回退仅当唯一，同号重复时放弃
+          // 退货单：orderNo 即供应商行 id 本身（登记时同源），不再叠加对方校验——退货行对方字段为 counterpartyUsername
+          // 且名称快照易漂移，叠加校验会匹配不上导致回写落空、供应商行停留待对账
           let idx = -1;
-          if (r.orderNo) idx = rows.findIndex(x => x.id === r.orderNo && cpOkRow(x));
+          if (r.orderNo) idx = rows.findIndex(x => x.id === r.orderNo && (isReturn || cpOkRow(x)));
           if (idx < 0 && r.docNo) {
-            const hits = rows.map((x, i) => ({ x, i })).filter(e => !!e.x.outboundNo && String(e.x.outboundNo).trim() === String(r.docNo || '').trim() && cpOkRow(e.x));
+            const hits = rows.map((x, i) => ({ x, i })).filter(e => !!e.x.outboundNo && String(e.x.outboundNo).trim() === String(r.docNo || '').trim() && (isReturn || cpOkRow(e.x)));
             if (hits.length === 1) idx = hits[0].i;
           }
           if (idx >= 0) {
@@ -357,8 +359,9 @@ const ReconciliationManage: React.FC = () => {
               billLog: appendBillLogEntry(rows[idx].billLog, logAction, operatorName, logDetail),
             };
             localStorage.setItem(key, JSON.stringify(rows));
-          } else if (isReturn && action === 'entryBySupplier' && !rows.some((x: any) => x.id === r.docNo || String(x.outboundNo || '').trim() === String(r.docNo || '').trim())) {
-            // 退货单：仅「按供方入账」完成时才在确认方本端补建负数退货行（发起/登记/其他完成动作均不建单，避免发起即出现对方账单）
+          } else if (isReturn && action === 'entryBySupplier' && supOwner === getOwner() && !rows.some((x: any) => x.id === r.docNo || String(x.outboundNo || '').trim() === String(r.docNo || '').trim())) {
+            // 退货单：仅「按供方入账」完成且本端拥有该键时才补建负数退货行；
+            // 跨端缺单不在非归属端建陈旧副本（会污染同步合并），由归属端凭完成墓碑自愈回写
             const payload = returnPayloadFromRecord(r, 'supplier');
             if (payload) {
               rows.unshift(buildSupplierReturnRow(payload, { customerName: String(r.customerName || ''), counterpartyUsername: String(r.customerUsername || ''), now: new Date().toLocaleString('zh-CN') }) as any);
@@ -395,8 +398,8 @@ const ReconciliationManage: React.FC = () => {
             update.billLog = appendBillLogEntry(bills[idx].billLog, logAction, operatorName, logDetail);
             bills[idx] = { ...bills[idx], ...update };
             localStorage.setItem(key, JSON.stringify(bills));
-          } else if (isReturn && action === 'entryBySupplier' && !bills.some((b: any) => b.key === `bill-${r.docNo}` || String(b.outboundNo || '').trim() === String(r.docNo || '').trim())) {
-            // 退货单：仅「按供方入账」完成时才在确认方本端补建负数退货账单（发起对账/登记/确认对账/按采方入账/不相符均不建单）
+          } else if (isReturn && action === 'entryBySupplier' && purOwner === getOwner() && !bills.some((b: any) => b.key === `bill-${r.docNo}` || String(b.outboundNo || '').trim() === String(r.docNo || '').trim())) {
+            // 退货单：仅「按供方入账」完成且本端拥有该键时才补建负数退货账单（发起对账/登记/确认对账/按采方入账/不相符均不建单）
             const payload = returnPayloadFromRecord(r, 'purchaser');
             if (payload) {
               bills.unshift(buildPurchaserReturnBill(payload, { operator: operatorName || '', supplierName: String(r.supplierName || ''), now: new Date().toLocaleString('zh-CN') }) as any);
@@ -424,7 +427,7 @@ const ReconciliationManage: React.FC = () => {
       supPerson: supReconPerson,
       purPerson: purReconPerson,
     } as ReconRecord);
-  }, [resolveSupplierPerson, findBillIndex]);
+  }, [resolveSupplierPerson, findBillIndex, getOwner]);
 
   // ==================== 对方反馈 / 账单不符弹窗 / 明细显示字段 状态 ====================
   const mySide: 'supplier' | 'purchaser' = isPurchaser ? 'purchaser' : 'supplier';
