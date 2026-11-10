@@ -115,8 +115,16 @@ const PurchaserSupplierList: React.FC = () => {
   const [searchCity, setSearchCity] = useState('');
   const [searchDistrict, setSearchDistrict] = useState('');
   const [searchSupplierNo, setSearchSupplierNo] = useState('');
-  // 回车确认搜索：递增触发 filteredData 重算（实时过滤已生效，回车作为显式确认）
-  const [searchTick, setSearchTick] = useState(0);
+  // 双态搜索：列表过滤只读「已应用态」，回车或「查询」按钮把草稿态同步为应用态，避免逐键实时过滤
+  const emptyAppliedSearch = { name: '', contact: '', phone: '', bank: '', legal: '', province: '', city: '', district: '', no: '' };
+  const [appliedSearch, setAppliedSearch] = useState(emptyAppliedSearch);
+  const applySearch = useCallback(() => {
+    setAppliedSearch({
+      name: searchText.trim(), contact: searchContact.trim(), phone: searchPhone.trim(),
+      bank: searchBank.trim(), legal: searchLegal.trim(), province: searchProvince.trim(),
+      city: searchCity.trim(), district: searchDistrict.trim(), no: searchSupplierNo.trim(),
+    });
+  }, [searchText, searchContact, searchPhone, searchBank, searchLegal, searchProvince, searchCity, searchDistrict, searchSupplierNo]);
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [detailVisible, setDetailVisible] = useState(false);
   const [detailSupplier, setDetailSupplier] = useState<SupplierEntry | null>(null);
@@ -915,15 +923,15 @@ const PurchaserSupplierList: React.FC = () => {
     // 安全模糊匹配：画像字段可能为 undefined，统一转字符串且忽略大小写，
     // 避免直接 .includes 抛 TypeError 触发全局 ErrorBoundary（“页面资源加载失败”）
     const has = (val: any, kw: string) => !kw || String(val ?? '').toLowerCase().includes(kw.toLowerCase());
-    const kwName = searchText.trim();
-    const kwContact = searchContact.trim();
-    const kwPhone = searchPhone.trim();
-    const kwBank = searchBank.trim();
-    const kwLegal = searchLegal.trim();
-    const kwProv = searchProvince.trim();
-    const kwCity = searchCity.trim();
-    const kwDist = searchDistrict.trim();
-    const kwNo = searchSupplierNo.trim();
+    const kwName = appliedSearch.name;
+    const kwContact = appliedSearch.contact;
+    const kwPhone = appliedSearch.phone;
+    const kwBank = appliedSearch.bank;
+    const kwLegal = appliedSearch.legal;
+    const kwProv = appliedSearch.province;
+    const kwCity = appliedSearch.city;
+    const kwDist = appliedSearch.district;
+    const kwNo = appliedSearch.no;
     if (kwName || kwContact || kwPhone || kwBank || kwLegal || kwProv || kwCity || kwDist || kwNo) {
       result = result.filter((s) =>
         (!kwName || has(s.supplierName, kwName) || has(s.shortName, kwName)) &&
@@ -938,7 +946,7 @@ const PurchaserSupplierList: React.FC = () => {
       );
     }
     return result;
-  }, [supplierList, statusFilter, searchText, searchContact, searchPhone, searchBank, searchLegal, searchProvince, searchCity, searchDistrict, searchSupplierNo, searchTick]);
+  }, [supplierList, statusFilter, appliedSearch]);
 
   // 查看详情
   const handleViewDetail = (record: SupplierEntry) => {
@@ -1662,41 +1670,41 @@ const PurchaserSupplierList: React.FC = () => {
       {/* 搜索与筛选 */}
       <Card style={{ marginBottom: 16 }} bodyStyle={{ padding: '12px 24px' }}>
         <Row gutter={[16, 12]} align="middle">
-          <Col xs={12} sm={6} md={4}>
+          <Col xs={12} sm={3} md={2}>
             <Input
               placeholder="供应商名称/简称"
               prefix={<SearchOutlined style={{ color: '#bfbfbf' }} />}
               value={searchText}
               onChange={(e) => setSearchText(e.target.value)}
-              onPressEnter={() => setSearchTick(t => t + 1)}
+              onPressEnter={applySearch}
               allowClear
             />
           </Col>
-          <Col xs={12} sm={6} md={4}>
-            <Input placeholder="联系人" value={searchContact} onChange={(e) => setSearchContact(e.target.value)} onPressEnter={() => setSearchTick(t => t + 1)} allowClear />
+          <Col xs={12} sm={3} md={2}>
+            <Input placeholder="联系人" value={searchContact} onChange={(e) => setSearchContact(e.target.value)} onPressEnter={applySearch} allowClear />
           </Col>
-          <Col xs={12} sm={6} md={4}>
-            <Input placeholder="联系电话" value={searchPhone} onChange={(e) => setSearchPhone(e.target.value)} onPressEnter={() => setSearchTick(t => t + 1)} allowClear />
+          <Col xs={12} sm={3} md={2}>
+            <Input placeholder="联系电话" value={searchPhone} onChange={(e) => setSearchPhone(e.target.value)} onPressEnter={applySearch} allowClear />
           </Col>
-          <Col xs={12} sm={6} md={4}>
-            <Input placeholder="银行账户" value={searchBank} onChange={(e) => setSearchBank(e.target.value)} onPressEnter={() => setSearchTick(t => t + 1)} allowClear />
+          <Col xs={12} sm={3} md={2}>
+            <Input placeholder="银行账户" value={searchBank} onChange={(e) => setSearchBank(e.target.value)} onPressEnter={applySearch} allowClear />
           </Col>
-          <Col xs={12} sm={6} md={4}>
-            <Input placeholder="法人代表" value={searchLegal} onChange={(e) => setSearchLegal(e.target.value)} onPressEnter={() => setSearchTick(t => t + 1)} allowClear />
+          <Col xs={12} sm={3} md={2}>
+            <Input placeholder="法人代表" value={searchLegal} onChange={(e) => setSearchLegal(e.target.value)} onPressEnter={applySearch} allowClear />
           </Col>
-          <Col xs={12} sm={6} md={4}>
-            <Input placeholder="省" value={searchProvince} onChange={(e) => setSearchProvince(e.target.value)} onPressEnter={() => setSearchTick(t => t + 1)} allowClear />
+          <Col xs={12} sm={3} md={2}>
+            <Input placeholder="省" value={searchProvince} onChange={(e) => setSearchProvince(e.target.value)} onPressEnter={applySearch} allowClear />
           </Col>
-          <Col xs={12} sm={6} md={4}>
-            <Input placeholder="市" value={searchCity} onChange={(e) => setSearchCity(e.target.value)} onPressEnter={() => setSearchTick(t => t + 1)} allowClear />
+          <Col xs={12} sm={3} md={2}>
+            <Input placeholder="市" value={searchCity} onChange={(e) => setSearchCity(e.target.value)} onPressEnter={applySearch} allowClear />
           </Col>
-          <Col xs={12} sm={6} md={4}>
-            <Input placeholder="区" value={searchDistrict} onChange={(e) => setSearchDistrict(e.target.value)} onPressEnter={() => setSearchTick(t => t + 1)} allowClear />
+          <Col xs={12} sm={3} md={2}>
+            <Input placeholder="区" value={searchDistrict} onChange={(e) => setSearchDistrict(e.target.value)} onPressEnter={applySearch} allowClear />
           </Col>
-          <Col xs={12} sm={6} md={4}>
-            <Input placeholder="供应商编号" value={searchSupplierNo} onChange={(e) => setSearchSupplierNo(e.target.value)} onPressEnter={() => setSearchTick(t => t + 1)} allowClear />
+          <Col xs={12} sm={3} md={2}>
+            <Input placeholder="供应商编号" value={searchSupplierNo} onChange={(e) => setSearchSupplierNo(e.target.value)} onPressEnter={applySearch} allowClear />
           </Col>
-          <Col xs={12} sm={6} md={4}>
+          <Col xs={12} sm={3} md={2}>
             <Select
               value={statusFilter}
               onChange={setStatusFilter}
@@ -1709,10 +1717,13 @@ const PurchaserSupplierList: React.FC = () => {
               <Option value="terminated">已解除合作</Option>
             </Select>
           </Col>
-          <Col xs={12} sm={6} md={4}>
-            <Button icon={<ReloadOutlined />} onClick={() => { setSearchText(''); setSearchContact(''); setSearchPhone(''); setSearchBank(''); setSearchLegal(''); setSearchProvince(''); setSearchCity(''); setSearchDistrict(''); setSearchSupplierNo(''); setStatusFilter('all'); }}>
-              重置
-            </Button>
+          <Col xs={12} sm={3} md={2}>
+            <Space size={4}>
+              <Button type="primary" icon={<SearchOutlined />} onClick={applySearch}>查询</Button>
+              <Button icon={<ReloadOutlined />} onClick={() => { setSearchText(''); setSearchContact(''); setSearchPhone(''); setSearchBank(''); setSearchLegal(''); setSearchProvince(''); setSearchCity(''); setSearchDistrict(''); setSearchSupplierNo(''); setAppliedSearch(emptyAppliedSearch); setStatusFilter('all'); }}>
+                重置
+              </Button>
+            </Space>
           </Col>
           <Col flex="auto" style={{ textAlign: 'right' }}>
             <Button icon={<SettingOutlined />} onClick={() => setFieldConfigVisible(true)}>显示字段</Button>
