@@ -35,6 +35,8 @@ const readList = (key: string): any[] => {
 };
 
 const negSupplierItems = (p: ReturnRegisterPayload) => p.items.map(it => ({
+  // 款式编码与采购端口径一致：缺省时取商品编码前缀（6981-黑色-36 → 6981），供款式编码汇总列/导出展示
+  styleCode: String(it.productCode || '').split('-')[0],
   productCode: it.productCode,
   productName: it.productName || '',
   color: it.color || '',

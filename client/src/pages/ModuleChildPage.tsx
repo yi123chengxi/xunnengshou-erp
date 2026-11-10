@@ -5903,7 +5903,7 @@ const ModuleChildPage: React.FC = () => {
           purchaserReconPerson: r.purchaserReconPerson || '',
           totalCount: Number(r.totalCount) || 0,
           totalAmount: Number(r.totalAmount) || 0,
-          styleCode: it.styleCode || '',
+          styleCode: it.styleCode || String(it.productCode || '').split('-')[0] || '',
           productCode: it.productCode || '',
           ...resolveItemColorSpec(it, master),
           productType: it.productType || '',
@@ -11037,7 +11037,8 @@ const handleBatchAttrsConfirm = () => {
           const items = Array.isArray(record.items) ? record.items : [];
           const map = new Map<string, number>();
           items.forEach((it: any) => {
-            const k = String(it?.styleCode || '').trim() || '-';
+            // 存量退货行等可能缺 styleCode：回退商品编码前缀（6981-黑色-36 → 6981），避免汇总成 '-×数量'
+            const k = String(it?.styleCode || '').trim() || String(it?.productCode || '').split('-')[0] || '-';
             map.set(k, (map.get(k) || 0) + (Number(it.quantity) || 0));
           });
           if (!map.size) return <Text type="secondary">-</Text>;

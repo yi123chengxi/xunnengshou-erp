@@ -984,7 +984,7 @@ const PurchaserBillPage: React.FC = () => {
           purchaserReconPerson: b.purchaserReconciler || '',
           totalCount: Number(b.totalQty) || 0,
           totalAmount: Number(b.totalAmount) || 0,
-          styleCode: it.styleCode || '',
+          styleCode: it.styleCode || String(it.productCode || '').split('-')[0] || '',
           productCode: it.productCode || '',
           ...resolveItemColorSpec(it, master),
           productType: it.productType || '',
@@ -1141,9 +1141,9 @@ const PurchaserBillPage: React.FC = () => {
     auxDocNo: { title: '辅助单据号', dataIndex: 'auxDocNo', key: 'auxDocNo', width: 140, align: 'center' as const, render: (t: string) => t || '-' },
     date: { title: '日期', dataIndex: 'date', key: 'date', width: 110, align: 'center' as const },
     styleCode: { title: '款式编号', key: 'styleCode', width: 140, align: 'center' as const, render: (_: any, r: BillRecord) => {
-      // 按款式编码汇总数量：8002*数量
+      // 按款式编码汇总数量：8002*数量（存量明细缺 styleCode 时回退商品编码前缀）
       const qtyMap = new Map<string, number>();
-      r.items.forEach(i => { if (!i.styleCode) return; qtyMap.set(i.styleCode, (qtyMap.get(i.styleCode) || 0) + (Number(i.quantity) || 0)); });
+      r.items.forEach(i => { const sc = String(i.styleCode || '').trim() || String(i.productCode || '').split('-')[0]; if (!sc) return; qtyMap.set(sc, (qtyMap.get(sc) || 0) + (Number(i.quantity) || 0)); });
       const entries = Array.from(qtyMap.entries());
       if (entries.length === 0) return '-';
       // 最多显示一行：首个款式汇总，多个款式时后面显示“多”标记；点击打开款式数量明细
