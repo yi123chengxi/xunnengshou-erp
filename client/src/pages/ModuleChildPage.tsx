@@ -11051,6 +11051,19 @@ const handleBatchAttrsConfirm = () => {
           );
         };
       }
+      // 账单明细：商品总数/商品总额按符号着色（正绿负红，零保持默认色）——退货登记负数单需直观区分；须置于 switch(col.type) 之后避免被通用渲染覆写
+      if (pageConfig?.title === '账单明细' && (col.dataIndex === 'totalCount' || col.dataIndex === 'totalAmount')) {
+        const money = col.dataIndex === 'totalAmount';
+        baseCol.render = (val: any) => {
+          const n = Number(val) || 0;
+          const color = n > 0 ? '#52c41a' : n < 0 ? '#ff4d4f' : '#1a2b45';
+          return (
+            <Text style={{ fontFamily: 'monospace', color, fontWeight: 500 }}>
+              {money ? `¥${n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : n}
+            </Text>
+          );
+        };
+      }
       // 财务审核：付款截图显示图片而非文本
       if (pageConfig?.title === '财务审核' && col.dataIndex === 'payScreenshot') {
         baseCol.render = (val: string) => {

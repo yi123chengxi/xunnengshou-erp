@@ -1173,8 +1173,8 @@ const PurchaserBillPage: React.FC = () => {
         </div>
       );
     } },
-    qty: { title: '数量', dataIndex: 'totalQty', key: 'qty', width: 80, align: 'center' as const },
-    amount: { title: '采购金额', dataIndex: 'totalAmount', key: 'amount', width: 100, align: 'center' as const, render: (v: any) => <Text style={{ color: '#f5222d' }}>¥{Number(v || 0).toFixed(2)}</Text> },
+    qty: { title: '数量', dataIndex: 'totalQty', key: 'qty', width: 80, align: 'center' as const, render: (v: any) => { const n = Number(v) || 0; return <Text style={{ color: n > 0 ? '#52c41a' : n < 0 ? '#ff4d4f' : undefined }}>{n}</Text>; } },
+    amount: { title: '采购金额', dataIndex: 'totalAmount', key: 'amount', width: 100, align: 'center' as const, render: (v: any) => { const n = Number(v) || 0; return <Text style={{ color: n > 0 ? '#52c41a' : n < 0 ? '#ff4d4f' : undefined }}>¥{n.toFixed(2)}</Text>; } },
     supplier: { title: '供应商', dataIndex: 'supplier', key: 'supplier', width: 140, align: 'center' as const, render: (t: string) => t || '-' },
     reconcileResult: { title: '对账结果', dataIndex: 'reconcileResult', key: 'reconcileResult', width: 90, align: 'center' as const, render: (t: string, r: BillRecord) => { const val = t || (matchPurchaserRecon(reconRecords, r) ? '已发起对账' : ''); const displayVal = val === '已对账' ? '对账完成' : val; return val ? <Tag color={val === '已发起对账' ? 'blue' : val === '一致' || val === '已对账' || val === '对账完成' || val === '按供方入账' ? 'green' : val === '不相符' ? 'red' : 'orange'}>{displayVal}</Tag> : '-'; } },
     diffNote: { title: '差异说明', dataIndex: 'diffNote', key: 'diffNote', width: 120, align: 'center' as const, ellipsis: true, render: (t: string) => t || '-' },
