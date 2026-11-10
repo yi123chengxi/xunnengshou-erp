@@ -106,6 +106,17 @@ const PurchaserSupplierList: React.FC = () => {
 
   const [dataSource, setDataSource] = useState<SupplierEntry[]>([]);
   const [searchText, setSearchText] = useState('');
+  // 分字段搜索（拆分原单一关键字框）：联系人/联系电话/银行账户/法人代表/省/市/区/供应商编号
+  const [searchContact, setSearchContact] = useState('');
+  const [searchPhone, setSearchPhone] = useState('');
+  const [searchBank, setSearchBank] = useState('');
+  const [searchLegal, setSearchLegal] = useState('');
+  const [searchProvince, setSearchProvince] = useState('');
+  const [searchCity, setSearchCity] = useState('');
+  const [searchDistrict, setSearchDistrict] = useState('');
+  const [searchSupplierNo, setSearchSupplierNo] = useState('');
+  // 回车确认搜索：递增触发 filteredData 重算（实时过滤已生效，回车作为显式确认）
+  const [searchTick, setSearchTick] = useState(0);
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [detailVisible, setDetailVisible] = useState(false);
   const [detailSupplier, setDetailSupplier] = useState<SupplierEntry | null>(null);
@@ -901,16 +912,33 @@ const PurchaserSupplierList: React.FC = () => {
     if (statusFilter !== 'all') {
       result = result.filter((s) => s.cooperationStatus === statusFilter);
     }
-    if (searchText) {
-      result = result.filter(
-        (s) =>
-          s.supplierName.includes(searchText) ||
-          s.shortName.includes(searchText) ||
-          s.contactPerson.includes(searchText)
+    // 安全模糊匹配：画像字段可能为 undefined，统一转字符串且忽略大小写，
+    // 避免直接 .includes 抛 TypeError 触发全局 ErrorBoundary（“页面资源加载失败”）
+    const has = (val: any, kw: string) => !kw || String(val ?? '').toLowerCase().includes(kw.toLowerCase());
+    const kwName = searchText.trim();
+    const kwContact = searchContact.trim();
+    const kwPhone = searchPhone.trim();
+    const kwBank = searchBank.trim();
+    const kwLegal = searchLegal.trim();
+    const kwProv = searchProvince.trim();
+    const kwCity = searchCity.trim();
+    const kwDist = searchDistrict.trim();
+    const kwNo = searchSupplierNo.trim();
+    if (kwName || kwContact || kwPhone || kwBank || kwLegal || kwProv || kwCity || kwDist || kwNo) {
+      result = result.filter((s) =>
+        (!kwName || has(s.supplierName, kwName) || has(s.shortName, kwName)) &&
+        has(s.contactPerson, kwContact) &&
+        has(s.contactPhone, kwPhone) &&
+        (has(s.bankAccountNo, kwBank) || has(s.accountName, kwBank) || has(s.bankName, kwBank) || has(s.branchName, kwBank)) &&
+        has(s.legalPerson, kwLegal) &&
+        has(s.province, kwProv) &&
+        has(s.city, kwCity) &&
+        has(s.district, kwDist) &&
+        has(s.supplierNo, kwNo)
       );
     }
     return result;
-  }, [supplierList, statusFilter, searchText]);
+  }, [supplierList, statusFilter, searchText, searchContact, searchPhone, searchBank, searchLegal, searchProvince, searchCity, searchDistrict, searchSupplierNo, searchTick]);
 
   // 查看详情
   const handleViewDetail = (record: SupplierEntry) => {
@@ -1634,16 +1662,41 @@ const PurchaserSupplierList: React.FC = () => {
       {/* 搜索与筛选 */}
       <Card style={{ marginBottom: 16 }} bodyStyle={{ padding: '12px 24px' }}>
         <Row gutter={[16, 12]} align="middle">
-          <Col xs={24} sm={8}>
+          <Col xs={12} sm={6} md={4}>
             <Input
-              placeholder="搜索供应商名称/联系人"
+              placeholder="供应商名称/简称"
               prefix={<SearchOutlined style={{ color: '#bfbfbf' }} />}
               value={searchText}
               onChange={(e) => setSearchText(e.target.value)}
+              onPressEnter={() => setSearchTick(t => t + 1)}
               allowClear
             />
           </Col>
-          <Col xs={12} sm={4}>
+          <Col xs={12} sm={6} md={4}>
+            <Input placeholder="联系人" value={searchContact} onChange={(e) => setSearchContact(e.target.value)} onPressEnter={() => setSearchTick(t => t + 1)} allowClear />
+          </Col>
+          <Col xs={12} sm={6} md={4}>
+            <Input placeholder="联系电话" value={searchPhone} onChange={(e) => setSearchPhone(e.target.value)} onPressEnter={() => setSearchTick(t => t + 1)} allowClear />
+          </Col>
+          <Col xs={12} sm={6} md={4}>
+            <Input placeholder="银行账户" value={searchBank} onChange={(e) => setSearchBank(e.target.value)} onPressEnter={() => setSearchTick(t => t + 1)} allowClear />
+          </Col>
+          <Col xs={12} sm={6} md={4}>
+            <Input placeholder="法人代表" value={searchLegal} onChange={(e) => setSearchLegal(e.target.value)} onPressEnter={() => setSearchTick(t => t + 1)} allowClear />
+          </Col>
+          <Col xs={12} sm={6} md={4}>
+            <Input placeholder="省" value={searchProvince} onChange={(e) => setSearchProvince(e.target.value)} onPressEnter={() => setSearchTick(t => t + 1)} allowClear />
+          </Col>
+          <Col xs={12} sm={6} md={4}>
+            <Input placeholder="市" value={searchCity} onChange={(e) => setSearchCity(e.target.value)} onPressEnter={() => setSearchTick(t => t + 1)} allowClear />
+          </Col>
+          <Col xs={12} sm={6} md={4}>
+            <Input placeholder="区" value={searchDistrict} onChange={(e) => setSearchDistrict(e.target.value)} onPressEnter={() => setSearchTick(t => t + 1)} allowClear />
+          </Col>
+          <Col xs={12} sm={6} md={4}>
+            <Input placeholder="供应商编号" value={searchSupplierNo} onChange={(e) => setSearchSupplierNo(e.target.value)} onPressEnter={() => setSearchTick(t => t + 1)} allowClear />
+          </Col>
+          <Col xs={12} sm={6} md={4}>
             <Select
               value={statusFilter}
               onChange={setStatusFilter}
@@ -1656,8 +1709,8 @@ const PurchaserSupplierList: React.FC = () => {
               <Option value="terminated">已解除合作</Option>
             </Select>
           </Col>
-          <Col xs={12} sm={4}>
-            <Button icon={<ReloadOutlined />} onClick={() => { setSearchText(''); setStatusFilter('all'); }}>
+          <Col xs={12} sm={6} md={4}>
+            <Button icon={<ReloadOutlined />} onClick={() => { setSearchText(''); setSearchContact(''); setSearchPhone(''); setSearchBank(''); setSearchLegal(''); setSearchProvince(''); setSearchCity(''); setSearchDistrict(''); setSearchSupplierNo(''); setStatusFilter('all'); }}>
               重置
             </Button>
           </Col>
