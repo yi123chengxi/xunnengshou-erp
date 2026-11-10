@@ -218,7 +218,7 @@ const PurchaserBillPage: React.FC = () => {
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
 
   // 采购账单搜索（点击查询后生效）
-  const emptyPSearch = { no: '', date: '', style: '', code: '', supplier: '', qty: '', amount: '', recon: '' };
+  const emptyPSearch = { no: '', date: '', style: '', code: '', supplier: '', qty: '', amount: '', recon: '', source: '' };
   const [pSearch, setPSearch] = useState({ ...emptyPSearch });
   const [pSearchApplied, setPSearchApplied] = useState({ ...emptyPSearch });
 
@@ -959,6 +959,12 @@ const PurchaserBillPage: React.FC = () => {
     if (s.supplier.trim() && !String(b.supplier || '').includes(s.supplier.trim())) return false;
     if (s.recon === '已对账' && !RECON_DONE.includes(String(b.reconcileResult || ''))) return false;
     if (s.recon === '未对账' && RECON_DONE.includes(String(b.reconcileResult || ''))) return false;
+    if (s.source) {
+      // 存量账单无 billSource：与列渲染同口径回退（MC-PUSH-/采购商推送/订单id = 订单发货，其余手工新增）
+      const auto = String(b.outboundNo || (b as any).no || '').startsWith('MC-PUSH-') || (b as any).orderSource === '采购商推送' || !!(b as any).orderId;
+      const src = b.billSource || (auto ? '订单发货' : '手工新增');
+      if (src !== s.source) return false;
+    }
     if (s.qty.trim() && !String(Number(b.totalQty) || 0).includes(s.qty.trim())) return false;
     if (s.amount.trim() && !String(Number(b.totalAmount) || 0).includes(s.amount.trim()) && !(Number(b.totalAmount) || 0).toFixed(2).includes(s.amount.trim())) return false;
     return true;
@@ -1230,8 +1236,8 @@ const PurchaserBillPage: React.FC = () => {
         <Row gutter={[8, 8]} style={{ padding: '16px 0 0' }} align="middle">
           <Col xs={12} sm={3}><Input size="small" allowClear placeholder="出库单号" value={pSearch.no} onChange={e => setPSearch(p => ({ ...p, no: e.target.value }))} /></Col>
           <Col xs={12} sm={3}><DatePicker size="small" style={{ width: '100%' }} allowClear placeholder="日期" value={pSearch.date ? dayjs(pSearch.date) : null} onChange={d => setPSearch(p => ({ ...p, date: d ? d.format('YYYY-MM-DD') : '' }))} /></Col>
-          <Col xs={12} sm={3}><Input size="small" allowClear placeholder="款式编号" value={pSearch.style} onChange={e => setPSearch(p => ({ ...p, style: e.target.value }))} /></Col>
-          <Col xs={12} sm={3}><Input size="small" allowClear placeholder="商品编码" value={pSearch.code} onChange={e => setPSearch(p => ({ ...p, code: e.target.value }))} /></Col>
+          <Col xs={12} sm={2}><Input size="small" allowClear placeholder="款式编号" value={pSearch.style} onChange={e => setPSearch(p => ({ ...p, style: e.target.value }))} /></Col>
+          <Col xs={12} sm={2}><Input size="small" allowClear placeholder="商品编码" value={pSearch.code} onChange={e => setPSearch(p => ({ ...p, code: e.target.value }))} /></Col>
           <Col xs={12} sm={3}>
             <Select size="small" style={{ width: '100%' }} allowClear showSearch placeholder="供应商"
               value={pSearch.supplier || undefined} options={supplierSearchOptions}
@@ -1245,6 +1251,12 @@ const PurchaserBillPage: React.FC = () => {
               value={pSearch.recon || undefined}
               options={[{ value: '已对账', label: '对账完成' }, { value: '未对账', label: '未对账' }]}
               onChange={v => setPSearch(p => ({ ...p, recon: v || '' }))} />
+          </Col>
+          <Col xs={8} sm={2}>
+            <Select size="small" style={{ width: '100%' }} allowClear placeholder="账单来源"
+              value={pSearch.source || undefined}
+              options={[{ value: '手工新增', label: '手工新增' }, { value: '订单发货', label: '订单发货' }, { value: '退货登记', label: '退货登记' }]}
+              onChange={v => setPSearch(p => ({ ...p, source: v || '' }))} />
           </Col>
           <Col xs={8} sm={3}>
             <Space size={4}>

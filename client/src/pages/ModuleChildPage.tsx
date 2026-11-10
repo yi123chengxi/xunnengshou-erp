@@ -10634,7 +10634,7 @@ const handleBatchAttrsConfirm = () => {
       }
       // 账单明细：账单来源标签渲染
       if (pageConfig?.title === '账单明细' && col.dataIndex === 'billSource') {
-        const sourceColors: Record<string, string> = { '订单': 'blue', '手工新增': 'green' };
+        const sourceColors: Record<string, string> = { '订单': 'blue', '手工新增': 'green', '退货登记': 'red' };
         baseCol.render = (val: string) => (
           <Tag color={sourceColors[val] || 'default'} style={{ fontWeight: 500 }}>{val || '-'}</Tag>
         );
@@ -14388,7 +14388,7 @@ const handleBatchAttrsConfirm = () => {
       {pageConfig?.title === '账单明细' && (
         <div style={{ marginTop: 12, padding: '10px 14px', background: '#f6f8fa', border: '1px solid #e3e8ee', borderRadius: 6, fontSize: 12, color: '#5a6d85', lineHeight: 1.9 }}>
           <div style={{ fontWeight: 600, color: '#1a2b45', marginBottom: 4 }}>账单来源与对账功能说明</div>
-          <div>1、账单来源：<Tag color="blue" style={{ marginRight: 4 }}>订单</Tag>基于订单自动生成的账单行，仅「已发货」状态的订单生成账单并允许「确认无误」「发起对账」；<Tag color="green" style={{ marginRight: 4 }}>手工新增</Tag>本页手工添加的账单；发货时同时自动写入采购商平台「采购账单」（编号前缀 MC-PUSH-，来源记为「订单发货」）。</div>
+          <div>1、账单来源：<Tag color="blue" style={{ marginRight: 4 }}>订单</Tag>基于订单自动生成的账单行，仅「已发货」状态的订单生成账单并允许「确认无误」「发起对账」；<Tag color="green" style={{ marginRight: 4 }}>手工新增</Tag>本页手工添加的账单；发货时同时自动写入采购商平台「采购账单」（编号前缀 MC-PUSH-，来源记为「订单发货」）；<Tag color="red" style={{ marginRight: 4 }}>退货登记</Tag>退货登记生成的负数退货账单（单号 RT- 前缀），与正常账单走相同对账流程。</div>
           <div>2、账单对账：行内点击「发起对账」将账单发送至采购商平台对账管理，按单据编号自动匹配核对；发起后对账结果显示「已发起对账」标签，完成前可撤回；对账结果状态：待对账、确认无误、已发起对账、对账完成、按采方入账、不相符。</div>
           <div>3、会计联动：会计账薄开启时，对账结果变更为 对账完成/确认无误/按采方入账 等终态后系统自动生成对应会计分录，变更回其他状态时自动删除。</div>
         </div>

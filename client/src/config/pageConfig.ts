@@ -479,7 +479,8 @@ export const customerPages: Record<string, ChildPageConfig> = {
       { type: 'select', options: [
         { label: '全部来源', value: '' },
         { label: '订单', value: '订单' },
-        { label: '手工', value: '手工' },
+        { label: '手工新增', value: '手工新增' },
+        { label: '退货登记', value: '退货登记' },
       ], label: '账单来源' },
       { type: 'select', options: [
         { label: '全部状态', value: '' },
