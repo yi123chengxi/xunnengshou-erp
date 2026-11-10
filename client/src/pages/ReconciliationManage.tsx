@@ -41,12 +41,32 @@ import { appendBillLogEntry } from '../utils/billLog';
 import { compressImageFile } from '../utils/imageCompress';
 import { resolveLatestCompanyName } from '../utils/nameSync';
 import { reconDbKey, loadRoleAll, loadRoleRecords, upsertRecords, migrateLegacyReconRecords } from '../utils/reconStore';
+import { buildSupplierReturnRow, buildPurchaserReturnBill } from '../utils/returnRegister';
 
 const { Title, Text, Paragraph } = Typography;
 const { Option } = Select;
 const { TabPane } = Tabs;
 
 const PRIMARY = '#1e4a7e';
+
+/** 退货单判定（RT- 前缀单号） */
+const isReturnDoc = (r: any): boolean => String(r?.docNo || '').trim().startsWith('RT-');
+
+/** 由对账记录明细构造退货登记 payload（取本侧数量/单价，缺失回退对侧），供对账完成时补建本端负数退货单 */
+const returnPayloadFromRecord = (r: any, side: 'supplier' | 'purchaser'): any => {
+  const ds = Array.isArray(r?.details) ? r.details : [];
+  if (!ds.length) return null;
+  const items = ds.map((d: any) => {
+    const ownQ = side === 'supplier' ? (Number(d.ourQty) || 0) : (Number(d.theirQty) || 0);
+    const ownP = side === 'supplier' ? (Number(d.ourPrice) || 0) : (Number(d.theirPrice) || 0);
+    const opQ = side === 'supplier' ? (Number(d.theirQty) || 0) : (Number(d.ourQty) || 0);
+    const opP = side === 'supplier' ? (Number(d.theirPrice) || 0) : (Number(d.ourPrice) || 0);
+    return { productCode: d.itemNo || '', productName: d.itemName || '', color: '', spec: '', quantity: Math.abs(ownQ || opQ), unitPrice: Math.abs(ownP || opP) };
+  });
+  const totalQty = items.reduce((s: number, it: any) => s + (Number(it.quantity) || 0), 0);
+  const totalAmount = Math.round(items.reduce((s: number, it: any) => s + (Number(it.quantity) || 0) * (Number(it.unitPrice) || 0), 0) * 100) / 100;
+  return { returnNo: String(r.docNo || '').trim(), items, totalQty, totalAmount, date: String(r.date || '').slice(0, 10), linkedOutboundNo: r.linkedOutboundNo || '', reason: r.returnReason || '' };
+};
 
 // ==================== 类型定义 ====================
 
@@ -298,6 +318,7 @@ const ReconciliationManage: React.FC = () => {
     const logDetail = supDiff;
     // 对账人：系统定时发起显示 '--'，否则显示操作人
     const isAuto = r.source === 'bill' && !action;
+    const isReturn = isReturnDoc(r);
     const reconcilerDisplay = isAuto ? '--' : (operatorName || '--');
     const supReconPerson = (action === 'entryByPurchaser' || action === 'confirmSupplier' || action === 'auto') ? reconcilerDisplay : '';
     const purReconPerson = (action === 'confirm' || action === 'entryBySupplier' || action === 'mismatch' || action === 'auto') ? reconcilerDisplay : '';
@@ -336,6 +357,13 @@ const ReconciliationManage: React.FC = () => {
               billLog: appendBillLogEntry(rows[idx].billLog, logAction, operatorName, logDetail),
             };
             localStorage.setItem(key, JSON.stringify(rows));
+          } else if (isReturn && !rows.some((x: any) => x.id === r.docNo || String(x.outboundNo || '').trim() === String(r.docNo || '').trim())) {
+            // 退货单：对账完成时才在确认方本端补建负数退货行（走对账管理流程，不在发起/登记时镜像，避免镜像自匹配触发自动完成）
+            const payload = returnPayloadFromRecord(r, 'supplier');
+            if (payload) {
+              rows.unshift(buildSupplierReturnRow(payload, { customerName: String(r.customerName || ''), counterpartyUsername: String(r.customerUsername || ''), now: new Date().toLocaleString('zh-CN') }) as any);
+              localStorage.setItem(key, JSON.stringify(rows));
+            }
           }
         }
       }
@@ -367,6 +395,13 @@ const ReconciliationManage: React.FC = () => {
             update.billLog = appendBillLogEntry(bills[idx].billLog, logAction, operatorName, logDetail);
             bills[idx] = { ...bills[idx], ...update };
             localStorage.setItem(key, JSON.stringify(bills));
+          } else if (isReturn && !bills.some((b: any) => b.key === `bill-${r.docNo}` || String(b.outboundNo || '').trim() === String(r.docNo || '').trim())) {
+            // 退货单：对账完成时才在确认方本端补建负数退货账单（走对账管理流程，不在发起/登记时镜像）
+            const payload = returnPayloadFromRecord(r, 'purchaser');
+            if (payload) {
+              bills.unshift(buildPurchaserReturnBill(payload, { operator: operatorName || '', supplierName: String(r.supplierName || ''), now: new Date().toLocaleString('zh-CN') }) as any);
+              localStorage.setItem(key, JSON.stringify(bills));
+            }
           }
         }
       }
@@ -443,7 +478,8 @@ const ReconciliationManage: React.FC = () => {
   // 自动对账：开关开启时对“完全一致”单据自动完成（completeRecon 会移除记录并回写账单，dataSource 收敛后 effect 自然终止）
   useEffect(() => {
     if (!autoRecon) return;
-    const targets = dataSource.filter(r => r.reconResult === 'matched');
+    // 退货单不参与自动核对自动完成：对方退货单为镜像/补建副本，自匹配恒成立，须由采购商人工确认或按供方入账
+    const targets = dataSource.filter(r => r.reconResult === 'matched' && !isReturnDoc(r));
     if (!targets.length) return;
     targets.forEach(r => completeRecon(r, 'auto', '系统自动核对'));
   }, [autoRecon, dataSource, completeRecon]);

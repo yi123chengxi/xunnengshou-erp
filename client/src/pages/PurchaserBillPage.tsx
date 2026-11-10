@@ -1061,22 +1061,6 @@ const PurchaserBillPage: React.FC = () => {
         styleCompare: [],
         source: 'bill',
       });
-      // 退货单走对账管理：仅当发起对账时才在供应商账单明细创建负数退货行（安全追加并集，不擦除对方存量数据）；
-      // 登记时不再即时镜像，避免退货未经对账就出现在对方账单明细
-      if (supUser?.username && ((b as any).docType === 'return' || String((b as any).billSource || '') === '退货登记')) {
-        const supRow = {
-          key: `bill-${b.outboundNo}`, id: b.outboundNo, _manual: true, outboundNo: b.outboundNo,
-          docType: 'return', returnNo: b.outboundNo, linkedOutboundNo: (b as any).linkedOutboundNo || '', returnReason: (b as any).returnReason || '',
-          customerName: myCompanyName, customerUsername: owner, counterpartyUsername: owner,
-          outboundDate: b.date || '', createdAt: (b as any).createdAt || new Date().toLocaleString('zh-CN'),
-          totalCount: Number(b.totalQty) || 0,
-          productDetail: (b.items || []).map((it: any) => `${it.productCode}×${it.quantity}`).join('，'),
-          totalAmount: Number(b.totalAmount) || 0, paidAmount: 0, billSource: '退货登记', orderStatus: '',
-          reconResult: '待对账', diffDesc: '', supplierReconPerson: '', purchaserReconPerson: '', confirmTime: '',
-          items: (b.items || []).map((it: any) => ({ productCode: it.productCode || '', productName: it.productName || '', color: it.color || '', spec: it.spec || '', quantity: Number(it.quantity) || 0, price: Number(it.unitPrice) || 0, amount: Number(it.amount) || 0 })),
-        };
-        void appendRowsToRemoteKey(`pageData_customer_bill-detail_${supUser.username}`, [supRow], (r: any) => String(r?.id || r?.key || ''));
-      }
       initiatedKeys.push(b.key);
       added += 1;
     });

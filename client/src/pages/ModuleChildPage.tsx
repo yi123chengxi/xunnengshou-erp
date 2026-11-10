@@ -3166,20 +3166,6 @@ const ModuleChildPage: React.FC = () => {
       return { ok: false, reason: '已发起对账，请勿重复发起' };
     }
     upsertRecords([rec]);
-    // 退货单走对账管理：仅当发起对账时才在采购商采购账单创建负数退货单（安全追加并集，不擦除对方存量数据）；
-    // 登记时不再即时镜像，避免退货未经对账就出现在对方账单
-    if (customerUsername && ((record as any).docType === 'return' || String((record as any).billSource || '') === '退货登记')) {
-      const purBill = {
-        key: `bill-${record.outboundNo || record.id}`, outboundNo: record.outboundNo || record.id, prefix: 'RT',
-        supplier: supplierName, date: (record as any).outboundDate || '',
-        items: (Array.isArray(record.items) ? record.items : []).map((it: any) => ({ styleCode: String(it.productCode || '').split('-')[0], productCode: it.productCode || '', productName: it.productName || '', color: it.color || '', spec: it.spec || '', quantity: Number(it.quantity) || 0, unitPrice: Number(it.price ?? it.unitPrice) || 0, amount: Number(it.amount) || 0, productType: '' })),
-        images: [], recorder: getCurrentUserDisplayName(), totalQty: Number(record.totalCount) || 0, totalAmount: Number(record.totalAmount) || 0,
-        reconcileResult: '', diffNote: '', supplierReconciler: '', purchaserReconciler: '', supplierImages: [], purchaserImages: [],
-        createdAt: (record as any).createdAt || new Date().toLocaleString('zh-CN'), billSource: '退货登记', docType: 'return',
-        returnNo: record.outboundNo || record.id, linkedOutboundNo: (record as any).linkedOutboundNo || '', returnReason: (record as any).returnReason || '',
-      };
-      void appendRowsToRemoteKey(`purchaser_bills_${customerUsername}`, [purBill], (bb: any) => String(bb?.key || bb?.outboundNo || ''));
-    }
     // 记录发起对账日志
     let newBillLog = (record as any).billLog;
     try {
