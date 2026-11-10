@@ -1086,6 +1086,14 @@ const CustomerInfo: React.FC = () => {
     return () => { alive = false; };
   }, [allCustomers]);
 
+  // 已认证租户保护：编辑弹窗中的客户若已完成企业认证，公司名称不可被供应商修改
+  // （认证名称是企业身份真源，供应商侧改名会造成名称快照与认证主体分叉）
+  const editingCertified = useMemo(() => {
+    if (!editingCustomer) return false;
+    const un = String((editingCustomer as any).purchaserUsername || '').trim();
+    return !!un && custCertMap[un]?.status === 'certified';
+  }, [editingCustomer, custCertMap]);
+
   // 发布本供应商展示的有效信用额度到同步键 published_credit_<owner>，
   // 供采购商跨浏览器只读（与本页「信用额度」列展示值完全一致，避免两端不一致）
   useEffect(() => {
@@ -1476,6 +1484,11 @@ const CustomerInfo: React.FC = () => {
   // 新增/编辑客户（共用同一窗口：editingCustomer 非空时保存修改，否则新建）
   const handleAddCustomer = () => {
     if (!fnOk(editingCustomer ? 'edit' : 'add')) { message.warning(editingCustomer ? '无编辑权限' : '无新增权限'); return; }
+    // 已认证租户：拦截公司名称篡改（输入框已禁用，此处为兼容绕过/历史焦点的双保险）
+    if (editingCustomer && editingCertified) {
+      const nm = String(addForm.getFieldValue('name') || '').trim();
+      if (nm && nm !== String(editingCustomer.name || '').trim()) { message.warning('该客户已完成企业认证，公司名称不可修改'); return; }
+    }
     addForm.validateFields().then((values) => {
       // 采购商编号查重：编号已在客户列表中存在（直接客户+已绑定采购商，排除编辑自身）则不允许保存
       const pno = String(values.purchaserNo || '').trim();
@@ -2572,8 +2585,9 @@ const CustomerInfo: React.FC = () => {
             name="name"
             label="客户名称"
             rules={[{ required: true, message: '请输入客户名称' }]}
+            extra={editingCertified ? '该客户已完成企业认证，公司名称不可修改' : undefined}
           >
-            <Input placeholder="请输入客户企业名称" autoComplete="off" />
+            <Input placeholder="请输入客户企业名称" autoComplete="off" disabled={editingCertified} />
           </Form.Item>
           <Row gutter={16}>
             <Col span={12}>
