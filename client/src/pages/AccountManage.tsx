@@ -5,6 +5,7 @@ import {
   Popconfirm, DatePicker, Badge, Tooltip, Checkbox, Divider, Upload, Alert,
 } from 'antd';
 import { reloadAfterPull } from '../utils/serverSync';
+import { saveDataset } from '../utils/dataStore';
 import {
   PlusOutlined,
   SearchOutlined,
@@ -105,6 +106,19 @@ interface AccountRecord {
   group?: string; // 所属部门（原“分组”）
   phone?: string; // 手机号码（可用于登录；同号多账号时禁用手机号登录）
 }
+
+/** registeredUsers 写入并同步上传：仅 setItem 时手机号/角色等编辑只留本浏览器，
+ * 其他设备（子账号登录端）拉取服务端旧副本会报「未绑定有效手机号」 */
+const persistRegisteredUsers = (list: any[]) => {
+  const json = JSON.stringify(list);
+  localStorage.setItem('registeredUsers', json);
+  // 上传权限收敛：仅主账号（管理员）会话可把账号注册表写入共享数据集；
+  // 子账号/只读会话改动只留本地，收窄客户端越权写注册表（角色/状态/手机号）的攻击面
+  try {
+    if (localStorage.getItem('isSubAccount') === 'true' || localStorage.getItem('isViewOnly') === 'true') return;
+  } catch { return; }
+  saveDataset('registeredUsers', json);
+};
 
 // 分组数据持久化
 export interface GroupRecord {
@@ -398,7 +412,7 @@ const AccountManage: React.FC = () => {
         }
       });
       if (changed) {
-        localStorage.setItem('registeredUsers', JSON.stringify(regUsers));
+        persistRegisteredUsers(regUsers);
       }
     } catch { /* ignore */ }
   // eslint-disable-line
@@ -492,7 +506,7 @@ const AccountManage: React.FC = () => {
             regUsers[idx].roles = values.roles || [];
             regUsers[idx].customPermissions = editPermsRef.current;
             regUsers[idx].phone = inputPhone;
-            localStorage.setItem('registeredUsers', JSON.stringify(regUsers));
+            persistRegisteredUsers(regUsers);
           }
         } catch { /* ignore */ }
         return updated;
@@ -521,7 +535,7 @@ const AccountManage: React.FC = () => {
     try {
       const regUsers: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
       const updated = regUsers.filter((u: any) => u.username !== record.username);
-      localStorage.setItem('registeredUsers', JSON.stringify(updated));
+      persistRegisteredUsers(updated);
     } catch { /* ignore */ }
     message.success(`账号 ${record.displayName} 已删除`);
   }, []);
@@ -549,7 +563,7 @@ const AccountManage: React.FC = () => {
       const idx = regUsers.findIndex((u: any) => u.username === record.username);
       if (idx >= 0) {
         regUsers[idx].accountStatus = newStatus;
-        localStorage.setItem('registeredUsers', JSON.stringify(regUsers));
+        persistRegisteredUsers(regUsers);
       }
     } catch { /* ignore */ }
     message.success(newStatus === 'normal' ? `账号 ${record.displayName} 已启用` : `账号 ${record.displayName} 已禁用`);
@@ -659,7 +673,7 @@ const AccountManage: React.FC = () => {
           );
           if (idx >= 0) {
             registeredUsers[idx].password = values.newPassword;
-            localStorage.setItem('registeredUsers', JSON.stringify(registeredUsers));
+            persistRegisteredUsers(registeredUsers);
           }
         } catch { /* ignore */ }
       }
@@ -714,9 +728,13 @@ const AccountManage: React.FC = () => {
         }
       } catch { /* ignore */ }
 
-      // 手机号码：格式校验+ 同号多账号提示（同号并存时手机号登录将被禁用）
+      // 手机号码：必填 + 格式校验 + 同号多账号提示（同号并存时手机号登录将被禁用）
       const inputPhone = String(values.phone || '').trim();
-      if (inputPhone && !/^1[3-9]\d{9}$/.test(inputPhone)) {
+      if (!inputPhone) {
+        message.error('请输入手机号码（子账号必填，用于登录验证码接收）');
+        return;
+      }
+      if (!/^1[3-9]\d{9}$/.test(inputPhone)) {
         message.error('手机号码格式不正确（须为 11 位有效手机号）');
         return;
       }
@@ -772,7 +790,7 @@ const AccountManage: React.FC = () => {
         parentAccount: parentAccount,  // 使用主账号作为父账号
         needsPasswordChange: true,
       });
-      localStorage.setItem('registeredUsers', JSON.stringify(registeredUsers));
+      persistRegisteredUsers(registeredUsers);
 
       // 复制建号：同步复制源账号的个人三态覆写
       if (copyFromRef.current) {
@@ -901,7 +919,7 @@ const AccountManage: React.FC = () => {
         needsPasswordChange: true, // 首次登录必须修改密码
       });
     });
-    localStorage.setItem('registeredUsers', JSON.stringify(registeredUsers));
+    persistRegisteredUsers(registeredUsers);
     setDataSource(prev => [...newAccounts, ...prev]);
     setImportVisible(false);
     setImportRows([]);
@@ -963,7 +981,7 @@ const AccountManage: React.FC = () => {
           regUsers.forEach((u: any) => {
             if (targetUsernames.includes(u.username)) u.accountStatus = 'normal';
           });
-          localStorage.setItem('registeredUsers', JSON.stringify(regUsers));
+          persistRegisteredUsers(regUsers);
         } catch { /* ignore */ }
         message.success(`已启用 ${selectedRowKeys.length} 个账号`);
         break;
@@ -982,7 +1000,7 @@ const AccountManage: React.FC = () => {
           regUsers.forEach((u: any) => {
             if (targetUsernames.includes(u.username)) u.accountStatus = 'disabled';
           });
-          localStorage.setItem('registeredUsers', JSON.stringify(regUsers));
+          persistRegisteredUsers(regUsers);
         } catch { /* ignore */ }
         message.success(`已禁用 ${selectedRowKeys.length} 个账号`);
         break;
@@ -1007,7 +1025,7 @@ const AccountManage: React.FC = () => {
             try {
               const regUsers: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
               const updated = regUsers.filter((u: any) => !deleteTargets.includes(u.username));
-              localStorage.setItem('registeredUsers', JSON.stringify(updated));
+              persistRegisteredUsers(updated);
             } catch { /* ignore */ }
             setSelectedRowKeys([]);
             message.success('批量删除完成');
@@ -1620,12 +1638,13 @@ const AccountManage: React.FC = () => {
               <Form.Item
                 name="phone"
                 label="手机号码"
-                tooltip="选填；填写后该子账号可用手机号登录。若同一手机号同时绑定多个租户或多个子账号，手机号登录将被禁用，须使用用户名登录"
+                tooltip="必填；用于新设备登录验证码接收与手机号登录。若同一手机号同时绑定多个租户或多个子账号，手机号登录将被禁用，须使用用户名登录"
                 rules={[
+                  { required: true, message: '请输入手机号码' },
                   { pattern: /^1[3-9]\d{9}$/, message: '请输入 11 位有效手机号）' },
                 ]}
               >
-                <Input placeholder="请输入手机号码（选填，可用于登录）" prefix={<MobileOutlined />} allowClear />
+                <Input placeholder="请输入手机号码（必填，用于登录验证码）" prefix={<MobileOutlined />} allowClear />
               </Form.Item>
             </Col>
           </Row>

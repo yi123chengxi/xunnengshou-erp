@@ -330,10 +330,15 @@ function mergeRegisteredUsers(serverJson: string): any[] | null {
     const local: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
     let changed = false;
     serverUsers.forEach((su: any) => {
-      if (su && su.username && !local.some((u: any) => u.username === su.username)) {
-        local.push(su);
-        changed = true;
-      }
+      if (!su || !su.username) return;
+      const lu = local.find((u: any) => u.username === su.username);
+      if (!lu) { local.push(su); changed = true; return; }
+      // 手机号字段级同步：管理端编辑补绑/改绑后上传的服务端值须传播到所有设备，
+      // 否则子账号登录端本地旧副本 phone 恒空→新设备验证报「未绑定有效手机号」；
+      // 服务端空号不回清本地已有号码（防修复前的旧服务端副本反向清除）
+      const sp = String(su.phone || '').trim();
+      const lp = String(lu.phone || '').trim();
+      if (sp && sp !== lp) { lu.phone = sp; changed = true; }
     });
     if (changed) {
       const raw = getOriginalSetItem();

@@ -10,7 +10,7 @@ import { useNavigate } from 'react-router-dom';
 import Logo from '../components/Logo';
 import { safeSetItem } from '../utils/storageQuota';
 import { FREE_PERIOD } from '../utils/billingPolicy';
-import { fetchServerDataset, flushDatasetUpload } from '../utils/serverSync';
+import { fetchServerDataset, flushDatasetUpload, reloadAfterPull } from '../utils/serverSync';
 import { initPushNotifications } from '../utils/pushNotification';
 import { getProvinceOptions, getCityOptions, getDistrictOptions } from '../utils/regions';
 import { PROCESS_TYPE_OPTIONS } from './ContractFactoryPage';
@@ -200,6 +200,12 @@ const Auth: React.FC = () => {
       }
       keys.forEach(k => localStorage.removeItem(k));
     } catch { /* ignore */ }
+  }, []);
+
+  // 登录页挂载即拉取服务端数据集：管理端补绑/改绑的手机号经合并层传播到本设备，
+  // 避免本地旧副本 phone 为空导致新设备验证报「未绑定有效手机号」
+  useEffect(() => {
+    reloadAfterPull(() => { /* 拉取完成即可，登录提交时读最新 registeredUsers */ });
   }, []);
 
   // 倒计时逻辑
