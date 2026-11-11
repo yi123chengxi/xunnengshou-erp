@@ -192,14 +192,26 @@ const ensureCus = (m: SummaryMap<CustomerSummaryEntry>, name: string): CustomerS
 // 台账记录归属客户名：有 customerId 按 ID→名映射（与既有 manualOf 口径一致），无 ID 按名称
 const receiptOwnerName = (r: any, idNameMap: Record<string, string>) => trimName(r?.customerId ? idNameMap[r.customerId] : r?.customerName);
 
-// 单对象重算：指定客户的「采购总额」（只遍历订单表一次）
+const billDetailKey = (owner: string) => `pageData_customer_bill-detail_${owner}`;
+
+// 采购总额口径（与客户列表/账单明细页一致）：优先按该客户账单明细行「商品总额」合计（含手工新增与负数退货行）；
+// 仅当该客户无任何账单行时回退按余额支付订单（排除待付款）统计
+const computePurchaseCents = (owner: string, targets: Set<string>): Map<string, number> => {
+  const per = new Map<string, number>();
+  const bills: any[] = readJson(billDetailKey(owner), []) || [];
+  bills.forEach(b => { const n = trimName(b?.customerName); if (n && targets.has(n)) per.set(n, (per.get(n) || 0) + toCents(b?.totalAmount)); });
+  const orders: any[] = readJson(ordersKey(owner), []) || [];
+  orders.forEach(o => { const n = trimName(o?.customerName); if (n && targets.has(n) && !per.has(n)) per.set(n, orderPurchaseCents(o)); });
+  return per;
+};
+
+// 单对象重算：指定客户的「采购总额」（遍历账单明细表一次；无账单行客户回退订单表）
 export const refreshCustomerPurchase = (owner: string, names: string[]) => {
   const targets = new Set(names.map(trimName).filter(Boolean));
   if (!targets.size) return;
   const summary = loadCustomerSummary(owner);
   targets.forEach(n => { ensureCus(summary, n).purchaseTotal = 0; });
-  const orders: any[] = readJson(ordersKey(owner), []) || [];
-  orders.forEach(o => { const n = trimName(o?.customerName); if (targets.has(n)) ensureCus(summary, n).purchaseTotal += orderPurchaseCents(o); });
+  computePurchaseCents(owner, targets).forEach((cents, n) => { ensureCus(summary, n).purchaseTotal += cents; });
   targets.forEach(n => { ensureCus(summary, n).updatedAt = nowIso(); });
   writeJson(customerSummaryKey(owner), summary);
 };
@@ -223,8 +235,12 @@ export const refreshCustomerReceived = (owner: string, names: string[], idNameMa
 export const ensureCustomerSummaryBuilt = (owner: string, idNameMap: Record<string, string>) => {
   if (localStorage.getItem(customerSummaryKey(owner)) !== null) return;
   const summary: SummaryMap<CustomerSummaryEntry> = {};
+  const names = new Set<string>();
+  const bills: any[] = readJson(billDetailKey(owner), []) || [];
+  bills.forEach(b => { const n = trimName(b?.customerName); if (n) names.add(n); });
   const orders: any[] = readJson(ordersKey(owner), []) || [];
-  orders.forEach(o => { ensureCus(summary, trimName(o?.customerName)).purchaseTotal += orderPurchaseCents(o); });
+  orders.forEach(o => { const n = trimName(o?.customerName); if (n) names.add(n); });
+  computePurchaseCents(owner, names).forEach((cents, n) => { ensureCus(summary, n).purchaseTotal += cents; });
   const recs: any[] = readJson(receiptsKey(owner), []) || [];
   recs.forEach(r => {
     const n = receiptOwnerName(r, idNameMap);
@@ -260,17 +276,17 @@ export const verifyCustomerSummary = (owner: string, names: string[], idNameMap:
   return fixed;
 };
 
-// 校验客户采购总额快照与订单表，不一致自动修复，返回修复名单（巡检用）
+// 校验客户采购总额快照与账单明细/订单表，不一致自动修复，返回修复名单（巡检用）
 export const verifyCustomerPurchase = (owner: string, names: string[]): string[] => {
   const summary = loadCustomerSummary(owner);
-  const orders: any[] = readJson(ordersKey(owner), []) || [];
   const fixed: string[] = [];
+  const targets = new Set(names.map(trimName).filter(Boolean));
+  const expected = computePurchaseCents(owner, targets);
   names.forEach(raw => {
     const n = trimName(raw);
     if (!n) return;
     const e = summary[n];
-    let total = 0;
-    orders.forEach(o => { if (trimName(o?.customerName) === n) total += orderPurchaseCents(o); });
+    const total = expected.get(n) || 0;
     if (!e || e.purchaseTotal !== total) { refreshCustomerPurchase(owner, [n]); fixed.push(n); }
   });
   return fixed;

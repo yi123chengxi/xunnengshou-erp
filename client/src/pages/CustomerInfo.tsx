@@ -942,8 +942,8 @@ const CustomerInfo: React.FC = () => {
       if (e.key?.includes('bill-detail') || e.key?.includes('order-manage')) {
         setDataRefreshKey(k => k + 1);
       }
-      // 跨标签页订单变更：一次性单遍历刷新全部客户采购总额快照（仅跨页签写事件触发，非每次渲染）
-      if (e.key?.includes('order-manage')) {
+      // 跨标签页订单/账单明细变更：一次性单遍历刷新全部客户采购总额快照（仅跨页签写事件触发，非每次渲染）
+      if (e.key?.includes('order-manage') || e.key?.includes('bill-detail')) {
         const names = Array.from(new Set([...Object.values(idNameMapRef.current), ...Object.keys(loadCustomerSummary(getDataOwner()))]));
         refreshCustomerPurchase(getDataOwner(), names);
         setCustSummary(loadCustomerSummary(getDataOwner()));
@@ -1010,6 +1010,17 @@ const CustomerInfo: React.FC = () => {
       window.removeEventListener('sync-data-updated', handleSyncOrUpdate);
     };
   }, [syncBoundPurchasers]);
+
+  // 同文档 keep-alive 实例不发 storage 事件：发货/账单重建派发 order-data-updated 时重算采购总额快照
+  useEffect(() => {
+    const handleOrderUpdated = () => {
+      const names = Array.from(new Set([...Object.values(idNameMapRef.current), ...Object.keys(loadCustomerSummary(getDataOwner()))]));
+      refreshCustomerPurchase(getDataOwner(), names);
+      setCustSummary(loadCustomerSummary(getDataOwner()));
+    };
+    window.addEventListener('order-data-updated', handleOrderUpdated);
+    return () => window.removeEventListener('order-data-updated', handleOrderUpdated);
+  }, []);
 
   // 快照维护：客户ID→名称映射 + 一次性迁移构建 + 快照加载；空闲分片巡检防漂移
   useEffect(() => {
