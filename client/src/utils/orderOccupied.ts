@@ -31,6 +31,10 @@ export const buildOrderOccupiedMap = (owner: string, excludeOrderIds?: string[])
 /** 把订单占用数回写商品列表 orderReserved 字段（经 dataStore 通道落库，内容未变化时不写盘） */
 export const syncOrderReserved = (owner: string): void => {
   try {
+    // 订单快照缺失（未加载/被清理）时禁止回写：空汇总会把占用字段全量清 0，
+    // 与实时汇总渲染交替出现“一会 0 一会占用数”的抖动
+    const rawOrders = localStorage.getItem(`pageData_sales_order-manage_${owner}`);
+    if (rawOrders === null) return;
     const map = buildOrderOccupiedMap(owner);
     const list = readProductListSync(owner);
     if (!Array.isArray(list) || list.length === 0) return;

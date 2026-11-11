@@ -4850,6 +4850,9 @@ const ModuleChildPage: React.FC = () => {
   // 防止旧内存数据整体覆盖导致新增记录被“自动删除”。
   const loadedIdsRef = React.useRef<Set<string>>(new Set());
   const lastKnownTsRef = React.useRef<number>(0);
+  // 订单键空写申报：仅显式删除（单删/批删）允许把订单存储写空，
+  // 防瞬时空内存态（未加载/异常重建）经自动持久化清空订单存储导致订单占用数抖动归 0
+  const allowEmptyOrdersPersistRef = React.useRef(false);
   React.useEffect(() => {
     const onSyncUpdated = () => setSyncVersion(v => v + 1);
     window.addEventListener('sync-data-updated', onSyncUpdated);
@@ -5498,6 +5501,9 @@ const ModuleChildPage: React.FC = () => {
       // 注意：延迟 1s，给 IndexedDB 异步恢复充足时间，避免误清空
       const timer = setTimeout(() => {
         if (dataSourceRef.current.length !== 0) return; // 加载后已有数据，跳过
+        // 订单键空写门禁：未申报的清空一律不落盘（订单存储被清=订单占用/账单派生全链路失真）
+        if (String(sharedDataKey).includes('sales_order-manage') && !allowEmptyOrdersPersistRef.current) return;
+        allowEmptyOrdersPersistRef.current = false;
         try {
           const cur = localStorage.getItem(sharedDataKey);
           if (cur && cur !== '[]') {
@@ -9241,7 +9247,11 @@ const ModuleChildPage: React.FC = () => {
     }
     setDataSource(prev => prev.filter(item => item.key !== record.key));
     // 订单管理：删除订单后同步订单占用数到商品列表
-    if (pageConfig?.title === '订单管理') syncOrderReserved(getDataOwner());
+    if (pageConfig?.title === '订单管理') {
+      // 申报空写：删空最后一条订单时允许存储落空
+      allowEmptyOrdersPersistRef.current = true;
+      syncOrderReserved(getDataOwner());
+    }
     // 账单明细：删除账单行同时墓碑化关联的存活对账记录（撤回语义），避免采购商平台残留孤儿在途对账
     if (pageConfig?.title === '账单明细') {
       try {
@@ -10386,7 +10396,11 @@ const ModuleChildPage: React.FC = () => {
             setDataSource(prev => prev.filter(item => !selectedRowKeys.includes(item.key)));
             setSelectedRowKeys([]);
             // 订单管理：批量删除后同步订单占用数到商品列表
-            if (pageConfig?.title === '订单管理') syncOrderReserved(getDataOwner());
+            if (pageConfig?.title === '订单管理') {
+              // 申报空写：批量删空时允许存储落空
+              allowEmptyOrdersPersistRef.current = true;
+              syncOrderReserved(getDataOwner());
+            }
             message.success('批量删除成功');
           },
         });
@@ -10608,6 +10622,8 @@ const handleBatchAttrsConfirm = () => {
     }
     // 产品列表：订单占用数（未发货订单数量总和），用于计算可配货库存
     const occupiedMap = isProductList ? buildOrderOccupiedMap(getDataOwner()) : {};
+    // 订单快照缺失时回退存储占用字段，不渲染 0（防“一会 0 一会占用数”抖动）
+    const ordersSnapshotMissing = isProductList ? localStorage.getItem(`pageData_sales_order-manage_${getDataOwner()}`) === null : false;
     // 生产订单：物料清单/加工清单生成状态——按 poId 反查采购申请单/加工订单存储（poListGenVersion 变化时重算）
     const poGenCgsqIds = new Set<string>();
     const poGenJgIds = new Set<string>();
@@ -10653,7 +10669,8 @@ const handleBatchAttrsConfirm = () => {
       // 产品列表：可配货库存 = 实际库存数 - 订单占用数（实时计算）
       if (isProductList && col.dataIndex === 'allocatableStock') {
         baseCol.render = (_: any, record: any) => {
-          const avail = (Number(record.actualStock) || 0) - (occupiedMap[record.productCode] || 0);
+          const occ = ordersSnapshotMissing ? (Number(record.orderReserved) || 0) : (occupiedMap[record.productCode] || 0);
+          const avail = (Number(record.actualStock) || 0) - occ;
           return <Text strong style={{ color: avail > 0 ? '#52c41a' : '#ff4d4f' }}>{avail}</Text>;
         };
       }
@@ -10669,7 +10686,7 @@ const handleBatchAttrsConfirm = () => {
       // 产品列表：订单占用数单元格可点击查看订单占用明细（值取未发货订单实时汇总）
       if (isProductList && col.dataIndex === 'orderReserved') {
         baseCol.render = (_: any, record: any) => {
-          const occ = occupiedMap[record.productCode] || 0;
+          const occ = ordersSnapshotMissing ? (Number(record.orderReserved) || 0) : (occupiedMap[record.productCode] || 0);
           return (
             <a onClick={(e) => { e.stopPropagation(); setOrderReservedProduct(record); setOrderReservedVisible(true); }}
               style={{ color: occ > 0 ? '#fa8c16' : PRIMARY, fontWeight: 600, cursor: 'pointer', display: 'block', width: '100%', minHeight: 22 }}>
