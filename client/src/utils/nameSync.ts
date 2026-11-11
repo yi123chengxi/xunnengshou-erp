@@ -46,7 +46,7 @@ const SWEEP_PREFIXES = [
   'recon_db_',
 ];
 const SWEEP_EXACT = ['recon_records'];
-
+    
 /**
  * 解析某公司名称/账号的最新公司名称（注册账号表为唯一真源，其次按改名链归一取链尾）。
  * 用于列表展示：即使本地镜像/账单快照仍是旧名，也能显示改名后的公司全称。
@@ -171,14 +171,16 @@ export const repairCounterpartyNames = (): string[] => {
           if (u && u.username !== keyOwner) { nr.supplierUsername = u.username; rc = true; }
         }
         // 合作镜像卡片/客户档案：按关联账号刷新公司名称与联系信息等信息
-        const su = nr.supplierUsername ? u2c.get(String(nr.supplierUsername)) : null;
+        // 人工编辑保护（_supEdited/_custEdited）：账单行被人工改过供应商/客户后，
+        // 不得按残留凭据把名称改写回旧账号公司名（否则编辑刷新后回退）
+        const su = (!nr._supEdited && nr.supplierUsername) ? u2c.get(String(nr.supplierUsername)) : null;
         if (su) {
           if (su.companyName && nr.supplierName !== su.companyName) { nr.supplierName = su.companyName; rc = true; }
           if (su.contactPerson && nr.contactPerson !== su.contactPerson) { nr.contactPerson = su.contactPerson; rc = true; }
           if (su.phone && nr.contactPhone !== su.phone) { nr.contactPhone = su.phone; rc = true; }
           if (su.companyNo && nr.supplierNo !== su.companyNo) { nr.supplierNo = su.companyNo; rc = true; }
         }
-        const pu = nr.purchaserUsername ? u2c.get(String(nr.purchaserUsername)) : null;
+        const pu = (!nr._purEdited && nr.purchaserUsername) ? u2c.get(String(nr.purchaserUsername)) : null;
         if (pu) {
           if (pu.companyName && nr.purchaserName !== pu.companyName) { nr.purchaserName = pu.companyName; rc = true; }
           if (pu.companyName && key.startsWith('customers_') && nr.name !== pu.companyName) { nr.name = pu.companyName; rc = true; }
@@ -193,8 +195,8 @@ export const repairCounterpartyNames = (): string[] => {
           }
         }
         if (su && su.companyName && nr.targetSupplierName && nr.targetSupplierName !== su.companyName) { nr.targetSupplierName = su.companyName; rc = true; }
-        // 客户名称按 customerUsername（公司编号/账号凭证）刷新：改名后账单快照与客户档案不再分叉
-        const cu = nr.customerUsername ? u2c.get(String(nr.customerUsername)) : null;
+        // 客户名称按 customerUsername（公司编号/账号凭证）刷新：改名后账单快照与客户档案不再分叉；人工改过客户的行跳过
+        const cu = (!nr._custEdited && nr.customerUsername) ? u2c.get(String(nr.customerUsername)) : null;
         if (cu && cu.companyName && nr.customerName !== cu.companyName) { nr.customerName = cu.companyName; rc = true; }
         // 对账记录：双方名称与 counterparty 按凭证刷新（counterparty 语义=发起方的对手方）
         if (key === 'recon_records' || key.indexOf('recon_db_') === 0) {

@@ -925,11 +925,37 @@ const PurchaserBillPage: React.FC = () => {
       items: validItems, totalQty: eTotalQty, totalAmount: eTotalAmount,
     };
     const diffDetail = oldRec ? diffBillRecords(oldRec, newFields, PURCHASER_BILL_FIELD_MAP, ['key', 'images', 'purchaserImages']) : '';
+    // 换供应商时重解析凭据：残留旧 supplierUsername 会被名称自愈（repairCounterpartyNames）
+    // 按凭据把供应商名改写回旧账号公司名，表现为“编辑供应商刷新后回退”
+    const supChanged = String(oldRec?.supplier || '').trim() !== String(eSupplier || '').trim();
+    let supUsername = (oldRec as any)?.supplierUsername || '';
+    let supNo = (oldRec as any)?.supplierNo || '';
+    if (supChanged) {
+      supUsername = ''; supNo = '';
+      try {
+        const users: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+        const nm = String(eSupplier || '').trim();
+        const u = users.find((x: any) => [x?.companyName, x?.companyShortName, x?.companyNo].some(v => String(v || '').trim() === nm));
+        if (u) { supUsername = u.username || ''; supNo = u.companyNo || ''; }
+        else {
+          // 已合作供应商镜像卡片：按名称反查卡片上的账号凭据
+          const mirrors: any[] = JSON.parse(localStorage.getItem(supplierStorageKey) || '[]');
+          const m = Array.isArray(mirrors) ? mirrors.find((x: any) => String(x?.supplierName || '').trim() === nm && x?.supplierUsername) : null;
+          if (m) {
+            supUsername = String(m.supplierUsername);
+            const mu = users.find((x: any) => x?.username === supUsername);
+            supNo = m.supplierNo || mu?.companyNo || '';
+          }
+        }
+      } catch { /* ignore */ }
+    }
     const updated = all.map(b => b.key === editKey ? {
       ...b,
       outboundNo: eOutboundNo.trim(), prefix: ePrefix, supplier: eSupplier,
       date: eDate ? eDate.format('YYYY-MM-DD') : b.date,
       items: validItems, totalQty: eTotalQty, totalAmount: eTotalAmount,
+      // 换供应商：凭据重解析 + 人工编辑标记（名称自愈跳过该行供应商名改写）
+      ...(supChanged ? { supplierUsername: supUsername, supplierNo: supNo, _supEdited: true } : {}),
       // 对账相关字段保留原值，不在编辑弹窗中修改
       // reconcileResult / diffNote / supplierReconciler / purchaserReconciler 保持原值
       images: editImage ? [editImage] : [], purchaserImages: editImage ? [editImage] : [],
