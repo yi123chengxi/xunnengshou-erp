@@ -277,6 +277,13 @@ export const loadBoundPurchasersFromStorage = (): BoundPurchaser[] => {
       if (Array.isArray(parsed)) bound = parsed.filter(b => !LEGACY_DEMO_BOUND_IDS.has(b.id) && !LEGACY_DEMO_BOUND_NAMES.has(b.purchaserName));
     }
   } catch { /* ignore */ }
+  // 终止态单调守卫快照：解除合作不可逆，防派生链路（镜像/申请数据在他端缺失或滞后）
+  // 把已终止/解除中降级回已合作（主/子账号与跨浏览器状态分叉的根因之一）
+  const storedTermStatus = new Map<string, string>();
+  bound.forEach((b: any) => {
+    const k = b?.purchaserUsername || b?.purchaserName || '';
+    if (k && (b.status === 'terminated' || b.status === 'terminating')) storedTermStatus.set(k, b.status);
+  });
   // 兜底合并：已批准的合作申请（防止个别批准路径未回写 boundPurchasers 导致客户缺失）
   try {
     const owner = getDataOwner();
@@ -448,6 +455,15 @@ export const loadBoundPurchasersFromStorage = (): BoundPurchaser[] => {
       } catch { /* ignore */ }
     }
   } catch { /* ignore */ }
+  // 终止态单调守卫：存储态已终止/解除中的记录不得被派生链路降级回已合作
+  if (storedTermStatus.size > 0) {
+    bound = bound.map((b: any) => {
+      const k = b?.purchaserUsername || b?.purchaserName || '';
+      const st = storedTermStatus.get(k);
+      if (st && b.status === 'approved') return { ...b, status: st as BoundPurchaser['status'] };
+      return b;
+    });
+  }
   if (bound.length > 0) return bound;
   return initialBoundPurchasers; // 无真实数据时用 demo
 };

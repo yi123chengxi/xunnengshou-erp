@@ -274,18 +274,25 @@ const InventoryCheckPage: React.FC = () => {
     message.success(`已填充 ${formItems.length} 条盘点数量（系统库存 + ${inc}）`);
   }, [formItems, scanDefaultQty]);
 
-  // 确认新增
+  // 确认新增：盘点单创建即生效——盘点数量覆盖商品列表实际库存（用户契约：库存盘点=实际库存真值源）
   const handleConfirmAdd = useCallback(() => {
     if (formItems.length === 0) { message.warning('请至少添加一项商品'); return; }
     const docNo = generateDocNo('PD');
     const now = new Date().toLocaleString('zh-CN');
+    const owner = getDataOwner();
     const rec: CheckRecord = {
       key: docNo, docNo, items: formItems.map(i => ({ ...i })),
-      operator: formOperator, createTime: now, status: '待生效', confirmTime: '', remark: formRemark,
+      operator: formOperator, createTime: now, status: '已生效', confirmTime: now, remark: formRemark,
     };
+    formItems.forEach(i => {
+      updateProductStock(i.productCode, i.checkQty, {
+        type: '盘点', changeQty: i.diff, beforeStock: i.systemStock,
+        relatedDocNo: docNo, operator: formOperator, remark: i.remark,
+      }, owner);
+    });
     saveData([rec, ...dataSource]);
     setAddVisible(false); resetForm();
-    message.success(`盘点单 ${docNo} 已创建（待生效）`);
+    message.success(`盘点单 ${docNo} 已创建并生效，实际库存已按盘点数量覆盖更新`);
   }, [formItems, formOperator, formRemark, dataSource, saveData]);
 
   // 确认生效

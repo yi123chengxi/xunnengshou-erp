@@ -2784,12 +2784,19 @@ const ModuleChildPage: React.FC = () => {
     try { orders = JSON.parse(localStorage.getItem(`pageData_sales_order-manage_${owner}`) || '[]'); } catch { /* ignore */ }
     if (!Array.isArray(orders)) orders = [];
     const existMap = new Map(existing.map(r => [r.id, r]));
+    // 发货凭证：已有出库单的订单视同已发货（部分发货路径仅生成出库单未改状态），
+    // 保证余额支付订单发货后账单明细必然生成账单行
+    const outboundOrderIds = new Set<string>();
+    try {
+      const so: any[] = JSON.parse(localStorage.getItem(`sales_outbound_${owner}`) || '[]');
+      (Array.isArray(so) ? so : []).forEach((s: any) => { if (s?.orderId) outboundOrderIds.add(String(s.orderId)); });
+    } catch { /* ignore */ }
     // 存量行全量保留（防擦除不变量）：凡不在订单集合中的已有行（手工新增/退货登记/历史行）一律保留在列表顶部。
     // 不能只保留 _manual 行——否则订单键暂缺（未拉取/owner 不一致）时重建会把订单派生行与历史行全部丢弃并上传擦除。
     const orderIds = new Set(orders.map((o: any) => o.id));
     const preservedRows = existing.filter((r: any) => r && r.id && !orderIds.has(r.id));
     return [...preservedRows, ...orders
-      .filter((o: any) => o && o.id && (o.orderStatus === '已发货' || o.orderStatus === '已完成') && (o.payMethod === '余额支付' || String(o.orderTags || '').includes('余额支付') || String(o.orderTag || '').includes('余额支付')))
+      .filter((o: any) => o && o.id && (o.orderStatus === '已发货' || o.orderStatus === '已完成' || outboundOrderIds.has(String(o.id))) && (o.payMethod === '余额支付' || String(o.orderTags || '').includes('余额支付') || String(o.orderTag || '').includes('余额支付')))
       .sort((a: any, b: any) => String(b.createTime || '').localeCompare(String(a.createTime || '')))
       .map((o: any) => {
         const prev = existMap.get(o.id);
@@ -9138,6 +9145,8 @@ const ModuleChildPage: React.FC = () => {
               appendOrderLog(selectedRecord.id, '订单发货', `编辑发货：生成出库单 ${docNo}，订单状态变更为已发货`);
             }
           } catch { /* ignore */ }
+          // 编辑路径发货后同步重建账单明细（批量发货 handleShipNow 同口径），余额支付订单立即生成账单
+          try { refreshBillDetailStorage(getDataOwner()); } catch { /* ignore */ }
         }
         // 余额支付自动确认收款日志
         if (values.payMethod === '余额支付' && oldStatus === '待付款') {
