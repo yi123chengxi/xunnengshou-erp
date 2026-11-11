@@ -4644,9 +4644,39 @@ const ModuleChildPage: React.FC = () => {
         image: billAddImage,
       };
       const diffDetail = oldRec ? diffBillRecords(oldRec, newRec, SUPPLIER_BILL_FIELD_MAP, ['paidAmount', 'receivableAmount', 'reconResult', 'diffDesc', 'supplierReconPerson', 'purchaserReconPerson']) : '';
+      // 换客户时必须重解析对手方凭据：凭据残留旧客户会被名称自愈（repairCounterpartyNames）
+      // 按 customerUsername 把客户名改写回旧账号公司名，表现为“编辑客户名称刷新/查询后回退”
+      const oldCustName = String(oldRec?.customerName || '').trim();
+      const custChanged = !!oldRec && oldCustName !== String(billAddCustomer || '').trim();
+      let custUsername = oldRec?.customerUsername || '';
+      let custNo = oldRec?.customerNo || '';
+      if (custChanged) {
+        custUsername = ''; custNo = '';
+        try {
+          const users: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+          const nm = String(billAddCustomer || '').trim();
+          const u = users.find((x: any) => [x?.companyName, x?.companyShortName, x?.companyNo].some(v => String(v || '').trim() === nm));
+          if (u) { custUsername = u.username || ''; custNo = u.companyNo || ''; }
+          else {
+            // 客户档案/绑定采购商候选：按绑定关系反查采购商账号凭据
+            const bound: any[] = JSON.parse(localStorage.getItem(`boundPurchasers_${getDataOwner()}`) || '[]');
+            const bp = Array.isArray(bound) ? bound.find((b: any) => String(b?.purchaserName || '').trim() === nm) : null;
+            if (bp?.purchaserUsername) {
+              custUsername = String(bp.purchaserUsername);
+              const bu = users.find((x: any) => x?.username === custUsername);
+              custNo = bu?.companyNo || '';
+            }
+          }
+        } catch { /* ignore */ }
+      }
+      // 凭据+人工编辑标记必须同时进内存与存储：自动持久化 effect 会用内存内容整体回写存储，
+      // 若仅存储有标记会被内存副本抹掉，名称自愈随即把客户名改回旧客户
+      const credPatch: Record<string, any> = { customerUsername: custUsername, customerNo: custNo };
+      if (custChanged) credPatch._custEdited = true;
       setDataSource(prev => prev.map(r => (r.key === billAddEditKey ? {
         ...r,
         ...newRec,
+        ...credPatch,
         receivableAmount: totalAmount - (Number(r.paidAmount) || 0),
         billLog: diffDetail ? appendBillLogEntry(r.billLog, '编辑账单', undefined, diffDetail) : r.billLog,
       } : r)));
@@ -4659,38 +4689,10 @@ const ModuleChildPage: React.FC = () => {
         if (Array.isArray(data)) {
           const idx = data.findIndex((r: any) => r.key === billAddEditKey);
           if (idx >= 0) {
-            // 换客户时必须重解析对手方凭据：凭据残留旧客户会被名称自愈（repairCounterpartyNames）
-            // 按 customerUsername 把客户名改写回旧账号公司名，表现为“编辑客户名称刷新后回退”
-            const oldCustName = String(data[idx].customerName || '').trim();
-            const custChanged = oldCustName !== String(billAddCustomer || '').trim();
-            let custUsername = data[idx].customerUsername || '';
-            let custNo = data[idx].customerNo || '';
-            if (custChanged) {
-              custUsername = ''; custNo = '';
-              try {
-                const users: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
-                const nm = String(billAddCustomer || '').trim();
-                const u = users.find((x: any) => [x?.companyName, x?.companyShortName, x?.companyNo].some(v => String(v || '').trim() === nm));
-                if (u) { custUsername = u.username || ''; custNo = u.companyNo || ''; }
-                else {
-                  // 客户档案/绑定采购商候选：按绑定关系反查采购商账号凭据
-                  const bound: any[] = JSON.parse(localStorage.getItem(`boundPurchasers_${getDataOwner()}`) || '[]');
-                  const bp = Array.isArray(bound) ? bound.find((b: any) => String(b?.purchaserName || '').trim() === nm) : null;
-                  if (bp?.purchaserUsername) {
-                    custUsername = String(bp.purchaserUsername);
-                    const bu = users.find((x: any) => x?.username === custUsername);
-                    custNo = bu?.companyNo || '';
-                  }
-                }
-              } catch { /* ignore */ }
-            }
             data[idx] = {
               ...data[idx],
               ...newRec,
-              customerUsername: custUsername,
-              customerNo: custNo,
-              // 人工改过客户：名称自愈跳过该行的客户名改写，杜绝同步轮询把编辑结果回滚
-              ...(custChanged ? { _custEdited: true } : {}),
+              ...credPatch,
               receivableAmount: totalAmount - (Number(data[idx].paidAmount) || 0),
               billLog: diffDetail ? appendBillLogEntry(data[idx].billLog, '编辑账单', undefined, diffDetail) : data[idx].billLog,
             };
