@@ -936,6 +936,7 @@ const PurchaserBillPage: React.FC = () => {
       ...(diffDetail ? { billLog: appendBillLogEntry((b as any).billLog, '编辑账单', undefined, diffDetail) } : {}),
     } : b);
     localStorage.setItem(storageKey, JSON.stringify(updated));
+    saveDataset(storageKey, JSON.stringify(updated)); // 编辑结果同步上传（缺此调用时跨浏览器端刷新后读回旧值）
     // 供应商采购金额快照：编辑可能改供应商/金额，新旧供应商均单对象重算
     refreshSupplierPurchase(getDataOwner(), Array.from(new Set([oldRec?.supplier, eSupplier].filter((s): s is string => !!s))));
     reload(); setEditVisible(false); setHighlightCodes(new Set()); message.success('采购账单已更新');

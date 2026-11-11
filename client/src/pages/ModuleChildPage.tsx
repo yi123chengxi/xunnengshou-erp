@@ -114,6 +114,7 @@ import { appendBillLogEntry, readBillLog, billLogColor, resolveOperatorName, dif
 import { pullAllDatasets, flushDatasetUploadAsync, ensureDatasetFromServer, reloadAfterPull, appendRowsToRemoteKey } from '../utils/serverSync';
 import { PRESET_PRINT_TEMPLATES, seedPresetPrintTemplates } from '../config/presetPrintTemplates';
 import { refreshCustomerPurchase } from '../utils/paySummary';
+import { resolveLatestCompanyName } from '../utils/nameSync';
 import { loadAllCustomersFromStorage } from './CustomerInfo';
 import { loadRoleRecords, loadRoleAll, upsertRecords } from '../utils/reconStore';
 import { resolveCustomerPrice, resolveCustomerRef } from '../utils/priceStrategy';
@@ -2789,6 +2790,13 @@ const ModuleChildPage: React.FC = () => {
       .sort((a: any, b: any) => String(b.createTime || '').localeCompare(String(a.createTime || '')))
       .map((o: any) => {
         const prev = existMap.get(o.id);
+        // 客户编辑保护：重建时保留编辑弹窗人工改过的客户（按改名链折叠后仍不同源才视为人工改客户），
+        // 并携带对手方凭据/辅助单号等回填字段，避免刷新后客户名称与匹配凭据丢失
+        const orderName = String(o.customerName || '');
+        const prevName = String(prev?.customerName || '');
+        const editedCust = !!prev && !!prevName && prevName !== orderName &&
+          resolveLatestCompanyName(prevName, '') !== resolveLatestCompanyName(orderName, '');
+        const custName = editedCust ? prevName : (orderName || prevName);
         let items: any[] = [];
         try { if (o.orderItems) items = JSON.parse(o.orderItems); } catch { /* ignore */ }
         // 兼容历史推送订单：orderItems 中单价字段名为 unitPrice，统一映射为 price
@@ -2801,7 +2809,10 @@ const ModuleChildPage: React.FC = () => {
           key: prev?.key || `bill-${o.id}`,
           id: o.id,
           outboundNo: o.outboundNo || prev?.outboundNo || (digits ? `CK-${digits}` : ''),
-          customerName: o.customerName || '',
+          customerName: custName,
+          customerUsername: prev?.customerUsername || '',
+          customerNo: prev?.customerNo || '',
+          auxDocNo: prev?.auxDocNo || '',
           outboundDate: prev?.outboundDate || (o.payTime ? String(o.payTime).slice(0, 10) : (o.createTime ? String(o.createTime).slice(0, 10) : '')),
           createdAt: prev?.createdAt || o.payTime || o.createTime || '',
           totalCount: bookedByPurchaser ? (Number(prev.totalCount) || rowItems.reduce((s: number, it: any) => s + (Number(it.quantity) || 0), 0)) : (Number(o.palletCount) || rowItems.reduce((s: number, it: any) => s + (Number(it.quantity) || 0), 0)),
@@ -4637,22 +4648,37 @@ const ModuleChildPage: React.FC = () => {
         receivableAmount: totalAmount - (Number(r.paidAmount) || 0),
         billLog: diffDetail ? appendBillLogEntry(r.billLog, '编辑账单', undefined, diffDetail) : r.billLog,
       } : r)));
-      // 同步日志到 localStorage
-      if (diffDetail) {
-        try {
-          const owner = getDataOwner();
-          const storageKey = `pageData_customer_bill-detail_${owner}`;
-          const saved = localStorage.getItem(storageKey);
-          if (saved) {
-            const data = JSON.parse(saved);
-            const idx = data.findIndex((r: any) => r.key === billAddEditKey);
-            if (idx >= 0) {
-              data[idx].billLog = appendBillLogEntry(data[idx].billLog, '编辑账单', undefined, diffDetail);
-              localStorage.setItem(storageKey, JSON.stringify(data));
-            }
+      // 编辑结果全量落库（此前仅写 billLog，编辑字段只改内存→刷新后从存储读回旧值，客户名称等回退）
+      try {
+        const owner = getDataOwner();
+        const storageKey = `pageData_customer_bill-detail_${owner}`;
+        const saved = localStorage.getItem(storageKey);
+        const data: any[] = saved ? JSON.parse(saved) : [];
+        if (Array.isArray(data)) {
+          const idx = data.findIndex((r: any) => r.key === billAddEditKey);
+          if (idx >= 0) {
+            // 换客户时回填对手方凭据（账号/公司编号），供后续对账匹配/回写使用
+            let custUsername = data[idx].customerUsername || '';
+            let custNo = data[idx].customerNo || '';
+            try {
+              const users: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+              const u = users.find((x: any) => String(x?.companyName || '').trim() === billAddCustomer);
+              if (u) { custUsername = u.username || custUsername; custNo = u.companyNo || custNo; }
+            } catch { /* ignore */ }
+            data[idx] = {
+              ...data[idx],
+              ...newRec,
+              customerUsername: custUsername,
+              customerNo: custNo,
+              receivableAmount: totalAmount - (Number(data[idx].paidAmount) || 0),
+              billLog: diffDetail ? appendBillLogEntry(data[idx].billLog, '编辑账单', undefined, diffDetail) : data[idx].billLog,
+            };
+            const json = JSON.stringify(data);
+            localStorage.setItem(storageKey, json);
+            saveDataset(storageKey, json);
           }
-        } catch { /* ignore */ }
-      }
+        }
+      } catch { /* ignore */ }
       setBillAddVisible(false);
       setBillAddCheckedRows(new Set()); setBillAddBatchQty(null); setBillAddBatchPrice(null);
       message.success(`单据 ${no} 已保存修改`);

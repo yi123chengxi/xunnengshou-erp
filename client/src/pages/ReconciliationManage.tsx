@@ -342,6 +342,8 @@ const ReconciliationManage: React.FC = () => {
           // 且名称快照易漂移，叠加校验会匹配不上导致回写落空、供应商行停留待对账
           let idx = -1;
           if (r.orderNo) idx = rows.findIndex(x => x.id === r.orderNo && (isReturn || cpOkRow(x)));
+          // 凭证级兜底：orderNo 即供应商行 id，名称/凭据漂移不得阻断终态回写（否则对方行停留在途态被自愈降级）
+          if (idx < 0 && r.orderNo) idx = rows.findIndex(x => x.id === r.orderNo);
           if (idx < 0 && r.docNo) {
             const hits = rows.map((x, i) => ({ x, i })).filter(e => !!e.x.outboundNo && String(e.x.outboundNo).trim() === String(r.docNo || '').trim() && (isReturn || cpOkRow(e.x)));
             if (hits.length === 1) idx = hits[0].i;
@@ -1336,8 +1338,18 @@ const ReconciliationManage: React.FC = () => {
     if (isPurchaser) {
       try { bills = JSON.parse(localStorage.getItem('purchaser_bills_' + getOwner()) || '[]'); } catch { /* ignore */ }
       if (!Array.isArray(bills)) bills = [];
-      // 已对账完成的账单（已对账/按供方入账）不显示在手动关联窗口中
-      bills = bills.filter(b => !['已对账', '按供方入账', '已发起对账'].includes(String(b.reconcileResult || '')));
+      // 手动关联候选限制：仅对账结果为空/待对账的账单可关联（在途/终态单不得被他单占用）；
+      // 本记录已关联/发起源单保留可选（重新关联场景）；已被其他存活记录关联的单排除
+      const selfLink = String(record.matchedBillKey || '');
+      const otherLinked = new Set<string>();
+      dataSource.forEach((x: any) => { if (!x || x.key === record.key || x.delisted) return; const t = String(x.matchedBillKey || ''); if (t) otherLinked.add(t); });
+      bills = bills.filter((b: any) => {
+        const id = String(b.key || '');
+        if (id && id === selfLink) return true;
+        if (otherLinked.has(id)) return false;
+        const res = String(b.reconcileResult || '').trim();
+        return res === '' || res === '待对账';
+      });
       // 对方校验：仅显示供应商与本对账记录一致的采购账单，避免手动关联到其它供应商的账单
       // 放宽口径：凭证（supplierUsername）优先 + 名称含改名链归一，避免改名后正确账单被过滤掉无法关联
       const cpSupplier = String(record.supplierName || (record.initiator === 'purchaser' ? record.counterparty : '') || '').trim();
@@ -1348,8 +1360,17 @@ const ReconciliationManage: React.FC = () => {
     } else {
       try { bills = JSON.parse(localStorage.getItem(`pageData_customer_bill-detail_${getOwner()}`) || '[]'); } catch { /* ignore */ }
       if (!Array.isArray(bills)) bills = [];
-      // 仅显示未完成对账的供应商账单
-      bills = bills.filter(b => !['对账完成', '按采方入账'].includes(String(b.reconResult || '')));
+      // 手动关联候选限制：仅对账结果为空/待对账的供应商账单行可关联；本记录发起源行(orderNo)保留可选；被他单占用行排除
+      const selfLink = String(record.orderNo || '');
+      const otherLinked = new Set<string>();
+      dataSource.forEach((x: any) => { if (!x || x.key === record.key || x.delisted) return; const t = String(x.orderNo || ''); if (t) otherLinked.add(t); });
+      bills = bills.filter((b: any) => {
+        const id = String(b.id || '');
+        if (id && id === selfLink) return true;
+        if (otherLinked.has(id)) return false;
+        const res = String(b.reconResult || '').trim();
+        return res === '' || res === '待对账';
+      });
       // 对方校验：仅显示采购商与本对账记录一致的供应商账单明细，避免手动关联到其它采购商的账单
       // 放宽口径：凭证（customerUsername）优先 + 名称含改名链归一，避免改名后正确账单被过滤掉无法关联
       const cpCustomer = String(record.customerName || '').trim();
@@ -1364,7 +1385,7 @@ const ReconciliationManage: React.FC = () => {
     setLinkPick(record.matchedBillKey || record.orderNo || '');
     setLinkRecord(record);
     setLinkVisible(true);
-  }, [getOwner, isPurchaser, latestNameOf]);
+  }, [getOwner, isPurchaser, latestNameOf, dataSource]);
 
   // 手动关联弹窗：按字段搜索过滤（点击查询后生效）
   const linkQtyOf = (b: any) => Number(b.totalQty) || (Array.isArray(b.items) ? b.items.reduce((s: number, it: any) => s + (Number(it.quantity) || 0), 0) : 0);

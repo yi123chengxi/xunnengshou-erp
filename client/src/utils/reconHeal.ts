@@ -318,6 +318,9 @@ export function healReconTerminalLinks(): boolean {
       d.rows = d.rows.map((row: any) => {
         if (String(row?.reconResult || '') !== '已发起对账') return row;
         if (liveOfRow(row) || !tombOfRowAny(row)) return row;
+        // 完成证据优先：本行存在完成墓碑时由 1.5 回写终态，此处不得先降级为待对账（
+        // 否则对方端自动对账完成后，本端行会被误还原为待对账）
+        if (completionTombOfRow(row)) return row;
         ch = true;
         return {
           ...row,
@@ -342,6 +345,8 @@ export function healReconTerminalLinks(): boolean {
         const cur = String(b?.reconcileResult || '');
         if (!['已发起对账', '一致', '不一致'].includes(cur)) return b;
         if (liveOfBill(b) || !tombOfBillAny(b)) return b;
+        // 完成证据优先：存在完成墓碑的账单不降级（终态由终态账单/墓碑链路维护）
+        if (tombs.some((t: any) => isCompletionTomb(t) && ((t.matchedBillKey && t.matchedBillKey === b.key) || (t.orderNo && t.orderNo === b.key) || (!!t.docNo && !!b.outboundNo && String(t.docNo).trim() === String(b.outboundNo).trim())))) return b;
         ch = true;
         return {
           ...b,
