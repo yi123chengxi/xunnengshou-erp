@@ -168,6 +168,8 @@ export const postInstallmentEffects = (opts: PostInstallmentOpts): { ok: boolean
       });
       writeJson(rk, list);
       incrementCustomerReceived(owner, counterparty, amt);
+      // 同文档广播：保活的客户列表页据此重载收款台账（否则已收货款明细弹窗空白，需刷新浏览器）
+      try { window.dispatchEvent(new CustomEvent('customer-receipts-updated', { detail: { owner, key: rk } })); } catch { /* ignore */ }
     }
   } else {
     const res = record.account

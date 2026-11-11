@@ -807,6 +807,11 @@ const CustomerInfo: React.FC = () => {
   const [customerReceipts, setCustomerReceipts] = useState<any[]>(() => {
     try { return JSON.parse(localStorage.getItem('customerReceipts_' + getDataOwner()) || '[]'); } catch { return []; }
   });
+  // 从落盘重载收款台账：保活的收/付申请页收款确认后写台账但同文档不发 storage 事件，
+  // 明细弹窗读本 state，不重载则停留挂载时旧值（弹窗空白），刷新浏览器后才可见
+  const reloadCustomerReceipts = useCallback(() => {
+    try { setCustomerReceipts(JSON.parse(localStorage.getItem('customerReceipts_' + getDataOwner()) || '[]')); } catch { /* ignore */ }
+  }, [getDataOwner]);
   // 客户对账单：生成历史与查看弹窗
   const [stmtList, setStmtList] = useState<CustomerStatement[]>(() => {
     try { const l = JSON.parse(localStorage.getItem('customer_statements_' + getDataOwner()) || '[]'); return Array.isArray(l) ? l : []; } catch { return []; }
@@ -948,10 +953,11 @@ const CustomerInfo: React.FC = () => {
         refreshCustomerPurchase(getDataOwner(), names);
         setCustSummary(loadCustomerSummary(getDataOwner()));
       }
-      // 收款台账/快照跨页签变更：重载快照
+      // 收款台账/快照跨页签变更：重载快照与台账 state
       if (e.key?.includes('customerReceipts_') || e.key?.includes('customer_pay_summary_')) {
         setCustSummary(loadCustomerSummary(getDataOwner()));
       }
+      if (e.key?.includes('customerReceipts_')) reloadCustomerReceipts();
       // 信用额度调整跨页签变更：重载调整记录
       if (e.key?.startsWith('credit_adjustments_')) {
         setCreditAdjustments(loadCreditAdjustments());
@@ -982,7 +988,7 @@ const CustomerInfo: React.FC = () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('bound-purchasers-changed', handleBoundChange);
     };
-  }, [syncBoundPurchasers]);
+  }, [syncBoundPurchasers, reloadCustomerReceipts]);
 
   // 监听自定义事件：当在绑定管理页面确认解绑后，自动刷新客户列表
   useEffect(() => {
@@ -993,6 +999,8 @@ const CustomerInfo: React.FC = () => {
     // 监听服务器同步和订单数据变更，触发采购总额重新计算
     const handleSyncOrUpdate = () => {
       setDataRefreshKey(k => k + 1);
+      // 服务端 pull 落地后收款台账可能已更新：同步重载台账 state（否则明细弹窗空白）
+      reloadCustomerReceipts();
       // 从服务端合并额度调整记录
       const key = getCreditAdjustKey();
       mergeDatasetFromServer(key).then((mergedJson) => {
@@ -1009,7 +1017,21 @@ const CustomerInfo: React.FC = () => {
       window.removeEventListener('supplier-unbind-success', handleUnbindSuccess);
       window.removeEventListener('sync-data-updated', handleSyncOrUpdate);
     };
-  }, [syncBoundPurchasers]);
+  }, [syncBoundPurchasers, reloadCustomerReceipts]);
+
+  // 收款确认同文档广播（收/付申请确认/订单分期入账）：重载台账 state 与已收货款快照
+  useEffect(() => {
+    const handleReceiptsUpdated = () => {
+      reloadCustomerReceipts();
+      setCustSummary(loadCustomerSummary(getDataOwner()));
+    };
+    window.addEventListener('customer-receipts-updated', handleReceiptsUpdated);
+    return () => window.removeEventListener('customer-receipts-updated', handleReceiptsUpdated);
+  }, [reloadCustomerReceipts, getDataOwner]);
+  // 明细弹窗打开即从落盘重载：兜底未派发事件的写入点，杜绝空白弹窗
+  useEffect(() => {
+    if (receiptDetailVisible) reloadCustomerReceipts();
+  }, [receiptDetailVisible, reloadCustomerReceipts]);
 
   // 同文档 keep-alive 实例不发 storage 事件：发货/账单重建派发 order-data-updated 时重算采购总额快照
   useEffect(() => {
