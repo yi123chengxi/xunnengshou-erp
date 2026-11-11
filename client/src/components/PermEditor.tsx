@@ -28,6 +28,9 @@ interface Props {
    * 取代原“独立权限配置”区域（角色预设基础上额外追加，仅对该账号生效） */
   pageChecks?: string[];
   onPageChecksChange?: (next: string[]) => void;
+  /** 分组权限模式：左侧每个菜单前显示复选框，直接映射三态——
+   * 勾选=allow（组内成员拥有该页面权限）、取消勾选=deny（隐藏该页面）；未操作=继承（默认显示勾选） */
+  menuCheckTri?: boolean;
 }
 
 const TriRadio: React.FC<{ value?: PermTri; onChange: (v: PermTri) => void }> = ({ value, onChange }) => (
@@ -45,7 +48,7 @@ const TriRadio: React.FC<{ value?: PermTri; onChange: (v: PermTri) => void }> = 
   />
 );
 
-const PermEditor: React.FC<Props> = ({ scopes, value, onChange, pageChecks, onPageChecksChange }) => {
+const PermEditor: React.FC<Props> = ({ scopes, value, onChange, pageChecks, onPageChecksChange, menuCheckTri }) => {
   const [search, setSearch] = useState('');
   const allMenuKeys = useMemo(() => scopes.flatMap(s => menuKeysOf(s)), [scopes]);
   const [selMenu, setSelMenu] = useState<string>(allMenuKeys[0] || '');
@@ -53,7 +56,8 @@ const PermEditor: React.FC<Props> = ({ scopes, value, onChange, pageChecks, onPa
 
   // 菜单级复选框：供应商菜单点走 legacy 白名单（pageChecks，勾选=追加授权）；
   // 采购商/加工厂菜单点默认放行，复选框映射三态覆写（取消勾选=写入 deny 隐藏，勾选=恢复继承）
-  const showPageChecks = pageChecks !== undefined && !!onPageChecksChange;
+  // 分组模式（menuCheckTri）：全平台菜单复选框直接映射三态（勾选=allow 拥有页面权限，取消=deny 隐藏）
+  const showPageChecks = menuCheckTri || (pageChecks !== undefined && !!onPageChecksChange);
   const togglePage = (key: string, checked: boolean) => {
     const cur = new Set(pageChecks || []);
     if (checked) cur.add(key); else cur.delete(key);
@@ -64,13 +68,17 @@ const PermEditor: React.FC<Props> = ({ scopes, value, onChange, pageChecks, onPa
     keys.forEach(k => { if (checked) cur.add(k); else cur.delete(k); });
     onPageChecksChange?.(Array.from(cur));
   };
-  const isPageChecked = (scope: PermScope, key: string): boolean =>
-    scope === 'supplier' ? (pageChecks || []).includes(key) : value[key] !== 'deny';
+  const isPageChecked = (scope: PermScope, key: string): boolean => {
+    if (menuCheckTri) return value[key] !== 'deny';
+    return scope === 'supplier' ? (pageChecks || []).includes(key) : value[key] !== 'deny';
+  };
   const togglePageByScope = (scope: PermScope, key: string, checked: boolean) => {
+    if (menuCheckTri) { set(key, checked ? 'allow' : 'deny'); return; }
     if (scope === 'supplier') togglePage(key, checked);
     else set(key, checked ? 'inherit' : 'deny');
   };
   const toggleGroupPagesByScope = (scope: PermScope, keys: string[], checked: boolean) => {
+    if (menuCheckTri) { batch(keys, checked ? 'allow' : 'deny'); return; }
     if (scope === 'supplier') toggleGroupPages(keys, checked);
     else batch(keys, checked ? 'inherit' : 'deny');
   };
@@ -156,9 +164,11 @@ const PermEditor: React.FC<Props> = ({ scopes, value, onChange, pageChecks, onPa
                       }}>
                       <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, flex: 1 }}>
                         {rowCheck && (
-                          <span onClick={e => e.stopPropagation()} title={scope === 'supplier'
-                            ? '勾选=该账号拥有此菜单（角色预设基础上追加）'
-                            : '取消勾选=对该账号隐藏此菜单（写入禁止覆写）；勾选=恢复可见（沿继承链）'}>
+                          <span onClick={e => e.stopPropagation()} title={menuCheckTri
+                            ? '勾选=组内成员拥有该页面权限（允许）；取消勾选=隐藏该页面（禁止）'
+                            : scope === 'supplier'
+                              ? '勾选=该账号拥有此菜单（角色预设基础上追加）'
+                              : '取消勾选=对该账号隐藏此菜单（写入禁止覆写）；勾选=恢复可见（沿继承链）'}>
                             <Checkbox checked={isPageChecked(scope, i.key)} onChange={e => togglePageByScope(scope, i.key, e.target.checked)} />
                           </span>
                         )}

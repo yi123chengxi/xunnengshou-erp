@@ -1815,9 +1815,10 @@ const AccountManage: React.FC = () => {
             分组权限配置
           </Text>
           <div style={{ fontSize: 12, color: '#666', marginTop: 4, marginBottom: 12 }}>
-            左侧选择菜单，右侧配置该菜单的进入/按键/字段（查看/编辑）权限；组权限低于个人显式覆写、高于角色层；组内成员自动生效。
+            左侧菜单前复选框：勾选=组内成员拥有该页面权限，取消勾选=隐藏该页面（分组头复选框可整组切换）；
+            点击菜单后右侧配置该菜单的进入/按键/字段（查看/编辑）权限；组权限低于个人显式覆写、高于角色层；组内成员自动生效。
           </div>
-          <PermEditor scopes={['supplier', 'purchaser', 'factory']} value={groupPermDraft} onChange={setGroupPermDraft} />
+          <PermEditor scopes={['supplier', 'purchaser', 'factory']} value={groupPermDraft} onChange={setGroupPermDraft} menuCheckTri />
         </div>
       </Modal>
 
