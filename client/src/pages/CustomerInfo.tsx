@@ -2991,34 +2991,11 @@ const CustomerInfo: React.FC = () => {
           const cust = receiptDetailCustomer;
           if (!cust) return null;
           const rows: any[] = [];
-          // 手工登记收款（新增收款）
+          // 已收货款口径 = 仅手工登记收款（customerReceipts 台账），与列表「已收货款」列同源；
+          // 订单/账单金额不属于收款：余额支付订单的明细在「账单明细」页生成账单行，不进入收款明细
           customerReceipts
             .filter((r: any) => r.customerId === cust.id || r.customerName === cust.name)
             .forEach((r: any) => rows.push({ key: r.key, no: r.receiptNo || '-', date: r.date, amount: Number(r.amount) || 0, account: r.account || '-', voucher: r.voucher || '', source: '手工登记' }));
-          // 账单明细列表：对应客户的已付金额记录（账单未生成时回退按订单统计）
-          let billRows: any[] = [];
-          try { billRows = JSON.parse(localStorage.getItem(`pageData_customer_bill-detail_${getDataOwner()}`) || '[]'); } catch { /* ignore */ }
-          const orderById = new Map<string, any>();
-          try {
-            const os: any[] = JSON.parse(localStorage.getItem(`pageData_sales_order-manage_${getDataOwner()}`) || '[]');
-            (Array.isArray(os) ? os : []).forEach((o: any) => { if (o?.id) orderById.set(o.id, o); });
-          } catch { /* ignore */ }
-          const billList = Array.isArray(billRows) ? billRows : [];
-          if (Array.isArray(billList) && billList.length > 0) {
-            billList.forEach((b: any) => {
-              const ord = orderById.get(b?.id) || null;
-              const amt = Number(b?.paidAmount) || Number(ord?.paidAmount) || 0;
-              if (b && String(b.customerName || '').trim() === String(cust.name || '').trim() && amt > 0) {
-                rows.push({ key: `bill-${b.id}`, no: b.id, date: b.outboundDate || '-', amount: amt, account: ord?.payAccount || '-', voucher: ord?.payScreenshot || '', source: `账单明细（${b.id}）` });
-              }
-            });
-          } else {
-            orderById.forEach((o: any) => {
-              if (o && o.orderStatus !== '待付款' && (Number(o.paidAmount) || 0) > 0 && String(o.customerName || '').trim() === String(cust.name || '').trim()) {
-                rows.push({ key: `order-${o.id}`, no: o.id, date: o.payTime || o.date || '-', amount: Number(o.paidAmount) || 0, account: o.payAccount || '-', voucher: o.payScreenshot || '', source: `订单收款（${o.id}）` });
-              }
-            });
-          }
           const total = rows.reduce((s, r) => s + r.amount, 0);
           // 按日期降序排列（最新记录在前）
           rows.sort((a, b) => {
