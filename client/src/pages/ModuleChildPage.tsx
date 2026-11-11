@@ -2845,6 +2845,31 @@ const ModuleChildPage: React.FC = () => {
       })];
   }, [getDataOwner]);
 
+  // 实际库存自愈：stock_change_log 为库存变动唯一真值源（入库/出库/盘点均经 updateProductStock 记日志），
+  // 取每商品最新一条 afterStock 校正 actualStock，纠正跨端同步/内存回写带来的陈旧副本（实际库存归 0/跳变根因）
+  const healActualStockFromLogs = useCallback((rows: Record<string, any>[]) => {
+    if (!Array.isArray(rows) || rows.length === 0) return rows;
+    let logs: any[] = [];
+    try { logs = JSON.parse(localStorage.getItem(`stock_change_log_${getDataOwner()}`) || '[]'); } catch { logs = []; }
+    if (!Array.isArray(logs) || logs.length === 0) return rows;
+    const tsOf = (t: any) => Date.parse(String(t || '').replace(/-/g, '/')) || 0;
+    const latest = new Map<string, number>();
+    logs.slice().sort((a: any, b: any) => tsOf(a?.createTime) - tsOf(b?.createTime)).forEach((l: any) => {
+      if (!l?.productCode || l.afterStock === undefined || l.afterStock === null || l.afterStock === '') return;
+      latest.set(String(l.productCode), Number(l.afterStock) || 0);
+    });
+    if (latest.size === 0) return rows;
+    let changed = false;
+    const next = rows.map((r: any) => {
+      const code = String(r?.productCode || '');
+      if (!code || !latest.has(code)) return r;
+      const v = latest.get(code) as number;
+      if ((Number(r.actualStock) || 0) !== v) { changed = true; return { ...r, actualStock: v }; }
+      return r;
+    });
+    return changed ? next : rows;
+  }, [getDataOwner]);
+
   // 发货后重建账单明细落库：仅已发货/已完成订单生成「订单」来源账单，立即持久化（取消手工新增后账单唯一来源）
   const refreshBillDetailStorage = useCallback((owner: string) => {
     try {
@@ -5034,6 +5059,8 @@ const ModuleChildPage: React.FC = () => {
       if (moduleKey === 'customer' && childKey === 'bill-detail') {
         data = buildBillDetailRows(data);
       }
+      // 商品族：实际库存按库存变动日志自愈（纠正被跨端同步/内存回写清 0 的陈旧副本）
+      if (isProductList) data = healActualStockFromLogs(data);
       // 财务审核：与订单管理对账——“已审核待财审”订单必须有对应的待处理审核单（历史缺单数据自动补建，兼容脏数据）
       if (moduleKey === 'sales' && childKey === 'finance-audit') {
         try {
@@ -5436,6 +5463,8 @@ const ModuleChildPage: React.FC = () => {
       let parsed = JSON.parse(stored);
       if (!Array.isArray(parsed)) return;
       if (moduleKey === 'customer' && childKey === 'bill-detail') parsed = buildBillDetailRows(parsed);
+      // 商品族：切签重载时实际库存按日志自愈
+      if (isProductList) parsed = healActualStockFromLogs(parsed);
       setDataSource(parsed);
       loadedIdsRef.current = new Set(parsed.map((r: any) => String(r?.id || r?.key || '')).filter(Boolean));
     } catch { /* ignore */ }
@@ -5474,7 +5503,8 @@ const ModuleChildPage: React.FC = () => {
       });
       const merged = extras.length > 0 ? [...parsed, ...extras] : parsed;
       if (isProductList) {
-        const withImg = merged.map((item: any) => {
+        const healed = healActualStockFromLogs(merged);
+        const withImg = healed.map((item: any) => {
           if (item && item.key) {
             try { const img = localStorage.getItem(getImgKey(item.key)); if (img) return { ...item, image: img }; } catch {}
           }
@@ -8268,7 +8298,9 @@ const ModuleChildPage: React.FC = () => {
           if (Array.isArray(parsed)) {
             // 账单明细：查询时必须从订单重建（存储可能缺新派生账单行，如刚发货的余额支付订单），
             // 与加载/切签路径同口径，杜绝“点查询看不到新账单”
-            setDataSource(moduleKey === 'customer' && childKey === 'bill-detail' ? buildBillDetailRows(parsed) : parsed);
+            const rebuilt = moduleKey === 'customer' && childKey === 'bill-detail' ? buildBillDetailRows(parsed) : parsed;
+            // 商品族：查询时实际库存按日志自愈
+            setDataSource(isProductList ? healActualStockFromLogs(rebuilt) : rebuilt);
           }
         }
       } catch { /* ignore */ }
