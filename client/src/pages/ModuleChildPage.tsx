@@ -2777,6 +2777,15 @@ const ModuleChildPage: React.FC = () => {
     setImportProgress({ running: false, done: 0, total: 0 });
   }, []);
 
+  // 账单日期归一：斜杠/带时间格式统一为 YYYY-MM-DD（横线），
+  // 否则订单行 outboundDate 为 '2026/11/11' 会被统计时间范围字符串比较整体排除，列表汇总与页面可见行口径不一致
+  const normBillDay = (v: any): string => {
+    const s = String(v || '').trim();
+    if (!s) return '';
+    const d = dayjs(s.replace(/\//g, '-'));
+    return d.isValid() ? d.format('YYYY-MM-DD') : s;
+  };
+
   // ============ 账单明细（客户管理）：基于订单生成账单行 ============
   const buildBillDetailRows = useCallback((existing: Record<string, any>[]) => {
     const owner = getDataOwner();
@@ -2825,7 +2834,7 @@ const ModuleChildPage: React.FC = () => {
           auxDocNo: prev?.auxDocNo || '',
           // 人工改客户标记随重建保留，名称自愈持续跳过该行客户名改写
           ...(prev?._custEdited ? { _custEdited: true } : {}),
-          outboundDate: prev?.outboundDate || (o.payTime ? String(o.payTime).slice(0, 10) : (o.createTime ? String(o.createTime).slice(0, 10) : '')),
+          outboundDate: normBillDay(prev?.outboundDate || o.payTime || o.createTime),
           createdAt: prev?.createdAt || o.payTime || o.createTime || '',
           totalCount: bookedByPurchaser ? (Number(prev.totalCount) || rowItems.reduce((s: number, it: any) => s + (Number(it.quantity) || 0), 0)) : (Number(o.palletCount) || rowItems.reduce((s: number, it: any) => s + (Number(it.quantity) || 0), 0)),
           productDetail: bookedByPurchaser ? (prev.productDetail || rowItems.map((it: any) => `${it.productCode || ''}×${it.quantity}`).join('，')) : (o.productDetail || rowItems.map((it: any) => `${it.productCode || ''}×${it.quantity}`).join('，')),
@@ -5683,10 +5692,11 @@ const ModuleChildPage: React.FC = () => {
       if (pageConfig?.title === '账单明细' && billUnreconOnly) {
         if (BILL_RECON_DONE.includes(String((item as any).reconResult || ''))) return false;
       }
-      // 账单明细：统计时间范围（与列表同口径，按出库日期过滤，默认本月）
+      // 账单明细：统计时间范围（与列表同口径，按出库日期过滤，默认本月；日期归一后比较，兼容历史斜杠格式）
       if (pageConfig?.title === '账单明细' && billRange) {
-        const d = String((item as any).outboundDate || (item as any).date || '');
-        if (!d || d < billRange[0] || d > billRange[1]) return false;
+        const d = String((item as any).outboundDate || (item as any).date || '').replace(/\//g, '-');
+        const dd = dayjs(d);
+        if (!d || !dd.isValid() || dd.isBefore(billRange[0], 'day') || dd.isAfter(billRange[1], 'day')) return false;
       }
       // 加工厂平台-加工订单：仅显示供应商/合作工厂推送过来的代加工订单（带 pushRef 标记），不显示本账号自建订单
       if (isFactoryPlatform && childKey === 'processing-order' && !item.pushRef) return false;
