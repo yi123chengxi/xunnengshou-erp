@@ -1506,6 +1506,9 @@ const ModuleChildPage: React.FC = () => {
     const fnOk = (a: string) => canFn('supplier', `${moduleKey}/${childKey}`, a);
     const fieldViewOk = (di: string) => canField('basic-data/product-list', di, 'view');
     const fieldEditOk = (di: string) => canField('basic-data/product-list', di, 'edit');
+    // PERM_V2 字段查看（非商品族页面）：字段点键格式 field:<菜单>:<页面>.<dataIndex>:view（与扫描生成产物一致）；
+    // 未扫描到字段点的页面解析为默认放行，过滤无副作用（账单明细等页的列级查看权限由此生效）
+    const pageFieldViewOk = (di: string) => canField(`${moduleKey}/${childKey}`, `${childKey}.${di}`, 'view');
     // 全部商品：主仓位绑定弹窗（点击主仓位单元格选择仓位）
     const [mainLocPickVisible, setMainLocPickVisible] = useState(false);
     const [mainLocPickRecord, setMainLocPickRecord] = useState<any>(null);
@@ -4707,6 +4710,8 @@ const ModuleChildPage: React.FC = () => {
       message.success(`单据 ${no} 已保存修改`);
       return;
     }
+    // 权限兜底：新增入口被绕过时（旧会话/直接调用）在此拦截无新增权限的保存
+    if (!fnOk('add')) { message.warning('无新增权限'); return; }
     // 源头防重：同客户下出库单号已存在时强提示；若已对账完成则禁止新增
     // （避免新增账单复用历史已对账单号，被旧对账证据经单号回写感染为「自动对账完成」）
     try {
@@ -8314,6 +8319,8 @@ const ModuleChildPage: React.FC = () => {
 
   // 账单明细：重置并打开自定义新增弹窗（工具栏新增账单与 handleAdd 共用）
   const openBillAddNew = () => {
+    // 双重门控：按键隐藏之外，直接调用也拦截（防旧会话/快捷键绕过）
+    if (!fnOk('add')) { message.warning('无新增权限'); return; }
     setBillAddEditKey('');
     setBillAddNo('');
     setBillAddCustomer('');
@@ -10576,8 +10583,9 @@ const handleBatchAttrsConfirm = () => {
       configColumns = configColumns.filter(c => vSet.has(c.key));
       configColumns = configColumns.slice().sort((a: any, b: any) => visibleColumnKeys.indexOf(a.key) - visibleColumnKeys.indexOf(b.key));
     }
-    // PERM_V2 字段查看：商品族页面按字段点(view)隐藏列
+    // PERM_V2 字段查看：商品族页面按字段点(view)隐藏列；其余页面按本页字段点隐藏列（个人/分组/角色 deny 生效）
     if (isProductList) configColumns = configColumns.filter(c => fieldViewOk(String(c.dataIndex || c.key)));
+    else configColumns = configColumns.filter(c => pageFieldViewOk(String(c.dataIndex || c.key)));
     // 加工订单：按字段显示配置过滤和排序
     if (pageConfig?.title === '加工订单') {
       configColumns = configColumns.filter((c: any) => !poFieldHidden.has(c.key));
@@ -12336,7 +12344,7 @@ const handleBatchAttrsConfirm = () => {
         </div>
         {pageConfig.columnGroups.map(group => {
           const groupCols = (effectivePageConfig?.columns?.filter(c => c.group === group) || [])
-            .filter(c => !isProductList || fieldViewOk(String(c.dataIndex || c.key)));
+            .filter(c => (isProductList ? fieldViewOk(String(c.dataIndex || c.key)) : pageFieldViewOk(String(c.dataIndex || c.key))));
           if (groupCols.length === 0) return null;
           const checkedCount = groupCols.filter(c => visibleSet.has(c.key)).length;
           return (
@@ -12658,7 +12666,7 @@ const handleBatchAttrsConfirm = () => {
       {pageConfig?.title === '账单明细' && (
         <>
           <Tooltip title="手工新增账单单据（保存后同步写入采购商平台采购账单）">
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => {
+            <Button type="primary" icon={<PlusOutlined />} style={fnOk('add') ? undefined : { display: 'none' }} onClick={() => {
               if (!fnOk('add')) { message.warning('无新增权限'); return; }
               openBillAddNew();
             }}>新增账单</Button>
