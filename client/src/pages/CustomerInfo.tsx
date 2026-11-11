@@ -284,6 +284,9 @@ export const loadBoundPurchasersFromStorage = (): BoundPurchaser[] => {
     const k = b?.purchaserUsername || b?.purchaserName || '';
     if (k && (b.status === 'terminated' || b.status === 'terminating')) storedTermStatus.set(k, b.status);
   });
+  // 派生前回状态快照：供末尾回写比对（派生结果必须落库上传，否则子账号/他端永远读到旧存储态）
+  const storedStatusSnap = new Map<string, string>();
+  bound.forEach((b: any) => { storedStatusSnap.set(String(b?.purchaserUsername || b?.purchaserName || ''), String(b?.status || '')); });
   // 兜底合并：已批准的合作申请（防止个别批准路径未回写 boundPurchasers 导致客户缺失）
   try {
     const owner = getDataOwner();
@@ -464,6 +467,17 @@ export const loadBoundPurchasersFromStorage = (): BoundPurchaser[] => {
       return b;
     });
   }
+  // 派生结果回写落库：镜像/合作申请派生出的状态（如已解除合作）与新增记录必须持久化并上传，
+  // 否则子账号/其他浏览器拉取的仍是旧存储态 approved（主账号显示已解除、子账号显示已合作的根因）
+  try {
+    const keyOf = (b: any) => String(b?.purchaserUsername || b?.purchaserName || '');
+    const changed = bound.some((b: any) => {
+      const k = keyOf(b);
+      const st = String(b?.status || '');
+      return storedStatusSnap.has(k) ? storedStatusSnap.get(k) !== st : true;
+    });
+    if (changed) localStorage.setItem('boundPurchasers_' + getDataOwner(), JSON.stringify(bound));
+  } catch { /* ignore */ }
   if (bound.length > 0) return bound;
   return initialBoundPurchasers; // 无真实数据时用 demo
 };

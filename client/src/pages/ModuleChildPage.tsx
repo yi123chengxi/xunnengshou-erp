@@ -7652,6 +7652,8 @@ const ModuleChildPage: React.FC = () => {
         syncOrderReserved(owner);
         // 发货成功后：将已发货订单在账单明细中新增/更新账单（订单来源）
         refreshBillDetailStorage(owner);
+        // 通知已挂载的账单明细实例立即重建（同窗口keep-alive页签无需切签即可见新账单）
+        try { window.dispatchEvent(new CustomEvent('order-data-updated', { detail: { owner, key: `pageData_sales_order-manage_${owner}` } })); } catch { /* ignore */ }
         // 采购商推送订单发货联动：更新推送订单状态 + 自动写入采购账单
         records.forEach(rec => {
           const orderId = rec.orderId || rec.id;
@@ -8264,7 +8266,9 @@ const ModuleChildPage: React.FC = () => {
         if (stored) {
           const parsed = JSON.parse(stored);
           if (Array.isArray(parsed)) {
-            setDataSource(parsed);
+            // 账单明细：查询时必须从订单重建（存储可能缺新派生账单行，如刚发货的余额支付订单），
+            // 与加载/切签路径同口径，杜绝“点查询看不到新账单”
+            setDataSource(moduleKey === 'customer' && childKey === 'bill-detail' ? buildBillDetailRows(parsed) : parsed);
           }
         }
       } catch { /* ignore */ }
@@ -8281,7 +8285,7 @@ const ModuleChildPage: React.FC = () => {
     setAppliedOrderAddr({ ...orderAddr });
     setJgApplied(Object.fromEntries(Object.entries(jgSearch).map(([k, v]) => [k, splitJgValues(v)])));
     message.success(`查询完成`);
-  }, [searchText, statusFilter, dynamicFilterValues, bankNameFilter, billProductCodes, billStyleCodes, orderPickCodes, orderPickStyles, orderAddr, jgSearch, sharedDataKey]);
+  }, [searchText, statusFilter, dynamicFilterValues, bankNameFilter, billProductCodes, billStyleCodes, orderPickCodes, orderPickStyles, orderAddr, jgSearch, sharedDataKey, moduleKey, childKey, buildBillDetailRows]);
 
   // 导出
   const handleExport = useCallback(() => {
@@ -9153,6 +9157,7 @@ const ModuleChildPage: React.FC = () => {
           } catch { /* ignore */ }
           // 编辑路径发货后同步重建账单明细（批量发货 handleShipNow 同口径），余额支付订单立即生成账单
           try { refreshBillDetailStorage(getDataOwner()); } catch { /* ignore */ }
+          try { const ow = getDataOwner(); window.dispatchEvent(new CustomEvent('order-data-updated', { detail: { owner: ow, key: `pageData_sales_order-manage_${ow}` } })); } catch { /* ignore */ }
         }
         // 余额支付自动确认收款日志
         if (values.payMethod === '余额支付' && oldStatus === '待付款') {
