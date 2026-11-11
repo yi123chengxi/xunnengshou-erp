@@ -29,6 +29,33 @@ startBankSyncWatcher();
 // 一次性邀约链接消耗监听：采购商同意/拒绝合作完成时自动消耗会话内的邀约码使链接失效
 startInviteConsumeWatcher();
 
+// 陈旧 bundle 提醒：本 tab 加载的 main chunk 与服务端最新 manifest 不一致时提示强刷
+//（救济已被浏览器缓存旧 index.html 的设备；nginx 已对 index.html 设 no-cache 杜绝新增缓存）
+(() => {
+  try {
+    if (process.env.NODE_ENV !== 'production') return;
+    const script = document.querySelector('script[src*="/static/js/main."]');
+    const loadedFile = (script?.getAttribute('src') || '').split('/').pop() || '';
+    if (!loadedFile) return;
+    fetch(`/asset-manifest.json?_=${Date.now()}`, { cache: 'no-store' })
+      .then(r => (r.ok ? r.json() : null))
+      .then((mf: any) => {
+        const latestFile = (String(mf?.files?.['main.js'] || '')).split('/').pop() || '';
+        if (!latestFile || latestFile === loadedFile) return;
+        if (sessionStorage.getItem('staleBundleNotified')) return;
+        sessionStorage.setItem('staleBundleNotified', '1');
+        setTimeout(() => {
+          const div = document.createElement('div');
+          div.textContent = '系统已更新到新版本，请按 Ctrl+F5 强制刷新加载最新功能';
+          div.style.cssText = 'position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:9999;background:#fff7e6;border:1px solid #ffd591;color:#ad6800;padding:8px 16px;border-radius:6px;font-size:13px;box-shadow:0 2px 8px rgba(0,0,0,.15)';
+          document.body.appendChild(div);
+          setTimeout(() => div.remove(), 8000);
+        }, 2000);
+      })
+      .catch(() => { /* 服务端不可用时静默 */ });
+  } catch { /* ignore */ }
+})();
+
 // 浏览器会话级登录态：sessionStorage 随浏览器关闭而清空，
 // 重启浏览器后再打开网址视为"未登入"——清除上次残留的登录会话并回退登录页，
 // 同一浏览器会话内刷新/新开标签页仍保持登录（不影响正常使用）。
