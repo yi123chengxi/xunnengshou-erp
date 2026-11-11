@@ -74,7 +74,8 @@ export const saveUserPermOverrides = (username: string, overrides: Record<string
     const users: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
     const idx = users.findIndex(u => u.username === username);
     if (idx >= 0) {
-      users[idx] = { ...users[idx], permOverrides: overrides };
+      // _permTs 版本戳：子账号设备合并层按版本采纳服务端新版覆写/权限
+      users[idx] = { ...users[idx], permOverrides: overrides, _permTs: Date.now() };
       localStorage.setItem('registeredUsers', JSON.stringify(users));
     }
   } catch { /* ignore */ }

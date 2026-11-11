@@ -506,6 +506,8 @@ const AccountManage: React.FC = () => {
             regUsers[idx].roles = values.roles || [];
             regUsers[idx].customPermissions = editPermsRef.current;
             regUsers[idx].phone = inputPhone;
+            // 权限编辑版本戳：子账号设备合并层按 _permTs 采纳服务端新版权限（防停留在新增时快照）
+            regUsers[idx]._permTs = Date.now();
             persistRegisteredUsers(regUsers);
           }
         } catch { /* ignore */ }
@@ -782,6 +784,7 @@ const AccountManage: React.FC = () => {
         role: currentUserRole,
         roles: values.roles || [],
         customPermissions: addPermsRef.current,
+        _permTs: Date.now(),
         companyName: currentUser?.companyName || currentUsername,
         contactPerson: values.displayName,
         email: '',

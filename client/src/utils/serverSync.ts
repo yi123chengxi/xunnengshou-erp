@@ -16,7 +16,7 @@ import { repairCounterpartyNames } from './nameSync';
 import { healReconTerminalLinks } from './reconHeal';
 
 // 需要同步的业务数据 key 前缀/精确名
-const SYNC_PREFIXES = ['pageData_', 'custom_', 'warehouses_', 'purchaser_suppliers_', 'boundPurchasers_', 'accounts_', 'shop_info_', 'shop_profit_', 'month_end_check_', 'withdrawal_record_', 'dev_', 'hr_', 'newstyle_', 'brandauth_', 'molds_', 'credit_adjustments_', 'published_credit_', 'payment_requests_', 'payment_request_managers_', 'notification_settings_', 'print_template_', 'price_strategy_', 'user_notice_', 'invoice_record_', 'invoice_apply_requests_', 'purchaser_bills_', 'recon_db_'];
+const SYNC_PREFIXES = ['pageData_', 'custom_', 'warehouses_', 'purchaser_suppliers_', 'boundPurchasers_', 'accounts_', 'shop_info_', 'shop_profit_', 'month_end_check_', 'withdrawal_record_', 'dev_', 'hr_', 'newstyle_', 'brandauth_', 'molds_', 'credit_adjustments_', 'published_credit_', 'payment_requests_', 'payment_request_managers_', 'notification_settings_', 'print_template_', 'price_strategy_', 'user_notice_', 'invoice_record_', 'invoice_apply_requests_', 'purchaser_bills_', 'recon_db_', 'roles_', 'preset_role_overrides_', 'role_permsettings_'];
 const SYNC_EXACT = ['registeredUsers', 'subscription_orders', 'storage_orders', 'market_publish_orders', 'market_ratings', 'market_trade_orders', 'market_visitor_cart_shares', 'market_mold_listings', 'purchaser_pushed_orders', 'cooperation_applications', 'cooperation_invites', 'recon_records', 'recon_feedback', 'company_renames'];
 // 图片块体积大，不参与跨浏览器同步（各浏览器独立）
 const EXCLUDE_PREFIXES = ['prodImg_', 'thumb_', 'payShot_', 'mold_img_'];
@@ -329,6 +329,7 @@ function mergeRegisteredUsers(serverJson: string): any[] | null {
     if (!Array.isArray(serverUsers)) return null;
     const local: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
     let changed = false;
+    let permsChanged = false;
     serverUsers.forEach((su: any) => {
       if (!su || !su.username) return;
       const lu = local.find((u: any) => u.username === su.username);
@@ -339,6 +340,15 @@ function mergeRegisteredUsers(serverJson: string): any[] | null {
       const sp = String(su.phone || '').trim();
       const lp = String(lu.phone || '').trim();
       if (sp && sp !== lp) { lu.phone = sp; changed = true; }
+      // 管理端权威字段传播：主账号编辑的角色/独立权限/个人三态覆写/姓名/状态须同步到子账号设备，
+      // 否则子账号本地副本停留在「新增账号时」的权限快照，刷新/重登都不更新；
+      // _permTs 版本守卫：仅服务端编辑版本更新才采纳，防主账号未上传的本地新编辑被服务端旧值回滚
+      // （子账号会话不上传 registeredUsers，主账号为唯一编辑方）
+      if ((Number(su._permTs) || 0) > (Number(lu._permTs) || 0)) {
+        (['roles', 'customPermissions', 'permOverrides', 'displayName', 'status', '_permTs'] as const).forEach(f => {
+          if ((su as any)[f] !== undefined) { (lu as any)[f] = (su as any)[f]; changed = true; permsChanged = true; }
+        });
+      }
     });
     if (changed) {
       const raw = getOriginalSetItem();
@@ -347,6 +357,10 @@ function mergeRegisteredUsers(serverJson: string): any[] | null {
       raw('registeredUsers_ts', String(Date.now()));
       saveDataset('registeredUsers', json);
       flushDatasetUpload('registeredUsers', json);
+    }
+    // 权限字段落地后同标签页派发 perm-changed：已挂载布局的菜单/门控立即按新权限重算
+    if (permsChanged) {
+      try { window.dispatchEvent(new Event('perm-changed')); } catch { /* ignore */ }
     }
     return local;
   } catch {

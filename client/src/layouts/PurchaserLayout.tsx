@@ -41,6 +41,7 @@ import { useDevPermSet, isPermAllowed } from '../utils/devPerms';
 import { menuVisible, menuKeyFromPath, usePermTick } from '../utils/perm';
 import { compressImageFile } from '../utils/imageCompress';
 import { recordCompanyRename, repairCounterpartyNames } from '../utils/nameSync';
+import { getProfileUserInfo, getCertQueryUsername } from '../utils/profileInfo';
 import { Result as AntResult } from 'antd';
 
 const { Header, Sider, Content } = Layout;
@@ -259,7 +260,8 @@ const PurchaserLayout: React.FC = () => {
   // 当前用户企业认证状态
   const [ownCertInfo, setOwnCertInfo] = useState<CertInfo | null>(null);
   const loadOwnCert = useCallback(async () => {
-    const un = localStorage.getItem('username') || '';
+    // 子账号继承主账号认证结果：认证为公司级行为，查询用主账号 username
+    const un = getCertQueryUsername();
     const s = await fetchCertStatus(un);
     setOwnCertInfo(s);
   }, []);
@@ -276,13 +278,8 @@ const PurchaserLayout: React.FC = () => {
   const editProvince = Form.useWatch('province', editProfileForm);
   const editCity = Form.useWatch('city', editProfileForm);
 
-  // 获取当前用户注册信息
-  const getUserInfo = () => {
-    const username = localStorage.getItem('username');
-    if (!username) return null;
-    const registeredUsers = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
-    return registeredUsers.find((u: any) => u.username === username) || null;
-  };
+  // 获取当前用户注册信息（子账号公司级字段继承主账号，见 utils/profileInfo）
+  const getUserInfo = () => getProfileUserInfo();
 
   // 打开企业信息编辑弹窗
   const handleOpenEditProfile = () => {
