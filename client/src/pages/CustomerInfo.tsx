@@ -1018,6 +1018,16 @@ const CustomerInfo: React.FC = () => {
     boundPurchasers.forEach(bp => { if (bp.id) m[bp.id] = bp.purchaserName; });
     idNameMapRef.current = m;
     ensureCustomerSummaryBuilt(getDataOwner(), m);
+    // 挂载即全量自愈：按本地订单/收款台账一次性校正全部客户快照，
+    // 立即修复历史跨端同步遗留的 0 污染快照（空闲巡检逐个轮转太慢，用户会先看到跳动）
+    try {
+      const names = Array.from(new Set([...Object.values(m), ...Object.keys(loadCustomerSummary(getDataOwner()))]));
+      if (names.length) {
+        const f1 = verifyCustomerPurchase(getDataOwner(), names);
+        const f2 = verifyCustomerSummary(getDataOwner(), names, m);
+        if (f1.length || f2.length) { /* 已自动修复，下方统一重载快照 */ }
+      }
+    } catch { /* ignore */ }
     setCustSummary(loadCustomerSummary(getDataOwner()));
   }, [customers, boundPurchasers]);
   useEffect(() => {

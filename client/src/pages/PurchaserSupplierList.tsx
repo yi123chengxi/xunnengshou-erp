@@ -580,6 +580,16 @@ const PurchaserSupplierList: React.FC = () => {
   useEffect(() => {
     supplierNamesRef.current = dataSource.map(s => s.supplierName);
   }, [dataSource]);
+  // 挂载即全量自愈：按本地账单/付款台账一次性校正全部供应商快照，
+  // 立即修复历史跨端同步遗留的 0 污染快照（快照键已退出同步，各端由源数据本地重算）
+  useEffect(() => {
+    const names = dataSource.map(s => s.supplierName).filter(Boolean);
+    if (!names.length) return;
+    try {
+      const fixed = verifySupplierSummary(getDataOwner(), names);
+      if (fixed.length) reloadPaySummary();
+    } catch { /* ignore */ }
+  }, [dataSource, reloadPaySummary]);
 
   // 供应商认证状态批量查询（按 supplierUsername 查）
   const [supCertMap, setSupCertMap] = useState<Record<string, CertInfo>>({});
