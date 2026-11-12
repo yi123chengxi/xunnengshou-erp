@@ -44,6 +44,20 @@ export function isUploadOnlyKey(key: string): boolean {
   return UPLOAD_ONLY_PREFIXES.some(p => key.startsWith(p));
 }
 
+/**
+ * 本地是否真的持有数据行：解析后行数为 0（"[]" / "null" / 空串）一律视为空基。
+ * 早期以 getItem(key) !== null 判“有数据”，本地存成 "[]" 也算有数据，
+ * 于是宽限期内的键永远不再回拉——本地一旦被意外写空就永久锁死在空副本上再也回不来。
+ */
+export function localDatasetHasRows(rawJson: string | null): boolean {
+  if (rawJson === null || rawJson === '') return false;
+  try {
+    const parsed = JSON.parse(rawJson);
+    if (Array.isArray(parsed)) return parsed.length > 0;
+    return parsed !== null && parsed !== '';
+  } catch { return rawJson.length > 0; }
+}
+
 /** 当前登录账号的数据归属者（子账号归父账号），与页面 getDataOwner 保持一致 */
 function currentOwner(): string {
   try {
@@ -157,8 +171,10 @@ function handleSyncAuthRequired(): void {
   reauthTriggered = true;
   try {
     sessionStorage.setItem('sync_reauth_required', '1');
-    ['username', 'userRole', 'isViewOnly', 'isSubAccount', 'parentAccount', 'userRoles', 'userCustomPermissions', 'lastActiveTime', 'token']
-      .forEach(k => localStorage.removeItem(k));
+    // 只清凭据与活性时间，保留身份/归属字段（username / isSubAccount / parentAccount / userRole 等）：
+    // 这些字段是 getDataOwner 解析数据归属的唯一依据，清掉后重定向前的瞬时读写会
+    // 把归属从主账号漂到子账号，导致写入错误 owner 的私有键（表现为“订单只剩一条”）
+    ['lastActiveTime', 'token'].forEach(k => localStorage.removeItem(k));
   } catch { /* ignore */ }
   try { window.location.href = '/login'; } catch { /* ignore */ }
 }
@@ -465,7 +481,10 @@ export async function pullAllDatasets(): Promise<number> {
       // 无论时间戳如何都必须从服务端拉取，否则刷新后数据丢失
       if (!global && serverTs <= localTs + GRACE_PERIOD_MS) {
         let hasLocalData = false;
-        try { hasLocalData = localStorage.getItem(key) !== null; } catch { /* ignore */ }
+        try {
+          // 「有数据」以解析后的行数为准：本地存成 "[]" / 非数组同样视为空基，必须继续回拉服务端全量副本
+          hasLocalData = localDatasetHasRows(localStorage.getItem(key));
+        } catch { /* ignore */ }
         if (hasLocalData) continue;
       }
       const rec = await fetchServerDataset(key);

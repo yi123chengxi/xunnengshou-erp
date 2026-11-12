@@ -45,10 +45,10 @@ const MERGE_ALWAYS_KEYS = ['recon_records'];
 // 墓碑语义键前缀：分平台对账独立库（recon_db_supplier_<账号> / recon_db_purchaser_<账号>）
 const MERGE_ALWAYS_PREFIXES = ['recon_db_'];
 const isMergeAlwaysKey = (key: string): boolean => MERGE_ALWAYS_KEYS.includes(key) || MERGE_ALWAYS_PREFIXES.some(p => key.startsWith(p));
-// 永不缩水键前缀（租户核心账单数据，丢失即信任事故）：PUT 一律改为「incoming 并集 + 仅按显式 removedIds 删除」，
+// 永不缩水键前缀（租户核心账单/订单数据，丢失即信任事故）：PUT 一律改为「incoming 并集 + 仅按显式 removedIds 删除」，
 // 绝不整键替换。未申报 removedIds 的缩水（跨端镜像空基覆盖/派生重建丢行等意外）在服务端被并集保留，物理杜绝误擦除；
-// 合法删除由客户端删除操作随 body 申报 removedIds 生效。
-const NEVER_SHRINK_PREFIXES = ['purchaser_bills_', 'pageData_customer_bill-detail_'];
+// 合法删除由客户端删除操作随 body 申报 removedIds 生效（订单：仅撤回缺货拆分合并子单时申报）。
+const NEVER_SHRINK_PREFIXES = ['purchaser_bills_', 'pageData_customer_bill-detail_', 'pageData_sales_order-manage_'];
 const isNeverShrinkKey = (key: string): boolean => NEVER_SHRINK_PREFIXES.some(p => key.startsWith(p));
 
 // ============ 收/付申请待处理推送（系统级 Web Push，浏览器关闭仍可提醒） ============
@@ -181,8 +181,10 @@ router.put('/dataset', async (req: Request, res: Response) => {
     }
     if (Number(baseTs) === row.updated_at) {
       // 永不缩水键：即使客户端自认为最新，也仅允许「并集 + 显式 removedIds 删除」，禁止整键替换擦除存量行
+      // （行缺 key/id 无法安合并时，退而记录级并集，仍比整键替换安全）
       if (isNeverShrinkKey(key)) {
-        const guarded = mergeWithExplicitRemovals(row.dataset_json, json, req.body.removedIds);
+        const guarded = mergeWithExplicitRemovals(row.dataset_json, json, req.body.removedIds)
+          || mergeArrayDatasets(row.dataset_json, json, isMergeAlwaysKey(key));
         if (guarded) {
           const gTs = Math.max(ts, row.updated_at);
           await store.forceUpsertDataset(key, guarded, owner, gTs);
