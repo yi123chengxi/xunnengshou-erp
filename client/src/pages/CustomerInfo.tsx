@@ -1176,14 +1176,24 @@ const CustomerInfo: React.FC = () => {
   }, [editingCustomer, custCertMap]);
 
   // 发布本供应商展示的有效信用额度到同步键 published_credit_<owner>，
-  // 供采购商跨浏览器只读（与本页「信用额度」列展示值完全一致，避免两端不一致）
+  // 供采购商跨浏览器只读（直接取本页「信用额度」列已算好的 credit 值，两端由构造保证一致；
+  // 旧实现此处另用 (c.id, c.name) 重算，而列用 (bp.id, bp.purchaserName)，调整记录命中集不同会算出两个数）
+  // 除名称外必须同时发布主体凭证（账号/公司编号）：采购商注册全称与我方客户档案名可能不一致
+  // （手工建档时敲错/对方已改名而档案未刷新），只按名称匹配会静默取不到额度而显示 0
   useEffect(() => {
     const owner = getDataOwner();
-    const rows = allCustomers.map((c: CustomerRecord) => ({
-      customerId: c.id,
-      customerName: c.name,
-      effective: getEffectiveCredit(c.id, c.name, Number(c.baseCredit) || 0, creditAdjustments),
-    }));
+    const idx = buildCredIndex();
+    const rows = allCustomers.map((c: CustomerRecord) => {
+      const anyC = c as any;
+      const cred = idx.credOfName(String(c.name || '').trim());
+      return {
+        customerId: c.id,
+        customerName: c.name,
+        customerUsername: String(anyC.purchaserUsername || cred?.username || '').trim(),
+        customerNo: String(anyC.purchaserNo || cred?.companyNo || '').trim(),
+        effective: Number(c.credit) || 0,
+      };
+    });
     const key = `published_credit_${owner}`;
     const json = JSON.stringify(rows);
     safeSetItem(key, json);

@@ -50,6 +50,7 @@ import { loadSupplierFinishedProducts } from '../utils/supplierProducts';
 import { findInviteRecord, markInviteUsed } from '../utils/inviteRegistry';
 import { isAccountingMode, writeAutoEntries, loadSubjectOptions, subjectFilterOption } from '../utils/accountingBridge';
 import { getCurrentUserDisplayName } from '../utils/billLog';
+import { buildCredIndex } from '../utils/nameSync';
 import { compressImageFile } from '../utils/imageCompress';
 import { copyText } from '../utils/clipboard';
 
@@ -768,41 +769,72 @@ const PurchaserSupplierList: React.FC = () => {
     );
   }, [dataSource]);
 
-  // 我司公司名（用于 boundPurchasers 账号级匹配）
-  const myCompanyName = useMemo(() => {
-    try {
-      const users = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
-      const u = users.find((x: any) => x.username === username);
-      return String(u?.companyName || username || '');
-    } catch { return username; }
+  // 我司主体凭证（账号 > 公司编号 > 注册全称）：子账号登录时数据归属主账号，身份键必须取主账号
+  // （取代旧的 myCompanyName 全局变量：只按注册全称全等匹配，无法处理对方档案名与我司注册名不一致）
+  const myParty = useMemo(() => {
+    const owner = getDataOwner();
+    let users: any[] = [];
+    try { users = JSON.parse(localStorage.getItem('registeredUsers') || '[]'); } catch { users = []; }
+    const me = users.find((u: any) => u.username === owner) || users.find((u: any) => u.username === username);
+    const name = String(me?.companyName || username || '');
+    const no = String(me?.companyNo || me?.companyShortName || '');
+    const idx = buildCredIndex();
+    return { name, no, id: idx.identity({ username: owner, no, name }) || idx.identity({ username, no, name }) };
   }, [username]);
 
+  // 我司主体判定器：凭证（账号/公司编号）优先，名称全等与改名链兜底。
+  // 供应商侧客户档案名常与采购商注册全称不一致（手工建档敲错、对方改名后档案未刷新），
+  // 只按名称全等匹配会静默取不到额度而显示 0，故一律先比身份键
+  // loose=true 时再放开「名称互为前缀」的宽松判定：供应商手工建档的我司档案既无账号也无编号、
+  // 名称又与注册全称有出入时，这是唯一能把额度认回来的通道；
+  // 限制短名≥8字且尾差≤6字，避免把不同主体误认成我司
+  const makeMyPartyMatcher = useCallback(() => {
+    const idx = buildCredIndex();
+    const mine = myParty.id;
+    const myName = String(myParty.name || '').trim();
+    const looseName = (nm: string): boolean => {
+      if (!myName || !nm || nm === myName) return false;
+      const [short, long] = nm.length <= myName.length ? [nm, myName] : [myName, nm];
+      return short.length >= 8 && long.startsWith(short) && long.length - short.length <= 6;
+    };
+    return (p: { username?: any; no?: any; name?: any }, loose = false): boolean => {
+      const rid = idx.identity({ username: p?.username, no: p?.no, name: p?.name });
+      if (mine && rid === mine) return true;
+      const nm = String(p?.name || '').trim();
+      if (!nm) return false;
+      if (myName && nm === myName) return true;
+      if (mine && idx.identityOfName(nm) === mine) return true;
+      return loose && looseName(nm);
+    };
+  }, [myParty]);
+
   // 解析供应商账号 owner：优先条目自带账号 → 其次在同名候选账号中按业务关系消歧 → 回退公司名首个匹配
-  // 消歧信号（公司名可能重名，必须用账号/业务数据定位）：
-  //   ① credit_adjustments_<账号> 含我司名的调整记录（已跨浏览器同步，最可靠）
+  // 消歧信号（公司名可能重名，必须用账号/业务数据定位；名称一律走主体身份键，允许对方档案名与注册名不一致）：
+  //   ① credit_adjustments_<账号> 含我司的调整记录（已跨浏览器同步，最可靠）
   //   ② boundPurchasers_<账号> 绑定了我司（同浏览器）
-  //   ③ customers_<账号> 含我司名档案（同浏览器）
+  //   ③ customers_<账号> 含我司档案（同浏览器）
   const resolveSupplierOwner = useCallback((supplierName: string, entry?: any): string => {
     let users: any[] = [];
     try { users = JSON.parse(localStorage.getItem('registeredUsers') || '[]'); } catch { users = []; }
     if (entry?.supplierUsername && users.some((u: any) => u.username === entry.supplierUsername)) return entry.supplierUsername;
     const cands = users.filter((u: any) => (u.companyName || '') === supplierName);
+    const same = makeMyPartyMatcher();
     for (const c of cands) {
       try {
         const adjs: any[] = JSON.parse(localStorage.getItem('credit_adjustments_' + c.username) || '[]');
-        if (Array.isArray(adjs) && myCompanyName && adjs.some((r: any) => r.customerName === myCompanyName)) return c.username;
+        if (Array.isArray(adjs) && adjs.some((r: any) => same({ name: r.customerName }, true))) return c.username;
       } catch { /* ignore */ }
       try {
         const bps: any[] = JSON.parse(localStorage.getItem('boundPurchasers_' + c.username) || '[]');
-        if (Array.isArray(bps) && bps.some((b: any) => b.purchaserUsername === username || (myCompanyName && b.purchaserName === myCompanyName))) return c.username;
+        if (Array.isArray(bps) && bps.some((b: any) => same({ username: b.purchaserUsername, no: b.purchaserNo, name: b.purchaserName }, true))) return c.username;
       } catch { /* ignore */ }
       try {
         const custs: any[] = JSON.parse(localStorage.getItem('customers_' + c.username) || '[]');
-        if (Array.isArray(custs) && myCompanyName && custs.some((cc: any) => cc.name === myCompanyName)) return c.username;
+        if (Array.isArray(custs) && custs.some((cc: any) => same({ name: cc.name }, true))) return c.username;
       } catch { /* ignore */ }
     }
     return cands[0]?.username || '';
-  }, [username, myCompanyName]);
+  }, [username, makeMyPartyMatcher]);
 
   // 供应商发布的有效信用额度（published_credit_<供应商账号>，跨浏览器从服务端拉取）
   const [publishedCredit, setPublishedCredit] = useState<Record<string, number>>({});
@@ -813,21 +845,31 @@ const PurchaserSupplierList: React.FC = () => {
     Promise.all(owners.map(async ({ id, name, entry }) => {
       let users: any[] = [];
       try { users = JSON.parse(localStorage.getItem('registeredUsers') || '[]'); } catch { users = []; }
-      // 候选账号：条目自带账号优先，其次同名公司名账号（公司名可能重名）
+      // 候选账号：条目自带账号优先 → 供应商编号命中 → 同名公司名账号（公司名可能重名也可能与我侧档案名不一致）
       const cands: any[] = [];
-      if (entry?.supplierUsername) {
-        const u = users.find((x: any) => x.username === entry.supplierUsername);
-        if (u) cands.push(u);
-      }
-      users.filter((u: any) => (u.companyName || '') === name).forEach((u: any) => { if (!cands.some((c: any) => c.username === u.username)) cands.push(u); });
+      const push = (u: any) => { if (u && !cands.some((c: any) => c.username === u.username)) cands.push(u); };
+      if (entry?.supplierUsername) push(users.find((x: any) => x.username === entry.supplierUsername));
+      const supNo = String(entry?.supplierNo || '').trim();
+      if (supNo) users.forEach((u: any) => { if (String(u.companyNo || u.companyShortName || '').trim() === supNo) push(u); });
+      users.filter((u: any) => (u.companyName || '') === name).forEach((u: any) => push(u));
+      // 改名链：我方档案里存的是供应商旧名时，companyName 全等命不中，按身份键再补一次
+      const sid = buildCredIndex().identityOfName(name);
+      if (sid.startsWith('u:')) push(users.find((x: any) => x.username === sid.slice(2)));
       // 逐个拉取发布额度，选「含我司记录」的那个账号（跨浏览器权威消歧）
+      // 匹配走主体身份键（账号/公司编号优先，名称与改名链兜底）：供应商档案里的我司名称
+      // 可能与我司注册全称不一致（只按名称全等会永远匹配不上 → 额度静默显示 0）
+      const same = makeMyPartyMatcher();
       for (const c of cands) {
         try {
           const res = await fetch(`${apiBase}/sync/dataset?key=published_credit_${c.username}`);
           if (!res.ok) continue;
           const data = await res.json();
           const rows: any[] = JSON.parse(data?.json || '[]');
-          const row = Array.isArray(rows) ? rows.find((r: any) => r.customerName === myCompanyName) : null;
+          const list = Array.isArray(rows) ? rows : [];
+          // 先严格（账号/编号/名称全等/改名链），全落空再宽松（名称互为前缀）：
+          // 老版本发布的数据不带凭证，只能靠名称认回来
+          const row = list.find((r: any) => same({ username: r.customerUsername, no: r.customerNo, name: r.customerName }))
+            || list.find((r: any) => same({ username: r.customerUsername, no: r.customerNo, name: r.customerName }, true));
           if (row) return { id, value: Number(row.effective) || 0 };
         } catch { /* ignore */ }
       }
@@ -839,15 +881,13 @@ const PurchaserSupplierList: React.FC = () => {
       setPublishedCredit(m);
     });
     return () => { cancelled = true; };
-  }, [dataSource, myCompanyName]);
+  }, [dataSource, makeMyPartyMatcher]);
 
   // 信用额度(元)：供应商端「客户基础信息」中授予我司的有效信用额度（初始额度+调整净额，由供应商调整）
   const supplierCreditMap = useMemo(() => {
     const map: Record<string, number> = {};
-    let users: any[] = [];
-    try { users = JSON.parse(localStorage.getItem('registeredUsers') || '[]'); } catch { users = []; }
-    const me = users.find((u: any) => u.username === username);
-    const myName = String(me?.companyName || username || '');
+    const same = makeMyPartyMatcher();
+    const myName = myParty.name;
     dataSource.forEach((s) => {
       // 优先采用供应商发布的有效额度（跨浏览器权威值，与供应商端展示一致）
       if (publishedCredit[s.id] !== undefined) { map[s.id] = publishedCredit[s.id]; return; }
@@ -859,14 +899,15 @@ const PurchaserSupplierList: React.FC = () => {
         const bps: any[] = JSON.parse(localStorage.getItem('boundPurchasers_' + owner) || '[]');
         let adjId = '';
         let adjName = myName;
-        const bp = bps.find((b: any) => b.purchaserUsername === username || (myName && b.purchaserName === myName));
+        const bp = bps.find((b: any) => same({ username: b.purchaserUsername, no: b.purchaserNo, name: b.purchaserName }))
+          || bps.find((b: any) => same({ username: b.purchaserUsername, no: b.purchaserNo, name: b.purchaserName }, true));
         if (bp) {
           const linked = bp.customerId ? custs.find((c: any) => c.id === bp.customerId) : null;
           base = bp.credit !== undefined && bp.credit !== null ? Number(bp.credit) || 0 : Number(linked?.credit) || 0;
           adjId = bp.id || '';
           adjName = bp.purchaserName || myName;
         } else {
-          const c = custs.find((c: any) => myName && c.name === myName);
+          const c = custs.find((c: any) => same({ name: c.name })) || custs.find((c: any) => same({ name: c.name }, true));
           if (c) { base = Number(c.credit) || 0; adjId = c.id; adjName = c.name; }
         }
         const adjs: any[] = JSON.parse(localStorage.getItem('credit_adjustments_' + owner) || '[]');
@@ -878,7 +919,7 @@ const PurchaserSupplierList: React.FC = () => {
       map[s.id] = base;
     });
     return map;
-  }, [dataSource, username, resolveSupplierOwner, publishedCredit]);
+  }, [dataSource, makeMyPartyMatcher, myParty, resolveSupplierOwner, publishedCredit]);
 
   // 订单占用金额：从 purchaser_pushed_orders 实时计算每个供应商的已推送订单总额
   const orderOccupationMap = useMemo(() => {
