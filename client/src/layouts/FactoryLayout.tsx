@@ -131,6 +131,7 @@ const FactoryLayout: React.FC = () => {
       localStorage.removeItem('username');
       localStorage.removeItem('isSubAccount');
       localStorage.removeItem('parentAccount');
+      localStorage.removeItem('token'); // 同步接口鉴权令牌
       navigate('/login');
     }
   }, [navigate]);

@@ -129,6 +129,40 @@ export function declareShrink(key: string, removedIds: string[]): void {
   pendingRemovedIds.set(key, Array.from(new Set([...prev, ...removedIds])));
 }
 
+/** 同步请求鉴权头：登录后写入的 JWT（未登录时为空对象，仅能访问公开键） */
+function authHeaders(extra?: Record<string, string>): Record<string, string> {
+  const headers: Record<string, string> = { ...(extra || {}) };
+  try {
+    const token = localStorage.getItem('token');
+    if (token) headers.Authorization = `Bearer ${token}`;
+  } catch { /* ignore */ }
+  return headers;
+}
+
+// 升级平滑：服务端对私有键要求 JWT，升级前已登录的旧会话没有 token，
+// 首次同步会 401。此时清掉旧会话并引导重新登录，避免“看着已登录但数据不再同步”的静默失效。
+let reauthTriggered = false;
+function handleSyncAuthRequired(): void {
+  if (reauthTriggered) return;
+  let username = '';
+  let atLogin = false;
+  try {
+    username = localStorage.getItem('username') || '';
+    atLogin = (window.location.pathname || '').indexOf('/login') === 0;
+  } catch { return; }
+  if (!username) return;   // 访客：公共页只写 market_* 公开键，无需登录
+  if (atLogin) return;     // 已在登录页：交给登录流程本身处理，避免反复跳转
+  // 401 只表示「令牌缺失/失效/过期」，此时清掉旧会话并引导重新登录，
+  // 避免“看着已登录但数据不再同步”的静默失效（本地数据保留，重新登录后下次写入会重新上传）
+  reauthTriggered = true;
+  try {
+    sessionStorage.setItem('sync_reauth_required', '1');
+    ['username', 'userRole', 'isViewOnly', 'isSubAccount', 'parentAccount', 'userRoles', 'userCustomPermissions', 'lastActiveTime', 'token']
+      .forEach(k => localStorage.removeItem(k));
+  } catch { /* ignore */ }
+  try { window.location.href = '/login'; } catch { /* ignore */ }
+}
+
 async function doUpload(key: string, json: string, ts?: number, baseTs?: number): Promise<void> {
   if (!(await serverAvailable())) return;
   const removedIds = pendingRemovedIds.get(key);
@@ -136,13 +170,15 @@ async function doUpload(key: string, json: string, ts?: number, baseTs?: number)
   try {
     const res = await fetchWithTimeout(`${API_BASE}/sync/dataset`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
       // 上传数据本身的写入时间戳（而非上传时刻）+ 已知服务端版本 baseTs + 显式删除申报 removedIds
       body: JSON.stringify({ key, json, updatedAt: ts || Date.now(), baseTs: baseTs ?? knownTs.get(key) ?? 0, ...(removedIds && removedIds.length ? { removedIds } : {}) }),
     });
     if (res.ok) {
       const data = await res.json().catch(() => null);
       if (data && typeof data.newTs === 'number') knownTs.set(key, data.newTs);
+    } else if (res.status === 401) {
+      handleSyncAuthRequired();
     }
   } catch {
     serverState = { ok: false, at: Date.now() };
@@ -186,7 +222,7 @@ export async function flushDatasetUploadAsync(key: string, value: string): Promi
   try {
     const res = await fetchWithTimeout(`${API_BASE}/sync/dataset`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ key, json: value, updatedAt: Date.now(), baseTs: knownTs.get(key) ?? 0 }),
     });
     if (res.ok) {
@@ -194,6 +230,7 @@ export async function flushDatasetUploadAsync(key: string, value: string): Promi
       if (data && typeof data.newTs === 'number') knownTs.set(key, data.newTs);
       return true;
     }
+    if (res.status === 401) handleSyncAuthRequired();
     return false;
   } catch {
     return false;
@@ -213,7 +250,7 @@ export async function ensureDatasetFromServer(key: string): Promise<boolean> {
   console.log('[ensureDataset] serverAvailable=', available);
   if (!available) return false;
   try {
-    const res = await fetchWithTimeout(`${API_BASE}/sync/dataset?key=${encodeURIComponent(key)}`, {}, 8000);
+    const res = await fetchWithTimeout(`${API_BASE}/sync/dataset?key=${encodeURIComponent(key)}`, { headers: authHeaders() }, 8000);
     console.log('[ensureDataset] fetch status=', res.status);
     if (!res.ok) return false;
     const data = await res.json();
@@ -239,7 +276,7 @@ export async function mergeDatasetFromServer(key: string): Promise<string | null
   if (!isSyncKey(key)) return null;
   if (!(await serverAvailable())) return null;
   try {
-    const res = await fetchWithTimeout(`${API_BASE}/sync/dataset?key=${encodeURIComponent(key)}`, {}, 8000);
+    const res = await fetchWithTimeout(`${API_BASE}/sync/dataset?key=${encodeURIComponent(key)}`, { headers: authHeaders() }, 8000);
     if (!res.ok) return null;
     const data = await res.json();
     if (!data || typeof data.json !== 'string') return null;
@@ -274,7 +311,8 @@ export async function mergeDatasetFromServer(key: string): Promise<string | null
 export async function fetchServerDataset(key: string): Promise<{ json: string; updatedAt: number } | null> {
   if (!(await serverAvailable())) return null;
   try {
-    const res = await fetchWithTimeout(`${API_BASE}/sync/dataset?key=${encodeURIComponent(key)}`);
+    const res = await fetchWithTimeout(`${API_BASE}/sync/dataset?key=${encodeURIComponent(key)}`, { headers: authHeaders() });
+    if (res.status === 401) { handleSyncAuthRequired(); return null; }
     if (!res.ok) return null;
     const data = await res.json();
     return data && typeof data.json === 'string' ? { json: data.json, updatedAt: Number(data.updatedAt) || 0 } : null;
@@ -398,7 +436,8 @@ export async function pullAllDatasets(): Promise<number> {
   if (!(await serverAvailable())) return 0;
   let meta: Record<string, number> = {};
   try {
-    const res = await fetchWithTimeout(`${API_BASE}/sync/meta`, {}, 5000);
+    const res = await fetchWithTimeout(`${API_BASE}/sync/meta`, { headers: authHeaders() }, 5000);
+    if (res.status === 401) { handleSyncAuthRequired(); return 0; }
     if (!res.ok) return 0;
     meta = (await res.json()) || {};
   } catch {

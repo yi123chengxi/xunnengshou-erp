@@ -18,10 +18,11 @@ import { WebSocketServer, WebSocket } from 'ws';
 import jwt from 'jsonwebtoken';
 import dotenv from 'dotenv';
 import { updateJobStatus, PrintJob } from './print-job-store';
+import { getJwtSecret } from '../utils/jwtSecret';
 
 dotenv.config();
 
-const JWT_SECRET = process.env.JWT_SECRET || 'factory-management-secret-key-2024';
+const JWT_SECRET = getJwtSecret();
 
 // ============ 类型定义 ============
 

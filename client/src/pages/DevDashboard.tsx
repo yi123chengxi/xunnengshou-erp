@@ -7,6 +7,7 @@ import dayjs, { Dayjs } from 'dayjs';
 import Logo from '../components/Logo';
 import { getUserQuota, setUserQuota, formatStorageSize, getUsagePercent, getTotalStorageUsage, getAllQuotas, kbToGb, gbToKb, fetchAllServerUsage, getLocalUsageKB, sessionDataOwner, getPaidQuotaKB, getFreeBaseQuotaKB } from '../utils/storageQuota';
 import request from '../utils/request';
+import { validatePassword } from '../utils/passwordPolicy';
 import useStickTableHeight from '../hooks/useStickTableHeight';
 import { getDevIdentity, loadGroups, saveGroups, loadGroupPerms, saveGroupPerms, applyGroupPermsToMembers, loadCustomerPerms, saveCustomerPerms, allPermKeys, buildPermTree, updateRegisteredUsers, getSubRole, loadDevSubAccounts, loadFollowups, addFollowup, loadCustomerLogs, addCustomerLog } from '../utils/devStore';
 import { readDevPermSet, ECOM_KEY_MIGRATION, PERM_V2, PERM_V3, PERM_V3_DEFAULT_KEYS, PERM_V4, PERM_V4_DEFAULT_KEYS, PERM_V5, PERM_V5_DEFAULT_KEYS, PERM_V6, PERM_V6_DEFAULT_KEYS, PERM_V7, PERM_V7_DEFAULT_KEYS, PERM_V8, PERM_V8_DEFAULT_KEYS, PERM_V9, PERM_V9_DEFAULT_KEYS, PERM_V10, PERM_V10_DEFAULT_KEYS, PERM_V16, PERM_V16_DEFAULT_KEYS, PERM_V17, PERM_V17_DEFAULT_KEYS } from '../utils/devPerms';
@@ -510,12 +511,9 @@ const DevDashboard: React.FC = () => {
       message.warning('请输入新密码');
       return;
     }
-    if (newPassword.length < 6) {
-      message.warning('密码长度不能少于6位');
-      return;
-    }
-    if (!/^(?=.*[a-zA-Z])(?=.*\d)/.test(newPassword)) {
-      message.warning('密码必须包含字母和数字');
+    const pwdCheck = validatePassword(newPassword, { username: String(passwordTargetUser?.username || '') });
+    if (!pwdCheck.ok) {
+      message.warning(pwdCheck.message);
       return;
     }
     if (newPassword !== confirmPassword) {

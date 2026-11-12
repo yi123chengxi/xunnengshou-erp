@@ -486,6 +486,7 @@ const PurchaserLayout: React.FC = () => {
             localStorage.removeItem('userRole');
             localStorage.removeItem('username');
             localStorage.removeItem('isViewOnly');
+            localStorage.removeItem('token'); // 同步接口鉴权令牌
             message.success('已安全退出');
             setTimeout(() => navigate('/login'), 1000);
           },

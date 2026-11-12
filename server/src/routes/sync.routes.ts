@@ -9,9 +9,32 @@ import { sendPushToUser } from './push.routes';
 import {
   applyUsageDeltaForWrite, getUsageBytes, getAllUsageBytes, recomputeUsage, getDatasetJson,
 } from '../services/storageUsage';
+import {
+  attachSyncUser, currentSyncUser, requireSyncAuth, isKeyAllowed, filterMetaForUser,
+  sanitizeRegisteredUsersJson, hashRegisteredUsersJson, hashPassword, SyncUser,
+} from '../middleware/syncGuard';
 
 const router = Router();
 router.use(express.json({ limit: '60mb' }));
+// 解析令牌（有则挂 req.user，无也放行；是否允许访问由各键的公开/归属规则决定）
+router.use(attachSyncUser);
+
+/** 统一的键访问拒绝响应：未登录 401，已登录但越权 403 */
+const denyLogAt = new Map<string, number>();
+function denyKey(res: Response, user: SyncUser | null, key: string, action: string): void {
+  // 拒绝日志（同一用户+键 10 分钟一条）：便于排查“某类数据突然不同步”是否被鉴权拦下
+  const tag = `${user ? user.username : 'anon'}|${key}|${action}`;
+  const now = Date.now();
+  if (now - (denyLogAt.get(tag) || 0) > 10 * 60_000) {
+    denyLogAt.set(tag, now);
+    console.warn(`[sync] 拒绝${action} key=${key} user=${user ? user.username : '(匿名)'}`);
+  }
+  if (!user) {
+    res.status(401).json({ code: 401, message: '未登录或登录已过期，请重新登录' });
+    return;
+  }
+  res.status(403).json({ code: 403, message: `无权${action}该数据(${key})` });
+}
 
 // 只增不删的全局列表键：任何情况下不允许整体替换导致记录缩水（无删除 UI，缩水必为客户端本地缺数据误上传）
 const APPEND_ONLY_KEYS = ['market_trade_orders', 'purchaser_pushed_orders'];
@@ -87,14 +110,15 @@ async function notifyNewPayRequests(key: string, oldJson: string, newJson: strin
 // ============ 数据集 CRUD ============
 
 /** 获取所有数据集的元信息（key + 更新时间） */
-router.get('/meta', async (_req: Request, res: Response) => {
+router.get('/meta', async (req: Request, res: Response) => {
   try {
     const rows = await store.getAllMeta();
     const meta: Record<string, number> = {};
     for (const r of rows) {
       meta[r.dataset_key] = r.updated_at;
     }
-    res.json(meta);
+    // 匿名只返回公开键（避免被枚举他人账号下的数据集名称）
+    res.json(filterMetaForUser(meta, currentSyncUser(req)));
   } catch (err: any) {
     console.error('[sync] /meta error:', err.message);
     res.status(500).json({ error: err.message });
@@ -106,9 +130,13 @@ router.get('/dataset', async (req: Request, res: Response) => {
   try {
     const key = String(req.query.key || '');
     if (!key) { res.status(400).json({ error: 'missing key' }); return; }
+    const user = currentSyncUser(req);
+    if (!isKeyAllowed(key, user, 'read')) { denyKey(res, user, key, '读取'); return; }
     const row = await store.getDataset(key);
     if (!row) { res.status(404).json({ error: 'not found' }); return; }
-    res.json({ key: row.dataset_key, json: row.dataset_json, updatedAt: row.updated_at });
+    // 账号数据集读取脱敏：不下发任何密码凭据
+    const json = key === 'registeredUsers' ? sanitizeRegisteredUsersJson(row.dataset_json) : row.dataset_json;
+    res.json({ key: row.dataset_key, json, updatedAt: row.updated_at });
   } catch (err: any) {
     console.error('[sync] /dataset GET error:', err.message);
     res.status(500).json({ error: err.message });
@@ -123,8 +151,16 @@ router.get('/dataset', async (req: Request, res: Response) => {
  */
 router.put('/dataset', async (req: Request, res: Response) => {
   try {
-    const { key, json, updatedAt, baseTs, force } = req.body;
+    const { key, updatedAt, baseTs, force } = req.body;
+    let json = req.body.json;
     if (!key || typeof json !== 'string') { res.status(400).json({ error: 'missing key or json' }); return; }
+    const user = currentSyncUser(req);
+    if (!isKeyAllowed(key, user, 'write')) { denyKey(res, user, key, '写入'); return; }
+    // 账号数据集写入前处理：明文密码统一转 bcrypt 哈希，服务端不再落明文
+    if (key === 'registeredUsers') {
+      const existing = await store.getDataset(key).catch(() => null);
+      json = await hashRegisteredUsersJson(json, existing ? existing.dataset_json : null);
+    }
     const ts = Number(updatedAt) || Date.now();
     const owner = extractOwner(key);
     const row = await store.getDataset(key);
@@ -253,6 +289,8 @@ router.delete('/dataset', async (req: Request, res: Response) => {
   try {
     const key = String(req.query.key || '');
     if (!key) { res.status(400).json({ error: 'missing key' }); return; }
+    const delUser = currentSyncUser(req);
+    if (!isKeyAllowed(key, delUser, 'delete')) { denyKey(res, delUser, key, '删除'); return; }
     const oldJson = await getDatasetJson(key);
     await store.deleteDataset(key);
     await applyUsageDeltaForWrite(key, oldJson, null);
@@ -265,19 +303,19 @@ router.delete('/dataset', async (req: Request, res: Response) => {
 // ============ 存储用量（增量计数器） ============
 
 /** 查询某租户数据库用量（字节，O(1)） */
-router.get('/usage', async (req: Request, res: Response) => {
+router.get('/usage', requireSyncAuth, async (req: Request, res: Response) => {
   const owner = String(req.query.owner || '');
   if (!owner) { res.status(400).json({ error: 'missing owner' }); return; }
   res.json({ code: 0, data: { owner, bytes: await getUsageBytes(owner) } });
 });
 
 /** 全部租户用量映射（开发者后台列表用） */
-router.get('/usage-all', async (_req: Request, res: Response) => {
+router.get('/usage-all', requireSyncAuth, async (_req: Request, res: Response) => {
   res.json({ code: 0, data: await getAllUsageBytes() });
 });
 
 /** 重新扫描：全量重算某租户（或全部）用量计数器 */
-router.post('/usage-recompute', async (req: Request, res: Response) => {
+router.post('/usage-recompute', requireSyncAuth, async (req: Request, res: Response) => {
   const owner = String(req.query.owner || req.body?.owner || '');
   const result = await recomputeUsage(owner || undefined);
   res.json({ code: 0, data: result });
@@ -286,33 +324,42 @@ router.post('/usage-recompute', async (req: Request, res: Response) => {
 // ============ 用户账号 CRUD ============
 
 /** 获取所有注册用户 */
-router.get('/users', async (_req: Request, res: Response) => {
+router.get('/users', requireSyncAuth, async (_req: Request, res: Response) => {
   try {
     const users = await store.getAllUsers();
-    res.json(users);
+    // 读取脱敏：不返回密码凭据
+    res.json((users || []).map((u: any) => {
+      const clone: any = { ...u };
+      delete clone.password;
+      delete clone.passwordHash;
+      return clone;
+    }));
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
 /** 获取单个用户 */
-router.get('/users/:username', async (req: Request, res: Response) => {
+router.get('/users/:username', requireSyncAuth, async (req: Request, res: Response) => {
   try {
     const user = await store.getUser(req.params.username);
     if (!user) { res.status(404).json({ error: 'user not found' }); return; }
-    res.json(user);
+    const clone: any = { ...(user as any) };
+    delete clone.password;
+    delete clone.passwordHash;
+    res.json(clone);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
 /** 注册用户 */
-router.post('/users', async (req: Request, res: Response) => {
+router.post('/users', requireSyncAuth, async (req: Request, res: Response) => {
   try {
     const { username, password, role, company_name, contact_person, phone, email, register_date, status } = req.body;
     if (!username || !password) { res.status(400).json({ error: 'username and password required' }); return; }
     const changes = await store.insertUser({
-      username, password, role: role || 'user', company_name: company_name || '', contact_person: contact_person || '',
+      username, password: await hashPassword(String(password)), role: role || 'user', company_name: company_name || '', contact_person: contact_person || '',
       phone: phone || '', email: email || '', register_date: register_date || new Date().toISOString().slice(0, 10), status: status || 'active',
     });
     if (changes === 0) {
@@ -326,10 +373,10 @@ router.post('/users', async (req: Request, res: Response) => {
 });
 
 /** 更新用户 */
-router.put('/users/:username', async (req: Request, res: Response) => {
+router.put('/users/:username', requireSyncAuth, async (req: Request, res: Response) => {
   try {
     const { password, role, company_name, contact_person, phone, email, status } = req.body;
-    await store.updateUser({ password: password || null, role: role || null, company_name: company_name || null, contact_person: contact_person || null, phone: phone || null, email: email || null, status: status || null }, req.params.username);
+    await store.updateUser({ password: password ? await hashPassword(String(password)) : null, role: role || null, company_name: company_name || null, contact_person: contact_person || null, phone: phone || null, email: email || null, status: status || null }, req.params.username);
     res.json({ updated: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -337,7 +384,7 @@ router.put('/users/:username', async (req: Request, res: Response) => {
 });
 
 /** 删除用户 */
-router.delete('/users/:username', async (req: Request, res: Response) => {
+router.delete('/users/:username', requireSyncAuth, async (req: Request, res: Response) => {
   try {
     await store.deleteUser(req.params.username);
     res.json({ deleted: true });
@@ -348,7 +395,7 @@ router.delete('/users/:username', async (req: Request, res: Response) => {
 
 // ============ 系统设置 ============
 
-router.get('/settings/:key', async (req: Request, res: Response) => {
+router.get('/settings/:key', requireSyncAuth, async (req: Request, res: Response) => {
   try {
     const value = await store.getSetting(req.params.key);
     res.json({ value: value || '' });
@@ -357,7 +404,7 @@ router.get('/settings/:key', async (req: Request, res: Response) => {
   }
 });
 
-router.put('/settings/:key', async (req: Request, res: Response) => {
+router.put('/settings/:key', requireSyncAuth, async (req: Request, res: Response) => {
   try {
     await store.setSetting(req.params.key, String(req.body.value || ''));
     res.json({ saved: true });

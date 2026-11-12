@@ -10,7 +10,7 @@ import { useNavigate } from 'react-router-dom';
 import Logo from '../components/Logo';
 import { safeSetItem } from '../utils/storageQuota';
 import { FREE_PERIOD } from '../utils/billingPolicy';
-import { fetchServerDataset, flushDatasetUpload, reloadAfterPull } from '../utils/serverSync';
+import { fetchServerDataset, flushDatasetUpload, reloadAfterPull, pullAllDatasets } from '../utils/serverSync';
 import { initPushNotifications } from '../utils/pushNotification';
 import { getProvinceOptions, getCityOptions, getDistrictOptions } from '../utils/regions';
 import { PROCESS_TYPE_OPTIONS } from './ContractFactoryPage';
@@ -22,6 +22,43 @@ const PRIMARY = '#1e4a7e';
 // 短信验证码登录接口地址（统一走 apiBase：开发 localhost:3000，生产同源 /api）
 import { API_BASE as SMS_API_BASE } from '../utils/apiBase';
 import { cleanupDemoAccountsAndSession } from '../utils/demoAccountCleanup';
+import { validatePassword } from '../utils/passwordPolicy';
+
+/**
+ * Web 登录服务端裁决：服务端可用时以其结论为准（服务端只存 bcrypt 哈希，本地不再作为凭据来源）。
+ * 返回 ok 时同时带回 JWT，供 /api/sync 鉴权使用；网络不可达返回 offline，由调用方回退本地校验。
+ */
+const serverWebLogin = async (
+  username: string,
+  password: string
+): Promise<{ status: 'ok' | 'invalid' | 'offline'; token?: string; user?: any; message?: string }> => {
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 8000);
+    let res: globalThis.Response;
+    try {
+      res = await fetch(`${SMS_API_BASE}/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+        signal: ctrl.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+    const data = await res.json().catch(() => null);
+    if (res.ok && data?.data?.token) {
+      return { status: 'ok', token: String(data.data.token), user: data.data.user || {} };
+    }
+    if (res.status === 401 || res.status === 403) {
+      return { status: 'invalid', message: data?.message || '用户名或密码错误' };
+    }
+    // 5xx / 网关异常视同服务不可用，回退本地校验
+    return { status: 'offline' };
+  } catch {
+    return { status: 'offline' };
+  }
+};
 
 // === 安全防护工具函数 ===
 const MAX_LOGIN_ATTEMPTS = 5;
@@ -186,6 +223,16 @@ const Auth: React.FC = () => {
     const t = setTimeout(() => setSmsCountdown(c => c - 1), 1000);
     return () => clearTimeout(t);
   }, [smsCountdown]);
+
+  // 安全升级提示：旧会话因服务端要求鉴权被清除时提示重新登录
+  useEffect(() => {
+    try {
+      if (sessionStorage.getItem('sync_reauth_required') === '1') {
+        sessionStorage.removeItem('sync_reauth_required');
+        message.warning('为提升数据安全，请重新登录以恢复数据同步');
+      }
+    } catch { /* ignore */ }
+  }, []);
   const deviceCountdownRef = useRef<NodeJS.Timeout | null>(null);
   const [pendingLoginUser, setPendingLoginUser] = useState<any>(null); // 待登录用户（等待设备验证）
   const [pendingIsViewOnly, setPendingIsViewOnly] = useState(false);
@@ -264,6 +311,10 @@ const Auth: React.FC = () => {
     safeSetItem('userRoles', JSON.stringify(foundUser.roles || []));
     safeSetItem('userCustomPermissions', JSON.stringify(foundUser.customPermissions || []));
     safeSetItem('lastActiveTime', Date.now().toString());
+    // 登录后立即拉取一次服务端数据（私有键需要 JWT，避免等 60s 轮询才看到自己的数据）
+    void pullAllDatasets().then(() => {
+      try { window.dispatchEvent(new Event('sync-data-updated')); } catch { /* ignore */ }
+    }).catch(() => { /* ignore */ });
 
     if (isViewOnly) {
       message.info('您的账号已进入数据保留期，仅可查看历史数据，无法进行操作');
@@ -636,6 +687,10 @@ const Auth: React.FC = () => {
     safeSetItem('userRoles', JSON.stringify(foundUser.roles || []));
     safeSetItem('userCustomPermissions', JSON.stringify(foundUser.customPermissions || []));
     safeSetItem('lastActiveTime', Date.now().toString());
+    // 登录后立即拉取一次服务端数据（私有键需要 JWT，避免等 60s 轮询才看到自己的数据）
+    void pullAllDatasets().then(() => {
+      try { window.dispatchEvent(new Event('sync-data-updated')); } catch { /* ignore */ }
+    }).catch(() => { /* ignore */ });
 
     if (isViewOnly) {
       message.info('您的账号已进入数据保留期，仅可查看历史数据，无法进行操作');
@@ -684,6 +739,36 @@ const Auth: React.FC = () => {
 
         let foundUser: any = null;
         let userSource: 'mock' | 'registered' = 'mock';
+
+        // === 服务端裁决（账号密码）：服务端可用时以其结论为准；网络不通才回退本地比对 ===
+        // 手机号输入先由本地解析成账号再裁决（服务端登录接口只接受账号名）
+        const phoneLike = /^1[3-9]\d{9}$/.test(String(username).trim());
+        let serverAuthed = false;
+        let serverUser: any = null;
+        const failLocal = (reason: string, serverMessage?: string) => {
+          const failCount = recordLoginFailure(username);
+          const remaining = MAX_LOGIN_ATTEMPTS - failCount;
+          recordLoginLog(username, false, reason);
+          if (remaining <= 0) {
+            message.error(`密码错误次数已达${MAX_LOGIN_ATTEMPTS}次，账号已被锁定${LOCK_DURATION_MINUTES}分钟`);
+          } else if (remaining <= 2) {
+            message.warning(`${serverMessage || '账号或密码错误'}，还剩 ${remaining} 次机会，超过后账号将被锁定${LOCK_DURATION_MINUTES}分钟`);
+          } else {
+            message.error(`${serverMessage || '账号或密码错误'}（还剩 ${remaining} 次机会）`);
+          }
+          setLoading(false);
+        };
+        if (!phoneLike) {
+          const verdict = await serverWebLogin(username, password);
+          if (verdict.status === 'invalid') { failLocal('服务端校验失败', verdict.message); return; }
+          if (verdict.status === 'ok') {
+            serverAuthed = true;
+            serverUser = verdict.user;
+            if (verdict.token) {
+              try { localStorage.setItem('token', verdict.token); } catch { /* ignore */ }
+            }
+          }
+        }
 
         // 先在 mockUsers 中查找
         const mockUser = mockUsers.find(u => u.username === username && u.password === password);
@@ -735,7 +820,10 @@ const Auth: React.FC = () => {
         // 跨浏览器登录：本地未找到时先从服务器拉取账号并集合并到本地，再走本地查找
         {
           const localPre: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
-          if (!localPre.some((u: any) => u.username === username && u.password === password)) {
+          const alreadyMatched = serverAuthed
+            ? localPre.some((u: any) => u.username === username)
+            : localPre.some((u: any) => u.username === username && u.password === password);
+          if (!alreadyMatched) {
             try {
               const rec = await fetchServerDataset('registeredUsers');
               if (rec) {
@@ -748,6 +836,10 @@ const Auth: React.FC = () => {
                     if (localIdx < 0) {
                       // 本地不存在，新增
                       localPre.push(su);
+                      changed = true;
+                    } else if (serverAuthed) {
+                      // 服务端已裁决通过：本地副本仅补齐管理端字段，不覆盖本地密码
+                      localPre[localIdx] = { ...su, ...localPre[localIdx] };
                       changed = true;
                     } else if (su.password === password && localPre[localIdx].password !== password) {
                       // 本地存在但密码不匹配，用服务器版本更新（密码变更同步）
@@ -778,12 +870,27 @@ const Auth: React.FC = () => {
             return;
           }
           if (phoneHits.length === 1) loginName = phoneHits[0].username;
+          // 手机号已解析出账号：再由服务端裁决密码（服务端只存哈希）
+          if (loginName !== username) {
+            const phoneVerdict = await serverWebLogin(loginName, password);
+            if (phoneVerdict.status === 'invalid') { failLocal('服务端校验失败', phoneVerdict.message); return; }
+            if (phoneVerdict.status === 'ok') {
+              serverAuthed = true;
+              serverUser = phoneVerdict.user;
+              if (phoneVerdict.token) {
+                try { localStorage.setItem('token', phoneVerdict.token); } catch { /* ignore */ }
+              }
+            }
+          }
         }
 
         // 如果没找到，再从 localStorage 的 registeredUsers 中查找
         if (!foundUser) {
           const registeredUsers = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
-          const found = registeredUsers.find((u: any) => u.username === loginName && u.password === password);
+          // 服务端已裁决通过时只需按账号名定位本地资料（服务端不下发密码，本地可能也没有该记录的明文密码）
+          const found = serverAuthed
+            ? registeredUsers.find((u: any) => u.username === loginName)
+            : registeredUsers.find((u: any) => u.username === loginName && u.password === password);
           if (found) {
             let role = found.role;
             if (role === 'supplier,purchaser' || role === 'purchaser,supplier') {
@@ -791,7 +898,7 @@ const Auth: React.FC = () => {
             }
             foundUser = {
               username: found.username,
-              password: found.password,
+              password: found.password || password,
               role,
               name: found.companyName || found.contactPerson || found.username,
               email: found.email || '',
@@ -808,20 +915,32 @@ const Auth: React.FC = () => {
           }
         }
 
+        // 服务端已通过但本地还没有该账号资料（新浏览器首次登录）：先用服务端返回的基础信息登录
+        if (!foundUser && serverAuthed && serverUser) {
+          let role = String(serverUser.role || 'supplier');
+          if (role === 'supplier,purchaser' || role === 'purchaser,supplier') role = 'both';
+          foundUser = {
+            username: serverUser.username || loginName,
+            password,
+            role,
+            name: serverUser.name || serverUser.company_name || serverUser.username || loginName,
+            email: '',
+            phone: '',
+            trialEndDate: '',
+            authorizedUntil: '',
+            isSubAccount: false,
+            parentAccount: '',
+            roles: [],
+            needsPasswordChange: false,
+          };
+          userSource = 'registered';
+        }
+
         if (foundUser) {
           proceedWithUser(foundUser);
         } else {
           // === 登录失败：记录失败次数 ===
-          const failCount = recordLoginFailure(username);
-          const remaining = MAX_LOGIN_ATTEMPTS - failCount;
-          recordLoginLog(username, false, `密码错误（第${failCount}次）`);
-          if (remaining <= 0) {
-            message.error(`密码错误次数已达${MAX_LOGIN_ATTEMPTS}次，账号已被锁定${LOCK_DURATION_MINUTES}分钟`);
-          } else if (remaining <= 2) {
-            message.warning(`账号或密码错误，还剩 ${remaining} 次机会，超过后账号将被锁定${LOCK_DURATION_MINUTES}分钟`);
-          } else {
-            message.error(`账号或密码错误（还剩 ${remaining} 次机会）`);
-          }
+          failLocal('登录失败');
         }
 
         setLoading(false);
@@ -874,6 +993,10 @@ const Auth: React.FC = () => {
       });
       const j = await res.json();
       if (j.code !== 0) { message.error(j.message || '登录失败'); setSmsLoading(false); return; }
+      // 短信登录服务端直接签发 JWT（验证码已证明手机号归属）
+      if (j.data?.token) {
+        try { localStorage.setItem('token', String(j.data.token)); } catch { /* ignore */ }
+      }
       const username = j.data?.username;
       // 与账号密码登录同口径：先合并服务器账号再本地查找
       const local: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
@@ -1041,12 +1164,10 @@ const Auth: React.FC = () => {
       message.warning('请输入新密码');
       return;
     }
-    if (newPwd.length < 6) {
-      message.warning('密码长度不能少于6位');
-      return;
-    }
-    if (!/^(?=.*[a-zA-Z])(?=.*\d)/.test(newPwd)) {
-      message.warning('密码必须包含字母和数字');
+    // 统一密码策略（长度/弱密码/是否含账号名与手机号片段）
+    const pwdCheck = validatePassword(newPwd, { username: matchedUser?.username });
+    if (!pwdCheck.ok) {
+      message.warning(pwdCheck.message);
       return;
     }
     if (newPwd !== confirmPwd) {
@@ -1470,11 +1591,16 @@ const Auth: React.FC = () => {
                 label="登录密码"
                 rules={[
                   { required: true, message: '请设置登录密码' },
-                  { min: 6, message: '密码至少6位' },
-                  { pattern: /^(?=.*[a-zA-Z])(?=.*\d)/, message: '密码必须包含字母和数字' },
+                  ({ getFieldValue }) => ({
+                    validator(_, value) {
+                      if (!value) return Promise.resolve();
+                      const r = validatePassword(String(value), { username: String(getFieldValue('username') || '') });
+                      return r.ok ? Promise.resolve() : Promise.reject(new Error(r.message));
+                    },
+                  }),
                 ]}
               >
-                <Input.Password prefix={<LockOutlined />} placeholder="请设置登录密码（字母+数字）" />
+                <Input.Password prefix={<LockOutlined />} placeholder="请设置登录密码（至少10位，12位以下需含字母+数字）" />
               </Form.Item>
 
               <Form.Item

@@ -117,6 +117,7 @@ const DevLayout: React.FC = () => {
       localStorage.removeItem('devUserName');
       localStorage.removeItem('devIsSub');
       localStorage.removeItem('devParent');
+      localStorage.removeItem('token'); // 同步接口鉴权令牌
       navigate('/xunnengs/entry-7x2qf9');
     }
   }, [navigate]);

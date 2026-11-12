@@ -10,6 +10,7 @@
 import { Router, Request, Response } from 'express';
 import { isSmsConfigured, sendSmsCode } from '../services/aliyunSms';
 import { store } from '../database/store';
+import { issueToken } from './auth.routes';
 
 const router = Router();
 
@@ -101,7 +102,10 @@ router.post('/login', async (req: Request, res: Response) => {
     }
     codeStore.delete(phone);
     if (u.accountStatus === 'disabled' || u.status === '禁用') { res.json({ code: 403, message: '该账号已被禁用，请联系管理员' }); return; }
-    res.json({ code: 0, data: { username: u.username } });
+    // 短信验证码已证明手机号归属：直接签发 JWT，供 /api/sync 鉴权使用
+    let token = '';
+    try { token = await issueToken(String(u.username), String(u.role || 'supplier')); } catch { /* 签发失败不阻断登录，前端会回退本地模式 */ }
+    res.json({ code: 0, data: { username: u.username, token } });
   } catch (err: any) {
     res.status(500).json({ code: 500, message: err.message });
   }

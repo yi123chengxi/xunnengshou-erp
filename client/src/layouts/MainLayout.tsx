@@ -38,6 +38,7 @@ import type { MenuProps } from 'antd';
 import Logo from '../components/Logo';
 import KeepAliveOutlet from '../components/KeepAliveOutlet';
 import { menuVisible, menuKeyFromPath, usePermTick, getPreviewUser, setPreviewUser } from '../utils/perm';
+import { validatePassword } from '../utils/passwordPolicy';
 import { Result as AntResult } from 'antd';
 import ServiceOrdersModal from '../components/ServiceOrdersModal';
 import EnterpriseCertModal, { CertBadge, fetchCertStatus, getChangeLockMessage } from '../components/EnterpriseCertModal';
@@ -831,6 +832,7 @@ const MainLayout: React.FC = () => {
             localStorage.removeItem('parentAccount');
             localStorage.removeItem('userRoles');
             localStorage.removeItem('userCustomPermissions');
+            localStorage.removeItem('token'); // 同步接口鉴权令牌
             message.success('已安全退出，即将跳转到登录页');
             setTimeout(() => navigate('/login'), 1000);
           },
@@ -2240,11 +2242,16 @@ const MainLayout: React.FC = () => {
             label="新密码"
             rules={[
               { required: true, message: '请输入新密码' },
-              { min: 6, message: '密码至少6位' },
-              { pattern: /^(?=.*[a-zA-Z])(?=.*\d)/, message: '密码必须包含字母和数字' },
+              ({ getFieldValue }) => ({
+                validator(_, value) {
+                  if (!value) return Promise.resolve();
+                  const r = validatePassword(String(value), { username: localStorage.getItem('username') || '' });
+                  return r.ok ? Promise.resolve() : Promise.reject(new Error(r.message));
+                },
+              }),
             ]}
           >
-            <Input.Password placeholder="请输入新密码（字母+数字）" prefix={<LockOutlined />} />
+            <Input.Password placeholder="请输入新密码（至少10位，12位以下需含字母+数字）" prefix={<LockOutlined />} />
           </Form.Item>
           <Form.Item
             name="confirmPwd"

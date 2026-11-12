@@ -23,6 +23,7 @@ server/data/*.db-shm
 server/data/*.db-wal
 server/data/sync/
 server/data/registeredUsers.json
+server/data/jwt.secret
 
 # ========================
 # 构建产物

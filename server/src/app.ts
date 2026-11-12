@@ -1,13 +1,14 @@
 import express from 'express';
 import http from 'http';
-import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'path';
 // SQLite 数据库（同步导入，确保启动时建表完成）
 import './database/sqlite';
 import { runCleanupFromDB } from './tasks/cleanup.task';
 import { ensureUsageBackfill } from './services/storageUsage';
-import { STORE_DRIVER } from './database/store';
+import { STORE_DRIVER, store } from './database/store';
+import { securityHeaders, corsGuard, rateLimit } from './middleware/security';
+import { upgradePlaintextUserTable, hashRegisteredUsersJson } from './middleware/syncGuard';
 
 // 路由导入
 import customerRoutes from './routes/customer.routes';
@@ -42,14 +43,23 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // 中间件
-app.use(cors());
+app.disable('x-powered-by');
+app.set('trust proxy', 1); // Nginx 反代：取真实客户端 IP 用于限流
+app.use(securityHeaders);
+app.use(corsGuard);
 app.use(express.json({ limit: '60mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 // 打印客户端更新源：latest.yml + 安装包（electron-updater generic provider，客户端登录后按 serverUrl/downloads/ 检查更新）
 app.use('/downloads', express.static(path.join(__dirname, '../downloads')));
 
-// API路由
+// API路由（先挂限流，再挂业务路由）
+app.use('/api/auth/login', rateLimit({ name: 'auth-login', windowMs: 5 * 60_000, max: 30, message: '登录尝试过于频繁，请稍后再试' }));
+app.use('/api/auth', rateLimit({ name: 'auth', windowMs: 60_000, max: 120 }));
+app.use('/api/sms', rateLimit({ name: 'sms', windowMs: 60_000, max: 60, message: '验证码请求过于频繁，请稍后再试' }));
+// 同步轮询：60s 一轮会拉取多键 + 写回，单 IP 每分钟上限 2400 次以拦截脚本扫描，不拦截正常轮询
+app.use('/api/sync', rateLimit({ name: 'sync', windowMs: 60_000, max: 2400, message: '同步请求过于频繁，请稍后再试' }));
+
 app.use('/api/auth', authRoutes);
 app.use('/api/sms', smsRoutes);
 app.use('/api/enterprise', enterpriseRoutes);
@@ -107,6 +117,23 @@ server.listen(PORT, async () => {
   console.log(`✅ 数据库已就绪（驱动：${STORE_DRIVER}）`);
   // 存储用量计数器背填：仅首次升级（计数器表为空）时全量聚合一次，后续走增量
   void ensureUsageBackfill().catch(() => { /* ignore */ });
+  // 安全迁移：存量明文密码升级为 bcrypt（registered_users 表 + registeredUsers 数据集）
+  void (async () => {
+    try {
+      const upgraded = await upgradePlaintextUserTable(store);
+      if (upgraded > 0) console.log(`[security] registered_users 明文密码已升级为 bcrypt：${upgraded} 个账号`);
+      const rec = await store.getDataset('registeredUsers');
+      if (rec) {
+        const hashed = await hashRegisteredUsersJson(rec.dataset_json, rec.dataset_json);
+        if (hashed !== rec.dataset_json) {
+          await store.forceUpsertDataset('registeredUsers', hashed, '', rec.updated_at);
+          console.log('[security] registeredUsers 数据集明文密码已升级为 bcrypt 哈希');
+        }
+      }
+    } catch (err: any) {
+      console.error('[security] 密码哈希迁移失败:', err?.message || err);
+    }
+  })();
   // 企业认证 30 天巡检日任务（当日已跑自动跳过）
   try { startEnterprisePatrol(); } catch { /* ignore */ }
   console.log('🖨️  打印 WebSocket 服务已就绪: ws://localhost:' + PORT + '/ws/print');

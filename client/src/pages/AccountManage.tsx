@@ -5,6 +5,7 @@ import {
   Popconfirm, DatePicker, Badge, Tooltip, Checkbox, Divider, Upload, Alert,
 } from 'antd';
 import { reloadAfterPull } from '../utils/serverSync';
+import { validatePassword } from '../utils/passwordPolicy';
 import { saveDataset } from '../utils/dataStore';
 import {
   PlusOutlined,
@@ -843,7 +844,7 @@ const AccountManage: React.FC = () => {
           const group = pick(r, ['所属分组', '所属分组', '分组', '所属部门']);
           const username = pick(r, ['用户名', '用户名', '账号']);
           const displayName = pick(r, ['姓名*', '姓名', '名称']);
-          const password = pick(r, ['初始密码', '密码']) || 'abc123456';
+          const password = pick(r, ['初始密码', '密码']) || 'Xns@2026init';
           const remark = pick(r, ['备注', '说明']);
           const row: ImportAccountRow = { rowNo: i + 2, group, username, displayName, password, remark, error: '' };
           if (!group) row.error = '缺少所属分组（必填）';
@@ -856,7 +857,7 @@ const AccountManage: React.FC = () => {
             else if (registered.some((u: any) => String(u.username || '').toLowerCase() === username.toLowerCase())) row.error = '用户名已被注册';
           }
           if (!row.error && !displayName) row.error = '缺少姓名（必填）';
-          if (!row.error && !(password.length >= 6 && /[a-zA-Z]/.test(password) && /\d/.test(password))) row.error = '初始密码至少6位且含字母和数字';
+          if (!row.error && !validatePassword(password, { username }).ok) row.error = validatePassword(password, { username }).message;
           if (!row.error) seen.add(username.toLowerCase());
           return row;
         }).filter(r => r.group || r.username || r.displayName || r.remark); // 忽略全空行
@@ -1608,11 +1609,16 @@ const AccountManage: React.FC = () => {
                 label="初始密码"
                 rules={[
                   { required: true, message: '请设置初始密码' },
-                  { min: 6, message: '密码至少6位' },
-                  { pattern: /^(?=.*[a-zA-Z])(?=.*\d)/, message: '密码必须包含字母和数字' },
+                  ({ getFieldValue }) => ({
+                    validator(_, value) {
+                      if (!value) return Promise.resolve();
+                      const r = validatePassword(String(value), { username: String(getFieldValue('username') || '') });
+                      return r.ok ? Promise.resolve() : Promise.reject(new Error(r.message));
+                    },
+                  }),
                 ]}
               >
-                <Input.Password placeholder="请设置初始密码（字母+数字）" prefix={<LockOutlined />} />
+                <Input.Password placeholder="请设置初始密码（至少10位，12位以下需含字母+数字）" prefix={<LockOutlined />} />
               </Form.Item>
             </Col>
             <Col span={12}>
@@ -1726,11 +1732,16 @@ const AccountManage: React.FC = () => {
             label="新密码"
             rules={[
               { required: true, message: '请输入新密码' },
-              { min: 6, message: '密码至少6位' },
-              { pattern: /^(?=.*[a-zA-Z])(?=.*\d)/, message: '密码必须包含字母和数字' },
+              ({ getFieldValue }) => ({
+                validator(_, value) {
+                  if (!value) return Promise.resolve();
+                  const r = validatePassword(String(value), { username: pwdAccount?.username });
+                  return r.ok ? Promise.resolve() : Promise.reject(new Error(r.message));
+                },
+              }),
             ]}
           >
-            <Input.Password placeholder="请输入新密码（字母+数字）" prefix={<LockOutlined />} />
+            <Input.Password placeholder="请输入新密码（至少10位，12位以下需含字母+数字）" prefix={<LockOutlined />} />
           </Form.Item>
           <Form.Item
             name="confirmPassword"

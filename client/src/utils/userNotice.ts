@@ -91,7 +91,9 @@ export const clearUserNotices = (username: string) => {
   keys.forEach(k => {
     try { localStorage.removeItem(k); } catch { /* ignore */ }
     if (!k.endsWith('_ts')) {
-      fetch(`${API_BASE}/sync/dataset?key=${encodeURIComponent(k)}`, { method: 'DELETE' }).catch(() => { /* ignore */ });
+      let auth: Record<string, string> = {};
+      try { const t = localStorage.getItem('token'); if (t) auth = { Authorization: `Bearer ${t}` }; } catch { /* ignore */ }
+      fetch(`${API_BASE}/sync/dataset?key=${encodeURIComponent(k)}`, { method: 'DELETE', headers: auth }).catch(() => { /* ignore */ });
     }
   });
   try { window.dispatchEvent(new Event(USER_NOTICES_EVENT)); } catch { /* ignore */ }
