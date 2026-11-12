@@ -171,10 +171,11 @@ function handleSyncAuthRequired(): void {
   reauthTriggered = true;
   try {
     sessionStorage.setItem('sync_reauth_required', '1');
-    // 只清凭据与活性时间，保留身份/归属字段（username / isSubAccount / parentAccount / userRole 等）：
-    // 这些字段是 getDataOwner 解析数据归属的唯一依据，清掉后重定向前的瞬时读写会
-    // 把归属从主账号漂到子账号，导致写入错误 owner 的私有键（表现为“订单只剩一条”）
-    ['lastActiveTime', 'token'].forEach(k => localStorage.removeItem(k));
+    // 必须连身份/归属字段一并清除（等同真正登出）：MainLayout 与 index 的会话守卫都以
+    // username 作为登录标，只清 token 会留下“看着已登录、同步始终 401 静默失效”的状态；
+    // 且重定向与清除同步执行，页面不会在归属缺失下继续读写业务数据
+    ['username', 'userRole', 'isViewOnly', 'isSubAccount', 'parentAccount', 'userRoles', 'userCustomPermissions', 'lastActiveTime', 'token']
+      .forEach(k => localStorage.removeItem(k));
   } catch { /* ignore */ }
   try { window.location.href = '/login'; } catch { /* ignore */ }
 }
