@@ -32,6 +32,31 @@ export const isOccupyingOrder = (o: any): boolean => {
   return true;
 };
 
+/**
+ * 订单编号取号：取「全部已知 MC 号」的最大值 +1（MC000001 起）。
+ * 取号集合必须含全量落盘数据：只按过滤/分页后的列表取号会取到重号，
+ * 而 MC 号是订单主键（对账/回写/合并均按它查找），重号会直接串改他单数据。
+ */
+export const nextOrderIdFrom = (ids: any[]): string => {
+  let maxNum = 0;
+  (Array.isArray(ids) ? ids : []).forEach((raw: any) => {
+    const m = /^MC(\d+)$/.exec(String(raw === undefined || raw === null ? '' : raw));
+    if (m) {
+      const n = parseInt(m[1], 10);
+      if (n > maxNum) maxNum = n;
+    }
+  });
+  return `MC${String(maxNum + 1).padStart(6, '0')}`;
+};
+
+/** 取号用的订单号集合：当前列表 id + 全量落盘订单 id */
+export const collectOrderIdsForAlloc = (owner: string, listIds: any[] = []): string[] => {
+  const ids: string[] = [];
+  (Array.isArray(listIds) ? listIds : []).forEach((v: any) => ids.push(String(v === undefined || v === null ? '' : v)));
+  readOrders(owner).forEach((r: any) => ids.push(String(r?.id ?? '')));
+  return ids;
+};
+
 /** 余额支付判定（付款方式字段或订单标签含「余额支付」），只有余额支付才占用额度 */
 export const isBalancePayOrder = (o: any): boolean =>
   String(o?.payMethod || '').trim() === '余额支付'

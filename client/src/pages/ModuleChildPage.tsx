@@ -111,7 +111,7 @@ import { buildSupplierReturnRow, buildPurchaserReturnBill, writeReturnStockFlows
 import { appendStockLog, updateProductStock } from '../utils/stockUtils';
 import { loadTenantUsers } from '../utils/tenantUsers';
 import { appendBillLogEntry, readBillLog, billLogColor, resolveOperatorName, diffBillRecords, SUPPLIER_BILL_FIELD_MAP, getCurrentUserDisplayName } from '../utils/billLog';
-import { pullAllDatasets, flushDatasetUploadAsync, ensureDatasetFromServer, reloadAfterPull, appendRowsToRemoteKey } from '../utils/serverSync';
+import { pullAllDatasets, flushDatasetUploadAsync, ensureDatasetFromServer, reloadAfterPull, appendRowsToRemoteKey, declareShrink } from '../utils/serverSync';
 import { PRESET_PRINT_TEMPLATES, seedPresetPrintTemplates } from '../config/presetPrintTemplates';
 import { refreshCustomerPurchase, computeCustomerPurchaseCents, computeCustomerReceivedCents, toYuan } from '../utils/paySummary';
 import { resolveLatestCompanyName, resolveCompanyCred, buildCompanyCredMap, buildCredIndex } from '../utils/nameSync';
@@ -133,7 +133,7 @@ import ProductPrintPage from './ProductPrintPage';
 import FieldConfigModal from '../components/FieldConfigModal';
 import StockHistoryModal from '../components/StockHistoryModal';
 import OrderReservedModal from '../components/OrderReservedModal';
-import { buildOrderOccupiedMap, syncOrderReserved } from '../utils/orderOccupied';
+import { buildOrderOccupiedMap, syncOrderReserved, nextOrderIdFrom, collectOrderIdsForAlloc } from '../utils/orderOccupied';
 import {
   RECON_BOOKED, reconStateOf, orderStatusOkForRecon, canInitRecon, canConfirmBill, canWithdrawRecon,
   resolveBillAmountFields, deriveReconState,
@@ -4933,8 +4933,9 @@ const ModuleChildPage: React.FC = () => {
   // 防止旧内存数据整体覆盖导致新增记录被“自动删除”。
   const loadedIdsRef = React.useRef<Set<string>>(new Set());
   const lastKnownTsRef = React.useRef<number>(0);
-  // 订单键空写申报：仅显式删除（单删/批删）允许把订单存储写空，
-  // 防瞬时空内存态（未加载/异常重建）经自动持久化清空订单存储导致订单占用数抖动归 0
+  // 订单键空写申报：订单不提供删除功能（只能取消），正常业务下不存在“合法清空订单存储”的场景，
+  // 因此该闸口默认一律拦截：防瞬时空内存态（未加载/异常重建）经自动持久化清空订单存储导致订单占用数抖动归 0
+  // 确实需要落空的极端场景（如多单合并后仅剩一单）需显式置 allowEmptyOrdersPersistRef.current = true 后才允许写入
   const allowEmptyOrdersPersistRef = React.useRef(false);
   React.useEffect(() => {
     const onSyncUpdated = () => setSyncVersion(v => v + 1);
@@ -7589,6 +7590,11 @@ const ModuleChildPage: React.FC = () => {
         orderTags: Array.isArray(orig.orderTags) ? orig.orderTags.filter((t: string) => t !== '缺货拆分') : orig.orderTags,
       };
       const childIdSet = new Set(childIds);
+      // 永不缩水键显式删除申报：子单行是合法消失（已合并回原单），必须随上传申报 removedIds，
+      // 否则服务端会按并集保留子单导致撤回拆分后子单“复活”、数量翻倍
+      try {
+        declareShrink(omKey, list.filter((o: any) => childIdSet.has(o.id)).map((o: any) => String(o.key || o.id || '')).filter(Boolean));
+      } catch { /* ignore */ }
       pushRecordToPage(omKey, list.filter((o: any) => !childIdSet.has(o.id)).map((o: any) => o.id === orig.id ? { ...o, ...upd } : o));
       setDataSource(prev => prev.filter((r: any) => !childIdSet.has(r.id)).map((r: any) => r.id === orig.id ? { ...r, ...upd } : r));
       appendOrderLog(orig.id, '撤回拆分', `子单 ${childIds.join('、')} 已合并回原单，合并后总额 ¥${total.toFixed(2)}、已付 ¥${paid.toFixed(2)}`);
@@ -8479,24 +8485,15 @@ const ModuleChildPage: React.FC = () => {
     }
     // 订单管理：自动生成订单编号（MC前缀 + 递增序号）
     if (pageConfig?.title === '订单管理') {
-      const existingIds = dataSource.map(d => String(d.id || ''));
-      let maxNum = 0;
-      existingIds.forEach(id => {
-        const match = id.match(/^MC(\d+)$/);
-        if (match) {
-          const num = parseInt(match[1], 10);
-          if (num > maxNum) maxNum = num;
-        }
-      });
-      const nextNum = maxNum + 1;
-      const orderId = `MC${String(nextNum).padStart(6, '0')}`;
+      // 取号必须覆盖「当前列表 + 全量落盘数据」，否则筛选/分页态下会取到重号（MC 号是订单主键）
+      const orderId = nextOrderIdFrom(collectOrderIdsForAlloc(getDataOwner(), dataSource.map(d => String(d.id || ''))));
       addForm.setFieldsValue({ id: orderId, createTime: new Date().toLocaleString('zh-CN', { hour12: false }).replace(/\//g, '-'), person: getCurrentUserDisplayName() });
     }
     setEditMode(false);
     setAddVisible(true);
     // 重置生产订单图片状态
     if (pageConfig?.title === '生产订单') setPoAddImages([]);
-  }, [addForm, pageConfig, activeTab, dataSource]);
+  }, [addForm, pageConfig, activeTab, dataSource, getDataOwner]);
 
   // 确认新增
   const handleAddConfirm = useCallback(() => {
@@ -8654,13 +8651,8 @@ const ModuleChildPage: React.FC = () => {
     setEditMode(false);
     setSelectedRecord(null);
     editForm.resetFields();
-    const existingIds = dataSource.map(d => String(d.id || ''));
-    let maxNum = 0;
-    existingIds.forEach(id => {
-      const m = id.match(/^MC(\d+)$/);
-      if (m) { const n = parseInt(m[1], 10); if (n > maxNum) maxNum = n; }
-    });
-    const orderId = `MC${String(maxNum + 1).padStart(6, '0')}`;
+    // 取号覆盖「当前列表 + 全量落盘数据」，避免筛选/分页态下取到重号（MC 号是订单主键）
+    const orderId = nextOrderIdFrom(collectOrderIdsForAlloc(getDataOwner(), dataSource.map(d => String(d.id || ''))));
     editForm.setFieldsValue({
       id: orderId,
       orderStatus: '待付款',
@@ -8676,7 +8668,7 @@ const ModuleChildPage: React.FC = () => {
     setSelectedCity('');
     setSelectedDistrict('');
     setEditVisible(true);
-  }, [editForm, dataSource, getCurrentUserDisplayName]);
+  }, [editForm, dataSource, getCurrentUserDisplayName, getDataOwner]);
 
   // 查看详情
   const handleView = useCallback((record: Record<string, any>) => {
@@ -9334,12 +9326,12 @@ const ModuleChildPage: React.FC = () => {
 
   // 删除
   const handleDelete = useCallback((record: Record<string, any>) => {
-    if (!fnOk('delete')) { message.warning('无删除权限'); return; }
-    // 采购商推送订单：源头在采购商，供应商删除会导致采购商端订单悬空，只允许取消不允许删除
-    if (pageConfig?.title === '订单管理' && record.orderSource === '采购商推送') {
-      message.warning('采购商推送的订单不允许删除，如需终止请在操作列取消订单');
+    // 订单管理：订单只能取消不能删除（删除会切断账单/拣货/财审的回写链路，取消后仍可反取消恢复）
+    if (pageConfig?.title === '订单管理') {
+      message.warning('订单不支持删除，如需终止请在操作列取消订单');
       return;
     }
+    if (!fnOk('delete')) { message.warning('无删除权限'); return; }
     // 银行账户：余额不为0时禁止删除
     if (moduleKey === 'finance' && childKey === 'bank-account') {
       const balance = Number(record.balance) || 0;
@@ -9349,12 +9341,6 @@ const ModuleChildPage: React.FC = () => {
       }
     }
     setDataSource(prev => prev.filter(item => item.key !== record.key));
-    // 订单管理：删除订单后同步订单占用数到商品列表
-    if (pageConfig?.title === '订单管理') {
-      // 申报空写：删空最后一条订单时允许存储落空
-      allowEmptyOrdersPersistRef.current = true;
-      syncOrderReserved(getDataOwner());
-    }
     // 账单明细：删除账单行同时墓碑化关联的存活对账记录（撤回语义），避免采购商平台残留孤儿在途对账
     if (pageConfig?.title === '账单明细') {
       try {
@@ -10247,8 +10233,11 @@ const ModuleChildPage: React.FC = () => {
     { key: 'print', icon: <PrinterOutlined />, label: '打印' },
     ...(isProductList ? [{ key: 'batch-image', icon: <PictureOutlined />, label: '批量修改图片' }] : []),
     ...(isProductFamily ? [{ key: 'batch-edit-attrs', icon: <EditOutlined />, label: '批量修改属性' }] : []),
-    { type: 'divider' as const },
-    { key: 'batch-delete', icon: <DeleteOutlined />, label: '批量删除', danger: true },
+    // 订单管理：订单只能取消不能删除，不提供「批量删除」入口
+    ...(pageConfig?.title === '订单管理' ? [] : [
+      { type: 'divider' as const },
+      { key: 'batch-delete', icon: <DeleteOutlined />, label: '批量删除', danger: true },
+    ]),
   ];
 
   // 批量修改属性弹窗状态
@@ -10481,13 +10470,8 @@ const ModuleChildPage: React.FC = () => {
         break;
       }
       case 'batch-delete':
-        // 订单管理：采购商推送订单不可删除；已发货/已完成订单不可删除
-        if (pageConfig?.title === '订单管理') {
-          const pushedRows = filteredData.filter(r => selectedRowKeys.includes(r.key) && r.orderSource === '采购商推送');
-          if (pushedRows.length > 0) { message.warning(`选中记录中包含 ${pushedRows.length} 个采购商推送订单，推送订单不可删除，请取消勾选后重试`); return; }
-          const shippedRows = filteredData.filter(r => selectedRowKeys.includes(r.key) && (r.orderStatus === '已发货' || r.orderStatus === '已完成'));
-          if (shippedRows.length > 0) { message.warning(`选中记录中包含 ${shippedRows.length} 个已发货订单，已发货订单不能进行操作`); return; }
-        }
+        // 订单管理：订单只能取消不能删除，批量删除整体不可用
+        if (pageConfig?.title === '订单管理') { message.warning('订单不支持删除，如需终止请勾选后使用上方「取消订单」'); return; }
         Modal.confirm({
           title: '确认批量删除',
           icon: <ExclamationCircleOutlined />,
@@ -10498,12 +10482,6 @@ const ModuleChildPage: React.FC = () => {
           onOk: () => {
             setDataSource(prev => prev.filter(item => !selectedRowKeys.includes(item.key)));
             setSelectedRowKeys([]);
-            // 订单管理：批量删除后同步订单占用数到商品列表
-            if (pageConfig?.title === '订单管理') {
-              // 申报空写：批量删空时允许存储落空
-              allowEmptyOrdersPersistRef.current = true;
-              syncOrderReserved(getDataOwner());
-            }
             message.success('批量删除成功');
           },
         });
