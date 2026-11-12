@@ -52,6 +52,20 @@ const PRIMARY = '#1e4a7e';
 /** 退货单判定（RT- 前缀单号） */
 const isReturnDoc = (r: any): boolean => String(r?.docNo || '').trim().startsWith('RT-');
 
+// 手动关联弹窗用：账单侧对账结果取值集合（采购账单 reconcileResult 与供应商账单明细 reconResult 的并集）
+const LINK_RECON_GREEN = ['一致', '已对账', '对账完成', '确认无误', '按供方入账', '按采方入账'];
+const LINK_RECON_RED = ['不一致', '不相符'];
+
+/** 手动关联弹窗：把账单的对账结果渲染成带色标记（空/待对账视为待对账） */
+const linkReconTagOf = (v: any) => {
+  const s = String(v ?? '').trim();
+  if (!s || s === '待对账' || s === '未对账') return <Text type="secondary">待对账</Text>;
+  if (s === '已发起对账') return <Tag color="processing" style={{ fontWeight: 500 }}>已发起对账</Tag>;
+  if (LINK_RECON_RED.includes(s)) return <Tag color="error" style={{ fontWeight: 500 }}>{s}</Tag>;
+  if (LINK_RECON_GREEN.includes(s)) return <Tag color="success" style={{ fontWeight: 500 }}>{s}</Tag>;
+  return <Tag>{s}</Tag>;
+};
+
 /** 由对账记录明细构造退货登记 payload（取本侧数量/单价，缺失回退对侧），供对账完成时补建本端负数退货单 */
 const returnPayloadFromRecord = (r: any, side: 'supplier' | 'purchaser'): any => {
   const ds = Array.isArray(r?.details) ? r.details : [];
@@ -2630,7 +2644,7 @@ const ReconciliationManage: React.FC = () => {
         onOk={handleLinkConfirm}
         okText="确认关联"
         cancelText="取消"
-        width={760}
+        width={880}
       >
         <div style={{
           background: '#e6f7ff', border: '1px solid #91d5ff', borderRadius: 8,
@@ -2667,6 +2681,7 @@ const ReconciliationManage: React.FC = () => {
           </Col>
         </Row>
         <Table
+          bordered
           size="small"
           rowKey={isPurchaser ? 'key' : 'id'}
           dataSource={linkFilteredBills}
@@ -2687,6 +2702,10 @@ const ReconciliationManage: React.FC = () => {
               render: (v: number) => `¥${(Number(v) || 0).toFixed(2)}`,
             },
             {
+              title: '对账结果', key: 'reconcileResult', width: 100, align: 'center' as const,
+              render: (_: any, b: any) => linkReconTagOf(b.reconcileResult),
+            },
+            {
               title: '关联状态', key: 'linkStatus', width: 90,
               render: (_: any, b: any) => {
                 const linked = dataSource.some(r => r.matchedBillKey === b.key);
@@ -2701,6 +2720,10 @@ const ReconciliationManage: React.FC = () => {
             {
               title: '金额', dataIndex: 'totalAmount', key: 'totalAmount', width: 100, align: 'right' as const,
               render: (v: number) => `¥${(Number(v) || 0).toFixed(2)}`,
+            },
+            {
+              title: '对账结果', key: 'reconResult', width: 100, align: 'center' as const,
+              render: (_: any, b: any) => linkReconTagOf(b.reconResult),
             },
             {
               title: '关联状态', key: 'linkStatus', width: 90,
