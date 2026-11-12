@@ -220,9 +220,10 @@ describe('刷新调度器合并（防逐事件全表扫描）', () => {
     put(K_SUMMARY, {});
     let doneCount = 0;
     const onDone = () => { doneCount += 1; };
-    scheduleCustomerRefresh(OWNER, ['甲公司新名'], onDone, 60);
-    scheduleCustomerRefresh(OWNER, ['乙公司'], onDone, 60);
-    await new Promise(r => setTimeout(r, 400));
+    scheduleCustomerRefresh(OWNER, ['甲公司新名'], onDone, 50);
+    scheduleCustomerRefresh(OWNER, ['乙公司'], onDone, 50);
+    // 等待窗口留足余量：CI runner 上多个 suite 并行时定时器回调可能被阻塞
+    await new Promise(r => setTimeout(r, 1500));
     expect(doneCount).toBe(1);
     const s = loadCustomerSummary(OWNER);
     expect(s['甲公司新名'].purchaseTotal).toBe(10000);

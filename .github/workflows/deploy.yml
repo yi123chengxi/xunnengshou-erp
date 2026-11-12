@@ -39,8 +39,15 @@ jobs:
           npm ci
           npm run build
 
+      - name: 安装前端依赖
+        # 必须先装依赖：门禁要用的 tsc 与 react-scripts 均来自 client/node_modules，
+        # 全新 runner 上无 node_modules 时 npx 会拉到同名废弃占位包并非法退出
+        run: cd client && npm ci
+
       - name: 前端类型检查与单测门禁
         # 位于构建之前：财务口径纯函数单测与 tsc 失败即中止，不产出部署包、不触碰服务器
+        id: gate_fe
+        continue-on-error: true
         run: |
           cd client
           { npx tsc --noEmit && CI=true npx react-scripts test --watchAll=false --ci; } 2>&1 | tee quality.log
@@ -49,12 +56,27 @@ jobs:
           NODE_OPTIONS: '--max-old-space-size=6144'
           GENERATE_SOURCEMAP: 'false'
 
+      - name: 门禁失败时回传质量日志供诊断
+        if: steps.gate_fe.outcome == 'failure'
+        run: |
+          mkdir -p ci-logs
+          if [ -f client/quality.log ]; then cp client/quality.log ci-logs/fe_quality.log; else echo "quality.log missing (failed before tee)" > ci-logs/fe_quality.log; fi
+          git config user.name "ci-bot"
+          git config user.email "ci-bot@users.noreply.github.com"
+          git add -f ci-logs/fe_quality.log
+          git commit -m "chore: 回传 CI 前端门禁日志 [skip ci]" || true
+          git push origin HEAD:main || true
+
+      - name: 门禁失败判定
+        if: steps.gate_fe.outcome == 'failure'
+        run: exit 1
+
       - name: 构建前端
         id: build_fe
         continue-on-error: true
         run: |
           cd client
-          { npm ci && npm run build; } 2>&1 | tee build.log
+          { npm run build; } 2>&1 | tee build.log
           exit ${PIPESTATUS[0]}
         env:
           # 超大 bundle 在 runner 默认堆内存下易 OOM；关闭 sourcemap 降低内存与耗时
