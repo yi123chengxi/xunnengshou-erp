@@ -3366,6 +3366,8 @@ const ModuleChildPage: React.FC = () => {
     try { localStorage.setItem(`billAddColConfig_${getDataOwner()}`, JSON.stringify(next)); } catch { /* ignore */ }
   };
   const [billAddCustomerPickVisible, setBillAddCustomerPickVisible] = useState(false);
+  // 账单明细新增-客户选择弹窗：按客户编码/名称/联系人/电话关键字过滤
+  const [billAddCustomerSearch, setBillAddCustomerSearch] = useState('');
   const [billAddEditKey, setBillAddEditKey] = useState<string>(''); // 非空时为编辑模式（复用新增弹窗）
   // 货品明细复选框 + 批量填充
   const [billAddCheckedRows, setBillAddCheckedRows] = useState<Set<number>>(new Set());
@@ -20651,7 +20653,7 @@ tr:nth-child(even) { background: #f5f9ff; }
           <Col span={6}>
             <div style={{ marginBottom: 4, fontSize: 12, color: '#5a6d85' }}>客户名称 <span style={{ color: '#ff4d4f' }}>*</span></div>
             <Input readOnly placeholder="点击选择客户" value={billAddCustomer} style={{ cursor: 'pointer' }}
-              onClick={() => setBillAddCustomerPickVisible(true)} />
+              onClick={() => { setBillAddCustomerSearch(''); setBillAddCustomerPickVisible(true); }} />
           </Col>
           <Col span={6}>
             <div style={{ marginBottom: 4, fontSize: 12, color: '#5a6d85' }}>剩余额度</div>
@@ -20932,18 +20934,33 @@ tr:nth-child(even) { background: #f5f9ff; }
       <Modal
         title={<span style={{ color: PRIMARY }}><UserOutlined style={{ marginRight: 8 }} />选择客户</span>}
         open={billAddCustomerPickVisible}
-        onCancel={() => setBillAddCustomerPickVisible(false)}
+        onCancel={() => { setBillAddCustomerPickVisible(false); setBillAddCustomerSearch(''); }}
         footer={null}
         width={760}
         destroyOnClose
       >
+        <Input.Search
+          placeholder="搜索客户编码 / 客户名称 / 联系人 / 电话"
+          value={billAddCustomerSearch}
+          onChange={e => setBillAddCustomerSearch(e.target.value)}
+          style={{ marginBottom: 12 }}
+          allowClear
+        />
         <Table
+          // 关键字变化时重挂载表格，重置内部分页页码，避免停留在超出范围的页导致显示空列表
+          key={`billAddCustPick_${billAddCustomerSearch.trim().toLowerCase()}`}
           bordered
           size="small"
           rowKey="id"
-          pagination={{ pageSize: 8, size: 'small' }}
-          dataSource={loadAllCustomersFromStorage()}
-          onRow={(r: any) => ({ onClick: () => { setBillAddCustomer(r.name); setBillAddCustomerPickVisible(false); }, style: { cursor: 'pointer' } })}
+          pagination={{ pageSize: 8, size: 'small', showTotal: (t: number) => `共 ${t} 条` }}
+          dataSource={(() => {
+            const kw = billAddCustomerSearch.trim().toLowerCase();
+            const list = loadAllCustomersFromStorage();
+            if (!kw) return list;
+            return list.filter((c: any) => [c.id, c.name, c.contact, c.phone, c.region]
+              .some((v: any) => String(v || '').toLowerCase().includes(kw)));
+          })()}
+          onRow={(r: any) => ({ onClick: () => { setBillAddCustomer(r.name); setBillAddCustomerPickVisible(false); setBillAddCustomerSearch(''); }, style: { cursor: 'pointer' } })}
           columns={[
             { title: '客户编码', dataIndex: 'id', width: 110 },
             { title: '客户名称', dataIndex: 'name', width: 220 },
