@@ -44,7 +44,7 @@ import {
   verifyCustomerSummary, verifyCustomerPurchase, repairCustomerSummaryBulk, scheduleCustomerRefresh, startIdlePatrol, makeReceiptMatcher, toYuan,
 } from '../utils/paySummary';
 import type { CustomerSummaryEntry } from '../utils/paySummary';
-import { buildOrderOccupiedAmountMap, getOrderOccupiedList } from '../utils/orderOccupied';
+import { createOccupiedAmountResolver, getOrderOccupiedList, useOrderOccupiedVersion } from '../utils/orderOccupied';
 import { canFn, usePermTick } from '../utils/perm';
 import { compressImageFile } from '../utils/imageCompress';
 import { getCurrentUserDisplayName } from '../utils/billLog';
@@ -793,8 +793,8 @@ const CustomerInfo: React.FC = () => {
   const watchTotalPurchase = Form.useWatch('totalPurchase', addForm);
   const watchReceivedPayment = Form.useWatch('receivedPayment', addForm);
   const watchName = Form.useWatch('name', addForm);
-  // 弹窗内订单占用：按客户名称实时汇总未发货订单金额
-  const watchOrderOccupied = buildOrderOccupiedAmountMap(getDataOwner())[String(watchName || '').trim()] || 0;
+  // 弹窗内订单占用：按主体身份键实时汇总未发货余额支付订单金额（与列表/明细弹窗同源）
+  const watchOrderOccupied = createOccupiedAmountResolver(getDataOwner()).of(watchName);
   // 省市区级联（预设中国省市区数据）
   const watchProvince = Form.useWatch('province', addForm);
   const watchCity = Form.useWatch('city', addForm);
@@ -918,6 +918,8 @@ const CustomerInfo: React.FC = () => {
 
   // 数据刷新触发器：递增时强制 useMemo 重新计算（包括采购总额等从 localStorage 读取的字段）
   const [dataRefreshKey, setDataRefreshKey] = useState(0);
+  // 订单占用刷新信号：订单写入/同步落地/页签回前台时重新取占用值（防占用漂移）
+  const orderOccupiedVersion = useOrderOccupiedVersion();
 
   // 采购总额/已收货款：增量聚合快照（列表 O(1) 读取，不再每次渲染全量遍历订单/收款台账）
   const [custSummary, setCustSummary] = useState<Record<string, CustomerSummaryEntry>>({});
@@ -1089,9 +1091,12 @@ const CustomerInfo: React.FC = () => {
     const sumOf = (name: string) => custSummary[String(name || '').trim()];
     const purchaseOf = (name: string) => toYuan(sumOf(name)?.purchaseTotal || 0);
     const receivedOf = (name: string) => toYuan(sumOf(name)?.receivedTotal || 0);
-    // 订单占用：未发货的采购商推送/余额支付订单按客户名称汇总金额
-    const occupiedMap = buildOrderOccupiedAmountMap(getDataOwner());
-    const occupiedOf = (name: string) => occupiedMap[String(name || '').trim()] || 0;
+    // 订单占用：未发货的余额支付订单按主体身份键汇总金额（同身份多别名只计一次）；
+    // orderOccupiedVersion 由订单写入/同步落地/页签回前台推动，避免订单已落库而占用值仍停在旧快照（0）
+    const occupiedResolver = createOccupiedAmountResolver(getDataOwner());
+    // 订单快照尚未落地时不渲染 0（0 与“无占用”语义冲突，是“一会有一会没”的直接来源）
+    const occupiedUnavailable = !occupiedResolver.loaded;
+    const occupiedOf = (...names: any[]) => occupiedUnavailable ? undefined : occupiedResolver.of(...names);
 
     // 收集所有已绑定采购商关联的直接客户档案（customerId 直连/采购商编号/同名匹配）
     const associatedCustomerIds = new Set(
@@ -1144,11 +1149,11 @@ const CustomerInfo: React.FC = () => {
         detailAddress: pAcc?.addressDetail || pAcc?.detailAddress || bp.detailAddress || linkedDirect?.detailAddress || '',
         totalPurchase: purchaseOf(bp.purchaserName) + (extraName ? purchaseOf(extraName) : 0),
         receivedPayment: receivedOf(bp.purchaserName) + (extraName ? receivedOf(extraName) : 0),
-        orderOccupied: occupiedOf(bp.purchaserName) + (extraName ? occupiedOf(extraName) : 0),
+        orderOccupied: occupiedOf(rowName, bp.purchaserName, extraName),
       };
     });
     return [...directCustomers, ...purchaserCustomers];
-  }, [customers, boundPurchasers, custSummary, creditAdjustments, dataRefreshKey]);
+  }, [customers, boundPurchasers, custSummary, creditAdjustments, dataRefreshKey, orderOccupiedVersion]);
 
   // 客户认证状态批量查询（按 purchaserUsername 查）
   const [custCertMap, setCustCertMap] = useState<Record<string, CertInfo>>({});
@@ -2290,17 +2295,23 @@ const CustomerInfo: React.FC = () => {
       },
     },
     {
-      title: headerWithTip('订单占用(元)', '未发货完成的余额支付订单金额合计：采购商推送选余额支付的未发货订单 + 订单管理手工新增选余额支付的未发货订单；点击可查看占用订单明细'),
+      title: headerWithTip('订单占用(元)', '未发货完成的余额支付订单金额合计（已取消订单一律不占用）：包含采购商推送与订单管理手工新增选余额支付的未发货订单；点击可查看占用订单明细；“—”表示订单资料尚未同步到本机，此时不按 0 计算'),
       dataIndex: 'orderOccupied', key: 'orderOccupied', width: 120, align: 'right',
-      render: (v: number, record: CustomerRecord) => (
-        <Tooltip title="点击查看占用订单明细">
-          <Button type="link" size="small"
-            style={{ padding: 0, fontSize: 13, fontWeight: 600, color: (Number(v) || 0) > 0 ? '#fa8c16' : '#999', height: 'auto' }}
-            onClick={() => { setOccupiedDetailCustomer(record); setOccupiedDetailVisible(true); }}>
-            {Number(v) || 0}
-          </Button>
-        </Tooltip>
-      ),
+      render: (v: number | undefined, record: CustomerRecord) => {
+        // 未加载（undefined）与“无占用”（0）必须可区分，否则同一个客户会出现“一会有一会没”的漂移观感
+        if (v === undefined || v === null) {
+          return <Tooltip title="订单资料尚未同步到本机，稍后会自动刷新"><span style={{ color: '#bbb' }}>—</span></Tooltip>;
+        }
+        return (
+          <Tooltip title="点击查看占用订单明细">
+            <Button type="link" size="small"
+              style={{ padding: 0, fontSize: 13, fontWeight: 600, color: (Number(v) || 0) > 0 ? '#fa8c16' : '#999', height: 'auto' }}
+              onClick={() => { setOccupiedDetailCustomer(record); setOccupiedDetailVisible(true); }}>
+              {Number(v) || 0}
+            </Button>
+          </Tooltip>
+        );
+      },
     },
     {
       title: '业务员',
