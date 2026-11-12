@@ -115,6 +115,7 @@ import { pullAllDatasets, flushDatasetUploadAsync, ensureDatasetFromServer, relo
 import { PRESET_PRINT_TEMPLATES, seedPresetPrintTemplates } from '../config/presetPrintTemplates';
 import { refreshCustomerPurchase, computeCustomerPurchaseCents, computeCustomerReceivedCents, toYuan } from '../utils/paySummary';
 import { resolveLatestCompanyName, resolveCompanyCred, buildCompanyCredMap, buildCredIndex } from '../utils/nameSync';
+import { normBillDay } from '../utils/billDate';
 import { loadAllCustomersFromStorage } from './CustomerInfo';
 import { loadRoleRecords, loadRoleAll, upsertRecords } from '../utils/reconStore';
 import { resolveCustomerPrice, resolveCustomerRef } from '../utils/priceStrategy';
@@ -2758,15 +2759,6 @@ const ModuleChildPage: React.FC = () => {
     setImportMapping([]);
     setImportProgress({ running: false, done: 0, total: 0 });
   }, []);
-
-  // 账单日期归一：斜杠/带时间格式统一为 YYYY-MM-DD（横线），
-  // 否则订单行 outboundDate 为 '2026/11/11' 会被统计时间范围字符串比较整体排除，列表汇总与页面可见行口径不一致
-  const normBillDay = (v: any): string => {
-    const s = String(v || '').trim();
-    if (!s) return '';
-    const d = dayjs(s.replace(/\//g, '-'));
-    return d.isValid() ? d.format('YYYY-MM-DD') : s;
-  };
 
   // ============ 账单明细（客户管理）：基于订单生成账单行 ============
   const buildBillDetailRows = useCallback((existing: Record<string, any>[]) => {

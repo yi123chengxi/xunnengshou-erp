@@ -39,6 +39,16 @@ jobs:
           npm ci
           npm run build
 
+      - name: 前端类型检查与单测门禁
+        # 位于构建之前：财务口径纯函数单测与 tsc 失败即中止，不产出部署包、不触碰服务器
+        run: |
+          cd client
+          { npx tsc --noEmit && CI=true npx react-scripts test --watchAll=false --ci; } 2>&1 | tee quality.log
+          exit ${PIPESTATUS[0]}
+        env:
+          NODE_OPTIONS: '--max-old-space-size=6144'
+          GENERATE_SOURCEMAP: 'false'
+
       - name: 构建前端
         id: build_fe
         continue-on-error: true
