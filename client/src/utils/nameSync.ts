@@ -43,9 +43,32 @@ const SWEEP_PREFIXES = [
   'purchaser_suppliers_', 'boundPurchasers_', 'customers_', 'purchaser_bills_',
   'pageData_customer_bill-detail_', 'pageData_sales_order-manage_',
   'invoice_record_', 'invoice_apply_requests_', 'business_license_',
-  'recon_db_',
+  'recon_db_', 'customerReceipts_',
 ];
 const SWEEP_EXACT = ['recon_records'];
+
+/** 公司凭证映射：全称/简称/编号 → { username, companyNo（老账号无 companyNo 时回退 companyShortName） } */
+export const buildCompanyCredMap = (): Map<string, { username: string; companyNo: string }> => {
+  const m = new Map<string, { username: string; companyNo: string }>();
+  let users: any[] = [];
+  try { users = JSON.parse(localStorage.getItem('registeredUsers') || '[]'); } catch { users = []; }
+  (Array.isArray(users) ? users : []).forEach((u: any) => {
+    if (!u || !u.username) return;
+    const cred = { username: String(u.username), companyNo: String(u.companyNo || u.companyShortName || '') };
+    [u.companyName, u.companyShortName, u.companyNo].forEach((k: any) => {
+      const s = String(k || '').trim();
+      if (s && !m.has(s)) m.set(s, cred);
+    });
+  });
+  return m;
+};
+
+/** 按公司名称解析注册凭证（账号+公司编号）；未注册对手方返回 null，调用方保持名称兼容 */
+export const resolveCompanyCred = (name: string, map?: Map<string, { username: string; companyNo: string }>): { username: string; companyNo: string } | null => {
+  const n = String(name || '').trim();
+  if (!n) return null;
+  return (map || buildCompanyCredMap()).get(n) || null;
+};
     
 /**
  * 解析某公司名称/账号的最新公司名称（注册账号表为唯一真源，其次按改名链归一取链尾）。
@@ -152,7 +175,7 @@ export const repairCounterpartyNames = (): string[] => {
         NAME_FIELDS.forEach(f => { const nv = fix(nr[f]); if (nv !== nr[f]) { nr[f] = nv; rc = true; } });
         // 合作凭证回填：仅存名称快照的历史记录按名称（含改名链）反查账号，
         // 补 purchaserUsername/supplierUsername/customerUsername + 公司编号，后续联动一律以凭证为准、不受改名影响
-        const keyOwnerM = key.match(/^(?:purchaser_bills|pageData_customer_bill-detail|boundPurchasers|purchaser_suppliers)_(.+)$/);
+        const keyOwnerM = key.match(/^(?:purchaser_bills|pageData_customer_bill-detail|boundPurchasers|purchaser_suppliers|pageData_sales_order-manage|customerReceipts)_(.+)$/);
         const keyOwner = keyOwnerM ? keyOwnerM[1] : '';
         if (!nr.purchaserUsername && typeof nr.purchaserName === 'string' && nr.purchaserName) {
           const u = resolveUserByName(nr.purchaserName);
@@ -164,7 +187,16 @@ export const repairCounterpartyNames = (): string[] => {
         }
         if (key.startsWith('pageData_customer_bill-detail_') && !nr.customerUsername && typeof nr.customerName === 'string' && nr.customerName) {
           const u = resolveUserByName(nr.customerName);
-          if (u && u.username !== keyOwner) { nr.customerUsername = u.username; if (!nr.customerNo && u.companyNo) nr.customerNo = u.companyNo; rc = true; }
+          if (u && u.username !== keyOwner) { nr.customerUsername = u.username; if (!nr.customerNo && (u.companyNo || u.companyShortName)) nr.customerNo = u.companyNo || u.companyShortName; rc = true; }
+        }
+        // 第一阶段凭证铺垫：订单行/收款台账行存量补号（仅填空不覆盖），后续 join 换轨以凭证为准
+        if (key.startsWith('pageData_sales_order-manage_') && !nr.customerUsername && typeof nr.customerName === 'string' && nr.customerName) {
+          const u = resolveUserByName(nr.customerName);
+          if (u && u.username !== keyOwner) { nr.customerUsername = u.username; if (!nr.customerNo && (u.companyNo || u.companyShortName)) nr.customerNo = u.companyNo || u.companyShortName; rc = true; }
+        }
+        if (key.startsWith('customerReceipts_') && !nr.customerUsername && typeof nr.customerName === 'string' && nr.customerName) {
+          const u = resolveUserByName(nr.customerName);
+          if (u && u.username !== keyOwner) { nr.customerUsername = u.username; if (!nr.customerNo && (u.companyNo || u.companyShortName)) nr.customerNo = u.companyNo || u.companyShortName; rc = true; }
         }
         if (key.startsWith('purchaser_bills_') && !nr.supplierUsername && typeof nr.supplier === 'string' && nr.supplier) {
           const u = resolveUserByName(nr.supplier);

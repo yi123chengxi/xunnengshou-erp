@@ -13,6 +13,7 @@ import { safeSetItem } from '../utils/storageQuota';
 import { saveDataset } from '../utils/dataStore';
 import { flushDatasetUploadAsync } from '../utils/serverSync';
 import { recordSupplierPayment, incrementCustomerReceived } from '../utils/paySummary';
+import { resolveCompanyCred } from '../utils/nameSync';
 import { sumPayRecords, installmentStatusOf } from '../utils/receiptWrite';
 import { isNotificationTypeEnabled } from '../utils/pushNotification';
 import { isAccountingMode, writeAutoEntries, loadSubjectOptions, subjectFilterOption } from '../utils/accountingBridge';
@@ -800,11 +801,15 @@ const PaymentRequestPage: React.FC = () => {
       let receiptNo = `${dayPrefix}${String(seq).padStart(3, '0')}`;
       while (crList.some((rr: any) => rr.receiptNo === receiptNo)) { seq += 1; receiptNo = `${dayPrefix}${String(seq).padStart(3, '0')}`; }
       const bankAcc = bankAccounts.find((b: any) => b.key === bankKey);
+      // 第一阶段凭证铺垫：收款台账行落客户账号+公司编号（改名稳定，第二阶段 join 换轨以凭证为准）
+      const crCred = resolveCompanyCred(customerName);
       crList.push({
         key: `RC-${Date.now()}`,
         receiptNo,
         customerId: r.customerId || '',
         customerName,
+        customerUsername: crCred?.username || '',
+        customerNo: crCred?.companyNo || '',
         amount: r.amount,
         account: bankAcc?.name || '',
         voucher: '',

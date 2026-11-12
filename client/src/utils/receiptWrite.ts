@@ -6,6 +6,7 @@
 // - 会计分录依赖 writeAutoEntries 的 sourceKey 幂等（同键先删旧再写新）
 // - 硬约束：本模块任何路径都不写账单明细/对账键（分段金额不入账单）
 import { isAccountingMode, writeAutoEntries, pushBankTransaction } from './accountingBridge';
+import { resolveCompanyCred } from './nameSync';
 import {
   incrementCustomerReceived, recordSupplierPayment, refreshSupplierPaid, supplierPaymentsKey, toCents,
 } from './paySummary';
@@ -154,10 +155,14 @@ export const postInstallmentEffects = (opts: PostInstallmentOpts): { ok: boolean
     const rk = `customerReceipts_${owner}`;
     const list: any[] = readJson(rk, []);
     if (!list.some((r: any) => r.key === `cr-${record.key}`)) {
+      // 第一阶段凭证铺垫：台账行落客户账号+公司编号（改名稳定，第二阶段 join 换轨以凭证为准）
+      const rwCred = resolveCompanyCred(counterparty);
       list.unshift({
         key: `cr-${record.key}`,
         customerName: counterparty,
         customerId: customerId || '',
+        customerUsername: rwCred?.username || '',
+        customerNo: rwCred?.companyNo || '',
         amount: amt,
         receiptDate: String(record.time || '').slice(0, 10),
         operator: record.operator || '',

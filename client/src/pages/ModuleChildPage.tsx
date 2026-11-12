@@ -114,7 +114,7 @@ import { appendBillLogEntry, readBillLog, billLogColor, resolveOperatorName, dif
 import { pullAllDatasets, flushDatasetUploadAsync, ensureDatasetFromServer, reloadAfterPull, appendRowsToRemoteKey } from '../utils/serverSync';
 import { PRESET_PRINT_TEMPLATES, seedPresetPrintTemplates } from '../config/presetPrintTemplates';
 import { refreshCustomerPurchase } from '../utils/paySummary';
-import { resolveLatestCompanyName } from '../utils/nameSync';
+import { resolveLatestCompanyName, resolveCompanyCred, buildCompanyCredMap } from '../utils/nameSync';
 import { loadAllCustomersFromStorage } from './CustomerInfo';
 import { loadRoleRecords, loadRoleAll, upsertRecords } from '../utils/reconStore';
 import { resolveCustomerPrice, resolveCustomerRef } from '../utils/priceStrategy';
@@ -2804,6 +2804,8 @@ const ModuleChildPage: React.FC = () => {
     // 不能只保留 _manual 行——否则订单键暂缺（未拉取/owner 不一致）时重建会把订单派生行与历史行全部丢弃并上传擦除。
     const orderIds = new Set(orders.map((o: any) => o.id));
     const preservedRows = existing.filter((r: any) => r && r.id && !orderIds.has(r.id));
+    // 凭证映射一次解析：重建时为缺凭证的账单行补账号+公司编号（第一阶段铺垫，不改匹配逻辑）
+    const credMap = buildCompanyCredMap();
     return [...preservedRows, ...orders
       .filter((o: any) => o && o.id && (o.orderStatus === '已发货' || o.orderStatus === '已完成' || outboundOrderIds.has(String(o.id))) && (o.payMethod === '余额支付' || String(o.orderTags || '').includes('余额支付') || String(o.orderTag || '').includes('余额支付')))
       .sort((a: any, b: any) => String(b.createTime || '').localeCompare(String(a.createTime || '')))
@@ -2816,6 +2818,7 @@ const ModuleChildPage: React.FC = () => {
         const editedCust = !!prev && !!prevName && prevName !== orderName &&
           resolveLatestCompanyName(prevName, '') !== resolveLatestCompanyName(orderName, '');
         const custName = editedCust ? prevName : (orderName || prevName);
+        const rowCred = resolveCompanyCred(custName, credMap);
         let items: any[] = [];
         try { if (o.orderItems) items = JSON.parse(o.orderItems); } catch { /* ignore */ }
         // 兼容历史推送订单：orderItems 中单价字段名为 unitPrice，统一映射为 price
@@ -2829,8 +2832,8 @@ const ModuleChildPage: React.FC = () => {
           id: o.id,
           outboundNo: o.outboundNo || prev?.outboundNo || (digits ? `CK-${digits}` : ''),
           customerName: custName,
-          customerUsername: prev?.customerUsername || '',
-          customerNo: prev?.customerNo || '',
+          customerUsername: prev?.customerUsername || o.customerUsername || rowCred?.username || '',
+          customerNo: prev?.customerNo || o.customerNo || rowCred?.companyNo || '',
           auxDocNo: prev?.auxDocNo || '',
           // 人工改客户标记随重建保留，名称自愈持续跳过该行客户名改写
           ...(prev?._custEdited ? { _custEdited: true } : {}),
@@ -4715,7 +4718,8 @@ const ModuleChildPage: React.FC = () => {
       }
       // 凭据+人工编辑标记必须同时进内存与存储：自动持久化 effect 会用内存内容整体回写存储，
       // 若仅存储有标记会被内存副本抹掉，名称自愈随即把客户名改回旧客户
-      const credPatch: Record<string, any> = { customerUsername: custUsername, customerNo: custNo };
+      const credNow = resolveCompanyCred(String(billAddCustomer || '').trim());
+      const credPatch: Record<string, any> = { customerUsername: custUsername || credNow?.username || '', customerNo: custNo || credNow?.companyNo || '' };
       if (custChanged) credPatch._custEdited = true;
       setDataSource(prev => prev.map(r => (r.key === billAddEditKey ? {
         ...r,
@@ -4770,11 +4774,14 @@ const ModuleChildPage: React.FC = () => {
         message.warning(`单据编号 ${no} 在该客户下已存在 ${dups.length} 张账单，继续新增将产生同号账单，对账时需手动关联`);
       }
     } catch { /* ignore */ }
+    const manualCred = resolveCompanyCred(billAddCustomer);
     const record: Record<string, any> = {
       key: `bill-manual-${Date.now()}`,
       id: `SD-${String(Date.now()).slice(-8)}`,
       outboundNo: no,
       customerName: billAddCustomer,
+      customerUsername: manualCred?.username || '',
+      customerNo: manualCred?.companyNo || '',
       outboundDate,
       createdAt: new Date().toISOString(),
       totalCount: totalQty,
@@ -8879,6 +8886,8 @@ const ModuleChildPage: React.FC = () => {
         // 组合收货地址：省+市+区+详细地址
         const _addrParts = [values.province, values.city, values.district, values.receiverDetail].filter(Boolean).map((s: string) => String(s).trim());
         if (_addrParts.length > 0) newRecord.receiverAddress = _addrParts.join(' ');
+        // 第一阶段凭证铺垫：订单落客户账号+公司编号（改名稳定，第二阶段 join 换轨以凭证为准）
+        { const oCred = resolveCompanyCred(String(newRecord.customerName || '')); if (oCred) { newRecord.customerUsername = oCred.username; newRecord.customerNo = oCred.companyNo; } }
         const validItems = orderEditItems.filter(it => (it.productCode || '').trim());
         newRecord.orderItems = JSON.stringify(validItems);
         newRecord.sellerImages = sellerImages.filter(s => !!s);
@@ -8979,6 +8988,11 @@ const ModuleChildPage: React.FC = () => {
           // 组合收货地址：省+市+区+详细地址
           const _addrParts2 = [values.province || updated.province, values.city || updated.city, values.district || updated.district, values.receiverDetail || updated.receiverDetail].filter(Boolean).map((s: string) => String(s).trim());
           if (_addrParts2.length > 0) updated.receiverAddress = _addrParts2.join(' ');
+          // 订单管理：随保存刷新客户凭证（账号+公司编号），换客户或改名后凭证不落伍
+          if (pageConfig?.title === '订单管理') {
+            const eCred = resolveCompanyCred(String(updated.customerName || ''));
+            if (eCred) { updated.customerUsername = eCred.username; updated.customerNo = eCred.companyNo; }
+          }
           // 业务员默认为创建人
           if (!updated.person) updated.person = updated.creator || getCurrentUserDisplayName();
           // 同步关联字段
