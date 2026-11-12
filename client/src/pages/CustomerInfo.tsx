@@ -2269,7 +2269,7 @@ const CustomerInfo: React.FC = () => {
             );
           },
         },
-    { title: headerWithTip('采购总额(元)', '按客户名称自动汇总：账单明细中余额支付订单的商品总额合计；账单未生成时按余额支付订单（排除待付款）统计'), dataIndex: 'totalPurchase', key: 'totalPurchase', width: 120, align: 'right', render: (v: number) => (Number(v) || 0) },
+    { title: headerWithTip('采购总额(元)', '按客户名称自动汇总：只统计账单明细中该客户的金额合计（含手工新增行与退货负数行）；未生成账单的订单不计入，其在途金额请看「订单占用」列'), dataIndex: 'totalPurchase', key: 'totalPurchase', width: 120, align: 'right', render: (v: number) => (Number(v) || 0) },
     {
       title: headerWithTip('已收货款(元)', '该客户手工登记的收款合计；点击列内“明细”可查看收款记录'), dataIndex: 'receivedPayment', key: 'receivedPayment', width: 140, align: 'right',
       render: (v: number, record: CustomerRecord) => (

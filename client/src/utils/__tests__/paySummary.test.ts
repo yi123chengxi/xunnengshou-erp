@@ -1,6 +1,6 @@
-// 财务快照口径单测：金额以「分」整数累加、账单行优先/订单回退、改名不拆主体、校验与重算同源
+// 财务快照口径单测：金额以「分」整数累加、采购总额只取账单明细行、改名不拆主体、校验与重算同源
 import {
-  toCents, toYuan, orderPurchaseCents,
+  toCents, toYuan,
   computePurchaseCents, computeCustomerPurchaseCents, computeCustomerReceivedCents,
   refreshCustomerPurchase, refreshCustomerReceived, loadCustomerSummary,
   repairCustomerSummaryBulk, verifyCustomerPurchase, verifyCustomerSummary,
@@ -35,7 +35,7 @@ beforeEach(() => {
   seedUsers();
 });
 
-describe('金额与订单口径基础函数', () => {
+describe('金额基础函数', () => {
   it('金额以分整数累加，杜绝浮点误差', () => {
     expect(toCents(0.1) + toCents(0.2)).toBe(30);
     expect(toYuan(30)).toBe(0.3);
@@ -43,18 +43,10 @@ describe('金额与订单口径基础函数', () => {
     expect(toCents(null)).toBe(0);
     expect(toCents('abc')).toBe(0);
   });
-
-  it('仅余额支付且非待付款的订单计入采购总额', () => {
-    expect(orderPurchaseCents({ orderStatus: '已完成', payMethod: '余额支付', productAmount: 1234.56 })).toBe(123456);
-    expect(orderPurchaseCents({ orderStatus: '待付款', payMethod: '余额支付', productAmount: 100 })).toBe(0);
-    expect(orderPurchaseCents({ orderStatus: '已完成', payMethod: '微信支付', productAmount: 100 })).toBe(0);
-    expect(orderPurchaseCents({ orderStatus: '已完成', payMethod: '微信支付', orderTags: '余额支付,加急', productAmount: 100 })).toBe(10000);
-    expect(orderPurchaseCents(null)).toBe(0);
-  });
 });
 
 describe('computePurchaseCents 采购总额', () => {
-  it('有账单行时以账单行为准（含负数退货行），不回退订单表', () => {
+  it('账单行合计为准（含负数退货行），同主体旧名行也归入', () => {
     put(K_BILLS, [
       { customerName: '甲公司新名', totalAmount: 1000.5 },
       { customerName: '甲公司旧名', totalAmount: -200.25 },
@@ -64,7 +56,7 @@ describe('computePurchaseCents 采购总额', () => {
     expect(per.get('甲公司新名')).toBe(80025);
   });
 
-  it('无账单行时回退订单表：0 值首单不得吞掉后续订单，多单必须累加（批次1回归）', () => {
+  it('采购总额只看账单明细：无账单行客户不回退订单表（批次2口径回归）', () => {
     put(K_BILLS, []);
     put(K_ORDERS, [
       { customerName: '乙公司', orderStatus: '待付款', payMethod: '余额支付', productAmount: 500 },
@@ -72,7 +64,14 @@ describe('computePurchaseCents 采购总额', () => {
       { customerName: '乙公司', orderStatus: '已完成', payMethod: '微信支付', productAmount: 700 },
       { customerName: '乙公司', orderStatus: '已发货', payMethod: '余额支付', productAmount: 25.5 },
     ]);
-    expect(computePurchaseCents(OWNER, new Set(['乙公司'])).get('乙公司')).toBe(32550);
+    expect(computePurchaseCents(OWNER, new Set(['乙公司'])).get('乙公司')).toBeUndefined();
+    expect(computeCustomerPurchaseCents(OWNER, '乙公司')).toBe(0);
+  });
+
+  it('同一客户有账单行时，只看账单行金额，订单金额不叠加', () => {
+    put(K_BILLS, [{ customerName: '乙公司', totalAmount: 100 }]);
+    put(K_ORDERS, [{ customerName: '乙公司', orderStatus: '已发货', payMethod: '余额支付', productAmount: 9999 }]);
+    expect(computeCustomerPurchaseCents(OWNER, '乙公司')).toBe(10000);
   });
 
   it('目标集合内含两个账单行的客户各自独立汇总，互不串账', () => {

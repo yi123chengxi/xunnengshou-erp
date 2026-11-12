@@ -37,14 +37,6 @@ const nowIso = () => new Date().toISOString();
 const trimName = (n: any) => String(n || '').trim();
 const fmtTime = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`;
 
-// 订单是否计入采购总额（与客户基础信息既有口径一致：余额支付且非待付款）
-export const orderPurchaseCents = (o: any): number => {
-  if (!o || o.orderStatus === '待付款') return 0;
-  const tags = `${o.orderTags || ''}${o.orderTag || ''}`;
-  if (o.payMethod !== '余额支付' && !tags.includes('余额支付')) return 0;
-  return toCents(o.productAmount);
-};
-
 // 目标主体名 → 身份键 → 基准目标名（同一身份命多个候选名时，取等于当前展示名的那个，
 // 避免旧名条目与新名条目各自累加一份造成汇总翻倍）
 // 匹配一律走主体身份键（账号 > 公司编号 > 改名链折叠后的名称），对方改名后历史行仍归同一主体；
@@ -250,29 +242,19 @@ const ensureCus = (m: SummaryMap<CustomerSummaryEntry>, name: string): CustomerS
 const billDetailKey = (owner: string) => `pageData_customer_bill-detail_${owner}`;
 export { billDetailKey as customerBillDetailKey, ordersKey as customerOrdersKey, receiptsKey as customerReceiptsKey };
 
-// 采购总额口径（与客户列表/账单明细页/剩余额度同源）：优先按该客户账单明细行「商品总额」合计（含手工新增与负数退货行）；
-// 仅当该客户无任何账单行时回退按余额支付订单（排除待付款）统计。
-// 回退判据用 hasBillRow 而非「结果 Map 是否已有值」：否则首单金额为 0（待付款/非余额支付）会占位并吞掉后续余额支付订单，
-// 且多单之间必须是累加而非覆盖。
+// 采购总额口径（与客户列表/账单明细页/剩余额度同源）：**只**统计该客户在账单明细中的行「金额」（totalAmount）合计，
+// 含手工新增行与负数退货行；匹配走主体身份键，对方改名后历史行仍归同一主体。
+// 账单未生成的订单不再回退计入采购总额：其在途金额由「订单占用」单独表达，
+// 否则未发货余额支付订单会在剩余额度公式里被“采购总额 + 订单占用”双重扣减。
 export const computePurchaseCents = (owner: string, targets: Set<string>): Map<string, number> => {
   const per = new Map<string, number>();
   const { idx, targetFor } = buildTargetIndex(targets);
-  const hasBillRow = new Set<string>();
   const bills: any[] = readJson(billDetailKey(owner), []) || [];
   bills.forEach(b => {
     const k = idx.identity({ username: b?.customerUsername, no: b?.customerNo, name: b?.customerName });
     const t = k ? targetFor.get(k) : undefined;
     if (!t) return;
-    hasBillRow.add(k);
     per.set(t, (per.get(t) || 0) + toCents(b?.totalAmount));
-  });
-  if (hasBillRow.size >= targetFor.size) return per;
-  const orders: any[] = readJson(ordersKey(owner), []) || [];
-  orders.forEach(o => {
-    const k = idx.identity({ username: o?.customerUsername, no: o?.customerNo, name: o?.customerName });
-    const t = k ? targetFor.get(k) : undefined;
-    if (!t || hasBillRow.has(k)) return;
-    per.set(t, (per.get(t) || 0) + orderPurchaseCents(o));
   });
   return per;
 };
@@ -321,7 +303,7 @@ export const computeCustomerReceivedCents = (owner: string, name: string, idName
   return computeReceivedCents(owner, new Set([n]), idNameMap).get(n)?.cents || 0;
 };
 
-// 单对象重算：指定客户的「采购总额」（遍历账单明细表一次；无账单行客户回退订单表）
+// 单对象重算：指定客户的「采购总额」（只遍历账单明细表一次）
 export const refreshCustomerPurchase = (owner: string, names: string[]) => {
   const targets = new Set(names.map(trimName).filter(Boolean));
   if (!targets.size) return;
@@ -432,7 +414,7 @@ export const verifyCustomerSummary = (owner: string, names: string[], idNameMap:
   return fixed;
 };
 
-// 校验客户采购总额快照与账单明细/订单表，不一致自动修复，返回修复名单（巡检用）
+// 校验客户采购总额快照与账单明细，不一致自动修复，返回修复名单（巡检用）
 export const verifyCustomerPurchase = (owner: string, names: string[]): string[] => {
   const summary = loadCustomerSummary(owner);
   const fixed: string[] = [];
