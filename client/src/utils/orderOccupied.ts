@@ -3,6 +3,7 @@
  * 按商品编码汇总占用数量，并回写商品列表的 orderReserved 字段
  */
 import { readProductListSync, writeProductList } from './dataStore';
+import { buildCredIndex } from './nameSync';
 
 export const ORDER_OCCUPY_EXCLUDE = ['待付款', '已发货', '已完成', '已取消'];
 
@@ -54,6 +55,7 @@ export const syncOrderReserved = (owner: string): void => {
 export const buildOrderOccupiedAmountMap = (owner: string): Record<string, number> => {
   const map: Record<string, number> = {};
   try {
+    const idx = buildCredIndex();
     const orders = JSON.parse(localStorage.getItem(`pageData_sales_order-manage_${owner}`) || '[]');
     (Array.isArray(orders) ? orders : []).forEach((o: any) => {
       const st = String(o?.orderStatus || '');
@@ -62,7 +64,12 @@ export const buildOrderOccupiedAmountMap = (owner: string): Record<string, numbe
       if (!isBalance) return; // 推送与手工新增均须为余额支付才占用额度
       const name = String(o?.customerName || '').trim();
       if (!name) return;
-      map[name] = Math.round(((map[name] || 0) + (Number(o?.productAmount) || 0)) * 100) / 100;
+      // 同时以行内存名与当前展示名入账：对方改名后，客户列表无论用新名还是旧名查都取到同一占用值
+      const canon = idx.currentNameOf(name);
+      const keys = new Set<string>([name]);
+      if (canon) keys.add(canon);
+      const amt = Number(o?.productAmount) || 0;
+      keys.forEach(k => { map[k] = Math.round(((map[k] || 0) + amt) * 100) / 100; });
     });
   } catch { /* ignore */ }
   return map;
@@ -76,13 +83,15 @@ export const getOrderOccupiedList = (owner: string, customerName: string): {
   const name = String(customerName || '').trim();
   if (!name) return rows;
   try {
+    const idx = buildCredIndex();
     const orders = JSON.parse(localStorage.getItem(`pageData_sales_order-manage_${owner}`) || '[]');
     (Array.isArray(orders) ? orders : []).forEach((o: any) => {
       const st = String(o?.orderStatus || '');
       if (!st || ORDER_OCCUPY_EXCLUDE.includes(st)) return;
       const isBalance = o?.payMethod === '余额支付' || String(o?.orderTags || '').includes('余额支付') || String(o?.orderTag || '').includes('余额支付');
       if (!isBalance) return; // 推送与手工新增均须为余额支付才占用额度
-      if (String(o?.customerName || '').trim() !== name) return;
+      const rn = String(o?.customerName || '').trim();
+      if (!idx.isSameParty(rn, name)) return; // 身份键归一：改名前的占用订单也列入当前客户明细
       rows.push({
         orderId: o.id || '',
         orderStatus: st,

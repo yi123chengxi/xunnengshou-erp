@@ -41,7 +41,7 @@ import { loadTenantUsers } from '../utils/tenantUsers';
 import { getProvinceOptions, getCityOptions, getDistrictOptions, CHINA_REGIONS } from '../utils/regions';
 import {
   loadCustomerSummary, ensureCustomerSummaryBuilt, incrementCustomerReceived,
-  verifyCustomerSummary, verifyCustomerPurchase, repairCustomerSummaryBulk, scheduleCustomerRefresh, startIdlePatrol, toYuan,
+  verifyCustomerSummary, verifyCustomerPurchase, repairCustomerSummaryBulk, scheduleCustomerRefresh, startIdlePatrol, makeReceiptMatcher, toYuan,
 } from '../utils/paySummary';
 import type { CustomerSummaryEntry } from '../utils/paySummary';
 import { buildOrderOccupiedAmountMap, getOrderOccupiedList } from '../utils/orderOccupied';
@@ -52,7 +52,7 @@ import { buildInviteLink } from '../utils/cooperationInvite';
 import { createInviteRecord, findUnusedInviteForCustomer, findInviteRecord, buildCustomerInviteLink } from '../utils/inviteRegistry';
 import type { InviteRecord } from '../utils/inviteRegistry';
 import { startCooperationTermination, cancelCooperationTermination, TERMINATE_GRACE_MS } from '../utils/cooperationTerminate';
-import { resolveLatestCompanyName } from '../utils/nameSync';
+import { resolveLatestCompanyName, buildCredIndex } from '../utils/nameSync';
 import { reconcileCooperationPairs } from '../utils/cooperationReconcile';
 import { copyText } from '../utils/clipboard';
 
@@ -828,6 +828,8 @@ const CustomerInfo: React.FC = () => {
     customers.forEach((c: any) => { m[c.id] = c.name; });
     return m;
   }, [customers]);
+  // 截止查询弹窗的名称归一索引：账单行/台账行与客户档案均按当前展示名对齐，避免改名后同一客户拆成两项
+  const asOfIdx = useMemo(() => buildCredIndex(), [asOfOpen, customers]);
 
   // 对账单企业认证徽章：按客户名称查对应租户账号的认证状态
   const [stmtCert, setStmtCert] = useState<CertInfo | null>(null);
@@ -3028,7 +3030,7 @@ const CustomerInfo: React.FC = () => {
           // 已收货款口径 = 仅手工登记收款（customerReceipts 台账），与列表「已收货款」列同源；
           // 订单/账单金额不属于收款：余额支付订单的明细在「账单明细」页生成账单行，不进入收款明细
           customerReceipts
-            .filter((r: any) => r.customerId === cust.id || r.customerName === cust.name)
+            .filter(makeReceiptMatcher(cust.name, (cust as any).id, asOfIdName))
             .forEach((r: any) => rows.push({ key: r.key, no: r.receiptNo || '-', date: r.date, amount: Number(r.amount) || 0, account: r.account || '-', voucher: r.voucher || '', source: '手工登记' }));
           const total = rows.reduce((s, r) => s + r.amount, 0);
           // 按日期降序排列（最新记录在前）
@@ -3179,17 +3181,17 @@ const CustomerInfo: React.FC = () => {
         debtLabel="截止应收欠款(元)"
         billLabel="账单"
         payLabel="收款"
-        names={allCustomers.map((c: any) => c.name)}
+        names={Array.from(new Set(allCustomers.map((c: any) => asOfIdx.currentNameOf(String(c.name || '')) || String(c.name || '')).filter(Boolean)))}
         bills={{
           list: asOfBills,
-          name: (b: any) => String(b?.customerName || b?.customer || '').trim(),
+          name: (b: any) => asOfIdx.currentNameOf(String(b?.customerName || b?.customer || '').trim()),
           date: (b: any) => String(b?.outboundDate || b?.date || ''),
           amount: (b: any) => Number(b?.totalAmount) || 0,
           no: (b: any) => b?.outboundNo || b?.id || '',
         }}
         pays={{
           list: customerReceipts,
-          name: (r: any) => String(r?.customerId ? (asOfIdName[r.customerId] || '') : (r?.customerName || '')).trim(),
+          name: (r: any) => asOfIdx.currentNameOf(String(r?.customerId ? (asOfIdName[r.customerId] || r?.customerName || '') : (r?.customerName || '')).trim()),
           date: (r: any) => String(r?.date || ''),
           amount: (r: any) => Number(r?.amount) || 0,
           no: (r: any) => r?.receiptNo || '',

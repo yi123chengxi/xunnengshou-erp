@@ -6,6 +6,8 @@
 // - 写入原子化：台账+快照+银行明细同一函数同步完成，任一步异常整体回滚
 // - 防漂移三层：写后自校验 / storage·sync 事件自愈 / 空闲分片巡检（requestIdleCallback 每次只校验一个对象）
 
+import { buildCredIndex } from './nameSync';
+
 export interface SupplierSummaryEntry { purchaseTotal: number; paidTotal: number; paidCount: number; updatedAt: string; }
 export interface CustomerSummaryEntry { purchaseTotal: number; receivedTotal: number; receivedCount: number; updatedAt: string; }
 export type SummaryMap<T> = Record<string, T>;
@@ -43,10 +45,57 @@ export const orderPurchaseCents = (o: any): number => {
   return toCents(o.productAmount);
 };
 
+// 目标主体名 → 身份键 → 基准目标名（同一身份命多个候选名时，取等于当前展示名的那个，
+// 避免旧名条目与新名条目各自累加一份造成汇总翻倍）
+// 匹配一律走主体身份键（账号 > 公司编号 > 改名链折叠后的名称），对方改名后历史行仍归同一主体；
+// 无凭证行退名称匹配，与旧实现行为一致。
+const buildTargetIndex = (names: Set<string>) => {
+  const idx = buildCredIndex();
+  const targetFor = new Map<string, string>();
+  names.forEach(n => {
+    const k = idx.identityOfName(n);
+    if (!k) return;
+    const prev = targetFor.get(k);
+    if (!prev) { targetFor.set(k, n); return; }
+    if (prev !== idx.currentNameOf(prev) && n === idx.currentNameOf(n)) targetFor.set(k, n);
+  });
+  return { idx, targetFor };
+};
+
 // ================= 采购商侧：供应商快照 =================
 export const loadSupplierSummary = (owner: string): SummaryMap<SupplierSummaryEntry> => readJson(supplierSummaryKey(owner), {}) || {};
 const ensureSup = (m: SummaryMap<SupplierSummaryEntry>, name: string): SupplierSummaryEntry => (m[name] || (m[name] = { purchaseTotal: 0, paidTotal: 0, paidCount: 0, updatedAt: '' }));
 const payCents = (p: any): number => Number(p?.amountCents ?? toCents(p?.amount)) || 0;
+
+// 供应商「采购金额」按主体身份键聚合（账号 > 编号 > 折叠名）：对方供应商改名后历史账单仍计入同一主体
+const computeSupPurchaseCents = (owner: string, targets: Set<string>): Map<string, number> => {
+  const per = new Map<string, number>();
+  const { idx, targetFor } = buildTargetIndex(targets);
+  const bills: any[] = readJson(billsKey(owner), []) || [];
+  bills.forEach(b => {
+    const k = idx.identity({ username: b?.supplierUsername, no: b?.supplierNo, name: b?.supplier });
+    const t = k ? targetFor.get(k) : undefined;
+    if (!t) return;
+    per.set(t, (per.get(t) || 0) + toCents(b?.totalAmount));
+  });
+  return per;
+};
+
+// 供应商「已付货款」按主体身份键聚合（付款台账行仅存名称，按改名链折叠后归一）
+const computeSupPaidCents = (owner: string, targets: Set<string>): Map<string, { cents: number; count: number }> => {
+  const per = new Map<string, { cents: number; count: number }>();
+  const { idx, targetFor } = buildTargetIndex(targets);
+  const pays: any[] = readJson(supplierPaymentsKey(owner), []) || [];
+  pays.forEach(p => {
+    const k = idx.identity({ username: p?.supplierUsername, no: p?.supplierNo, name: p?.supplierName });
+    const t = k ? targetFor.get(k) : undefined;
+    if (!t) return;
+    const e = per.get(t) || { cents: 0, count: 0 };
+    e.cents += payCents(p); e.count += 1;
+    per.set(t, e);
+  });
+  return per;
+};
 
 // 单对象重算：指定供应商的「采购金额」（只遍历账单表一次，仅累加目标供应商）
 export const refreshSupplierPurchase = (owner: string, names: string[]) => {
@@ -54,8 +103,7 @@ export const refreshSupplierPurchase = (owner: string, names: string[]) => {
   if (!targets.size) return;
   const summary = loadSupplierSummary(owner);
   targets.forEach(n => { ensureSup(summary, n).purchaseTotal = 0; });
-  const bills: any[] = readJson(billsKey(owner), []) || [];
-  bills.forEach(b => { const n = trimName(b?.supplier); if (targets.has(n)) ensureSup(summary, n).purchaseTotal += toCents(b?.totalAmount); });
+  computeSupPurchaseCents(owner, targets).forEach((cents, n) => { ensureSup(summary, n).purchaseTotal += cents; });
   targets.forEach(n => { ensureSup(summary, n).updatedAt = nowIso(); });
   writeJson(supplierSummaryKey(owner), summary);
 };
@@ -66,8 +114,7 @@ export const refreshSupplierPaid = (owner: string, names: string[]) => {
   if (!targets.size) return;
   const summary = loadSupplierSummary(owner);
   targets.forEach(n => { const e = ensureSup(summary, n); e.paidTotal = 0; e.paidCount = 0; });
-  const pays: any[] = readJson(supplierPaymentsKey(owner), []) || [];
-  pays.forEach(p => { const n = trimName(p?.supplierName); if (targets.has(n)) { const e = ensureSup(summary, n); e.paidTotal += payCents(p); e.paidCount += 1; } });
+  computeSupPaidCents(owner, targets).forEach((v, n) => { const e = ensureSup(summary, n); e.paidTotal = v.cents; e.paidCount = v.count; });
   targets.forEach(n => { ensureSup(summary, n).updatedAt = nowIso(); });
   writeJson(supplierSummaryKey(owner), summary);
 };
@@ -76,10 +123,13 @@ export const refreshSupplierPaid = (owner: string, names: string[]) => {
 export const ensureSupplierSummaryBuilt = (owner: string) => {
   if (localStorage.getItem(supplierSummaryKey(owner)) !== null) return;
   const summary: SummaryMap<SupplierSummaryEntry> = {};
+  const names = new Set<string>();
   const bills: any[] = readJson(billsKey(owner), []) || [];
-  bills.forEach(b => { ensureSup(summary, trimName(b?.supplier)).purchaseTotal += toCents(b?.totalAmount); });
+  bills.forEach(b => { const n = trimName(b?.supplier); if (n) names.add(n); });
   const pays: any[] = readJson(supplierPaymentsKey(owner), []) || [];
-  pays.forEach(p => { const e = ensureSup(summary, trimName(p?.supplierName)); e.paidTotal += payCents(p); e.paidCount += 1; });
+  pays.forEach(p => { const n = trimName(p?.supplierName); if (n) names.add(n); });
+  computeSupPurchaseCents(owner, names).forEach((cents, n) => { ensureSup(summary, n).purchaseTotal += cents; });
+  computeSupPaidCents(owner, names).forEach((v, n) => { const e = ensureSup(summary, n); e.paidTotal = v.cents; e.paidCount = v.count; });
   Object.values(summary).forEach(e => { e.updatedAt = nowIso(); });
   writeJson(supplierSummaryKey(owner), summary);
 };
@@ -91,23 +141,22 @@ export const repairSupplierSummary = (owner: string, names: string[]) => {
 };
 
 // 校验快照与台账/账单是否一致（已付货款 + 采购金额双口径），不一致自动修复，返回修复名单（巡检/加载校验用）
+// 预期值与 refresh 同源（同用身份键聚合），否则校验永远判不一致而反复重写
 export const verifySupplierSummary = (owner: string, names: string[]): string[] => {
   const summary = loadSupplierSummary(owner);
-  const pays: any[] = readJson(supplierPaymentsKey(owner), []) || [];
-  const bills: any[] = readJson(billsKey(owner), []) || [];
+  const targets = new Set(names.map(trimName).filter(Boolean));
+  if (!targets.size) return [];
+  const pays = computeSupPaidCents(owner, targets);
+  const purchase = computeSupPurchaseCents(owner, targets);
   const fixed: string[] = [];
-  names.forEach(raw => {
-    const n = trimName(raw);
-    if (!n) return;
+  targets.forEach(n => {
     const e = summary[n];
     // 条目整体缺失：两口径全重算修复
     if (!e) { repairSupplierSummary(owner, [n]); fixed.push(n); return; }
-    let total = 0; let count = 0;
-    pays.forEach(p => { if (trimName(p?.supplierName) === n) { total += payCents(p); count += 1; } });
-    let purchase = 0;
-    bills.forEach(b => { if (trimName(b?.supplier) === n) purchase += toCents(b?.totalAmount); });
-    if (e.paidTotal !== total || e.paidCount !== count) { refreshSupplierPaid(owner, [n]); fixed.push(n); }
-    if (e.purchaseTotal !== purchase) { refreshSupplierPurchase(owner, [n]); fixed.push(n); }
+    const pv = pays.get(n) || { cents: 0, count: 0 };
+    const pu = purchase.get(n) || 0;
+    if (e.paidTotal !== pv.cents || e.paidCount !== pv.count) { refreshSupplierPaid(owner, [n]); fixed.push(n); }
+    if (e.purchaseTotal !== pu) { refreshSupplierPurchase(owner, [n]); fixed.push(n); }
   });
   return fixed;
 };
@@ -178,10 +227,18 @@ export const recordSupplierPayment = (input: SupplierPaymentInput): { ok: boolea
 };
 
 // 付款明细（已付货款-明细弹窗数据源）：最近发生的付款排在最上面
+// 过滤同样走身份键，保证改名前的付款能在当前供应商名下查到
 export const loadSupplierPayments = (owner: string, supplierName: string): any[] => {
   const pays: any[] = readJson(supplierPaymentsKey(owner), []) || [];
+  const idx = buildCredIndex();
+  const want = idx.identityOfName(supplierName);
+  const nm = trimName(supplierName);
   return pays
-    .filter(p => trimName(p?.supplierName) === trimName(supplierName))
+    .filter(p => {
+      if (nm && trimName(p?.supplierName) === nm) return true;
+      const k = idx.identity({ username: p?.supplierUsername, no: p?.supplierNo, name: p?.supplierName });
+      return !!want && k === want;
+    })
     .slice()
     .sort((a, b) => String(b.createdAt || b.payDate || '').localeCompare(String(a.createdAt || a.payDate || '')));
 };
@@ -189,8 +246,6 @@ export const loadSupplierPayments = (owner: string, supplierName: string): any[]
 // ================= 供应商侧：客户快照 =================
 export const loadCustomerSummary = (owner: string): SummaryMap<CustomerSummaryEntry> => readJson(customerSummaryKey(owner), {}) || {};
 const ensureCus = (m: SummaryMap<CustomerSummaryEntry>, name: string): CustomerSummaryEntry => (m[name] || (m[name] = { purchaseTotal: 0, receivedTotal: 0, receivedCount: 0, updatedAt: '' }));
-// 台账记录归属客户名：有 customerId 按 ID→名映射（与既有 manualOf 口径一致），无 ID 按名称
-const receiptOwnerName = (r: any, idNameMap: Record<string, string>) => trimName(r?.customerId ? idNameMap[r.customerId] : r?.customerName);
 
 const billDetailKey = (owner: string) => `pageData_customer_bill-detail_${owner}`;
 export { billDetailKey as customerBillDetailKey, ordersKey as customerOrdersKey, receiptsKey as customerReceiptsKey };
@@ -201,24 +256,57 @@ export { billDetailKey as customerBillDetailKey, ordersKey as customerOrdersKey,
 // 且多单之间必须是累加而非覆盖。
 export const computePurchaseCents = (owner: string, targets: Set<string>): Map<string, number> => {
   const per = new Map<string, number>();
+  const { idx, targetFor } = buildTargetIndex(targets);
   const hasBillRow = new Set<string>();
   const bills: any[] = readJson(billDetailKey(owner), []) || [];
-  bills.forEach(b => { const n = trimName(b?.customerName); if (n && targets.has(n)) { hasBillRow.add(n); per.set(n, (per.get(n) || 0) + toCents(b?.totalAmount)); } });
-  if (hasBillRow.size === targets.size) return per;
+  bills.forEach(b => {
+    const k = idx.identity({ username: b?.customerUsername, no: b?.customerNo, name: b?.customerName });
+    const t = k ? targetFor.get(k) : undefined;
+    if (!t) return;
+    hasBillRow.add(k);
+    per.set(t, (per.get(t) || 0) + toCents(b?.totalAmount));
+  });
+  if (hasBillRow.size >= targetFor.size) return per;
   const orders: any[] = readJson(ordersKey(owner), []) || [];
-  orders.forEach(o => { const n = trimName(o?.customerName); if (n && targets.has(n) && !hasBillRow.has(n)) per.set(n, (per.get(n) || 0) + orderPurchaseCents(o)); });
+  orders.forEach(o => {
+    const k = idx.identity({ username: o?.customerUsername, no: o?.customerNo, name: o?.customerName });
+    const t = k ? targetFor.get(k) : undefined;
+    if (!t || hasBillRow.has(k)) return;
+    per.set(t, (per.get(t) || 0) + orderPurchaseCents(o));
+  });
   return per;
 };
 
-// 收款台账按客户名累加（分）：有 customerId 走 ID→名映射，无 ID 走名称（与 receiptOwnerName 口径一致）
+// 收款台账按客户累加（分）：先走主体身份键，再兼容 customerId→名映射与名称兜底
 const computeReceivedCents = (owner: string, targets: Set<string>, idNameMap: Record<string, string>): Map<string, { cents: number; count: number }> => {
   const per = new Map<string, { cents: number; count: number }>();
+  const { idx, targetFor } = buildTargetIndex(targets);
   const recs: any[] = readJson(receiptsKey(owner), []) || [];
   recs.forEach(r => {
-    const n = receiptOwnerName(r, idNameMap);
-    if (n && targets.has(n)) { const e = per.get(n) || { cents: 0, count: 0 }; e.cents += toCents(r?.amount); e.count += 1; per.set(n, e); }
+    const mappedName = r?.customerId ? trimName(idNameMap[r.customerId]) : '';
+    const k = idx.identity({ username: r?.customerUsername, no: r?.customerNo, name: mappedName || trimName(r?.customerName) });
+    const t = k ? targetFor.get(k) : undefined;
+    if (!t) return;
+    const e = per.get(t) || { cents: 0, count: 0 };
+    e.cents += toCents(r?.amount); e.count += 1;
+    per.set(t, e);
   });
   return per;
+};
+
+// 收款台账行归属判定器（弹窗明细与快照同源）：身份键优先，ID/名称兜底
+export const makeReceiptMatcher = (custName: string, custId?: string, idNameMap: Record<string, string> = {}) => {
+  const idx = buildCredIndex();
+  const nm = trimName(custName);
+  const want = idx.identityOfName(nm);
+  const id = trimName(custId);
+  return (r: any): boolean => {
+    if (id && trimName(r?.customerId) === id) return true;
+    if (nm && trimName(r?.customerName) === nm) return true;
+    const mappedName = r?.customerId ? trimName(idNameMap[r.customerId]) : '';
+    const k = idx.identity({ username: r?.customerUsername, no: r?.customerNo, name: mappedName || trimName(r?.customerName) });
+    return !!want && k === want;
+  };
 };
 
 // 单客户取数（供「剩余额度」等跨页复用，杜绝另写一套近似公式造成口径漂移）
@@ -308,12 +396,13 @@ export const ensureCustomerSummaryBuilt = (owner: string, idNameMap: Record<stri
   bills.forEach(b => { const n = trimName(b?.customerName); if (n) names.add(n); });
   const orders: any[] = readJson(ordersKey(owner), []) || [];
   orders.forEach(o => { const n = trimName(o?.customerName); if (n) names.add(n); });
-  computePurchaseCents(owner, names).forEach((cents, n) => { ensureCus(summary, n).purchaseTotal += cents; });
   const recs: any[] = readJson(receiptsKey(owner), []) || [];
   recs.forEach(r => {
-    const n = receiptOwnerName(r, idNameMap);
-    if (n) { const e = ensureCus(summary, n); e.receivedTotal += toCents(r?.amount); e.receivedCount += 1; }
+    const n = trimName(r?.customerId ? idNameMap[r.customerId] : r?.customerName);
+    if (n) names.add(n);
   });
+  computePurchaseCents(owner, names).forEach((cents, n) => { ensureCus(summary, n).purchaseTotal += cents; });
+  computeReceivedCents(owner, names, idNameMap).forEach((v, n) => { const e = ensureCus(summary, n); e.receivedTotal = v.cents; e.receivedCount = v.count; });
   Object.values(summary).forEach(e => { e.updatedAt = nowIso(); });
   writeJson(customerSummaryKey(owner), summary);
 };
@@ -331,15 +420,14 @@ export const incrementCustomerReceived = (owner: string, name: string, amountYua
 // 校验客户已收货款快照与台账，不一致自动修复，返回修复名单（巡检用）
 export const verifyCustomerSummary = (owner: string, names: string[], idNameMap: Record<string, string>): string[] => {
   const summary = loadCustomerSummary(owner);
-  const recs: any[] = readJson(receiptsKey(owner), []) || [];
+  const targets = new Set(names.map(trimName).filter(Boolean));
+  if (!targets.size) return [];
+  const expected = computeReceivedCents(owner, targets, idNameMap);
   const fixed: string[] = [];
-  names.forEach(raw => {
-    const n = trimName(raw);
-    if (!n) return;
+  targets.forEach(n => {
     const e = summary[n];
-    let total = 0; let count = 0;
-    recs.forEach(r => { if (receiptOwnerName(r, idNameMap) === n) { total += toCents(r?.amount); count += 1; } });
-    if (!e || e.receivedTotal !== total || e.receivedCount !== count) { refreshCustomerReceived(owner, [n], idNameMap); fixed.push(n); }
+    const v = expected.get(n) || { cents: 0, count: 0 };
+    if (!e || e.receivedTotal !== v.cents || e.receivedCount !== v.count) { refreshCustomerReceived(owner, [n], idNameMap); fixed.push(n); }
   });
   return fixed;
 };

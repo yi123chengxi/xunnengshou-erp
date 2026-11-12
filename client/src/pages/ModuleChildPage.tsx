@@ -114,7 +114,7 @@ import { appendBillLogEntry, readBillLog, billLogColor, resolveOperatorName, dif
 import { pullAllDatasets, flushDatasetUploadAsync, ensureDatasetFromServer, reloadAfterPull, appendRowsToRemoteKey } from '../utils/serverSync';
 import { PRESET_PRINT_TEMPLATES, seedPresetPrintTemplates } from '../config/presetPrintTemplates';
 import { refreshCustomerPurchase, computeCustomerPurchaseCents, computeCustomerReceivedCents, toYuan } from '../utils/paySummary';
-import { resolveLatestCompanyName, resolveCompanyCred, buildCompanyCredMap } from '../utils/nameSync';
+import { resolveLatestCompanyName, resolveCompanyCred, buildCompanyCredMap, buildCredIndex } from '../utils/nameSync';
 import { loadAllCustomersFromStorage } from './CustomerInfo';
 import { loadRoleRecords, loadRoleAll, upsertRecords } from '../utils/reconStore';
 import { resolveCustomerPrice, resolveCustomerRef } from '../utils/priceStrategy';
@@ -942,7 +942,10 @@ const ModuleChildPage: React.FC = () => {
     try {
       const owner = getDataOwner();
       const allCustomers = loadAllCustomersFromStorage();
-      const c = allCustomers.find((r: any) => (r.name || '') === customerName);
+      // 客户档案命中：名称全等优先，未命中时按主体身份键（账号/公司编号/改名链）归一再找，
+      // 避免对方刚改名、档案已刷新而订单仍存旧名时报“未查询到客户剩余额度”
+      let c: any = allCustomers.find((r: any) => (r.name || '') === customerName);
+      if (!c) { const cid = buildCredIndex(); c = allCustomers.find((r: any) => cid.isSameParty((r.name || ''), customerName)); }
       if (!c) return null;
       const baseCredit = Number(c.credit) || 0;
       // 信用额度调整：与客户列表页 getEffectiveCredit 一致
