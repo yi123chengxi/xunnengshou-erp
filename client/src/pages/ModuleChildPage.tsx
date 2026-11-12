@@ -134,6 +134,10 @@ import FieldConfigModal from '../components/FieldConfigModal';
 import StockHistoryModal from '../components/StockHistoryModal';
 import OrderReservedModal from '../components/OrderReservedModal';
 import { buildOrderOccupiedMap, syncOrderReserved } from '../utils/orderOccupied';
+import {
+  RECON_BOOKED, reconStateOf, orderStatusOkForRecon, canInitRecon, canConfirmBill, canWithdrawRecon,
+  resolveBillAmountFields, deriveReconState,
+} from '../utils/reconState';
 import { isAccountingMode, writeAutoEntries, removeAutoEntries, loadSubjectOptions, subjectFilterOption } from '../utils/accountingBridge';
 import { isInstallmentOrder, depositAmountOf, sumPayRecords, mergePayRecords, payProgressText, postInstallmentEffects, postShipRevenueEntry, installmentStatusOf } from '../utils/receiptWrite';
 import type { PayRecord } from '../utils/receiptWrite';
@@ -2797,9 +2801,17 @@ const ModuleChildPage: React.FC = () => {
         try { if (o.orderItems) items = JSON.parse(o.orderItems); } catch { /* ignore */ }
         // 兼容历史推送订单：orderItems 中单价字段名为 unitPrice，统一映射为 price
         items = items.map((it: any) => ({ ...it, price: it.price ?? it.unitPrice ?? 0 }));
-        // 按采方入账的行：保留入账时的明细与金额，不被订单数据重建覆盖
-        const bookedByPurchaser = prev?.reconResult === '按采方入账' && Array.isArray(prev.items);
-        const rowItems = bookedByPurchaser ? prev.items : items;
+        // 已入账终态行（对账完成/确认无误/按采方入账）：金额与明细锁定在对账时的数字，不被订单侧
+        // 改写（取消/反取消/缺货拆分/拆分合并/编辑弹窗回算）覆盖；订单当前值与锁定值有差额时
+        // 只挂 _orderDiff 标记供列表提示（旧实现只冻结「按采方入账」，另两个终态会被静默改数）
+        const af = resolveBillAmountFields(prev, {
+          totalCount: Number(o.palletCount) || items.reduce((s: number, it: any) => s + (Number(it.quantity) || 0), 0),
+          productDetail: o.productDetail || items.map((it: any) => `${it.productCode || ''}×${Number(it.quantity) || 0}`).join('，'),
+          totalAmount: Number(o.productAmount) || 0,
+          paidAmount: Number(o.paidAmount) || 0,
+          items,
+        });
+        const rowItems = af.items;
         const digits = String(o.id || '').replace(/\D/g, '').slice(-6);
         return {
           key: prev?.key || `bill-${o.id}`,
@@ -2811,12 +2823,14 @@ const ModuleChildPage: React.FC = () => {
           auxDocNo: prev?.auxDocNo || '',
           // 人工改客户标记随重建保留，名称自愈持续跳过该行客户名改写
           ...(prev?._custEdited ? { _custEdited: true } : {}),
+          // 订单金额漂移标记：仅在终态行且订单值≠锁定值时写入，否则不残留旧标记
+          ...(af._orderDiff !== undefined ? { _orderAmount: af._orderAmount, _orderDiff: af._orderDiff } : {}),
           outboundDate: normBillDay(prev?.outboundDate || o.payTime || o.createTime),
           createdAt: prev?.createdAt || o.payTime || o.createTime || '',
-          totalCount: bookedByPurchaser ? (Number(prev.totalCount) || rowItems.reduce((s: number, it: any) => s + (Number(it.quantity) || 0), 0)) : (Number(o.palletCount) || rowItems.reduce((s: number, it: any) => s + (Number(it.quantity) || 0), 0)),
-          productDetail: bookedByPurchaser ? (prev.productDetail || rowItems.map((it: any) => `${it.productCode || ''}×${it.quantity}`).join('，')) : (o.productDetail || rowItems.map((it: any) => `${it.productCode || ''}×${it.quantity}`).join('，')),
-          totalAmount: bookedByPurchaser ? (Number(prev.totalAmount) || 0) : (Number(o.productAmount) || 0),
-          paidAmount: Number(o.paidAmount) || 0,
+          totalCount: af.totalCount,
+          productDetail: af.productDetail,
+          totalAmount: af.totalAmount,
+          paidAmount: af.paidAmount,
           billSource: '订单',
           orderStatus: o.auditStatus === '已取消' ? '已取消' : (o.orderStatus || ''),
           reconResult: prev?.reconResult || '待对账',
@@ -2943,9 +2957,11 @@ const ModuleChildPage: React.FC = () => {
 
   // 账单明细：确认无误
   const handleBillConfirm = useCallback((record: Record<string, any>) => {
-    // 账单来源于订单时，仅已发货/已完成状态允许确认无误
-    if (record.billSource === '订单' && record.orderStatus !== '已发货' && record.orderStatus !== '已完成') {
-      message.warning(`订单状态为“${record.orderStatus || '未知'}”，仅“已发货”状态可确认无误`);
+    // 与按钮渲染同源判据：订单来源账单需已发货/已完成，且已发起对账的行不可本端单方确认
+    if (!canConfirmBill(record)) {
+      message.warning(orderStatusOkForRecon(record)
+        ? `账单当前对账状态为“${reconStateOf(record)}”，无需重复确认`
+        : `订单状态为“${record.orderStatus || '未知'}”，仅“已发货/已完成”状态可确认无误`);
       return;
     }
     Modal.confirm({
@@ -2992,28 +3008,44 @@ const ModuleChildPage: React.FC = () => {
     });
   }, [getDataOwner]);
 
-  // 账单明细（会计账薄版本）：监听对账结果变更，自动写入/删除对应会计分录
+  // 账单明细（会计账薄版本）：监听对账结果与已入账金额变更，自动写入/重写/删除对应会计分录
   const prevReconRef = useRef<Record<string, string>>({});
+  const prevReconAmtRef = useRef<Record<string, number>>({});
   useEffect(() => {
-    if (pageConfig?.title !== '账单明细') { prevReconRef.current = {}; return; }
+    if (pageConfig?.title !== '账单明细') { prevReconRef.current = {}; prevReconAmtRef.current = {}; return; }
     const owner = getDataOwner();
-    if (!isAccountingMode(owner)) { prevReconRef.current = {}; return; }
+    if (!isAccountingMode(owner)) { prevReconRef.current = {}; prevReconAmtRef.current = {}; return; }
     const next: Record<string, string> = {};
-    dataSource.forEach((r: any) => { next[r.key || r.id] = r.reconResult || ''; });
+    const nextAmt: Record<string, number> = {};
+    dataSource.forEach((r: any) => { const k = String(r.key || r.id); next[k] = r.reconResult || ''; nextAmt[k] = Number(r.totalAmount) || 0; });
     const prev = prevReconRef.current;
+    const prevAmt = prevReconAmtRef.current;
     if (Object.keys(prev).length > 0) {
-      const IN = ['对账完成', '确认无误', '按采方入账'];
+      const IN = RECON_BOOKED;
       dataSource.forEach((r: any) => {
-        const k = r.key || r.id; const cur = r.reconResult || ''; const old = prev[k] || '';
-        if (cur === old) return;
-        if (IN.includes(cur) && !IN.includes(old)) {
-          writeAutoEntries(owner, { sourceKey: `bill-recon-${r.id || k}`, debitSubject: '应收账款', creditSubject: '库存商品', amount: Number(r.totalAmount) || 0, summary: `销售${r.customerName || ''}商品（账单${r.id || ''}）对账结果：${cur}` });
-        } else if (!IN.includes(cur) && IN.includes(old)) {
-          removeAutoEntries(owner, `bill-recon-${r.id || k}`);
+        const k = String(r.key || r.id);
+        const cur = reconStateOf(r); const old = prev[k] || '';
+        const srcKey = `bill-recon-${r.id || k}`;
+        if (IN.includes(cur)) {
+          const amount = Number(r.totalAmount) || 0;
+          const entered = !IN.includes(old);
+          // 已入账行金额被改写（历史无锁定数据/手工调整）时按 sourceKey 幂等重写分录，
+          // 保证台账与账单金额不脱钩；writeAutoEntries 对金额≤0 只返回空串不清旧分录，需显式删除
+          const amtMoved = !entered && prevAmt[k] !== undefined && Math.abs(amount - prevAmt[k]) >= 0.005;
+          if (entered || amtMoved) {
+            if (amount > 0) {
+              writeAutoEntries(owner, { sourceKey: srcKey, debitSubject: '应收账款', creditSubject: '库存商品', amount, summary: `销售${r.customerName || ''}商品（账单${r.id || ''}）对账结果：${cur}` });
+            } else {
+              removeAutoEntries(owner, srcKey);
+            }
+          }
+        } else if (IN.includes(old)) {
+          removeAutoEntries(owner, srcKey);
         }
       });
     }
     prevReconRef.current = next;
+    prevReconAmtRef.current = nextAmt;
   }, [dataSource, pageConfig?.title, getDataOwner]);
 
   // 账单明细：发起对账核心逻辑（写入对账管理共享存储，采购商平台按单据编号自动匹配核对）
@@ -3026,9 +3058,15 @@ const ModuleChildPage: React.FC = () => {
       if (!silent) message.warning(reason);
       return { ok: false, reason };
     }
-    // 账单来源于订单时，仅已发货/已完成状态允许发起对账
-    if (record.billSource === '订单' && record.orderStatus !== '已发货' && record.orderStatus !== '已完成') {
+    // 账单来源于订单时，仅已发货/已完成状态允许发起对账（与按钮渲染同源判据，防两端各写一套）
+    if (!orderStatusOkForRecon(record)) {
       const reason = `订单状态为“${record.orderStatus || '未知'}”，仅“已发货/已完成”状态可发起对账`;
+      if (!silent) message.warning(reason);
+      return { ok: false, reason };
+    }
+    // 已在途/已入账的行不可重复发起（行内按钮已隐藏，此处兜底批量与自动发起入口）
+    if (!canInitRecon(record)) {
+      const reason = `账单当前对账状态为“${reconStateOf(record)}”，无需重复发起对账`;
       if (!silent) message.warning(reason);
       return { ok: false, reason };
     }
@@ -3212,6 +3250,10 @@ const ModuleChildPage: React.FC = () => {
         if (idx >= 0) {
           data[idx].billLog = newBillLog;
           data[idx].supplierReconciler = getCurrentUserDisplayName();
+          // 发起必须把在途态一并落库：buildBillDetailRows 重载时按 prev.reconResult 回填，
+          // 只改内存不落库（自动/批量发起后刷新）行会退回「待对账」——
+          // 表现即为撤回对账按钮消失、再点发起被查重挡回「请勿重复发起」的死锁
+          data[idx].reconResult = '已发起对账';
           // 凭证回填：改名导致名称快照与客户档案分叉时，后续联动一律以账号/公司编号为准
           if (customerUsername) data[idx].customerUsername = customerUsername;
           if (customerNo) data[idx].customerNo = customerNo;
@@ -4612,7 +4654,8 @@ const ModuleChildPage: React.FC = () => {
       const delayMs = s.delayHours * 3600 * 1000;
       const now = Date.now();
       const targets = dataSource.filter(r => {
-        if (r.reconResult !== '待对账') return false;
+        // 与行内按钮同源：仅「待对账 + 订单状态达标」的行参与自动发起（已发起/已入账行一律跳过）
+        if (!canInitRecon(r)) return false;
         const created = Date.parse(r.createdAt || '');
         if (!created || Number.isNaN(created) || now - created < delayMs) return false;
         if (s.scope === 'selected' && !s.customers.includes(r.customerName)) return false;
@@ -4627,6 +4670,26 @@ const ModuleChildPage: React.FC = () => {
     const timer = setInterval(run, 60000);
     return () => clearInterval(timer);
   }, [pageConfig?.title, dataSource, initReconCore, getDataOwner]);
+
+  // 账单行状态与对账库存活记录对齐自愈：存活记录是“到底发没发出去”的真值源。
+  // 历史数据（发起只改内存未落库）或旧端覆盖写回后，行会停在「待对账」而对账记录仍在，
+  // 表现为撤回按钮消失 + 再发起被查重挡回“请勿重复发起”；此处按存活记录补回在途态（改内存后统一自动持久化）
+  useEffect(() => {
+    if (pageConfig?.title !== '账单明细') return;
+    let aliveIds: string[] = [];
+    try {
+      aliveIds = loadRoleRecords('supplier', getDataOwner())
+        .filter((r: any) => r.source === 'bill' && r.orderNo)
+        .map((r: any) => String(r.orderNo));
+    } catch { /* ignore */ }
+    if (aliveIds.length === 0) return;
+    const alive = new Set(aliveIds);
+    if (!dataSource.some(r => r?.id && deriveReconState(r, alive.has(String(r.id))).changed)) return;
+    setDataSource(prev => prev.map(r => {
+      const d = deriveReconState(r, alive.has(String(r.id)));
+      return d.changed ? { ...r, reconResult: d.reconResult } : r;
+    }));
+  }, [pageConfig?.title, dataSource, getDataOwner]);
 
   // 账单明细新增弹窗：选中客户的剩余额度（与客户基础信息口径一致：信用额度 - 应收欠款）
   const billAddCreditLeft = useMemo(() => {
@@ -4849,11 +4912,14 @@ const ModuleChildPage: React.FC = () => {
               data[idx].supplierReconPerson = '';
               data[idx].purchaserReconPerson = '';
               data[idx].confirmTime = '';
+              // 撤回后行不再处于终态，订单金额漂移标记随之失效
+              delete data[idx]._orderAmount;
+              delete data[idx]._orderDiff;
               localStorage.setItem(storageKey, JSON.stringify(data));
             }
           }
         } catch { /* ignore */ }
-        setDataSource(prev => prev.map(r => (r.key === record.key ? { ...r, reconResult: '待对账', diffDesc: '', supplierReconciler: '', supplierReconPerson: '', purchaserReconPerson: '', confirmTime: '', billLog: newBillLog } : r)));
+        setDataSource(prev => prev.map(r => (r.key === record.key ? { ...r, reconResult: '待对账', diffDesc: '', supplierReconciler: '', supplierReconPerson: '', purchaserReconPerson: '', confirmTime: '', billLog: newBillLog, _orderAmount: undefined, _orderDiff: undefined } : r)));
         message.success(`账单 ${record.outboundNo || record.id} 的对账已撤回`);
       },
     });
@@ -10661,6 +10727,15 @@ const handleBatchAttrsConfirm = () => {
     const occupiedMap = isProductList ? buildOrderOccupiedMap(getDataOwner()) : {};
     // 订单快照缺失时回退存储占用字段，不渲染 0（防“一会 0 一会占用数”抖动）
     const ordersSnapshotMissing = isProductList ? localStorage.getItem(`pageData_sales_order-manage_${getDataOwner()}`) === null : false;
+    // 账单明细：对账库存活记录（未撤销）id 集合——行状态滞后时作为“已发出去”的兜底真值源
+    const billAliveReconIds = new Set<string>();
+    if (pageConfig?.title === '账单明细') {
+      try {
+        loadRoleRecords('supplier', getDataOwner())
+          .filter((r: any) => r.source === 'bill' && r.orderNo)
+          .forEach((r: any) => billAliveReconIds.add(String(r.orderNo)));
+      } catch { /* ignore */ }
+    }
     // 生产订单：物料清单/加工清单生成状态——按 poId 反查采购申请单/加工订单存储（poListGenVersion 变化时重算）
     const poGenCgsqIds = new Set<string>();
     const poGenJgIds = new Set<string>();
@@ -11174,13 +11249,27 @@ const handleBatchAttrsConfirm = () => {
       // 账单明细：商品总数/商品总额按符号着色（正绿负红，零保持默认色）——退货登记负数单需直观区分；须置于 switch(col.type) 之后避免被通用渲染覆写
       if (pageConfig?.title === '账单明细' && (col.dataIndex === 'totalCount' || col.dataIndex === 'totalAmount')) {
         const money = col.dataIndex === 'totalAmount';
-        baseCol.render = (val: any) => {
+        baseCol.render = (val: any, record: any) => {
           const n = Number(val) || 0;
           const color = n > 0 ? '#52c41a' : n < 0 ? '#ff4d4f' : '#1a2b45';
-          return (
+          const node = (
             <Text style={{ fontFamily: 'monospace', color, fontWeight: 500 }}>
               {money ? `¥${n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : n}
             </Text>
+          );
+          // 已入账行金额锁定时，订单侧后续改数不覆盖账面，仅挂“差”标提示双方不一致
+          const diff = money ? Number(record?._orderDiff) || 0 : 0;
+          if (!diff) return node;
+          const orderAmt = Number(record?._orderAmount) || 0;
+          return (
+            <Tooltip
+              title={`订单金额已变更为 ¥${orderAmt.toFixed(2)}，本账单按已入账金额 ¥${n.toFixed(2)} 锁定（差额 ¥${diff.toFixed(2)}）；如需按订单重算请先撤回对账`}
+            >
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                {node}
+                <Tag color="orange" style={{ margin: 0, fontSize: 11, lineHeight: '16px', padding: '0 4px' }}>差</Tag>
+              </span>
+            </Tooltip>
           );
         };
       }
@@ -11854,7 +11943,7 @@ const handleBatchAttrsConfirm = () => {
                   onClick={() => { setBillDetailRecord(record); setBillDetailItemView('productCode'); setBillDetailVisible(true); }}
                   style={{ color: PRIMARY, fontWeight: 500 }}>查看明细</Button>
               </Tooltip>
-              {record.reconResult !== '确认无误' && !['对账完成', '按采方入账'].includes(record.reconResult) && (record.billSource !== '订单' || record.orderStatus === '已发货') && (
+              {canConfirmBill(record) && (
                 <Tooltip title="确认该账单对账无误">
                   <Button type="link" size="small" icon={<CheckCircleOutlined />}
                     onClick={() => handleBillConfirm(record)}
@@ -11863,16 +11952,16 @@ const handleBatchAttrsConfirm = () => {
               )}
             </span>
           )}
-          {/* 账单明细：行内发起对账（账单来源于订单时，仅已发货状态允许发起） */}
-          {pageConfig?.title === '账单明细' && record.reconResult !== '已发起对账' && record.reconResult !== '确认无误' && !['对账完成', '按采方入账'].includes(record.reconResult) && (record.billSource !== '订单' || record.orderStatus === '已发货') && (
+          {/* 账单明细：行内发起对账（与 initReconCore 校验同源：订单来源账单需已发货/已完成，已发起/已入账行隐藏） */}
+          {pageConfig?.title === '账单明细' && canInitRecon(record) && (
             <Tooltip title="发起对账：账单发送至采购商平台对账管理，按单据编号自动匹配核对">
               <Button type="link" size="small" icon={<SwapOutlined />}
                 onClick={() => initReconCore(record)}
                 style={{ color: '#722ed1', fontWeight: 500 }}>发起对账</Button>
             </Tooltip>
           )}
-          {/* 账单明细：已发起对账/确认无误后显示撤回（编辑/删除隐藏） */}
-          {pageConfig?.title === '账单明细' && (record.reconResult === '已发起对账' || record.reconResult === '确认无误') && (
+          {/* 账单明细：已发起对账/确认无误（或行状态滞后但对账库仍有存活记录）后显示撤回（编辑/删除隐藏） */}
+          {pageConfig?.title === '账单明细' && canWithdrawRecon(record, billAliveReconIds.has(String(record.id))) && (
             <Tooltip title="撤回该账单的对账，对账管理中对应记录将被删除">
               <Button type="link" size="small" icon={<RollbackOutlined />}
                 onClick={() => handleWithdrawRecon(record)}
