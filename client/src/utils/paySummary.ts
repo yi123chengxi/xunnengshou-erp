@@ -193,16 +193,44 @@ const ensureCus = (m: SummaryMap<CustomerSummaryEntry>, name: string): CustomerS
 const receiptOwnerName = (r: any, idNameMap: Record<string, string>) => trimName(r?.customerId ? idNameMap[r.customerId] : r?.customerName);
 
 const billDetailKey = (owner: string) => `pageData_customer_bill-detail_${owner}`;
+export { billDetailKey as customerBillDetailKey, ordersKey as customerOrdersKey, receiptsKey as customerReceiptsKey };
 
-// 采购总额口径（与客户列表/账单明细页一致）：优先按该客户账单明细行「商品总额」合计（含手工新增与负数退货行）；
-// 仅当该客户无任何账单行时回退按余额支付订单（排除待付款）统计
-const computePurchaseCents = (owner: string, targets: Set<string>): Map<string, number> => {
+// 采购总额口径（与客户列表/账单明细页/剩余额度同源）：优先按该客户账单明细行「商品总额」合计（含手工新增与负数退货行）；
+// 仅当该客户无任何账单行时回退按余额支付订单（排除待付款）统计。
+// 回退判据用 hasBillRow 而非「结果 Map 是否已有值」：否则首单金额为 0（待付款/非余额支付）会占位并吞掉后续余额支付订单，
+// 且多单之间必须是累加而非覆盖。
+export const computePurchaseCents = (owner: string, targets: Set<string>): Map<string, number> => {
   const per = new Map<string, number>();
+  const hasBillRow = new Set<string>();
   const bills: any[] = readJson(billDetailKey(owner), []) || [];
-  bills.forEach(b => { const n = trimName(b?.customerName); if (n && targets.has(n)) per.set(n, (per.get(n) || 0) + toCents(b?.totalAmount)); });
+  bills.forEach(b => { const n = trimName(b?.customerName); if (n && targets.has(n)) { hasBillRow.add(n); per.set(n, (per.get(n) || 0) + toCents(b?.totalAmount)); } });
+  if (hasBillRow.size === targets.size) return per;
   const orders: any[] = readJson(ordersKey(owner), []) || [];
-  orders.forEach(o => { const n = trimName(o?.customerName); if (n && targets.has(n) && !per.has(n)) per.set(n, orderPurchaseCents(o)); });
+  orders.forEach(o => { const n = trimName(o?.customerName); if (n && targets.has(n) && !hasBillRow.has(n)) per.set(n, (per.get(n) || 0) + orderPurchaseCents(o)); });
   return per;
+};
+
+// 收款台账按客户名累加（分）：有 customerId 走 ID→名映射，无 ID 走名称（与 receiptOwnerName 口径一致）
+const computeReceivedCents = (owner: string, targets: Set<string>, idNameMap: Record<string, string>): Map<string, { cents: number; count: number }> => {
+  const per = new Map<string, { cents: number; count: number }>();
+  const recs: any[] = readJson(receiptsKey(owner), []) || [];
+  recs.forEach(r => {
+    const n = receiptOwnerName(r, idNameMap);
+    if (n && targets.has(n)) { const e = per.get(n) || { cents: 0, count: 0 }; e.cents += toCents(r?.amount); e.count += 1; per.set(n, e); }
+  });
+  return per;
+};
+
+// 单客户取数（供「剩余额度」等跨页复用，杜绝另写一套近似公式造成口径漂移）
+export const computeCustomerPurchaseCents = (owner: string, name: string): number => {
+  const n = trimName(name);
+  if (!n) return 0;
+  return computePurchaseCents(owner, new Set([n])).get(n) || 0;
+};
+export const computeCustomerReceivedCents = (owner: string, name: string, idNameMap: Record<string, string> = {}): number => {
+  const n = trimName(name);
+  if (!n) return 0;
+  return computeReceivedCents(owner, new Set([n]), idNameMap).get(n)?.cents || 0;
 };
 
 // 单对象重算：指定客户的「采购总额」（遍历账单明细表一次；无账单行客户回退订单表）
@@ -222,13 +250,53 @@ export const refreshCustomerReceived = (owner: string, names: string[], idNameMa
   if (!targets.size) return;
   const summary = loadCustomerSummary(owner);
   targets.forEach(n => { const e = ensureCus(summary, n); e.receivedTotal = 0; e.receivedCount = 0; });
-  const recs: any[] = readJson(receiptsKey(owner), []) || [];
-  recs.forEach(r => {
-    const n = receiptOwnerName(r, idNameMap);
-    if (n && targets.has(n)) { const e = ensureCus(summary, n); e.receivedTotal += toCents(r?.amount); e.receivedCount += 1; }
-  });
+  computeReceivedCents(owner, targets, idNameMap).forEach((v, n) => { const e = ensureCus(summary, n); e.receivedTotal = v.cents; e.receivedCount = v.count; });
   targets.forEach(n => { ensureCus(summary, n).updatedAt = nowIso(); });
   writeJson(customerSummaryKey(owner), summary);
+};
+
+// 批量修复（挂载全量自愈用）：源表只各扫一遍、快照只写一次。
+// 旧实现 verifyCustomerPurchase/verifyCustomerSummary 对每个不一致客户单独 refresh，
+// 实际成本是「1 + 不一致客户数」次全表扫描 + 同等次数整键写盘，客户多时页面挂载明显卡顿。
+export const repairCustomerSummaryBulk = (owner: string, names: string[], idNameMap: Record<string, string>): string[] => {
+  const targets = new Set(names.map(trimName).filter(Boolean));
+  if (!targets.size) return [];
+  const summary = loadCustomerSummary(owner);
+  const purchase = computePurchaseCents(owner, targets);
+  const received = computeReceivedCents(owner, targets, idNameMap);
+  const fixed: string[] = [];
+  let dirty = false;
+  targets.forEach(n => {
+    const e = summary[n];
+    const p = purchase.get(n) || 0;
+    const r = received.get(n) || { cents: 0, count: 0 };
+    if (!e || e.purchaseTotal !== p || e.receivedTotal !== r.cents || e.receivedCount !== r.count) {
+      const t = ensureCus(summary, n);
+      t.purchaseTotal = p; t.receivedTotal = r.cents; t.receivedCount = r.count; t.updatedAt = nowIso();
+      fixed.push(n); dirty = true;
+    }
+  });
+  if (dirty) writeJson(customerSummaryKey(owner), summary);
+  return fixed;
+};
+
+// 刷新调度器：把「一次批量操作连写多个键/多个事件」合并为一次重算，避免逐事件全表扫描。
+// 同文档写入不发原生 storage 事件，故 pull 落地、发货广播都必须显式走这里。
+let schedTimer: any = 0;
+let schedOwner = '';
+let schedNames = new Set<string>();
+export const scheduleCustomerRefresh = (owner: string, names: string[], onDone: () => void, delayMs = 150): void => {
+  if (schedOwner && schedOwner !== owner) { schedNames = new Set(); }
+  schedOwner = owner;
+  names.map(trimName).filter(Boolean).forEach(n => schedNames.add(n));
+  if (schedTimer) clearTimeout(schedTimer);
+  schedTimer = setTimeout(() => {
+    schedTimer = 0;
+    const o = schedOwner; const list = Array.from(schedNames);
+    schedNames = new Set(); schedOwner = '';
+    if (o && list.length) { try { refreshCustomerPurchase(o, list); } catch { /* ignore */ } }
+    try { onDone(); } catch { /* ignore */ }
+  }, delayMs);
 };
 
 // 一次性迁移构建（客户快照）：idNameMap = 客户ID→名称（直接客户+合作采购商）

@@ -113,7 +113,7 @@ import { loadTenantUsers } from '../utils/tenantUsers';
 import { appendBillLogEntry, readBillLog, billLogColor, resolveOperatorName, diffBillRecords, SUPPLIER_BILL_FIELD_MAP, getCurrentUserDisplayName } from '../utils/billLog';
 import { pullAllDatasets, flushDatasetUploadAsync, ensureDatasetFromServer, reloadAfterPull, appendRowsToRemoteKey } from '../utils/serverSync';
 import { PRESET_PRINT_TEMPLATES, seedPresetPrintTemplates } from '../config/presetPrintTemplates';
-import { refreshCustomerPurchase } from '../utils/paySummary';
+import { refreshCustomerPurchase, computeCustomerPurchaseCents, computeCustomerReceivedCents, toYuan } from '../utils/paySummary';
 import { resolveLatestCompanyName, resolveCompanyCred, buildCompanyCredMap } from '../utils/nameSync';
 import { loadAllCustomersFromStorage } from './CustomerInfo';
 import { loadRoleRecords, loadRoleAll, upsertRecords } from '../utils/reconStore';
@@ -952,37 +952,16 @@ const ModuleChildPage: React.FC = () => {
         .filter((r: any) => r.customerId === c.id || r.customerName === customerName)
         .reduce((s: number, r: any) => s + (r.type === 'increase' ? (Number(r.amount) || 0) : -(Number(r.amount) || 0)), 0);
       const credit = Math.round((baseCredit + netAdjust) * 100) / 100;
-      // 与客户列表页一致：采购总额 = 账单明细商品总额合计；已收货款仅统计手工登记收款
+      // 采购总额/已收货款一律走 paySummary 口径函数（与客户列表快照同源）：
+      // 旧实现此处另写一套“全局账单是否为空”回退判断，与快照的逐客户回退不一致，
+      // 且已收货款误读旧键名 customer_receipts_（无写入点）导致恒为 0 而虚报额度不足
       let totalPurchase = 0;
       let receivedPayment = 0;
       try {
-        const orders: any[] = JSON.parse(localStorage.getItem(`pageData_sales_order-manage_${owner}`) || '[]');
-        const rows = JSON.parse(localStorage.getItem(`pageData_customer_bill-detail_${owner}`) || '[]');
-        const name = customerName.trim();
-        if (!Array.isArray(rows) || rows.length === 0) {
-          // 账单明细未生成时，直接按余额支付订单（排除待付款）统计采购总额
-          (Array.isArray(orders) ? orders : []).forEach((o: any) => {
-            if (o && o.orderStatus !== '待付款' && (o.customerName || '').trim() === name && (o.payMethod === '余额支付' || String(o.orderTags || '').includes('余额支付') || String(o.orderTag || '').includes('余额支付'))) {
-              totalPurchase += Number(o.productAmount) || 0;
-            }
-          });
-        } else {
-          rows.forEach((r: any) => {
-            if ((r?.customerName || '').trim() === name) {
-              totalPurchase += Number(r?.totalAmount) || 0;
-            }
-          });
-        }
-        // 已收货款：仅统计手工登记收款
-        try {
-          const receipts = JSON.parse(localStorage.getItem(`customer_receipts_${owner}`) || '[]');
-          receipts.forEach((r: any) => {
-            const amt = Number(r?.amount) || 0;
-            const byId = !!c.id && !!r?.customerId && r.customerId === c.id;
-            const byName = !r?.customerId && !!r?.customerName && r.customerName === name;
-            if (byId || byName) receivedPayment += amt;
-          });
-        } catch { /* ignore */ }
+        const idNameMap: Record<string, string> = {};
+        allCustomers.forEach((r: any) => { if (r && r.id && r.name) idNameMap[String(r.id)] = String(r.name); });
+        totalPurchase = toYuan(computeCustomerPurchaseCents(owner, customerName));
+        receivedPayment = toYuan(computeCustomerReceivedCents(owner, customerName, idNameMap));
       } catch { /* ignore */ }
       return Math.round((credit - (totalPurchase - receivedPayment)) * 100) / 100;
     } catch { return null; }

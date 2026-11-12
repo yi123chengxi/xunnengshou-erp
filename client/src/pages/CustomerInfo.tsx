@@ -40,8 +40,8 @@ import { isAccountingMode, writeAutoEntries, loadSubjectOptions, subjectFilterOp
 import { loadTenantUsers } from '../utils/tenantUsers';
 import { getProvinceOptions, getCityOptions, getDistrictOptions, CHINA_REGIONS } from '../utils/regions';
 import {
-  loadCustomerSummary, ensureCustomerSummaryBuilt, incrementCustomerReceived, refreshCustomerPurchase,
-  verifyCustomerSummary, verifyCustomerPurchase, startIdlePatrol, toYuan,
+  loadCustomerSummary, ensureCustomerSummaryBuilt, incrementCustomerReceived,
+  verifyCustomerSummary, verifyCustomerPurchase, repairCustomerSummaryBulk, scheduleCustomerRefresh, startIdlePatrol, toYuan,
 } from '../utils/paySummary';
 import type { CustomerSummaryEntry } from '../utils/paySummary';
 import { buildOrderOccupiedAmountMap, getOrderOccupiedList } from '../utils/orderOccupied';
@@ -936,6 +936,12 @@ const CustomerInfo: React.FC = () => {
     syncBoundPurchasers();
   }, [syncBoundPurchasers]);
 
+  // 快照涉及的全部客户名（客户档案 + 合作采购商 + 快照已有条目）
+  const getAllCustNames = useCallback((): string[] => Array.from(new Set([
+    ...Object.values(idNameMapRef.current),
+    ...Object.keys(loadCustomerSummary(getDataOwner())),
+  ])), [getDataOwner]);
+
   // 跨标签页监听：当其他标签页写入当前供应商的 boundPurchasers 时自动刷新
   useEffect(() => {
     const storageKey = getStorageKey();
@@ -947,11 +953,9 @@ const CustomerInfo: React.FC = () => {
       if (e.key?.includes('bill-detail') || e.key?.includes('order-manage')) {
         setDataRefreshKey(k => k + 1);
       }
-      // 跨标签页订单/账单明细变更：一次性单遍历刷新全部客户采购总额快照（仅跨页签写事件触发，非每次渲染）
+      // 跨标签页订单/账单明细变更：合并后一次重算全部客户采购总额快照（150ms 防抖，避免逐事件全表扫描）
       if (e.key?.includes('order-manage') || e.key?.includes('bill-detail')) {
-        const names = Array.from(new Set([...Object.values(idNameMapRef.current), ...Object.keys(loadCustomerSummary(getDataOwner()))]));
-        refreshCustomerPurchase(getDataOwner(), names);
-        setCustSummary(loadCustomerSummary(getDataOwner()));
+        scheduleCustomerRefresh(getDataOwner(), getAllCustNames(), () => setCustSummary(loadCustomerSummary(getDataOwner())));
       }
       // 收款台账/快照跨页签变更：重载快照与台账 state
       if (e.key?.includes('customerReceipts_') || e.key?.includes('customer_pay_summary_')) {
@@ -988,7 +992,7 @@ const CustomerInfo: React.FC = () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('bound-purchasers-changed', handleBoundChange);
     };
-  }, [syncBoundPurchasers, reloadCustomerReceipts]);
+  }, [syncBoundPurchasers, reloadCustomerReceipts, getAllCustNames]);
 
   // 监听自定义事件：当在绑定管理页面确认解绑后，自动刷新客户列表
   useEffect(() => {
@@ -1001,6 +1005,9 @@ const CustomerInfo: React.FC = () => {
       setDataRefreshKey(k => k + 1);
       // 服务端 pull 落地后收款台账可能已更新：同步重载台账 state（否则明细弹窗空白）
       reloadCustomerReceipts();
+      // 同文档写入不发原生 storage 事件：pull 落地的订单/账单必须显式重算，
+      // 否则新设备采购总额停在 0，只能等空闲巡检逐个（20s/个）修正
+      scheduleCustomerRefresh(getDataOwner(), getAllCustNames(), () => setCustSummary(loadCustomerSummary(getDataOwner())));
       // 从服务端合并额度调整记录
       const key = getCreditAdjustKey();
       mergeDatasetFromServer(key).then((mergedJson) => {
@@ -1017,7 +1024,7 @@ const CustomerInfo: React.FC = () => {
       window.removeEventListener('supplier-unbind-success', handleUnbindSuccess);
       window.removeEventListener('sync-data-updated', handleSyncOrUpdate);
     };
-  }, [syncBoundPurchasers, reloadCustomerReceipts]);
+  }, [syncBoundPurchasers, reloadCustomerReceipts, getAllCustNames]);
 
   // 收款确认同文档广播（收/付申请确认/订单分期入账）：重载台账 state 与已收货款快照
   useEffect(() => {
@@ -1036,13 +1043,11 @@ const CustomerInfo: React.FC = () => {
   // 同文档 keep-alive 实例不发 storage 事件：发货/账单重建派发 order-data-updated 时重算采购总额快照
   useEffect(() => {
     const handleOrderUpdated = () => {
-      const names = Array.from(new Set([...Object.values(idNameMapRef.current), ...Object.keys(loadCustomerSummary(getDataOwner()))]));
-      refreshCustomerPurchase(getDataOwner(), names);
-      setCustSummary(loadCustomerSummary(getDataOwner()));
+      scheduleCustomerRefresh(getDataOwner(), getAllCustNames(), () => setCustSummary(loadCustomerSummary(getDataOwner())));
     };
     window.addEventListener('order-data-updated', handleOrderUpdated);
     return () => window.removeEventListener('order-data-updated', handleOrderUpdated);
-  }, []);
+  }, [getAllCustNames]);
 
   // 快照维护：客户ID→名称映射 + 一次性迁移构建 + 快照加载；空闲分片巡检防漂移
   useEffect(() => {
@@ -1051,15 +1056,11 @@ const CustomerInfo: React.FC = () => {
     boundPurchasers.forEach(bp => { if (bp.id) m[bp.id] = bp.purchaserName; });
     idNameMapRef.current = m;
     ensureCustomerSummaryBuilt(getDataOwner(), m);
-    // 挂载即全量自愈：按本地订单/收款台账一次性校正全部客户快照，
+    // 挂载即全量自愈：按本地订单/收款台账一次性校正全部客户快照（源表只扫一遍、快照只写一次），
     // 立即修复历史跨端同步遗留的 0 污染快照（空闲巡检逐个轮转太慢，用户会先看到跳动）
     try {
       const names = Array.from(new Set([...Object.values(m), ...Object.keys(loadCustomerSummary(getDataOwner()))]));
-      if (names.length) {
-        const f1 = verifyCustomerPurchase(getDataOwner(), names);
-        const f2 = verifyCustomerSummary(getDataOwner(), names, m);
-        if (f1.length || f2.length) { /* 已自动修复，下方统一重载快照 */ }
-      }
+      if (names.length) repairCustomerSummaryBulk(getDataOwner(), names, m);
     } catch { /* ignore */ }
     setCustSummary(loadCustomerSummary(getDataOwner()));
   }, [customers, boundPurchasers]);
