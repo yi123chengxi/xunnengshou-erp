@@ -167,8 +167,8 @@ function fireHooks(key: string, value: string): void {
 export function emergencyFreeSpace(protectKey?: string): void {
   const set = (k: string, v: string) => { try { originalSetItem.call(localStorage, k, v); } catch { /* ignore */ } };
   const del = (k: string) => { try { localStorage.removeItem(k); } catch { /* ignore */ } };
-  // 绝对不可删除的认证/关键键
-  const CRITICAL = new Set(['username', 'isSubAccount', 'parentAccount', 'registeredUsers']);
+  // 绝对不可删除的认证/关键键（写入失败留痕也必须保住，否则取证链路本身会被清理掉）
+  const CRITICAL = new Set(['username', 'isSubAccount', 'parentAccount', 'registeredUsers', WRITE_FAIL_LOG_KEY]);
   const isProtected = (k: string) => CRITICAL.has(k) || k === protectKey || k === `${protectKey}_ts` || k.startsWith('credit_adjustments_');
   try {
     const keys: string[] = [];
@@ -239,8 +239,56 @@ export function emergencyFreeSpace(protectKey?: string): void {
   } catch { /* ignore */ }
 }
 
+// ============ 写入失败留痕与告警（杜绝“提示保存成功但实际未存”） ============
+// 背景：全局 setItem 防护在“清理后仍写不进”时以前直接丢弃异常，调用方拿到 undefined、
+// 页面照常弹“保存成功”，刷新后数据消失且无任何可查线索。现在：
+// ① 写入环形留痕键（供开发现场/诊断导出取证）；② 广播事件供 UI 层当场提示；③ 函数仍返回 false。
+// 有意保持“不抛异常”：招回 throw 会打挂全应用几十处调用点（包括表单提交中间态），属行为破坏性变更。
+const WRITE_FAIL_LOG_KEY = 'storage_write_fail_log';
+const WRITE_FAIL_LOG_MAX = 50;
+export interface StorageWriteFailRecord { ts: number; key: string; size: number; stage: string; msg: string; }
+
+function appendWriteFailRecord(rec: StorageWriteFailRecord): void {
+  try {
+    let list: StorageWriteFailRecord[] = [];
+    try { const raw = localStorage.getItem(WRITE_FAIL_LOG_KEY); list = raw ? JSON.parse(raw) : []; } catch { list = []; }
+    if (!Array.isArray(list)) list = [];
+    list.push(rec);
+    if (list.length > WRITE_FAIL_LOG_MAX) list = list.slice(-WRITE_FAIL_LOG_MAX);
+    // 原生写入：不走防护补丁，避免递归与再次因配额满抛错
+    originalSetItem.call(localStorage, WRITE_FAIL_LOG_KEY, JSON.stringify(list));
+  } catch { /* 留痕键自己写不进：只能降级为控制台输出 */ }
+}
+
+/** 最近的数据写入失败记录（时间升序） */
+export function getWriteFailures(): StorageWriteFailRecord[] {
+  try {
+    const raw = localStorage.getItem(WRITE_FAIL_LOG_KEY);
+    const list = raw ? JSON.parse(raw) : [];
+    return Array.isArray(list) ? list : [];
+  } catch { return []; }
+}
+
+/** 清空写入失败留痕（仅在确认已处理/已取证后调用） */
+export function clearWriteFailures(): void {
+  try { originalSetItem.call(localStorage, WRITE_FAIL_LOG_KEY, '[]'); } catch { /* ignore */ }
+}
+
+// 同一键 60s 内只广播一次：批量写失败时不能把屏幕刷满弹窗
+let lastWriteFailNotify: { key: string; ts: number } = { key: '', ts: 0 };
+function reportWriteFailure(key: string, size: number, stage: string, err: any): void {
+  const msg = String((err && err.message) || err || 'QuotaExceededError').slice(0, 200);
+  appendWriteFailRecord({ ts: Date.now(), key: String(key || ''), size: Number(size) || 0, stage, msg });
+  try { console.warn('[storageQuota] 数据写入失败，本次修改未保存', { key, size, stage, msg }); } catch { /* ignore */ }
+  const now = Date.now();
+  if (lastWriteFailNotify.key === key && now - lastWriteFailNotify.ts < 60000) return;
+  lastWriteFailNotify = { key, ts: now };
+  try { window.dispatchEvent(new CustomEvent('storage-write-failed', { detail: { key, size, stage, msg } })); } catch { /* ignore */ }
+}
+
 /**
  * 安全 localStorage.setItem：配额溢出时自动紧急清理并重试，避免页面崩溃
+ * @returns 写入是否落盘；false 时已记录留痕并广播 storage-write-failed，调用方不得当作成功提示
  */
 export function safeSetItem(key: string, value: string): boolean {
   const oldLen = (localStorage.getItem(key) || '').length;
@@ -249,14 +297,15 @@ export function safeSetItem(key: string, value: string): boolean {
     fireHooks(key, value);
     notifyUsageWrite(key, oldLen, value.length);
     return true;
-  } catch {
+  } catch (err1) {
     emergencyFreeSpace(key);
     try {
       originalSetItem.call(localStorage, key, value);
       fireHooks(key, value);
       notifyUsageWrite(key, oldLen, value.length);
       return true;
-    } catch {
+    } catch (err2) {
+      reportWriteFailure(key, value.length, `safeSetItem(重试后仍失败;首次:${String((err1 as any)?.message || err1).slice(0, 60)})`, err2);
       return false;
     }
   }
@@ -288,7 +337,8 @@ export function proactiveQuotaCleanup(thresholdBytes = 4 * 1024 * 1024): void {
 
 /**
  * 全局 localStorage 配额防护补丁：安装后全应用任何 localStorage.setItem
- * 在配额溢出时自动紧急清理并重试，仍失败则放弃本次写入，杜绝未捕获 QuotaExceededError 导致页面崩溃
+ * 在配额溢出时自动紧急清理并重试；仍失败则放弃本次写入（保持页面可用），
+ * 但不再静默：写入留痕键并广播 storage-write-failed 供 UI 提示，杜绝“看起来保存成功”
  */
 let guardInstalled = false;
 export function installStorageQuotaGuard(): void {
@@ -299,12 +349,17 @@ export function installStorageQuotaGuard(): void {
     try {
       originalSetItem.call(this, key, value);
       if (this === localStorage) { fireHooks(key, value); notifyUsageWrite(key, oldLen, value.length); }
-    } catch {
+    } catch (err1) {
       try {
         emergencyFreeSpace();
         originalSetItem.call(this, key, value);
         if (this === localStorage) { fireHooks(key, value); notifyUsageWrite(key, oldLen, value.length); }
-      } catch { /* 清理后仍失败：放弃本次写入，保持页面可用 */ }
+      } catch (err2) {
+        // 清理后仍失败：放弃本次写入保持页面可用，但必须留痕并对外告警
+        if (this === localStorage) {
+          reportWriteFailure(key, (value || '').length, `setItem(重试后仍失败;首次:${String((err1 as any)?.message || err1).slice(0, 60)})`, err2);
+        }
+      }
     }
   };
   // removeItem 同样维护增量账本（删除即减去旧体积）

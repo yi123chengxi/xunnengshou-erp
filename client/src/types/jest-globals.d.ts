@@ -6,6 +6,8 @@ declare function describe(name: string, fn: () => void): void;
 declare function it(name: string, fn: () => void | Promise<void>): void;
 declare function beforeEach(fn: () => void): void;
 declare function afterEach(fn: () => void): void;
+// 仅用于 jest.resetModules()（测试需重新加载已捕获原生 setItem 引用的模块）
+declare const jest: { resetModules(): void; isolateModules(fn: () => void): void };
 
 interface JestMatchers {
   toBe(expected: any): void;
