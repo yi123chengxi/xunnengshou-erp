@@ -5,21 +5,13 @@ import ImageSlot from '../../components/ImageSlot';
 import useResizableColumns from '../../hooks/useResizableColumns';
 import { getDevIdentity } from '../../utils/devStore';
 import { saveDataset } from '../../utils/dataStore';
-import { FEEDBACK_KEY_PREFIX, FeedbackEntry } from '../../components/FeedbackPanel';
+import { FEEDBACK_KEY_PREFIX, FeedbackEntry, FeedbackHandleInfo, loadFeedbackRecords } from '../../components/FeedbackPanel';
 import { addUserNotice } from '../../utils/userNotice';
 
 const { Text } = Typography;
 
-/** 处理记录：随反馈条目一并存于 dev_feedback_<id> 键（dev_ 前缀全局同步） */
-interface HandleInfo {
-  by: string;
-  at: string;
-  note: string;
-  images: string[];
-}
-
 interface FeedbackRow extends FeedbackEntry {
-  handled?: HandleInfo;
+  handled?: FeedbackHandleInfo;
 }
 
 /**
@@ -39,29 +31,27 @@ const DevFeedbackPage: React.FC = () => {
   const [handleImages, setHandleImages] = useState<string[]>(['']);
 
   const load = () => {
-    const list: FeedbackRow[] = [];
-    for (let i = 0; i < localStorage.length; i++) {
-      const k = localStorage.key(i);
-      if (!k || !k.startsWith(FEEDBACK_KEY_PREFIX) || k.endsWith('_ts')) continue; // 跳过 dataStore 伴生时间戳键
-      try {
-        const e = JSON.parse(localStorage.getItem(k) || '{}');
-        if (e && e.content) {
-          list.push({
-            key: k,
-            username: e.username || '',
-            company: e.company || '',
-            platform: e.platform || '',
-            content: String(e.content),
-            images: Array.isArray(e.images) ? e.images.filter(Boolean) : [],
-            phone: e.phone || '',
-            category: e.category || '',
-            createdAt: e.createdAt || '',
-            handled: e.handled && typeof e.handled === 'object' ? e.handled : undefined,
-          });
-        }
-      } catch { /* 跳过坏键 */ }
-    }
-    list.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+    // 历史条目的 company 是在提交端读 localStorage.companyName 得到的（该键从未写入，恒为空）：
+    // 显示时按反馈账号反查 registeredUsers.companyName 补全，避免公司名称列显示「-」
+    let users: any[] = [];
+    try { users = JSON.parse(localStorage.getItem('registeredUsers') || '[]'); } catch { users = []; }
+    const usersArr = Array.isArray(users) ? users : [];
+    // 子账号反馈沿 parentAccount 链向上找主账号的公司名称
+    const companyOf = (username: string): string => {
+      const seen = new Set<string>();
+      let cur = usersArr.find((x: any) => x.username === username);
+      while (cur && !seen.has(cur.username)) {
+        seen.add(cur.username);
+        const c = String(cur.companyName || '').trim();
+        if (c) return c;
+        cur = cur.parentAccount ? usersArr.find((x: any) => x.username === cur.parentAccount) : undefined;
+      }
+      return '';
+    };
+    const list: FeedbackRow[] = loadFeedbackRecords().map(r => {
+      const stored = String(r.company || '').trim();
+      return { ...r, company: stored || companyOf(r.username) };
+    });
     setRows(list);
   };
 
@@ -83,7 +73,7 @@ const DevFeedbackPage: React.FC = () => {
     if (!handleTarget) return;
     const note = handleNote.trim();
     if (!note) { message.warning('请填写处理说明'); return; }
-    const info: HandleInfo = {
+    const info: FeedbackHandleInfo = {
       by: identity.name || identity.user || '开发者',
       at: new Date().toLocaleString('zh-CN'),
       note,
