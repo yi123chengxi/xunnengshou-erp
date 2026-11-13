@@ -7,13 +7,12 @@ import express, { Router, Request, Response } from 'express';
 import { store, STORE_DRIVER } from '../database/store';
 import { sendPushToUser } from './push.routes';
 import {
-  applyUsageDeltaForWrite, getUsageBytes, getAllUsageBytes, recomputeUsage, getDatasetJson,
+  applyUsageDeltaForWrite, getCompanyUsageBytes, getAllUsageBytesByCompany, recomputeUsage, getDatasetJson,
 } from '../services/storageUsage';
 import {
   attachSyncUser, currentSyncUser, requireSyncAuth, isKeyAllowed, filterMetaForUser,
-  sanitizeRegisteredUsersJson, hashRegisteredUsersJson, hashPassword, mergeRegisteredUsersJson, SyncUser,
+  sanitizeRegisteredUsersJson, hashRegisteredUsersJson, hashPassword, SyncUser,
 } from '../middleware/syncGuard';
-import { notifyDatasetUpdated } from '../ws/chat-ws';
 
 const router = Router();
 router.use(express.json({ limit: '60mb' }));
@@ -53,36 +52,8 @@ const isMergeAlwaysKey = (key: string): boolean => MERGE_ALWAYS_KEYS.includes(ke
 // 而这类非本账号键不参与本端启动拉取（isKeyForCurrentAccount 过滤），代写端持有的可能是一份陈旧快照；
 // 又因共享键对任何登录用户都下发 meta，陈旧副本会拿到「与服务端一致的 baseTs」→ 走整键替换分支 →
 // 对方刚新增的供应商/采购商卡片被陈旧副本擦掉、刚建立的合作被改回旧状态。表现为列表数量与状态来回跳动。
-const NEVER_SHRINK_PREFIXES = ['purchaser_bills_', 'pageData_customer_bill-detail_', 'pageData_sales_order-manage_', 'purchaser_suppliers_', 'boundPurchasers_', 'accounts_'];
-// accounts_<主账号> 为账号列表：多个浏览器共同维护同一份名单，任何一端拿着陈旧名单整键上传
-// 都会把另一端刚建的账号擦掉（表现为「新增的子账号在别的浏览器没有」）。
-// 行内有 key/id，可按 removedIds 精确删除；未申报的缩水一律并集保留。
+const NEVER_SHRINK_PREFIXES = ['purchaser_bills_', 'pageData_customer_bill-detail_', 'pageData_sales_order-manage_', 'purchaser_suppliers_', 'boundPurchasers_'];
 const isNeverShrinkKey = (key: string): boolean => NEVER_SHRINK_PREFIXES.some(p => key.startsWith(p));
-
-// ============ 权限类数据集变更实时通知 ============
-// 权限数据写入成功后，经聊天 WebSocket 通知该租户所有在线端（主账号 + 全部子账号）
-// 立即增量拉取，使「另一个浏览器给子账号改权限」无需刷新/等轮询即可生效。
-const PERM_NOTIFY_EXACT = ['registeredUsers'];
-const PERM_NOTIFY_PREFIXES = ['dev_', 'roles_', 'role_permsettings_', 'preset_role_overrides_', 'accounts_', 'account_groups_'];
-
-function permNotifyTargets(key: string, user: SyncUser | null): string[] {
-  if (!user) return [];
-  if (!(PERM_NOTIFY_EXACT.includes(key) || PERM_NOTIFY_PREFIXES.some(p => key.startsWith(p)))) return [];
-  const targets = new Set<string>();
-  if (user.owner) targets.add(user.owner);
-  if (user.username) targets.add(user.username);
-  // 开发者后台改客户权限：键内后缀是被改的客户账号，直接通知该客户
-  const m = key.match(/^dev_customer_(?:perms|deny)_(.+)$/);
-  if (m && m[1]) targets.add(m[1]);
-  return [...targets];
-}
-
-/** 写入成功后通知在线端拉取（静默失败：不影响写库结果，仍有 60 秒轮询兜底） */
-function notifyPermDatasetChanged(key: string, user: SyncUser | null): void {
-  const targets = permNotifyTargets(key, user);
-  if (targets.length === 0) return;
-  try { notifyDatasetUpdated(targets, key); } catch { /* ignore */ }
-}
 
 // 合作镜像键的状态单调保护：双方都携带显式 statusTs（状态变更时刻）且服务端记录的事件更新时，
 // 不允许陈旧副本把状态字段写回旧值；其余字段仍以 incoming 为准。任一侧缺少 statusTs 时不改写原语义，
@@ -208,16 +179,10 @@ router.put('/dataset', async (req: Request, res: Response) => {
     if (!key || typeof json !== 'string') { res.status(400).json({ error: 'missing key or json' }); return; }
     const user = currentSyncUser(req);
     if (!isKeyAllowed(key, user, 'write')) { denyKey(res, user, key, '写入'); return; }
-    // 权限类数据集落库成功后通知该租户在线端立即拉取（响应正常结束才算保存成功）
-    res.on('finish', () => { if (res.statusCode < 400) notifyPermDatasetChanged(key, user); });
     // 账号数据集写入前处理：明文密码统一转 bcrypt 哈希，服务端不再落明文
     if (key === 'registeredUsers') {
       const existing = await store.getDataset(key).catch(() => null);
-      const existingJson = existing ? existing.dataset_json : null;
-      // 行级并集：新增账号采纳、权限字段按 _permTs 保护、缩水需显式申报 removedIds
-      // （子账号会话也要能建号：旧逻辑把子账号写入直接拦在客户端，导致新账号只留在本机）
-      const guarded = existingJson ? mergeRegisteredUsersJson(existingJson, json, req.body.removedIds) : json;
-      json = await hashRegisteredUsersJson(guarded, existingJson);
+      json = await hashRegisteredUsersJson(json, existing ? existing.dataset_json : null);
     }
     const ts = Number(updatedAt) || Date.now();
     const owner = extractOwner(key);
@@ -374,19 +339,20 @@ router.delete('/dataset', async (req: Request, res: Response) => {
 
 // ============ 存储用量（增量计数器） ============
 
-/** 查询某租户数据库用量（字节，O(1)）
+/** 查询公司数据库用量（字节）
  *  用量是公司（主账号）级口径：一律以令牌里的 owner 为准，忽略前端传入的账号名，
- *  保证同一企业的主账号与任意子账号、任意浏览器查到同一个数字（旧版前端传子账号 username 也被纠正） */
+ *  并把主账号名下所有子账号的用量计入同一份总数，
+ *  保证同一企业的主账号与任意子账号、任意浏览器查到完全同一个数字 */
 router.get('/usage', requireSyncAuth, async (req: Request, res: Response) => {
   const u = currentSyncUser(req);
   const owner = String(u?.owner || u?.username || req.query.owner || '');
   if (!owner) { res.status(400).json({ error: 'missing owner' }); return; }
-  res.json({ code: 0, data: { owner, bytes: await getUsageBytes(owner) } });
+  res.json({ code: 0, data: { owner, bytes: await getCompanyUsageBytes(owner) } });
 });
 
-/** 全部租户用量映射（开发者后台列表用） */
+/** 全部用量映射（开发者后台列表用）：主账号行为公司合计，子账号行为其自身明细 */
 router.get('/usage-all', requireSyncAuth, async (_req: Request, res: Response) => {
-  res.json({ code: 0, data: await getAllUsageBytes() });
+  res.json({ code: 0, data: await getAllUsageBytesByCompany() });
 });
 
 /** 重新扫描：全量重算某租户（或全部）用量计数器 */
