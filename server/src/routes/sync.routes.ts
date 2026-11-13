@@ -339,9 +339,12 @@ router.delete('/dataset', async (req: Request, res: Response) => {
 
 // ============ 存储用量（增量计数器） ============
 
-/** 查询某租户数据库用量（字节，O(1)） */
+/** 查询某租户数据库用量（字节，O(1)）
+ *  用量是公司（主账号）级口径：一律以令牌里的 owner 为准，忽略前端传入的账号名，
+ *  保证同一企业的主账号与任意子账号、任意浏览器查到同一个数字（旧版前端传子账号 username 也被纠正） */
 router.get('/usage', requireSyncAuth, async (req: Request, res: Response) => {
-  const owner = String(req.query.owner || '');
+  const u = currentSyncUser(req);
+  const owner = String(u?.owner || u?.username || req.query.owner || '');
   if (!owner) { res.status(400).json({ error: 'missing owner' }); return; }
   res.json({ code: 0, data: { owner, bytes: await getUsageBytes(owner) } });
 });

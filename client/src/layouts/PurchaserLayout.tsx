@@ -31,7 +31,7 @@ import ServiceOrdersModal from '../components/ServiceOrdersModal';
 import EnterpriseCertModal, { CertBadge, fetchCertStatus, getChangeLockMessage } from '../components/EnterpriseCertModal';
 import type { CertInfo } from '../components/EnterpriseCertModal';
 import StorageCleanupModal from '../components/StorageCleanupModal';
-import { getUserQuota, getUsagePercent, formatStorageSize, getUsageBreakdown } from '../utils/storageQuota';
+import { getUserQuota, getUsagePercent, formatStorageSize, getUsageBreakdown, sessionDataOwner } from '../utils/storageQuota';
 import { STORAGE_SUBSCRIBE_DISABLED } from '../utils/billingPolicy';
 import { getProvinceOptions, getCityOptions, getDistrictOptions } from '../utils/regions';
 import { safeSetItem } from '../utils/storageQuota';
@@ -236,12 +236,12 @@ const PurchaserLayout: React.FC = () => {
 
   // 通知相关状态
   const [notificationCount] = useState(3);
-  // 空间用量：本地增量账本 + 服务端增量计数器合成，后台异步刷新
+  // 空间用量：顶栏「数据库空间」只统计云端数据库，口径统一为 sessionDataOwner()（子账号归主账号），与主账号显示一致
   const [spaceUsedKB, setSpaceUsedKB] = useState(0);
   useEffect(() => {
     let on = true;
-    const uname0 = localStorage.getItem('username') || '';
-    const load = () => { getUsageBreakdown(uname0).then(b => { if (on) setSpaceUsedKB(b.totalKB); }); };
+    const owner0 = sessionDataOwner();
+    const load = () => { getUsageBreakdown(owner0).then(b => { if (on) setSpaceUsedKB(b.serverKB); }); };
     load();
     window.addEventListener('storage-usage-updated', load);
     return () => { on = false; window.removeEventListener('storage-usage-updated', load); };
@@ -965,9 +965,9 @@ const PurchaserLayout: React.FC = () => {
             
             {/* 空间使用情况 */}
             {(() => {
-              const uname = localStorage.getItem('username') || '';
+              const owner = sessionDataOwner();
               const used = spaceUsedKB;
-              const quota = getUserQuota(uname);
+              const quota = getUserQuota(owner);
               const percent = getUsagePercent(used, quota);
               const popoverContent = (
                 <div style={{ width: 220, padding: '4px 0' }}>
@@ -1247,7 +1247,7 @@ const PurchaserLayout: React.FC = () => {
 
       {/* 企业认证弹窗（三要素核验） */}
       <EnterpriseCertModal open={enterpriseCertVisible} onClose={() => setEnterpriseCertVisible(false)} onCertChanged={loadOwnCert} />
-      <StorageCleanupModal open={cleanupModalVisible} onClose={() => setCleanupModalVisible(false)} onCleanupComplete={() => { const uname = localStorage.getItem('username') || ''; getUsageBreakdown(uname).then(b => setSpaceUsedKB(b.totalKB)); }} />
+      <StorageCleanupModal open={cleanupModalVisible} onClose={() => setCleanupModalVisible(false)} onCleanupComplete={() => { getUsageBreakdown(sessionDataOwner()).then(b => setSpaceUsedKB(b.serverKB)); }} />
 
       {/* 个人中心弹窗 */}
       <Modal

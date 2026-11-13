@@ -47,7 +47,7 @@ import StorageCleanupModal from '../components/StorageCleanupModal';
 import TrialCountdown from '../components/TrialCountdown';
 import SubscriptionModal from '../components/SubscriptionModal';
 import dayjs from 'dayjs';
-import { getUserQuota, getUsagePercent, formatStorageSize, getUsageBreakdown } from '../utils/storageQuota';
+import { getUserQuota, getUsagePercent, formatStorageSize, getUsageBreakdown, sessionDataOwner } from '../utils/storageQuota';
 import { FREE_PERIOD, STORAGE_SUBSCRIBE_DISABLED } from '../utils/billingPolicy';
 import { getMergedPermissions } from '../config/permissions';
 import { isPermAllowed, ECOM_KEY_MIGRATION } from '../utils/devPerms';
@@ -414,12 +414,13 @@ const MainLayout: React.FC = () => {
   // 通知相关状态
   const [notificationVisible, setNotificationVisible] = useState(false);
   const [notificationCount, setNotificationCount] = useState(0);
-  // 空间用量：本地增量账本 + 服务端增量计数器合成，后台异步刷新
+  // 空间用量：顶栏「数据库空间」只统计云端数据库（服务端增量计数器），本地 localStorage 缓存不计入；
+  // 查询口径统一为 sessionDataOwner()（子账号归主账号），保证同一企业的主/子账号显示完全一致
   const [spaceUsedKB, setSpaceUsedKB] = useState(0);
   useEffect(() => {
     let on = true;
-    const uname0 = localStorage.getItem('username') || '';
-    const load = () => { getUsageBreakdown(uname0).then(b => { if (on) setSpaceUsedKB(b.totalKB); }); };
+    const owner0 = sessionDataOwner();
+    const load = () => { getUsageBreakdown(owner0).then(b => { if (on) setSpaceUsedKB(b.serverKB); }); };
     load();
     window.addEventListener('storage-usage-updated', load);
     return () => { on = false; window.removeEventListener('storage-usage-updated', load); };
@@ -1428,9 +1429,9 @@ const MainLayout: React.FC = () => {
             
             {/* 空间使用情况 */}
             {(() => {
-              const uname = localStorage.getItem('username') || '';
+              const owner = sessionDataOwner();
               const used = spaceUsedKB;
-              const quota = getUserQuota(uname);
+              const quota = getUserQuota(owner);
               const percent = getUsagePercent(used, quota);
               const popoverContent = (
                 <div style={{ width: 220, padding: '4px 0' }}>
@@ -2010,7 +2011,7 @@ const MainLayout: React.FC = () => {
 
       {/* 企业认证弹窗（三要素核验） */}
       <EnterpriseCertModal open={enterpriseCertVisible} onClose={() => setEnterpriseCertVisible(false)} onCertChanged={loadOwnCert} />
-      <StorageCleanupModal open={cleanupModalVisible} onClose={() => setCleanupModalVisible(false)} onCleanupComplete={() => { const uname = localStorage.getItem('username') || ''; getUsageBreakdown(uname).then(b => setSpaceUsedKB(b.totalKB)); }} />
+      <StorageCleanupModal open={cleanupModalVisible} onClose={() => setCleanupModalVisible(false)} onCleanupComplete={() => { getUsageBreakdown(sessionDataOwner()).then(b => setSpaceUsedKB(b.serverKB)); }} />
 
       {/* 企业信息弹窗 */}
       <Modal

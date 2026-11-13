@@ -37,6 +37,7 @@ import {
   kbToGb,
   getUsageBreakdown,
   rescanUsage,
+  sessionDataOwner,
 } from '../utils/storageQuota';
 
 const { Title, Text } = Typography;
@@ -175,6 +176,8 @@ function saveOrders(orders: OrderRecord[]) {
 const StoragePricing: React.FC = () => {
   const navigate = useNavigate();
   const username = localStorage.getItem('username') || '';
+  // 用量/配额统一按公司（主账号）口径：子账号与主账号看到同一个数字，与顶栏一致
+  const owner = sessionDataOwner();
   const companyName = localStorage.getItem('companyName') || '';
 
   const [used, setUsed] = useState(0);
@@ -193,28 +196,28 @@ const StoragePricing: React.FC = () => {
     setOrders(loadOrders().filter((o) => o.username === username));
   }, []);
 
-  // 用量分解：本地表单缓存（增量账本） + 服务端数据库（增量计数器）
+  // 配额口径：已用空间 = 服务端数据库用量（本地表单缓存只做展示参考，不计入配额）
   const refreshUsage = (force = false) => {
-    getUsageBreakdown(username, force).then((b) => {
-      const q = getUserQuota(username);
-      setUsed(b.totalKB);
+    getUsageBreakdown(owner, force).then((b) => {
+      const q = getUserQuota(owner);
+      setUsed(b.serverKB);
       setLocalKB(b.localKB);
       setServerKB(b.serverKB);
       setQuota(q);
-      setPercent(getUsagePercent(b.totalKB, q));
+      setPercent(getUsagePercent(b.serverKB, q));
     });
   };
 
   // 重新扫描：本地全量重扫 + 服务端单遍全量重算
   const handleRescan = () => {
     setScanning(true);
-    rescanUsage(username).then((b) => {
-      const q = getUserQuota(username);
-      setUsed(b.totalKB);
+    rescanUsage(owner).then((b) => {
+      const q = getUserQuota(owner);
+      setUsed(b.serverKB);
       setLocalKB(b.localKB);
       setServerKB(b.serverKB);
       setQuota(q);
-      setPercent(getUsagePercent(b.totalKB, q));
+      setPercent(getUsagePercent(b.serverKB, q));
       setScanning(false);
       message.success('重新扫描完成：已覆盖全部表单与数据库');
     });
@@ -261,7 +264,7 @@ const StoragePricing: React.FC = () => {
         message.error(`已用空间 ${formatStorageSize(used)} 超出新套餐配额，无法订购`);
         return;
       }
-      setUserQuota(username, newQuotaKB);
+      setUserQuota(owner, newQuotaKB);
 
       const allOrders = loadOrders();
       // 旧套餐退款处理
@@ -389,11 +392,11 @@ const StoragePricing: React.FC = () => {
           <Descriptions.Item label="当前总额配">
             <Tag color="blue">{formatStorageSize(quota)}</Tag>
           </Descriptions.Item>
-          <Descriptions.Item label="本地表单缓存">
-            <Text type="secondary">{formatStorageSize(localKB)}</Text>
+          <Descriptions.Item label="本地浏览器缓存">
+            <Text type="secondary">{formatStorageSize(localKB)}（不计入配额）</Text>
           </Descriptions.Item>
           <Descriptions.Item label="服务器数据库">
-            <Text type="secondary">{formatStorageSize(serverKB)}</Text>
+            <Text type="secondary">{formatStorageSize(serverKB)}（已用空间口径）</Text>
           </Descriptions.Item>
         </Descriptions>
 
