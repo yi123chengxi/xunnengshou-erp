@@ -58,6 +58,13 @@ export async function companyMembersOf(owner: string): Promise<string[]> {
   return out;
 }
 
+/** 把任意账号名（主账号 / 一级或二级子账号）解析为所属公司的主账号 */
+export async function resolveCompanyRoot(name: string): Promise<string> {
+  if (!name) return name;
+  const { roots } = await loadUserIndex();
+  return roots.get(name) || name;
+}
+
 /** 键归属租户解析：pageData 四段式取末段；其余键末段或中段命中已知用户名即归属该用户 */
 export async function resolveOwnerKey(key: string): Promise<string> {
   const { names } = await loadUserIndex();
@@ -107,13 +114,15 @@ export async function getUsageBytes(owner: string): Promise<number> {
 
 /**
  * 公司（主账号）级用量：把主账号与其名下子账号的计数器相加。
+ * 入参先解析成根账号，所以传主账号名还是任意层级子账号名都得同一个数字（调用方不必关心 owner 缺失回落）。
  * 读侧归并且不搬数据：成本只是「成员数 × 一次主键查询」，与 dataset_store 行数无关，
  * 因此不会拖慢启动，也不会像全表重算那样造成分钟级不可用。
  */
 export async function getCompanyUsageBytes(owner: string): Promise<number> {
   if (!owner) return 0;
+  const root = await resolveCompanyRoot(owner);
   let total = 0;
-  for (const m of await companyMembersOf(owner)) total += await getUsageBytes(m);
+  for (const m of await companyMembersOf(root)) total += await getUsageBytes(m);
   return total;
 }
 
@@ -127,33 +136,38 @@ export async function getAllUsageBytes(): Promise<Record<string, number>> {
 }
 
 /**
- * 全部租户用量映射：主账号行给公司合计，子账号行保留它自己名下的明细（开发者后台两种都要看得到）。
- * 合计只写进根账号，不会把同一个字节数算两遍（调用方不会对本映射求和）。
+ * 全站用量映射：键 = 主账号（公司），值 = 该公司（主账号 + 名下子账号）的云端用量合计。
+ * 与 /usage 用的是同一个公司口径（getCompanyUsageBytes），因此开发者后台每家公司行显示的数字，
+ * 与该租户（无论登录主账号还是子账号）顶栏「数据库空间」看到的完全一致。
+ * 子账号不单独成键，所以对本映射求和即全站云端用量，不会重复计数。
  */
 export async function getAllUsageBytesByCompany(): Promise<Record<string, number>> {
   const { roots } = await loadUserIndex();
   const raw = await getAllUsageBytes();
-  const out: Record<string, number> = { ...raw };
+  const out: Record<string, number> = {};
   for (const [name, bytes] of Object.entries(raw)) {
     const root = roots.get(name) || name;
-    if (root === name) continue; // 根账号自己的桶已在结果里
     out[root] = (out[root] || 0) + bytes;
   }
+  // 没有任何数据桶的公司补一个 0，保证列表行与该租户顶栏都有同口径数字
+  for (const [name, root] of roots) if (root === name && !(name in out)) out[name] = 0;
   return out;
 }
 
 /** 全量重算（重新扫描）：单遍聚合 dataset_store，重写计数器；owner 为空时重算全部租户 */
 export async function recomputeUsage(owner?: string): Promise<Record<string, number>> {
   const sums: Record<string, number> = {};
+  let root = owner || '';
   try {
     for (const r of await store.allKeySizes()) {
       const o = await resolveOwnerKey(r.dataset_key);
       if (!o) continue;
       sums[o] = (sums[o] || 0) + (Number(r.bytes) || 0);
     }
-    // 指定主账号时连同名下子账号一起重算（仍然是同一遍扫描，不增加成本），
-    // 否则公司合计会因“只刷新主账号桶”而混入陈旧的子账号数据
-    const targets = owner ? await companyMembersOf(owner) : Object.keys(sums);
+    // 指定账号时先解析到公司根账号，连同名下子账号一起重算（仍然是同一遍扫描，不增加成本），
+    // 否则公司合计会因“只刷新一个桶”而混入陈旧的其它成员数据
+    root = await resolveCompanyRoot(owner || '');
+    const targets = owner ? await companyMembersOf(root) : Object.keys(sums);
     for (const t of targets) {
       await store.setUsageBytes(t, sums[t] || 0, Date.now());
     }
@@ -162,7 +176,7 @@ export async function recomputeUsage(owner?: string): Promise<Record<string, num
   }
   if (!owner) return sums;
   const folded: Record<string, number> = {};
-  for (const m of await companyMembersOf(owner)) folded[owner] = (folded[owner] || 0) + (sums[m] || 0);
+  for (const m of await companyMembersOf(root)) folded[root] = (folded[root] || 0) + (sums[m] || 0);
   return folded;
 }
 

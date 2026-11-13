@@ -385,7 +385,7 @@ router.get('/usage', requireSyncAuth, async (req: Request, res: Response) => {
   res.json({ code: 0, data: { owner, bytes: await getCompanyUsageBytes(owner) } });
 });
 
-/** 全部用量映射（开发者后台列表用）：主账号行为公司合计，子账号行为其自身明细 */
+/** 全站用量映射（开发者后台用）：键为主账号，值为该公司（含名下子账号）云端用量合计，口径与 /usage 一致 */
 router.get('/usage-all', requireSyncAuth, async (_req: Request, res: Response) => {
   res.json({ code: 0, data: await getAllUsageBytesByCompany() });
 });

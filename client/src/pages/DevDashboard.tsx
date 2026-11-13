@@ -5,7 +5,7 @@ import type { ColumnsType } from 'antd/es/table';
 import { useNavigate, useLocation } from 'react-router-dom';
 import dayjs, { Dayjs } from 'dayjs';
 import Logo from '../components/Logo';
-import { getUserQuota, setUserQuota, formatStorageSize, getUsagePercent, getTotalStorageUsage, getAllQuotas, kbToGb, gbToKb, fetchAllServerUsage, getLocalUsageKB, sessionDataOwner, getPaidQuotaKB, getFreeBaseQuotaKB } from '../utils/storageQuota';
+import { getUserQuota, setUserQuota, formatStorageSize, getUsagePercent, getAllQuotas, kbToGb, gbToKb, fetchAllServerUsage, getPaidQuotaKB, getFreeBaseQuotaKB } from '../utils/storageQuota';
 import request from '../utils/request';
 import { validatePassword } from '../utils/passwordPolicy';
 import useStickTableHeight from '../hooks/useStickTableHeight';
@@ -73,11 +73,9 @@ const DevDashboard: React.FC = () => {
   // 基础设施统计（应用服务磁盘 + 数据库空间）：服务端 /system/infra-stats
   const [infra, setInfra] = useState<any>(null);
   useEffect(() => { request.get('/system/infra-stats').then(r => setInfra(r?.data?.data || null)).catch(() => setInfra(null)); }, []);
-  // 租户总用量 KB = 本浏览器本地账本（仅当前会话租户） + 服务端数据库计数器
-  const usedKBOf = (uname: string): number => {
-    const local = uname && uname === sessionDataOwner() ? getLocalUsageKB(uname) : 0;
-    return parseFloat((local + (serverUsageMap[uname] || 0) / 1024).toFixed(2));
-  };
+  // 口径与租户顶栏「数据库空间」完全一致：只取云端数据库用量，且按公司合计（主账号 + 名下子账号）；
+  // 本浏览器 localStorage 缓存不计入配额，因此这里不得掺入本地量（旧实现会多加一层本地账本，造成两边数字不同）
+  const usedKBOf = (uname: string): number => parseFloat(((serverUsageMap[uname] || 0) / 1024).toFixed(2));
   const [filteredUsers, setFilteredUsers] = useState<RegisteredUser[]>([]);
   const [searchText, setSearchText] = useState('');
   const [roleFilter, setRoleFilter] = useState<string>('');
@@ -719,7 +717,7 @@ const v18Keys = allPermKeys().filter(k => PERM_V18_DEFAULT_KEYS.includes(k));
       render: (_: any, record: RegisteredUser) => <CertBadge info={certMap[record.username] || null} showUncertified />,
     },
     {
-      title: '空间使用',
+      title: <Tooltip title="云端数据库用量（公司口径：主账号 + 名下子账号合计），与该租户顶栏「数据库空间」显示完全一致；浏览器本地缓存不计入">空间使用</Tooltip>,
       key: 'storageUsage',
       width: 160,
       render: (_, record) => {
@@ -809,6 +807,12 @@ const v18Keys = allPermKeys().filter(k => PERM_V18_DEFAULT_KEYS.includes(k));
   };
 
   const modeTitle = mode === 'mine' ? '我的客户' : mode === 'pool' ? '客户公海' : '全部客户';
+
+  // 全站云端用量 KB：/usage-all 按公司返回，求和即合计（子账号已并入所属公司，不重复计数）
+  const totalCloudKB = useMemo(
+    () => parseFloat((Object.values(serverUsageMap).reduce((s: number, b) => s + (Number(b) || 0), 0) / 1024).toFixed(2)),
+    [serverUsageMap],
+  );
 
   // 客户总订购空间：全部客户已购/已分配配额之和（不含免费赠送底座）
   const totalPaidKB = useMemo(() => users.reduce((s: number, u: any) => s + (getPaidQuotaKB(u.username) || 0), 0), [users]);
@@ -920,9 +924,11 @@ const v18Keys = allPermKeys().filter(k => PERM_V18_DEFAULT_KEYS.includes(k));
         <Card bodyStyle={{ padding: '16px 20px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div>
-              <Text type="secondary">总存储用量</Text>
+              <Tooltip title="全站云端数据库用量合计（按公司口径，含各公司子账号），与各租户顶栏显示同源；不统计任何浏览器本地缓存">
+                <Text type="secondary">总存储用量</Text>
+              </Tooltip>
               <div style={{ fontSize: 24, fontWeight: 'bold', color: PRIMARY }}>
-                {formatStorageSize(getTotalStorageUsage())}
+                {formatStorageSize(totalCloudKB)}
               </div>
             </div>
             <CloudOutlined style={{ fontSize: 32, color: PRIMARY, opacity: 0.3 }} />
@@ -1153,7 +1159,7 @@ const v18Keys = allPermKeys().filter(k => PERM_V18_DEFAULT_KEYS.includes(k));
                   )}
                 </div>
               </Descriptions.Item>
-              <Descriptions.Item label="已使用" span={2}>
+              <Descriptions.Item label="已使用（云端·公司口径）" span={2}>
                 <div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
                     <Text>{formatStorageSize(used)} / {formatStorageSize(quota)}</Text>

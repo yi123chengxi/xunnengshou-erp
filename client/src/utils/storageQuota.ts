@@ -535,7 +535,7 @@ export async function fetchServerUsageBytes(owner: string, force = false): Promi
   }
 }
 
-/** 全部租户数据库用量映射（开发者后台列表用） */
+/** 全站云端用量映射（开发者后台用）：键为主账号，值 = 该公司（含名下子账号）字节数，与 /sync/usage 口径一致 */
 export async function fetchAllServerUsage(): Promise<Record<string, number>> {
   try {
     const res = await request.get('/sync/usage-all');
