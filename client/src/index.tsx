@@ -12,7 +12,8 @@ import './index.css';
 dayjs.locale('zh-cn');
 import { installStorageQuotaGuard, registerSetItemHook, proactiveQuotaCleanup } from './utils/storageQuota';
 import { installStorageWriteFailureNotice } from './utils/storageFailureNotice';
-import { scheduleDatasetUpload } from './utils/serverSync';
+import { scheduleDatasetUpload, installUploadQueueRetry } from './utils/serverSync';
+import { hydrateProductListCache } from './utils/dataStore';
 import { initPushNotifications } from './utils/pushNotification';
 import { cleanupDemoAccountsAndSession } from './utils/demoAccountCleanup';
 import { startBankSyncWatcher } from './utils/supplierBankSync';
@@ -24,6 +25,17 @@ installStorageQuotaGuard();
 installStorageWriteFailureNotice();
 // 跨浏览器同步：业务数据写入后防抖上传到后端（后端不可用时静默降级）
 registerSetItemHook((key, value) => scheduleDatasetUpload(key, value));
+// 待上传队列自动补传：断网/关页面期间未及上传的保存，联网、切回前台或每 30 秒自动重试
+installUploadQueueRetry();
+// 商品清单内存缓存预热：本地缓存被预算淘汰后，仪表盘等同步读取的页面仍能取到数据
+setTimeout(() => {
+  try {
+    const owner = localStorage.getItem('isSubAccount') === 'true'
+      ? (localStorage.getItem('parentAccount') || localStorage.getItem('username') || '')
+      : (localStorage.getItem('username') || '');
+    if (owner) void hydrateProductListCache(owner);
+  } catch { /* ignore */ }
+}, 1200);
 // 残留演示账号与遗留登录会话清理：测试期遗留的 admin 等会话在启动时即清除，回退登录页
 cleanupDemoAccountsAndSession();
 // 供应商银行信息自动同步监听：采购商侧供应商条目银行四字段默认同步供应商企业信息，

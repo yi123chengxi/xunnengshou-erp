@@ -6,7 +6,7 @@
  *   本地有但服务端没有的数据自动上传（首次迁移）；
  * - 服务端不可用时全部静默降级为纯本地模式，不影响现有功能。
  */
-import { saveDataset, loadDataset } from './dataStore';
+import { saveDataset, loadDataset, listDatasetKeys } from './dataStore';
 import { getOriginalSetItem, safeSetItem, emergencyFreeSpace } from './storageQuota';
 import { API_BASE } from './apiBase';
 import { repairPurchaserSupplierNames } from './cooperationTerminate';
@@ -14,6 +14,9 @@ import { reconcileCooperationPairs } from './cooperationReconcile';
 import { migrateLegacyReconRecords } from './reconStore';
 import { repairCounterpartyNames } from './nameSync';
 import { healReconTerminalLinks } from './reconHeal';
+import { queuePut, queueDelete, queueAll } from './uploadQueue';
+import { takeRemovedIds, peekRemovedIds, declareShrink } from './shrinkRegistry';
+export { declareShrink } from './shrinkRegistry';
 
 // 需要同步的业务数据 key 前缀/精确名
 // 注意：customer_pay_summary_/supplier_pay_summary_ 为本地派生快照（由订单/账单/台账重算），禁止跨端同步——
@@ -187,12 +190,8 @@ const knownTs = new Map<string, number>();
 // 显式删除申报：删除操作在写存储前调用 declareShrink 登记被删行 id，
 // 本次上传随 body 携带 removedIds，服务端据此才允许从「永不缩水键」中移除这些行；
 // 未申报的缩水（镜像/重建丢行等意外）在服务端被并集保留，物理杜绝误擦除。
-const pendingRemovedIds = new Map<string, string[]>();
-export function declareShrink(key: string, removedIds: string[]): void {
-  if (!removedIds || removedIds.length === 0) return;
-  const prev = pendingRemovedIds.get(key) || [];
-  pendingRemovedIds.set(key, Array.from(new Set([...prev, ...removedIds])));
-}
+// 登记表本体与 declareShrink 实现已下沉到 shrinkRegistry（供自愈类 util 引用而不形成循环依赖），
+// 本模块只负责在上传时消费申报，并以同名导出保持既有调用方（页面/util）的引用路径不变。
 
 /** 同步请求鉴权头：登录后写入的 JWT（未登录时为空对象，仅能访问公开键） */
 function authHeaders(extra?: Record<string, string>): Record<string, string> {
@@ -231,10 +230,10 @@ function handleSyncAuthRequired(): void {
   try { window.location.href = '/login'; } catch { /* ignore */ }
 }
 
-async function doUpload(key: string, json: string, ts?: number, baseTs?: number): Promise<void> {
-  if (!(await serverAvailable())) return;
-  const removedIds = pendingRemovedIds.get(key);
-  if (removedIds) pendingRemovedIds.delete(key);
+async function doUpload(key: string, json: string, ts?: number, baseTs?: number, removedIdsOverride?: string[]): Promise<boolean> {
+  if (!(await serverAvailable())) return false;
+  // 队列补传时使用入队那一刻的申报快照，避免与后续新写入的申报串味
+  const removedIds = removedIdsOverride || takeRemovedIds(key);
   try {
     const res = await fetchWithTimeout(`${API_BASE}/sync/dataset`, {
       method: 'PUT',
@@ -245,12 +244,74 @@ async function doUpload(key: string, json: string, ts?: number, baseTs?: number)
     if (res.ok) {
       const data = await res.json().catch(() => null);
       if (data && typeof data.newTs === 'number') knownTs.set(key, data.newTs);
-    } else if (res.status === 401) {
-      handleSyncAuthRequired();
+      return true;
     }
+    // 未确认落库：把本次消费掉的删除申报放回登记表，下次重传仍能合法删除被删行
+    if (removedIds && !removedIdsOverride) declareShrink(key, removedIds);
+    if (res.status === 401) handleSyncAuthRequired();
+    return false;
   } catch {
     serverState = { ok: false, at: Date.now() };
+    if (removedIds && !removedIdsOverride) declareShrink(key, removedIds);
+    return false;
   }
+}
+
+/** 把一次写入登记进持久化待上传队列（同键只保留最新一份） */
+function enqueueUpload(key: string, value: string, ts: number): void {
+  try {
+    queuePut({ key, value, ts, removedIds: peekRemovedIds(key), attempt: 0, nextAt: 0 });
+  } catch { /* 队列写不进不影响主流程 */ }
+}
+
+let flushingQueue = false;
+/**
+ * 补传队列：把 IndexedDB 里等待中的保存逐条推到服务端。
+ * 断网期间的保存、页面被关掉前未及上传的保存都由这里补上；失败按指数退避排队重试。
+ */
+export async function flushUploadQueue(force = false): Promise<number> {
+  if (flushingQueue) return 0;
+  flushingQueue = true;
+  let done = 0;
+  try {
+    const items = await queueAll();
+    if (items.length === 0) return 0;
+    if (!(await serverAvailable())) return 0;
+    const now = Date.now();
+    for (const it of items) {
+      if (!isSyncKey(it.key)) { queueDelete(it.key, it.ts); continue; }
+      // 换账号后队列里可能残留上一个账号的键：跳过但保留，等该账号登录后再补传，
+      // 避免把别人的数据写进当前账号
+      if (!isKeyForCurrentAccount(it.key)) continue;
+      if (!force && it.nextAt > now) continue;
+      const ok = await doUpload(it.key, it.value, it.ts, knownTs.get(it.key) ?? 0, it.removedIds);
+      if (ok) {
+        queueDelete(it.key, it.ts);
+        done++;
+      } else {
+        const attempt = (it.attempt || 0) + 1;
+        const delay = Math.min(60000, 2000 * Math.pow(2, Math.min(attempt, 5)));
+        queuePut({ ...it, attempt, nextAt: Date.now() + delay });
+      }
+    }
+  } finally {
+    flushingQueue = false;
+  }
+  return done;
+}
+
+let queueRetryInstalled = false;
+/** 安装自动补传：联网恢复、切回前台、每 30 秒各尝试一次（队列为空时开销可忽略） */
+export function installUploadQueueRetry(): void {
+  if (queueRetryInstalled) return;
+  queueRetryInstalled = true;
+  const kick = () => { void flushUploadQueue(); };
+  try { window.addEventListener('online', kick); } catch { /* ignore */ }
+  try {
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') kick(); });
+  } catch { /* ignore */ }
+  try { setInterval(kick, 30000); } catch { /* ignore */ }
+  try { setTimeout(kick, 4000); } catch { /* ignore */ }
 }
 
 /** 写入钩子回调：业务 key 变更后调度上传，并刷新本地 _ts 时间戳 */
@@ -260,15 +321,23 @@ export function scheduleDatasetUpload(key: string, value: string): void {
   const ts = Date.now();
   const baseTs = knownTs.get(key) ?? 0;
   try { getOriginalSetItem()(`${key}_ts`, String(ts)); } catch { /* ignore */ }
+  // 先落持久化队列：即使随后离线/刷新/关页面，这条写入也会在下次联网时自动补传
+  enqueueUpload(key, value, ts);
   const exist = pending.get(key);
   if (exist) {
     exist.value = value;
     exist.ts = ts;
     clearTimeout(exist.timer);
-    exist.timer = setTimeout(() => { pending.delete(key); void doUpload(key, exist.value, exist.ts, baseTs); }, 800);
+    exist.timer = setTimeout(() => {
+      pending.delete(key);
+      void doUpload(key, exist.value, exist.ts, baseTs).then(ok => { if (ok) queueDelete(key, exist.ts); });
+    }, 800);
   } else {
     const entry = { value, ts, timer: null as any };
-    entry.timer = setTimeout(() => { pending.delete(key); void doUpload(key, entry.value, entry.ts, baseTs); }, 800);
+    entry.timer = setTimeout(() => {
+      pending.delete(key);
+      void doUpload(key, entry.value, entry.ts, baseTs).then(ok => { if (ok) queueDelete(key, entry.ts); });
+    }, 800);
     pending.set(key, entry);
   }
 }
@@ -278,7 +347,9 @@ export function flushDatasetUpload(key: string, value: string): void {
   if (!isSyncKey(key)) return;
   const e = pending.get(key);
   if (e) { clearTimeout(e.timer); pending.delete(key); }
-  void doUpload(key, value);
+  const ts = Date.now();
+  enqueueUpload(key, value, ts);
+  void doUpload(key, value, ts).then(ok => { if (ok) queueDelete(key, ts); });
 }
 
 /** 立即上传并等待完成（关键数据保存后确保服务端已落库） */
@@ -286,21 +357,29 @@ export async function flushDatasetUploadAsync(key: string, value: string): Promi
   if (!isSyncKey(key)) return false;
   const e = pending.get(key);
   if (e) { clearTimeout(e.timer); pending.delete(key); }
+  // 先入队：离线/超时也保证这次保存在下次联网时自动补传，不再“返回 false 就等于丢数据”
+  const uploadTs = Date.now();
+  enqueueUpload(key, value, uploadTs);
   if (!(await serverAvailable())) return false;
+  const removedIds = takeRemovedIds(key);
   try {
     const res = await fetchWithTimeout(`${API_BASE}/sync/dataset`, {
       method: 'PUT',
       headers: authHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ key, json: value, updatedAt: Date.now(), baseTs: knownTs.get(key) ?? 0 }),
+      // 与防抖上传同语义：携带本次合法删除申报，否则立即上传会吞掉 removedIds 导致被删行被服务端并集复活
+      body: JSON.stringify({ key, json: value, updatedAt: uploadTs, baseTs: knownTs.get(key) ?? 0, ...(removedIds && removedIds.length ? { removedIds } : {}) }),
     });
     if (res.ok) {
       const data = await res.json().catch(() => null);
       if (data && typeof data.newTs === 'number') knownTs.set(key, data.newTs);
+      queueDelete(key, uploadTs);
       return true;
     }
+    if (removedIds) declareShrink(key, removedIds);
     if (res.status === 401) handleSyncAuthRequired();
     return false;
   } catch {
+    if (removedIds) declareShrink(key, removedIds);
     return false;
   }
 }
@@ -546,7 +625,9 @@ export async function pullAllDatasets(): Promise<number> {
         applied++;
         continue;
       }
-      const raw = getOriginalSetItem();
+      // 本地缓存写不进（配额满）时不能中断后续 saveDataset：
+      // 大表已迁移成「IndexedDB 主存 + localStorage 尽力缓存」，本地缓存写失败不影响落库与跨端
+      const raw = ((k: string, v: string) => { try { getOriginalSetItem()(k, v); } catch { /* ignore */ } }) as (k: string, v: string) => void;
       if (global) {
         // 下架语义键：并集会让查看端复活已删除记录并经 saveDataset 回传服务器，
         // 服务端版本不旧于本地时直接用服务端整体替换；本地有未上传的新写入时保留本地，
@@ -657,6 +738,17 @@ export async function pullAllDatasets(): Promise<number> {
           } catch { /* ignore */ }
         }
       }
+      // 大表已迁移为 IndexedDB 主存（localStorage 只做尽力缓存）：本地缓存为空但 IndexedDB 副本
+      // 比服务端新时，不得用旧的服务端副本回灌覆盖——改为把本地最新副本上传
+      let lsCached = '';
+      try { lsCached = localStorage.getItem(key) || ''; } catch { /* ignore */ }
+      if (!lsCached) {
+        const idbLocal = await loadDataset(key);
+        if (idbLocal && typeof idbLocal.json === 'string' && idbLocal.updatedAt > serverTs) {
+          void doUpload(key, idbLocal.json, idbLocal.updatedAt).catch(() => false);
+          continue;
+        }
+      }
       raw(key, rec.json);
       raw(`${key}_ts`, String(rec.updatedAt));
       saveDataset(key, rec.json);
@@ -690,6 +782,20 @@ export async function pullAllDatasets(): Promise<number> {
       await doUpload(key, json, localTs || Date.now());
     }
   } catch { /* 首次迁移失败不影响启动 */ }
+
+  // 第二步补充：主存已迁移到 IndexedDB 的大表（localStorage 里可能已无缓存）也要补上传，
+  // 否则升级前存在本机、又不再编辑的清单永远同步不到其他电脑
+  try {
+    const idbKeys = await listDatasetKeys();
+    for (const key of idbKeys) {
+      if (!key || !isSyncKey(key) || key.endsWith('_ts')) continue;
+      if (!isKeyForCurrentAccount(key)) continue;
+      if (meta[key]) continue; // 服务端已有，跳过
+      const idb = await loadDataset(key);
+      if (!idb || !idb.json || idb.json === '[]' || idb.json === '""') continue;
+      await doUpload(key, idb.json, idb.updatedAt || Date.now());
+    }
+  } catch { /* ignore */ }
 
   if (applied > 0) {
     // 通知已挂载页面重新读取本地存储，实现多浏览器在线时自动刷新

@@ -48,8 +48,31 @@ const isMergeAlwaysKey = (key: string): boolean => MERGE_ALWAYS_KEYS.includes(ke
 // 永不缩水键前缀（租户核心账单/订单数据，丢失即信任事故）：PUT 一律改为「incoming 并集 + 仅按显式 removedIds 删除」，
 // 绝不整键替换。未申报 removedIds 的缩水（跨端镜像空基覆盖/派生重建丢行等意外）在服务端被并集保留，物理杜绝误擦除；
 // 合法删除由客户端删除操作随 body 申报 removedIds 生效（订单：仅撤回缺货拆分合并子单时申报）。
-const NEVER_SHRINK_PREFIXES = ['purchaser_bills_', 'pageData_customer_bill-detail_', 'pageData_sales_order-manage_'];
+// 合作镜像键（purchaser_suppliers_ / boundPurchasers_）同样纳入：双方协作链路都会代写「对方账号下的键」，
+// 而这类非本账号键不参与本端启动拉取（isKeyForCurrentAccount 过滤），代写端持有的可能是一份陈旧快照；
+// 又因共享键对任何登录用户都下发 meta，陈旧副本会拿到「与服务端一致的 baseTs」→ 走整键替换分支 →
+// 对方刚新增的供应商/采购商卡片被陈旧副本擦掉、刚建立的合作被改回旧状态。表现为列表数量与状态来回跳动。
+const NEVER_SHRINK_PREFIXES = ['purchaser_bills_', 'pageData_customer_bill-detail_', 'pageData_sales_order-manage_', 'purchaser_suppliers_', 'boundPurchasers_'];
 const isNeverShrinkKey = (key: string): boolean => NEVER_SHRINK_PREFIXES.some(p => key.startsWith(p));
+
+// 合作镜像键的状态单调保护：双方都携带显式 statusTs（状态变更时刻）且服务端记录的事件更新时，
+// 不允许陈旧副本把状态字段写回旧值；其余字段仍以 incoming 为准。任一侧缺少 statusTs 时不改写原语义，
+// 避免把「未打时间戳的合法状态变更」误判为陈旧而永久卡死。
+const COOPERATION_MIRROR_PREFIXES = ['purchaser_suppliers_', 'boundPurchasers_'];
+const isCooperationMirrorKey = (key: string): boolean => COOPERATION_MIRROR_PREFIXES.some(p => key.startsWith(p));
+const STATUS_EVENT_FIELDS = ['cooperationStatus', 'status', 'terminateAt', 'terminateBy', 'statusTs'];
+const explicitStatusTs = (r: any): number => (r && typeof r === 'object' && r.statusTs !== undefined && r.statusTs !== null && Number(r.statusTs) > 0) ? Number(r.statusTs) : 0;
+function protectStaleStatus(existing: any, incoming: any): any {
+  const et = explicitStatusTs(existing);
+  const it = explicitStatusTs(incoming);
+  if (!et || !it || et <= it) return incoming;
+  const out: any = { ...incoming };
+  STATUS_EVENT_FIELDS.forEach((f) => {
+    if (existing[f] !== undefined) out[f] = existing[f];
+    else delete out[f];
+  });
+  return out;
+}
 
 // ============ 收/付申请待处理推送（系统级 Web Push，浏览器关闭仍可提醒） ============
 const payReqPushThrottle = new Map<string, number>();
@@ -183,8 +206,9 @@ router.put('/dataset', async (req: Request, res: Response) => {
       // 永不缩水键：即使客户端自认为最新，也仅允许「并集 + 显式 removedIds 删除」，禁止整键替换擦除存量行
       // （行缺 key/id 无法安合并时，退而记录级并集，仍比整键替换安全）
       if (isNeverShrinkKey(key)) {
-        const guarded = mergeWithExplicitRemovals(row.dataset_json, json, req.body.removedIds)
-          || mergeArrayDatasets(row.dataset_json, json, isMergeAlwaysKey(key));
+        const coop = isCooperationMirrorKey(key);
+        const guarded = mergeWithExplicitRemovals(row.dataset_json, json, req.body.removedIds, coop)
+          || mergeArrayDatasets(row.dataset_json, json, isMergeAlwaysKey(key), coop);
         if (guarded) {
           const gTs = Math.max(ts, row.updated_at);
           await store.forceUpsertDataset(key, guarded, owner, gTs);
@@ -215,9 +239,10 @@ router.put('/dataset', async (req: Request, res: Response) => {
       return;
     }
     // 客户端已过期 → 并集合并，防止旧数据删除新增记录
+    const coop = isCooperationMirrorKey(key);
     const merged = isNeverShrinkKey(key)
-      ? (mergeWithExplicitRemovals(row.dataset_json, json, req.body.removedIds) || mergeArrayDatasets(row.dataset_json, json, isMergeAlwaysKey(key)))
-      : mergeArrayDatasets(row.dataset_json, json, isMergeAlwaysKey(key));
+      ? (mergeWithExplicitRemovals(row.dataset_json, json, req.body.removedIds, coop) || mergeArrayDatasets(row.dataset_json, json, isMergeAlwaysKey(key), coop))
+      : mergeArrayDatasets(row.dataset_json, json, isMergeAlwaysKey(key), coop);
     const finalJson = merged || json;
     const finalTs = Math.max(ts, row.updated_at);
     await store.forceUpsertDataset(key, finalJson, owner, finalTs);
@@ -235,7 +260,7 @@ router.put('/dataset', async (req: Request, res: Response) => {
  * 保留 existing 中 incoming 未携带的字段。对账记录由供应商/采购商双端各写不同断言字段
  * （supResult/supPerson vs purResult/purPerson），整条覆盖会互相抹除对方刚写入的结果；
  * 字段级并集让两端贡献共存，incoming 显式携带的字段（含清空为 ''）仍以 incoming 为准。 */
-function mergeArrayDatasets(existingJson: string, incomingJson: string, fieldLevel = false): string | null {
+function mergeArrayDatasets(existingJson: string, incomingJson: string, fieldLevel = false, coopGuard = false): string | null {
   try {
     const a = JSON.parse(existingJson);
     const b = JSON.parse(incomingJson);
@@ -251,7 +276,7 @@ function mergeArrayDatasets(existingJson: string, incomingJson: string, fieldLev
       const av = id ? aById.get(id) : null;
       if (!av) return r;
       // 字段级并集：existing 为底、incoming 覆盖其上（incoming 省略的字段保留 existing 值）
-      const base = fieldLevel ? { ...av, ...r } : r;
+      const base = fieldLevel ? { ...av, ...r } : (coopGuard ? protectStaleStatus(av, r) : r);
       if (av.delisted === true && base.delisted !== true) return { ...base, delisted: true, delistedAt: av.delistedAt };
       return base;
     });
@@ -266,7 +291,7 @@ function mergeArrayDatasets(existingJson: string, incomingJson: string, fieldLev
  * 安全加固（L3）：removedIds 仅认可「确实存在于该键存量行」的 id（交集），并设单次上限，越界/不存在部分忽略，
  * 防止伪造/超量 removedIds 删除非预期行。 */
 const MAX_EXPLICIT_REMOVALS = 200;
-function mergeWithExplicitRemovals(existingJson: string, incomingJson: string, removedIds: any): string | null {
+function mergeWithExplicitRemovals(existingJson: string, incomingJson: string, removedIds: any, coopGuard = false): string | null {
   try {
     const a = JSON.parse(existingJson);
     const b = JSON.parse(incomingJson);
@@ -282,7 +307,17 @@ function mergeWithExplicitRemovals(existingJson: string, incomingJson: string, r
       const id = idOf(r);
       return !!id && !bIds.has(id) && !rm.has(id);
     });
-    return JSON.stringify([...b, ...keepFromExisting]);
+    let rows: any[] = b;
+    if (coopGuard) {
+      const aById = new Map<string, any>();
+      a.forEach((r: any) => { const id = idOf(r); if (id) aById.set(id, r); });
+      rows = b.map((r: any) => {
+        const id = idOf(r);
+        const av = id ? aById.get(id) : null;
+        return av ? protectStaleStatus(av, r) : r;
+      });
+    }
+    return JSON.stringify([...rows, ...keepFromExisting]);
   } catch { return null; }
 }
 

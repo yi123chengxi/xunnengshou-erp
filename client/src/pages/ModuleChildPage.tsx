@@ -104,7 +104,7 @@ import BatchAddProductModal from '../components/BatchAddProductModal';
 import ScheduleBoard from '../components/ScheduleBoard';
 import MoldPickerModal from '../components/MoldPickerModal';
 import SalesOutboundStatsPage from './inventory/SalesOutboundStatsPage';
-import { safeSetItem } from '../utils/storageQuota';
+import { safeSetItem, canCacheDataset, tryCacheDataset } from '../utils/storageQuota';
 import { getDataOwner } from '../utils/brandAuth';
 import { saveDataset, loadDataset } from '../utils/dataStore';
 import ReturnRegisterModal from '../components/ReturnRegisterModal';
@@ -5683,21 +5683,24 @@ const ModuleChildPage: React.FC = () => {
         let cur: string | null = null;
         try { cur = localStorage.getItem(sharedDataKey); } catch { /* ignore */ }
         if (cur === json) return;
-        // 超大数据集（如导入 5 万+行后 json >4MB）：跳过 localStorage 写入，
-        // 避免 safeSetItem 配额溢出触发 emergencyFreeSpace 误删其他数据键；
-        // 仅写 IndexedDB（可信存储）并上传服务端，刷新后由 IDB 恢复逻辑回灌
-        if (json.length > 4 * 1024 * 1024) {
-          try { localStorage.removeItem(sharedDataKey); } catch { /* ignore */ }
-          try { localStorage.removeItem(`${sharedDataKey}_ts`); } catch { /* ignore */ }
+        // 主存迁移（商品清单/订单/账单等大表）：本地缓存预算不够就干脆不写。
+        // localStorage 只有 ~5MB 且全站共用，把整表塞进去会把配额吃满，导致其他模块写入报
+        //「本地存储空间不足」，并触发 emergencyFreeSpace 按体积误删尚未上传的数据。
+        // 现在主存固定为 IndexedDB（可信）+ 服务端（跨端真源）+ 持久化上传队列（断网重试），
+        // 彻底摆脱 5MB 限制；本地保留的上一次副本只当作首屏加速缓存，不参与正确性。
+        if (!canCacheDataset(sharedDataKey, json.length)) {
           saveDataset(sharedDataKey, json);
+          // 与本地写盘结果无关的直传通道（离线时自动进队列，联网后补传）
           flushDatasetUploadAsync(sharedDataKey, json).catch(() => false);
           loadedIdsRef.current = new Set(outList.map((r: any) => String(r?.id || r?.key || '')).filter(Boolean));
           return;
         }
         const writeTs = Date.now();
-        const writeOk = safeSetItem(sharedDataKey, json);
+        // 无破坏式写本地缓存：配额不够就放弃缓存（不触发 emergencyFreeSpace 按体积删其他模块数据、
+        // 也不弹「本次修改未能保存」）——数据集已经在 IndexedDB + 服务端，少一份缓存不影响正确性
+        const writeOk = tryCacheDataset(sharedDataKey, json);
         if (writeOk) {
-          safeSetItem(`${sharedDataKey}_ts`, String(writeTs));
+          tryCacheDataset(`${sharedDataKey}_ts`, String(writeTs));
         }
         // 本地配额写不进（浏览器 5MB 上限）：写入钩子不会触发上传，必须直传服务端，
         // 避免“本机未落盘 + 他端看不到”的双重丢失；本地显示仍由下方 IndexedDB 兼底
@@ -5747,6 +5750,27 @@ const ModuleChildPage: React.FC = () => {
         };
         img.src = item.image;
       }
+    });
+  }, [dataSource, isProductList, getImgKey]);
+
+  // 图片已迁移到图片空间（记录里是云端 URL）的商品：清掉本地遗留的 base64 副本，
+  // 把 localStorage / IndexedDB 里占空间的旧图释放出来（云端原图仍可正常放大查看）
+  React.useEffect(() => {
+    if (!isProductList || dataSource.length === 0) return;
+    const isCloudRef = (it: any): boolean => {
+      const v = String(it?.imageUrl || it?.image || '');
+      return /^https?:\/\//i.test(v) || v.startsWith('/uploads/');
+    };
+    const stale = dataSource.filter((it: any) => it?.key && isCloudRef(it));
+    if (stale.length === 0) return;
+    // 单轮最多清 400 条，避免一次性大量 IO 阻塞主线程
+    stale.slice(0, 400).forEach((it: any) => {
+      const imgKey = getImgKey(it.key);
+      try {
+        if (localStorage.getItem(imgKey)) localStorage.removeItem(imgKey);
+      } catch { /* ignore */ }
+      deleteFullImage(imgKey);
+      deleteFullImage(`thumb_${imgKey}`);
     });
   }, [dataSource, isProductList, getImgKey]);
 
@@ -10372,10 +10396,12 @@ const ModuleChildPage: React.FC = () => {
       const rawBase64 = ev.target?.result as string;
       // 压缩图片以减小 localStorage 占用（原图 ~170KB → 压缩后 ~10-20KB）
       const base64 = await compressImage(rawBase64);
+      // 先关弹窗：上传图片空间可能要几百毫秒到几秒，不能把操作界面顶住等网络
+      setImageModalVisible(false);
       // 云端图片空间：上传后把记录改为引用云端 URL（换电脑/换浏览器可见）；
       // 上传失败时静默保留本机存储，不阻断原有上传流程
-      const pushToCloud = async (targets: Array<{ key: string; label?: string }>) => {
-        if (targets.length === 0) return;
+      const pushToCloud = async (targets: Array<{ key: string; label?: string }>): Promise<boolean> => {
+        if (targets.length === 0) return false;
         const moduleLabel = pageConfig?.title || moduleKey;
         try {
           const first = targets[0];
@@ -10404,59 +10430,81 @@ const ModuleChildPage: React.FC = () => {
           setDataSource(prev => prev.map(it =>
             keySet.has(String(it.key)) ? { ...it, image: url, imageUrl: asset.url, imageId: asset.id } : it
           ));
-        } catch { /* 云端不可用时保留本机存储 */ }
+          return true;
+        } catch { return false; }
+      };
+
+      // 云端成功后本地不再保留 base64：图片空间为图片主存，localStorage / IndexedDB 退出图片存储
+      const dropLocalCopy = (k: string) => {
+        const imgKey = getImgKey(k);
+        try { localStorage.removeItem(imgKey); } catch { /* ignore */ }
+        deleteFullImage(imgKey);
+        deleteFullImage(`thumb_${imgKey}`);
       };
       if (imageUploadMode === 'single' && imageUploadTarget) {
-        const imgKey = getImgKey(imageUploadTarget.key);
-        // 同步写入共享图片库（与新品研发同一 IndexedDB），保证两边图片一致
-        try { imgDB.set(imageUploadTarget.key, base64); } catch { /* ignore */ }
-        // 原图+缩略图同步存 IndexedDB 兜底，避免 localStorage 满时刷新丢失
-        try { saveFullImage(imgKey, rawBase64); } catch {}
-        try { saveFullImage(`thumb_${imgKey}`, base64); } catch {}
-        setDataSource(prev => prev.map(item =>
-          item.key === imageUploadTarget.key ? { ...item, image: base64 } : item
-        ));
-        // 立即持久化单张图片（safeSetItem 不抛异常，必须检查返回值）
-        const ok = safeSetItem(imgKey, base64);
-        if (ok) {
-          message.success('图片上传成功');
+        const targetKey = String(imageUploadTarget.key);
+        // 优先传图片空间：记录只存 URL 引用（换电脑/换浏览器都可见），本地不再存 base64
+        const cloudOk = await pushToCloud([{ key: targetKey, label: String(imageUploadTarget.productCode || imageUploadTarget.name || targetKey) }]);
+        if (cloudOk) {
+          dropLocalCopy(targetKey);
+          message.success('图片已上传到图片空间（换电脑也能看到）');
         } else {
-          const cleaned = cleanupOrphanedImages();
-          const retryOk = cleaned > 0 ? safeSetItem(imgKey, base64) : false;
-          if (retryOk) message.success(`图片上传成功（已清理 ${cleaned} 张废图片）`);
-          else message.warning('localStorage 空间不足，图片已存入本地数据库，刷新后仍可保留');
-        }
-        // 触发成品市场自动上架刷新
-        window.dispatchEvent(new CustomEvent('product-image-updated'));
-        void pushToCloud([{ key: String(imageUploadTarget.key), label: String(imageUploadTarget.productCode || imageUploadTarget.name || imageUploadTarget.key) }]);
-      } else if (imageUploadMode === 'batch') {
-        const keySet = new Set(selectedRowKeys);
-        setDataSource(prev => prev.map(item =>
-          keySet.has(item.key) ? { ...item, image: base64 } : item
-        ));
-        // 立即逐张持久化图片（localStorage 缩略图 + IndexedDB 兜底）
-        let failCount = 0;
-        selectedRowKeys.forEach(k => {
-          const imgKey = getImgKey(String(k));
-          try { imgDB.set(String(k), base64); } catch { /* ignore */ }
+          // 云端不可用（离线/服务异常）：退回本机存储兼底，保证当前能继续使用
+          const imgKey = getImgKey(imageUploadTarget.key);
+          // 同步写入共享图片库（与新品研发同一 IndexedDB），保证两边图片一致
+          try { imgDB.set(imageUploadTarget.key, base64); } catch { /* ignore */ }
+          // 原图+缩略图同步存 IndexedDB 兼底
           try { saveFullImage(imgKey, rawBase64); } catch {}
           try { saveFullImage(`thumb_${imgKey}`, base64); } catch {}
-          if (!safeSetItem(imgKey, base64)) failCount++;
-        });
-        if (failCount > 0) {
-          const usage = getStorageUsageMB();
-          message.warning(`${failCount} 张图片 localStorage 空间不足（已用 ${usage}MB/5MB），已存入本地数据库，刷新后仍可保留`);
-        } else {
-          message.success(`已为 ${selectedRowKeys.length} 条记录批量更新图片`);
+          setDataSource(prev => prev.map(item =>
+            item.key === imageUploadTarget.key ? { ...item, image: base64 } : item
+          ));
+          // 立即持久化单张图片（safeSetItem 不抛异常，必须检查返回值）
+          const ok = safeSetItem(imgKey, base64);
+          if (ok) {
+            message.success('图片上传成功（图片空间不可用，已存本机）');
+          } else {
+            const cleaned = cleanupOrphanedImages();
+            const retryOk = cleaned > 0 ? safeSetItem(imgKey, base64) : false;
+            if (retryOk) message.success(`图片上传成功（已清理 ${cleaned} 张废图片）`);
+            else message.warning('本地空间不足，图片已存入本地数据库，刷新后仍可保留');
+          }
         }
         // 触发成品市场自动上架刷新
         window.dispatchEvent(new CustomEvent('product-image-updated'));
-        void pushToCloud(selectedRowKeys.map(k => {
-          const rec = dataSource.find((r: any) => String(r.key) === String(k));
-          return { key: String(k), label: String(rec?.productCode || rec?.name || k) };
+      } else if (imageUploadMode === 'batch') {
+        const keyList = selectedRowKeys.map(k => String(k));
+        const cloudOk = await pushToCloud(keyList.map(k => {
+          const rec = dataSource.find((r: any) => String(r.key) === k);
+          return { key: k, label: String(rec?.productCode || rec?.name || k) };
         }));
+        if (cloudOk) {
+          keyList.forEach(k => dropLocalCopy(k));
+          message.success(`已为 ${keyList.length} 条记录上传图片到图片空间`);
+        } else {
+          const keySet = new Set(keyList);
+          setDataSource(prev => prev.map(item =>
+            keySet.has(String(item.key)) ? { ...item, image: base64 } : item
+          ));
+          // 逐张持久化图片（localStorage 缩略图 + IndexedDB 兼底）
+          let failCount = 0;
+          keyList.forEach(k => {
+            const imgKey = getImgKey(k);
+            try { imgDB.set(k, base64); } catch { /* ignore */ }
+            try { saveFullImage(imgKey, rawBase64); } catch {}
+            try { saveFullImage(`thumb_${imgKey}`, base64); } catch {}
+            if (!safeSetItem(imgKey, base64)) failCount++;
+          });
+          if (failCount > 0) {
+            const usage = getStorageUsageMB();
+            message.warning(`${failCount} 张图片本地空间不足（已用 ${usage}MB），已存入本地数据库，刷新后仍可保留`);
+          } else {
+            message.success(`已为 ${keyList.length} 条记录批量更新图片（图片空间不可用，已存本机）`);
+          }
+        }
+        // 触发成品市场自动上架刷新
+        window.dispatchEvent(new CustomEvent('product-image-updated'));
       }
-      setImageModalVisible(false);
     };
     reader.readAsDataURL(file);
   }, [imageUploadMode, imageUploadTarget, selectedRowKeys, getImgKey, compressImage, cleanupOrphanedImages, getStorageUsageMB, dataSource, moduleKey, childKey, pageConfig]);

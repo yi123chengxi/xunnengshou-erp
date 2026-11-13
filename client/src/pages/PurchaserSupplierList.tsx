@@ -40,7 +40,7 @@ import {
 } from '../utils/paySummary';
 import type { SupplierSummaryEntry } from '../utils/paySummary';
 import { writeProductList, loadProductListLatest } from '../utils/dataStore';
-import { reloadAfterPull } from '../utils/serverSync';
+import { reloadAfterPull, declareShrink } from '../utils/serverSync';
 import {
   takePendingInvite, acceptCooperationInvite, rejectCooperationInvite, resolveUserByCompanyNo,
 } from '../utils/cooperationInvite';
@@ -421,7 +421,7 @@ const PurchaserSupplierList: React.FC = () => {
           );
           if (terminateApp && !hasNewerCooperationApp(apps, s, terminateApp)) {
             hasChange = true;
-            return { ...s, cooperationStatus: 'terminated' as const, terminateApplyDate: undefined };
+            return { ...s, cooperationStatus: 'terminated' as const, terminateApplyDate: undefined, statusTs: Date.now() };
           }
         }
         // 2.5 同步供应商发起的终止合作申请：已合作 → 终止待确认（与合作申请页口径一致，双向显示解除申请中）
@@ -432,7 +432,7 @@ const PurchaserSupplierList: React.FC = () => {
             app.type === 'terminate' && app.supplierInitiated === true && app.status === 'pending' && !app.superseded);
           if (supPendingTerm) {
             hasChange = true;
-            return { ...s, cooperationStatus: 'terminating' as const, terminateApplyDate: supPendingTerm.applyDate };
+            return { ...s, cooperationStatus: 'terminating' as const, terminateApplyDate: supPendingTerm.applyDate, statusTs: Date.now() };
           }
         }
         // 3. 检测供应商发起的解除合作申请（排除已作废的申请）
@@ -469,7 +469,7 @@ const PurchaserSupplierList: React.FC = () => {
           );
           if (supplierTerminateApp && !hasNewerCooperationApp(apps, s, supplierTerminateApp)) {
             hasChange = true;
-            return { ...s, cooperationStatus: 'terminated' as const };
+            return { ...s, cooperationStatus: 'terminated' as const, statusTs: Date.now() };
           }
         }
         return s;
@@ -1235,7 +1235,7 @@ const PurchaserSupplierList: React.FC = () => {
         // 已解除合作的条目重新置为待合作
         if (editingSupplier.cooperationStatus === 'terminated') {
           const all2: SupplierEntry[] = JSON.parse(localStorage.getItem(storageKey) || '[]');
-          localStorage.setItem(storageKey, JSON.stringify(all2.map((s) => (s.id === editingSupplier.id ? { ...s, cooperationStatus: 'pending' as const } : s))));
+          localStorage.setItem(storageKey, JSON.stringify(all2.map((s) => (s.id === editingSupplier.id ? { ...s, cooperationStatus: 'pending' as const, statusTs: Date.now() } : s))));
           reloadData();
         }
         message.success('供应商信息已更新，合作申请已发送，等待供应商确认');
@@ -1279,7 +1279,7 @@ const PurchaserSupplierList: React.FC = () => {
         ));
         localStorage.setItem(COOPERATION_APPLICATIONS_KEY, JSON.stringify(updated));
         const allData: SupplierEntry[] = JSON.parse(localStorage.getItem(storageKey) || '[]');
-        const up = allData.map(s => (s.id === record.id ? { ...s, cooperationStatus: 'approved' as const, terminateApplyDate: undefined } : s));
+        const up = allData.map(s => (s.id === record.id ? { ...s, cooperationStatus: 'approved' as const, terminateApplyDate: undefined, statusTs: Date.now() } : s));
         localStorage.setItem(storageKey, JSON.stringify(up));
         reloadData();
         window.dispatchEvent(new Event('cooperation-applications-changed'));
@@ -1353,7 +1353,7 @@ const PurchaserSupplierList: React.FC = () => {
       const allData: SupplierEntry[] = JSON.parse(localStorage.getItem(storageKey) || '[]');
       const updated = allData.map((s) =>
         s.id === terminatingSupplier.id
-          ? { ...s, cooperationStatus: 'terminating' as const, terminateApplyDate: now }
+          ? { ...s, cooperationStatus: 'terminating' as const, terminateApplyDate: now, statusTs: Date.now() }
           : s
       );
       localStorage.setItem(storageKey, JSON.stringify(updated));
@@ -1392,6 +1392,8 @@ const PurchaserSupplierList: React.FC = () => {
         } catch { /* ignore */ }
         const allData: SupplierEntry[] = JSON.parse(localStorage.getItem(storageKey) || '[]');
         const updated = allData.filter((s) => s.id !== record.id);
+        // 供应商键已纳入服务端「永不缩水键」防擦除：合法删除必须随上传申报 removedIds，否则服务端会并集复活
+        declareShrink(storageKey, [String(record.id)]);
         localStorage.setItem(storageKey, JSON.stringify(updated));
         reloadData();
         message.success(`供应商「${record.supplierName}」已删除`);

@@ -4,6 +4,7 @@
  * 刷新后数据丢失。IndexedDB 容量充足，作为可信存储；localStorage 仅作容量允许时的缓存，
  * 并以 `${key}_ts` 时间戳协调两份存储的新旧。
  */
+import { canCacheDataset, tryCacheDataset } from './storageQuota';
 const DB_NAME = 'factory_erp_data';
 const STORE = 'datasets';
 
@@ -57,6 +58,21 @@ export const loadDataset = (key: string): Promise<DatasetRecord | null> => new P
   });
 });
 
+/**
+ * 列出 IndexedDB 中全部数据集键。
+ * 主存迁移后大表可能已不在 localStorage，首次上传服务端（迁移）必须以此为准。
+ */
+export const listDatasetKeys = (): Promise<string[]> => new Promise((resolve) => {
+  openDb().then((db) => {
+    if (!db) { resolve([]); return; }
+    try {
+      const req = db.transaction(STORE, 'readonly').objectStore(STORE).getAllKeys();
+      req.onsuccess = () => resolve((req.result || []).map(String));
+      req.onerror = () => resolve([]);
+    } catch { resolve([]); }
+  });
+});
+
 /* ---------------- 产品列表共享读写助手 ---------------- */
 
 export const productListKey = (owner: string) => `pageData_basic-data_product-list_${owner}`;
@@ -102,18 +118,35 @@ export const loadProductListLatest = async (owner: string): Promise<Record<strin
   return chosen;
 };
 
-/** 写入产品列表：IndexedDB 可信存储；localStorage 仅在小数据时缓存 */
+/** 写入产品列表：IndexedDB 可信存储；localStorage 仅在缓存预算允许时作缓存 */
 export const writeProductList = (owner: string, list: Record<string, any>[]): void => {
   const key = productListKey(owner);
   memProductList = { owner, list };
   try {
     const json = JSON.stringify(list);
     saveDataset(key, json);
-    if (json.length < 2000000) {
-      try {
-        localStorage.setItem(key, json);
-        localStorage.setItem(`${key}_ts`, String(Date.now()));
-      } catch { /* ignore */ }
+    if (canCacheDataset(key, json.length)) {
+      tryCacheDataset(key, json);
+      tryCacheDataset(`${key}_ts`, String(Date.now()));
     }
   } catch { /* ignore */ }
+};
+
+/**
+ * 启动预热：把 IndexedDB 里的商品清单回灌到会话内存缓存。
+ * 本地缓存被预算淘汰后，仪表盘/价格策略等页面的同步读取（readProductListSync）才有数据可用。
+ */
+export const hydrateProductListCache = async (owner: string): Promise<number> => {
+  if (!owner) return 0;
+  if (memProductList && memProductList.owner === owner && memProductList.list.length > 0) return memProductList.list.length;
+  try {
+    const idb = await loadDataset(productListKey(owner));
+    if (!idb || !idb.json) return 0;
+    const parsed = JSON.parse(idb.json);
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      memProductList = { owner, list: parsed };
+      return parsed.length;
+    }
+  } catch { /* ignore */ }
+  return 0;
 };

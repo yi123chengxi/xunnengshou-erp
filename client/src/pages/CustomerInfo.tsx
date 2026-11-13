@@ -34,7 +34,7 @@ import AsOfDebtModal from '../components/AsOfDebtModal';
 import EnterpriseCertModal, { CertBadge, fetchCertStatus, fetchCertBatch } from '../components/EnterpriseCertModal';
 import FieldConfigModal from '../components/FieldConfigModal';
 import type { CertInfo } from '../components/EnterpriseCertModal';
-import { flushDatasetUpload, flushDatasetUploadAsync, ensureDatasetFromServer, mergeDatasetFromServer, reloadAfterPull } from '../utils/serverSync';
+import { flushDatasetUpload, flushDatasetUploadAsync, ensureDatasetFromServer, mergeDatasetFromServer, reloadAfterPull, declareShrink } from '../utils/serverSync';
 import { safeSetItem } from '../utils/storageQuota';
 import { isAccountingMode, writeAutoEntries, loadSubjectOptions, subjectFilterOption } from '../utils/accountingBridge';
 import { loadTenantUsers } from '../utils/tenantUsers';
@@ -441,7 +441,7 @@ export const loadBoundPurchasersFromStorage = (): BoundPurchaser[] => {
     if (expired.length > 0) {
       bound = bound.map((bp: any) => (
         bp.status === 'terminating' && bp.terminateAt && nowTs >= Number(bp.terminateAt)
-          ? { ...bp, status: 'terminated' } : bp
+          ? { ...bp, status: 'terminated', statusTs: nowTs } : bp
       ));
       localStorage.setItem('boundPurchasers_' + getDataOwner(), JSON.stringify(bound));
       try {
@@ -1406,6 +1406,8 @@ const CustomerInfo: React.FC = () => {
           const filtered = boundPurchasers.filter(
             (bp) => bp.purchaserName !== record.name
           );
+          // boundPurchasers_ 已纳入服务端「永不缩水键」防擦除：这里是从本端真正移除绑定关系，必须申报被删行 id
+          declareShrink(storageKey, boundPurchasers.filter((bp: any) => bp.purchaserName === record.name).map((bp: any) => String(bp.id || '')).filter(Boolean));
           localStorage.setItem(storageKey, JSON.stringify(filtered));
           setBoundPurchasers(filtered);
         }
@@ -1546,6 +1548,8 @@ const CustomerInfo: React.FC = () => {
         supplierInitiated: true,
         supplierUsername: myUsername,
         supplierInitiatedDate: now,
+        // 跨账号代写对方键：状态变更必须带事件时间，服务端才能据 statusTs 分辨陈旧副本并重拦截旧状态回写
+        statusTs: Date.now(),
       };
       list[idx] = entry;
     }

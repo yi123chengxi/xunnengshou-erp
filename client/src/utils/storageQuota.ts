@@ -326,6 +326,75 @@ export function localStorageUsage(): number {
   return total;
 }
 
+// ============ 业务数据集本地缓存预算（主存迁移后的“尽力缓存”策略） ============
+// localStorage 只有约 5MB（同一域名下所有账号、所有模块共用），业务大表（商品清单/订单/账单）
+// 一旦把整表写进去，会把配额吃满，导致其他模块的任何写入都报「本地存储空间不足」，
+// 而 safeSetItem 的紧急清理又会按体积误删别的模块尚未上传的数据。
+// 所以：业务大表主存改为 IndexedDB（可信）+ 服务端（跨端）+ 上传队列（断网可重试），
+// localStorage 只在预算允许时做“能加速首屏的缓存”，写不进就不再硬写。
+/** 单个数据集允许占用本地的上限（字符数，≈2.4MB，占 5MB 的一半以内） */
+export const LOCAL_CACHE_SINGLE_MAX = 2400000;
+/** 全部业务数据集允许占用本地的总预算（字符数，≈3MB，给图片/配置/其他账号留出余量） */
+export const LOCAL_CACHE_TOTAL_BUDGET = 3000000;
+
+/** 商品清单键：仪表盘等页面同步读取，优先保证它在本地缓存里 */
+const isProductListCacheKey = (k: string): boolean => k.startsWith('pageData_') && k.includes('_product-list_');
+
+/**
+ * 判断某个数据集能否写入 localStorage 缓存。
+ * @param key 数据集键
+ * @param chars 即将写入的字符串长度
+ * @returns true 可以写；false 应跳过本地缓存（只写 IndexedDB + 上传服务端）
+ */
+export function canCacheDataset(key: string, chars: number): boolean {
+  try {
+    if (!(chars > 0)) return true;
+    if (chars > LOCAL_CACHE_SINGLE_MAX) return false;
+    const existing = (localStorage.getItem(key) || '').length;
+    if (localStorageUsage() - existing + chars <= LOCAL_CACHE_TOTAL_BUDGET) return true;
+    // 预算不足：按体积降序淘汰其他 pageData_ 本地缓存（页面加载时会从 IndexedDB 回灌），
+    // 但商品清单（仪表盘同步读取）与当前键不参与淘汰
+    const victims: Array<{ k: string; size: number }> = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k || k === key || k.endsWith('_ts') || !k.startsWith('pageData_')) continue;
+      if (isProductListCacheKey(k) || k === key) continue;
+      victims.push({ k, size: (localStorage.getItem(k) || '').length });
+    }
+    victims.sort((a, b) => b.size - a.size);
+    let used = localStorageUsage();
+    for (const v of victims) {
+      if (used - existing + chars <= LOCAL_CACHE_TOTAL_BUDGET) break;
+      try {
+        localStorage.removeItem(v.k);
+        localStorage.removeItem(`${v.k}_ts`);
+      } catch { /* ignore */ }
+      used -= v.size;
+    }
+    return used - existing + chars <= LOCAL_CACHE_TOTAL_BUDGET;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 无破坏式本地缓存写入：配额不足直接返回 false。
+ * 与 safeSetItem 的区别：**不调用 emergencyFreeSpace**（不会按体积误删其他模块尚未上传的数据）、
+ * **不广播 storage-write-failed**（不弹「本次修改未能保存」红条）——
+ * 因为数据集主存已经是 IndexedDB + 服务端，本地缓存写不进去只是少了一份加速副本。
+ */
+export function tryCacheDataset(key: string, value: string): boolean {
+  const oldLen = (localStorage.getItem(key) || '').length;
+  try {
+    originalSetItem.call(localStorage, key, value);
+    fireHooks(key, value);
+    notifyUsageWrite(key, oldLen, value.length);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** 启动时主动配额清理：占用超过阈值（约4MB，Chrome 上限约5MB）时提前释放空间，
  * 避免后续关键写入（信用额度等）因配额满而静默失败 */
 export function proactiveQuotaCleanup(thresholdBytes = 4 * 1024 * 1024): void {

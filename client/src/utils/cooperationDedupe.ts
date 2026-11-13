@@ -10,6 +10,7 @@
  * - 合作申请记录中指向被合并 id 的引用改写为主条目 id。
  */
 import { loadRegisteredUsers } from './cooperationInvite';
+import { declareShrink } from './shrinkRegistry';
 
 const PURCHASER_SUPPLIERS_PREFIX = 'purchaser_suppliers_';
 const COOPERATION_APPLICATIONS_KEY = 'cooperation_applications';
@@ -94,6 +95,9 @@ export const dedupePurchaserSuppliers = (owner: string): boolean => {
       mergedList.push(merged);
     });
     if (!changed) return false;
+    // 去重会真正减少行数：purchaser_suppliers_ 已纳入服务端「永不缩水键」，未申报的减少会被并集保留，
+    // 重复条目将在下次拉取时复活。因此必须先于写存储登记被合并掉的旧 id。
+    declareShrink(pKey, Array.from(idRemap.keys()));
     // 合作申请中指向被合并 id 的引用改写为主条目 id，避免审批/终止匹配落空
     try {
       const apps: any[] = JSON.parse(localStorage.getItem(COOPERATION_APPLICATIONS_KEY) || '[]');

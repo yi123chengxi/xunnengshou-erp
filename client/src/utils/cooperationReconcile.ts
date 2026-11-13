@@ -5,9 +5,18 @@
  * 本模块聚合公司对的全部镜像，取规范状态（terminated > terminating > approved）回写所有镜像记录，
  * 按正确形状补全缺失镜像，并清理误混入 boundPurchasers 的供应商卡片 / 自引用脏数据，
  * 保证双方客户列表与供应商列表对同一合作关系始终显示一致状态。
+ *
+ * 陈旧副本隔离（防状态来回跳动）：非本账号的镜像键（如供应商浏览器里残留的
+ * purchaser_suppliers_<采购商>）不参与本端启动拉取（isKeyForCurrentAccount 过滤），内容可能
+ * 停留在任意久以前。这类副本只用于「知道存在哪一对合作关系」，禁止参与状态仲裁、禁止被回写或
+ * 清理——否则一次页面加载就会用别的账号的陈旧状态改写本端权威键，再经上传固化到服务端。
  */
+import { getDataOwner } from './brandAuth';
+import { declareShrink } from './shrinkRegistry';
 
 const STATUS_RANK: Record<string, number> = { approved: 1, terminating: 2, terminated: 3 };
+const BOUND_PREFIX = 'boundPurchasers_';
+const PS_PREFIX = 'purchaser_suppliers_';
 
 const parseTs = (v: any): number => {
   if (!v) return 0;
@@ -42,6 +51,12 @@ const pairKey = (s: string, p: string) => (s < p ? s + '|' + p : p + '|' + s);
 
 export function reconcileCooperationPairs(): void {
   try {
+    const me = getDataOwner();
+    /** 本端是否持有该镜像键的权威副本：只有自己账号下的键会被启动拉取刷新，其余都是陈旧快照 */
+    const isTrusted = (key: string): boolean => {
+      const owner = key.indexOf(BOUND_PREFIX) === 0 ? key.slice(BOUND_PREFIX.length) : key.slice(PS_PREFIX.length);
+      return !!me && owner === me;
+    };
     const users: any[] = (() => { try { return JSON.parse(localStorage.getItem('registeredUsers') || '[]'); } catch { return []; } })();
     const boundKeys: { key: string; owner: string; list: any[] }[] = [];
     const psKeys: { key: string; owner: string; list: any[] }[] = [];
@@ -94,26 +109,36 @@ export function reconcileCooperationPairs(): void {
         appTs(a) > r.ts);
     };
     const guardedRecs = recs.filter(r => !supersededByNewerCoop(r));
+    // 状态仲裁只采纳本账号权威副本：对方账号键的本地副本不会被拉取刷新，它的状态不能拿来裁决本公司
+    const trustedRecs = guardedRecs.filter(r => isTrusted(r.key));
 
     // 公司对规范状态：取最近一次状态事件（statusTs/业务时间），同时间再取最进阶（terminated > terminating > approved）
-    const canon = new Map<string, { status: string; terminateAt: number; terminateBy: string; ts: number }>();
-    guardedRecs.forEach(r => {
-      if (!STATUS_RANK[r.status] || r.s === r.p) return;
-      const pk = pairKey(r.s, r.p);
-      const cur = canon.get(pk);
-      const rank = STATUS_RANK[r.status];
-      if (!cur || r.ts > cur.ts || (r.ts === cur.ts && rank > STATUS_RANK[cur.status])) {
-        canon.set(pk, { status: r.status, terminateAt: r.terminateAt, terminateBy: r.terminateBy, ts: r.ts });
-      }
-    });
-    if (canon.size === 0 && dropMarks.length === 0) return;
+    const arbitrate = (src: Rec[]): Map<string, { status: string; terminateAt: number; terminateBy: string; ts: number }> => {
+      const out = new Map<string, { status: string; terminateAt: number; terminateBy: string; ts: number }>();
+      src.forEach(r => {
+        if (!STATUS_RANK[r.status] || r.s === r.p) return;
+        const pk = pairKey(r.s, r.p);
+        const cur = out.get(pk);
+        const rank = STATUS_RANK[r.status];
+        if (!cur || r.ts > cur.ts || (r.ts === cur.ts && rank > STATUS_RANK[cur.status])) {
+          out.set(pk, { status: r.status, terminateAt: r.terminateAt, terminateBy: r.terminateBy, ts: r.ts });
+        }
+      });
+      return out;
+    };
+    const canon = arbitrate(trustedRecs);
+    // 宽松参考状态：含陈旧副本的仲裁结果，只用于「代写对方账号时补全缺失的新卡片」，绝不回写已有行
+    const canonLoose = arbitrate(guardedRecs);
+    if (canonLoose.size === 0 && dropMarks.length === 0) return;
 
     const changed = new Set<string>();
-    const holderOf = (key: string) => (key.indexOf('boundPurchasers_') === 0 ? boundKeys : psKeys).find(x => x.key === key);
+    const holderOf = (key: string) => (key.indexOf(BOUND_PREFIX) === 0 ? boundKeys : psKeys).find(x => x.key === key);
 
     // 1) 规范状态回写正确位置镜像（misplaced 记录不回写原位置，由补全+清理接管）
+    //    仅回写本账号权威键：对方账号的键由对方自己按权威副本维护，代写等于用陈旧状态覆盖对方最新操作
     recs.forEach(r => {
       if (r.shape === 'misplaced' || r.s === r.p || !STATUS_RANK[r.status]) return;
+      if (!isTrusted(r.key)) return;
       const c = canon.get(pairKey(r.s, r.p));
       const holder = holderOf(r.key);
       if (!c || !holder) return;
@@ -134,17 +159,17 @@ export function reconcileCooperationPairs(): void {
     const dirs = new Map<string, { s: string; p: string }>();
     guardedRecs.forEach(r => { if (r.s !== r.p && STATUS_RANK[r.status]) dirs.set(pairKey(r.s, r.p), { s: r.s, p: r.p }); });
     dirs.forEach(({ s, p }) => {
-      const c = canon.get(pairKey(s, p));
-      if (!c) return;
       const pk = pairKey(s, p);
       const src = guardedRecs.filter(r => pairKey(r.s, r.p) === pk);
       const pRec = users.find(u => u.username === p);
       const sRec = users.find(u => u.username === s);
       // 供应商侧 boundPurchasers_<s> 应有 p 的采购商卡片
-      const bKey = 'boundPurchasers_' + s;
+      const bKey = BOUND_PREFIX + s;
+      // 本账号权威键只采纳仲裁结果；代写对方账号时允许参考陈旧副本，但仅在缺行时追加新卡片，不改已有行
+      const cBound = canon.get(pk) || (isTrusted(bKey) ? undefined : canonLoose.get(pk));
       let bHolder = boundKeys.find(x => x.key === bKey);
       const bExist = bHolder ? bHolder.list.some((e: any) => e && e.purchaserUsername === p) : false;
-      if (!bExist) {
+      if (cBound && !bExist) {
         const from = src.find(r => r.shape === 'bound') || src[0];
         const base: any = (from && holderOf(from.key) ? holderOf(from.key)!.list[from.idx] : null) || {};
         const card: any = {
@@ -155,21 +180,22 @@ export function reconcileCooperationPairs(): void {
           purchaserContact: pRec?.contactPerson || base.purchaserContact || '',
           purchaserPhone: pRec?.phone || base.purchaserPhone || '',
           bindDate: String(base.cooperationDate || base.addedDate || base.bindDate || '').slice(0, 10),
-          status: c.status,
+          status: cBound.status,
           province: pRec?.province || '', city: pRec?.city || '', district: pRec?.district || '',
           detailAddress: pRec?.detailAddress || '',
         };
-        if (c.status !== 'approved') { if (c.terminateAt) card.terminateAt = c.terminateAt; if (c.terminateBy) card.terminateBy = c.terminateBy; }
-        if (c.ts) card.statusTs = c.ts;
+        if (cBound.status !== 'approved') { if (cBound.terminateAt) card.terminateAt = cBound.terminateAt; if (cBound.terminateBy) card.terminateBy = cBound.terminateBy; }
+        if (cBound.ts) card.statusTs = cBound.ts;
         if (!bHolder) { bHolder = { key: bKey, owner: s, list: [] }; boundKeys.push(bHolder); }
         bHolder.list.push(card);
         changed.add(bKey);
       }
       // 采购商侧 purchaser_suppliers_<p> 应有 s 的供应商卡片
-      const pKey = 'purchaser_suppliers_' + p;
+      const pKey = PS_PREFIX + p;
+      const cPs = canon.get(pk) || (isTrusted(pKey) ? undefined : canonLoose.get(pk));
       let pHolder = psKeys.find(x => x.key === pKey);
       const pExist = pHolder ? pHolder.list.some((e: any) => e && e.supplierUsername === s) : false;
-      if (!pExist) {
+      if (cPs && !pExist) {
         const from = src.find(r => r.shape === 'ps' || r.shape === 'misplaced') || src[0];
         const base: any = (from && holderOf(from.key) ? holderOf(from.key)!.list[from.idx] : null) || {};
         const card: any = {
@@ -181,12 +207,12 @@ export function reconcileCooperationPairs(): void {
           contactPhone: sRec?.phone || base.contactPhone || '',
           addedDate: base.addedDate || new Date().toISOString().slice(0, 19).replace('T', ' '),
           cooperationDate: base.cooperationDate || String(base.bindDate || '').slice(0, 10),
-          cooperationStatus: c.status,
+          cooperationStatus: cPs.status,
           province: sRec?.province || '', city: sRec?.city || '', district: sRec?.district || '', address: sRec?.address || '',
           orderPrefix: base.orderPrefix || '',
         };
-        if (c.status !== 'approved') { if (c.terminateAt) card.terminateAt = c.terminateAt; if (c.terminateBy) card.terminateBy = c.terminateBy; }
-        if (c.ts) card.statusTs = c.ts;
+        if (cPs.status !== 'approved') { if (cPs.terminateAt) card.terminateAt = cPs.terminateAt; if (cPs.terminateBy) card.terminateBy = cPs.terminateBy; }
+        if (cPs.ts) card.statusTs = cPs.ts;
         if (!pHolder) { pHolder = { key: pKey, owner: p, list: [] }; psKeys.push(pHolder); }
         pHolder.list.push(card);
         changed.add(pKey);
@@ -194,12 +220,23 @@ export function reconcileCooperationPairs(): void {
     });
 
     // 3) 清理误放/自引用脏条目（倒序删除避免错位）
+    //    只清理本账号权威键，并随上传申报 removedIds：这两个键属于「永不缩水键」，
+    //    不申报的减少会被服务端并集保留，被清理的脏条目会在下次拉取时复活
     const byKey = new Map<string, number[]>();
-    dropMarks.forEach(m => { const arr = byKey.get(m.key) || []; arr.push(m.idx); byKey.set(m.key, arr); });
+    dropMarks.forEach(m => {
+      if (!isTrusted(m.key)) return;
+      const arr = byKey.get(m.key) || []; arr.push(m.idx); byKey.set(m.key, arr);
+    });
     byKey.forEach((idxs, key) => {
       const holder = holderOf(key);
       if (!holder) return;
-      idxs.sort((a, b) => b - a).forEach(idx => holder.list.splice(idx, 1));
+      const removed: string[] = [];
+      idxs.sort((a, b) => b - a).forEach(idx => {
+        const gone = holder.list[idx];
+        if (gone && gone.id) removed.push(String(gone.id));
+        holder.list.splice(idx, 1);
+      });
+      if (removed.length) declareShrink(key, removed);
       changed.add(key);
     });
 
