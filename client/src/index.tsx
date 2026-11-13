@@ -14,6 +14,7 @@ import { installStorageQuotaGuard, registerSetItemHook, proactiveQuotaCleanup } 
 import { installStorageWriteFailureNotice } from './utils/storageFailureNotice';
 import { scheduleDatasetUpload, installUploadQueueRetry } from './utils/serverSync';
 import { hydrateProductListCache } from './utils/dataStore';
+import { hydrateImageUrlMap } from './utils/imageSpace';
 import { initPushNotifications } from './utils/pushNotification';
 import { cleanupDemoAccountsAndSession } from './utils/demoAccountCleanup';
 import { startBankSyncWatcher } from './utils/supplierBankSync';
@@ -28,12 +29,16 @@ registerSetItemHook((key, value) => scheduleDatasetUpload(key, value));
 // 待上传队列自动补传：断网/关页面期间未及上传的保存，联网、切回前台或每 30 秒自动重试
 installUploadQueueRetry();
 // 商品清单内存缓存预热：本地缓存被预算淘汰后，仪表盘等同步读取的页面仍能取到数据
+// 图片云端绑定表预热：localStorage 被配额清理删掉时用 IndexedDB 副本回灌，BOM/款式图不致空白
 setTimeout(() => {
   try {
     const owner = localStorage.getItem('isSubAccount') === 'true'
       ? (localStorage.getItem('parentAccount') || localStorage.getItem('username') || '')
       : (localStorage.getItem('username') || '');
-    if (owner) void hydrateProductListCache(owner);
+    if (owner) {
+      void hydrateProductListCache(owner);
+      void hydrateImageUrlMap(owner);
+    }
   } catch { /* ignore */ }
 }, 1200);
 // 残留演示账号与遗留登录会话清理：测试期遗留的 admin 等会话在启动时即清除，回退登录页

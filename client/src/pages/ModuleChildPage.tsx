@@ -98,7 +98,7 @@ import * as XLSX from 'xlsx-js-style';
 import { unzipSync, zipSync } from 'fflate';
 import { copyText } from '../utils/clipboard';
 import { getFullImage, saveFullImage, deleteFullImage, batchDeleteFullImages } from '../utils/imageStore';
-import { absoluteImageUrl, registerImageRef, uploadImage, attachImageToRecord, bindImageUrl, unbindImageUrl, loadImageUrlMap } from '../utils/imageSpace';
+import { absoluteImageUrl, registerImageRef, uploadImage, attachImageToRecord, bindImageUrl, bindImageUrls, unbindImageUrl, loadImageUrlMap } from '../utils/imageSpace';
 import { readScopedItem, writeScopedItem, readOwnerSuffixItem, writeOwnerSuffixItem, removeOwnerSuffixItem } from '../utils/scopedStorage';
 import BatchAddProductModal from '../components/BatchAddProductModal';
 import ScheduleBoard from '../components/ScheduleBoard';
@@ -10292,9 +10292,12 @@ const ModuleChildPage: React.FC = () => {
           if (img) await imgDB.set(newKey, img);
           const bindOwner = getDataOwner();
           const urlMap = loadImageUrlMap(bindOwner);
+          const copiedEntries: Record<string, string> = {};
           for (const suffix of ['', '_side', '_back', '_front2', '_top', '_bottom']) {
-            if (urlMap[`${src.key}${suffix}`]) bindImageUrl(bindOwner, `${newKey}${suffix}`, urlMap[`${src.key}${suffix}`]);
+            const url = urlMap[`${src.key}${suffix}`];
+            if (url) copiedEntries[`${newKey}${suffix}`] = url;
           }
+          bindImageUrls(bindOwner, copiedEntries);
         } catch { /* ignore */ }
       }
       try { localStorage.setItem(`pageData_basic-data_product-list_${owner}`, JSON.stringify(productList)); } catch { /* ignore */ }
@@ -10487,10 +10490,13 @@ const ModuleChildPage: React.FC = () => {
           const keySet = new Set(targets.map(t => t.key));
           // 图片空间成为主存：清掉本机旧图并绑定云端地址，BOM/款式设计页据此取图
           const owner = getDataOwner();
+          const boundEntries: Record<string, string> = {};
           targets.forEach(t => {
             try { imgDB.remove(t.key); } catch { /* ignore */ }
-            bindImageUrl(owner, t.key, asset.url);
+            boundEntries[t.key] = asset.url;
           });
+          // 整批一次写绑定表（逐条写会每条约一次全表序列化与配额清理）
+          bindImageUrls(owner, boundEntries);
           setDataSource(prev => prev.map(it =>
             keySet.has(String(it.key)) ? { ...it, image: url, imageUrl: asset.url, imageId: asset.id } : it
           ));

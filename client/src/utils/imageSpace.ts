@@ -10,7 +10,9 @@
  *   图片空间详情页据此展示「被引用在哪些地方」。
  */
 import { API_BASE, API_ORIGIN } from './apiBase';
-import { safeSetItem } from './storageQuota';
+import { tryCacheDataset } from './storageQuota';
+import { saveDataset, loadDataset } from './dataStore';
+import { flushDatasetUploadAsync } from './serverSync';
 
 export interface ImageRef {
   key: string;
@@ -172,31 +174,104 @@ export async function prepareImageDataUrl(raw: string): Promise<PreparedImage> {
  */
 export const imageUrlMapKey = (owner: string): string => `prodImgUrl_${owner}`;
 
-export function loadImageUrlMap(owner: string): Record<string, string> {
-  if (!owner) return {};
+// 内存缓存：BOM/款式图单元格在渲染期逐行调用 cloudImageOf → loadImageUrlMap，
+// 每次 JSON.parse 整张表会随商品数线性变慢，这里按账号缓存解析结果
+const memUrlMaps = new Map<string, Record<string, string>>();
+
+function readLocalUrlMap(owner: string): Record<string, string> | null {
   try {
     const raw = localStorage.getItem(imageUrlMapKey(owner));
-    const parsed = raw ? JSON.parse(raw) : null;
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, string> : {};
-  } catch { return {}; }
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, string> : null;
+  } catch { return null; }
+}
+
+export function loadImageUrlMap(owner: string): Record<string, string> {
+  if (!owner) return {};
+  const hit = memUrlMaps.get(owner);
+  if (hit) return hit;
+  const fromLocal = readLocalUrlMap(owner);
+  if (fromLocal) { memUrlMaps.set(owner, fromLocal); return fromLocal; }
+  return {};
+}
+
+/**
+ * 写绑定表：一次序列化、三通道落地
+ * - IndexedDB：可信副本（localStorage 被配额清理删掉后仍能恢复）
+ * - localStorage：尽力缓存（用 tryCacheDataset，不触发 emergencyFreeSpace 误删其他模块）
+ * - 服务端 + 断网队列：写入钩子随缓存写入触发；缓存写不进时显式直传，保证换电脑可见
+ */
+function writeUrlMap(owner: string, map: Record<string, string>): void {
+  const key = imageUrlMapKey(owner);
+  memUrlMaps.set(owner, map);
+  const json = Object.keys(map).length === 0 ? '{}' : JSON.stringify(map);
+  // 空表（用户删掉最后一张）也要清掉本地并同步到服务端，否则旧地址会在下次拉取时复活
+  if (Object.keys(map).length === 0) {
+    try { localStorage.removeItem(key); } catch { /* ignore */ }
+    saveDataset(key, json);
+    flushDatasetUploadAsync(key, json).catch(() => false);
+    return;
+  }
+  const cached = tryCacheDataset(key, json);
+  saveDataset(key, json);
+  if (!cached) flushDatasetUploadAsync(key, json).catch(() => false);
+}
+
+/**
+ * 批量登记图片键→云端 URL：整批只读一次、写一次。
+ * 批量上传/复制商品时原先每条都重写整张表，500 条就是 500 次全表序列化，
+ * 且每次都单独触发一轮配额清理，这里合并成一次。
+ */
+export function bindImageUrls(owner: string, entries: Record<string, string>, removed?: string[]): void {
+  if (!owner) return;
+  const base = loadImageUrlMap(owner);
+  const next: Record<string, string> = { ...base };
+  let changed = false;
+  Object.keys(entries || {}).forEach((k) => {
+    const url = entries[k];
+    if (!k || !url || next[k] === url) return;
+    next[k] = url;
+    changed = true;
+  });
+  (removed || []).forEach((k) => {
+    if (k && k in next) { delete next[k]; changed = true; }
+  });
+  if (!changed) return;
+  writeUrlMap(owner, next);
 }
 
 /** 登记图片键→云端 URL；写入会触发同步上传，其他电脑随即可见 */
 export function bindImageUrl(owner: string, key: string, url: string): void {
   if (!owner || !key || !url) return;
-  const map = loadImageUrlMap(owner);
-  if (map[key] === url) return;
-  map[key] = url;
-  safeSetItem(imageUrlMapKey(owner), JSON.stringify(map));
+  bindImageUrls(owner, { [key]: url });
 }
 
 /** 解除图片键绑定（删除/替换图片时调用） */
 export function unbindImageUrl(owner: string, key: string): void {
   if (!owner || !key) return;
-  const map = loadImageUrlMap(owner);
-  if (!(key in map)) return;
-  delete map[key];
-  safeSetItem(imageUrlMapKey(owner), JSON.stringify(map));
+  bindImageUrls(owner, {}, [key]);
+}
+
+/**
+ * 启动预热：localStorage 里没有这张表（被配额清理删掉/换设备首次进入）时，
+ * 用 IndexedDB 副本回灌内存缓存，否则本机 BOM/款式图会取不到云端地址而空着。
+ */
+export async function hydrateImageUrlMap(owner: string): Promise<number> {
+  if (!owner) return 0;
+  if (readLocalUrlMap(owner)) return 0; // 本地已有，按需惰性解析即可
+  try {
+    const rec = await loadDataset(imageUrlMapKey(owner));
+    if (!rec || typeof rec.json !== 'string') return 0;
+    const parsed = JSON.parse(rec.json);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return 0;
+    const map = parsed as Record<string, string>;
+    const size = Object.keys(map).length;
+    if (size === 0) return 0;
+    memUrlMaps.set(owner, map);
+    tryCacheDataset(imageUrlMapKey(owner), rec.json);
+    return size;
+  } catch { return 0; }
 }
 
 // ============ API ============

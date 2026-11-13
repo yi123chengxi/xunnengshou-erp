@@ -22,7 +22,7 @@ import useResizableColumns from '../hooks/useResizableColumns';
 import BatchAddProductModal from '../components/BatchAddProductModal';
 import MoldPickerModal from '../components/MoldPickerModal';
 import {
-  attachImageToRecord, absoluteImageUrl, loadImageUrlMap, bindImageUrl, unbindImageUrl, registerImageRef,
+  attachImageToRecord, absoluteImageUrl, loadImageUrlMap, bindImageUrls, unbindImageUrl, registerImageRef,
 } from '../utils/imageSpace';
 
 const { Text, Title } = Typography;
@@ -130,7 +130,10 @@ const uploadImageToCloud = async (
       recordName: opts.recordName || first,
       field: opts.field || 'image',
     });
-    keys.forEach(k => bindImageUrl(owner, k, asset.url));
+    const boundEntries: Record<string, string> = {};
+    keys.forEach(k => { boundEntries[k] = asset.url; });
+    // 整批一次写绑定表（同色多规格逐条写会每条一次全表序列化）
+    bindImageUrls(owner, boundEntries);
     // 同色多规格共用一张图：其余规格也登记引用位置，图片空间详情能看到全部引用
     keys.slice(1).forEach(k => {
       void registerImageRef(asset.imageId, {
@@ -1447,10 +1450,12 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
         // 云端绑定同样复制，保证新货号在其他电脑上也能看到图片
         const owner = getDataOwner();
         const urlMap = loadImageUrlMap(owner);
+        const copiedEntries: Record<string, string> = {};
         for (const { suffix } of SIX_VIEWS) {
           const oldKey = `${src.key}${suffix}`;
-          if (urlMap[oldKey]) bindImageUrl(owner, `${newKey}${suffix}`, urlMap[oldKey]);
+          if (urlMap[oldKey]) copiedEntries[`${newKey}${suffix}`] = urlMap[oldKey];
         }
+        bindImageUrls(owner, copiedEntries);
       } catch { /* ignore */ }
     }
     const mergedJson = JSON.stringify(productList);
