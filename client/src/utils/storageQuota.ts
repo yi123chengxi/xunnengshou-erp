@@ -395,6 +395,16 @@ export function tryCacheDataset(key: string, value: string): boolean {
   }
 }
 
+/**
+ * 数据集已落 IndexedDB（但没有写进 localStorage）时的上传通知。
+ * 场景：商品清单等大表超过本地缓存预算，跳过 localStorage 直接写 IndexedDB，
+ * 此时写入钩子不会触发，必须显式通知同步链路，否则服务端停留在旧数据、
+ * 换电脑/其他端看到的仍是修改前的值。
+ */
+export function notifyDatasetWrite(key: string, value: string): void {
+  fireHooks(key, value);
+}
+
 /** 启动时主动配额清理：占用超过阈值（约4MB，Chrome 上限约5MB）时提前释放空间，
  * 避免后续关键写入（信用额度等）因配额满而静默失败 */
 export function proactiveQuotaCleanup(thresholdBytes = 4 * 1024 * 1024): void {

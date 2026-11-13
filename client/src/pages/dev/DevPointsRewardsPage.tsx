@@ -6,6 +6,7 @@ import {
   loadDevRewards, saveDevRewards, loadDevRedeems, saveDevRedeems, calcDevBalance, getDevIdentity, loadDevSubAccounts,
 } from '../../utils/devStore';
 import type { DevReward, DevRedeem } from '../../utils/devStore';
+import { attachImageToRecord, absoluteImageUrl } from '../../utils/imageSpace';
 
 // ===================== 奖品图片 IndexedDB 存储 =====================
 const openImgDb = (): Promise<IDBDatabase> => new Promise((resolve, reject) => {
@@ -74,25 +75,36 @@ const DevPointsRewardsPage: React.FC = () => {
     form.validateFields().then(async values => {
       const name = String(values.name || '').trim();
       if (!name) return;
+      const rewardId = editing?.id || `rw_${Date.now()}`;
       let imageKey = editing?.imageKey || '';
+      let imageUrl = editing?.imageUrl || '';
       if (formImage && formImage.startsWith('data:')) {
-        imageKey = `reward_${editing?.id || Date.now()}`;
-        try { await putImg(imageKey, formImage); } catch { message.error('图片保存失败'); return; }
+        imageKey = `reward_${rewardId}`;
+        // 优先传图片空间：URL 随 dev_ 数据集同步，换电脑/其他开发者账号都能看到奖品图
+        try {
+          const asset = await attachImageToRecord(formImage, {
+            name: `${name}-奖品图`, tags: ['奖品图'],
+            module: 'dev', moduleLabel: '开发者后台', childKey: 'points-rewards', childLabel: '积分奖品',
+            recordKey: rewardId, recordName: name, field: 'image',
+          });
+          imageUrl = asset.url;
+        } catch { /* 云端不可用：退回本机 IndexedDB */ }
+        try { await putImg(imageKey, formImage); } catch { if (!imageUrl) { message.error('图片保存失败'); return; } }
       }
       if (editing) {
         const next = loadDevRewards().map(r => r.id === editing.id ? {
           ...r, name, description: values.description || '', pointsCost: Number(values.pointsCost) || 0,
           stock: values.stock === undefined || values.stock === null ? -1 : Number(values.stock),
-          sortOrder: Number(values.sortOrder) || 0, imageKey,
+          sortOrder: Number(values.sortOrder) || 0, imageKey, imageUrl,
         } : r);
         saveDevRewards(next);
         message.success(`奖品「${name}」已更新`);
       } else {
         const entry: DevReward = {
-          id: `rw_${Date.now()}`, name, description: values.description || '',
+          id: rewardId, name, description: values.description || '',
           pointsCost: Number(values.pointsCost) || 0,
           stock: values.stock === undefined || values.stock === null ? -1 : Number(values.stock),
-          sortOrder: Number(values.sortOrder) || 0, imageKey, isActive: true,
+          sortOrder: Number(values.sortOrder) || 0, imageKey, imageUrl, isActive: true,
           createdAt: dayjs().format('YYYY-MM-DD HH:mm'),
         };
         saveDevRewards([...loadDevRewards(), entry]);
@@ -144,8 +156,8 @@ const DevPointsRewardsPage: React.FC = () => {
   const rewardColumns: any[] = [
     {
       title: '奖品图片', key: 'image', width: 100, align: 'center',
-      render: (_: any, r: DevReward) => r.imageKey && imgUrls[r.imageKey]
-        ? <Image src={imgUrls[r.imageKey]} width={56} height={42} style={{ objectFit: 'cover', borderRadius: 6 }} />
+      render: (_: any, r: DevReward) => (r.imageUrl || (r.imageKey && imgUrls[r.imageKey]))
+        ? <Image src={absoluteImageUrl(r.imageUrl || imgUrls[r.imageKey as string])} width={56} height={42} style={{ objectFit: 'cover', borderRadius: 6 }} />
         : <div style={{ width: 56, height: 42, background: '#fafafa', borderRadius: 6, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: '#bbb', fontSize: 11, border: '1px solid #f0f0f0' }}>无图</div>,
     },
     { title: '奖品名称', dataIndex: 'name', width: 160, align: 'center', render: (v: string) => <span style={{ fontWeight: 600 }}>{v}</span> },
@@ -170,7 +182,7 @@ const DevPointsRewardsPage: React.FC = () => {
           <Tooltip title="编辑"><Button size="small" type="link" icon={<EditOutlined />} onClick={() => {
             setEditing(r);
             form.setFieldsValue({ name: r.name, description: r.description || '', pointsCost: r.pointsCost, stock: r.stock, sortOrder: r.sortOrder });
-            setFormImage(r.imageKey && imgUrls[r.imageKey] ? imgUrls[r.imageKey] : '');
+            setFormImage(r.imageUrl || (r.imageKey && imgUrls[r.imageKey]) || '');
             setModalVisible(true);
           }} /></Tooltip>
           <Popconfirm title="确定删除该奖品？（兑换记录会保留）" onConfirm={() => handleDelete(r)} okText="删除" cancelText="取消" okButtonProps={{ danger: true }}>

@@ -116,12 +116,22 @@ const STRICT_PRIVATE_PREFIXES = [
   // 产品 BOM 与列/字段配置（键末段为账号，不得跨租户读取）
   'bom_', 'mainTablePageSize_', 'bomPrintCols_', 'billDetailColConfig_', 'prBomFieldConfig_',
   'billAddColConfig_', 'pickListFields_',
+  // 表格列显隐 / 列排序合并标记
+  'visible_columns_', 'vc_merged_', 'product_visible_columns_',
+  // 供应商/采购商平台绩效积分（键为 <platform>_analytics_<账号>_<后缀>）
+  'supplier_analytics_', 'purchaser_analytics_',
+  // BOM/款式设计图片的云端 URL 绑定表（prodImgUrl_<账号>）
+  'prodImgUrl_',
 ];
 
 /** 键的归属账号；共享键返回 null（与客户端 keyOwner 一致：取最后一个下划线后的账号名） */
 export function keyOwnerOf(key: string): string | null {
   if (SHARED_EXACT.has(key)) return null;
   if (SHARED_PREFIXES.some(p => key.startsWith(p))) return null;
+  // 供应商/采购商绩效键为 <platform>_analytics_<账号>_<后缀>，账号在第三段（末段是业务后缀）
+  if (key.startsWith('supplier_analytics_') || key.startsWith('purchaser_analytics_')) {
+    return key.split('_')[2] || '';
+  }
   const idx = key.lastIndexOf('_');
   if (idx < 0) return key;
   return key.slice(idx + 1);
@@ -166,6 +176,9 @@ export function isKeyAllowed(key: string, user: SyncUser | null, action: SyncAct
 export function filterMetaForUser(meta: Record<string, number>, user: SyncUser | null): Record<string, number> {
   const out: Record<string, number> = {};
   for (const key of Object.keys(meta)) {
+    // 合作邀约令牌键内嵌随机 token：不进入元信息列表，避免任意登录用户枚举全部邀请，
+    // 只能凭 URL 里的 token 直读对应数据集（isKeyAllowed 仍按共享键放行）
+    if (key.startsWith('cooperation_token_')) continue;
     if (user ? isKeyAllowed(key, user, 'read') : isPublicKey(key)) out[key] = meta[key];
   }
   return out;

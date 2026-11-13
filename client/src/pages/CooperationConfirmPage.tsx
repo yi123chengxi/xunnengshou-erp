@@ -3,6 +3,8 @@ import { Card, Button, message, Space, Typography, Descriptions, Tag, Spin } fro
 import { CheckCircleOutlined, CloseCircleOutlined, LinkOutlined } from '@ant-design/icons';
 import { useParams, useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
+import { ensureDatasetFromServer } from '../utils/serverSync';
+import { safeSetItem } from '../utils/storageQuota';
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -26,29 +28,45 @@ const CooperationConfirmPage: React.FC = () => {
   const [tokenData, setTokenData] = useState<CooperationToken | null>(null);
   const [processed, setProcessed] = useState(false);
 
-  const loadToken = useCallback(() => {
-    if (!token) return;
+  const loadToken = useCallback(async () => {
+    if (!token) { setLoading(false); return; }
+    const readLocal = (): CooperationToken | null => {
+      // 优先读单令牌键（已上云）：采购商生成链接时写入，供应商在本机/他端都能拿到
+      try {
+        const single = localStorage.getItem(`cooperation_token_${token}`);
+        if (single) {
+          const rec = JSON.parse(single);
+          if (rec && rec.token === token) return rec as CooperationToken;
+        }
+      } catch { /* ignore */ }
+      try {
+        const coopTokens: any[] = JSON.parse(localStorage.getItem('cooperation_tokens') || '[]');
+        const supplierTokens: any[] = JSON.parse(localStorage.getItem('supplier_cooperation_tokens') || '[]');
+
+        const normalizedSupplierTokens = supplierTokens.map((t: any) => ({
+          token: t.token,
+          purchaserName: t.purchaserName || '',
+          purchaserCompany: t.purchaserCompany || '',
+          purchaserContact: t.purchaserContact || '',
+          purchaserPhone: '',
+          supplierName: t.supplierCompany || t.supplierName || '',
+          supplierId: t.supplierUsername || t.supplierId || '',
+          status: t.status,
+          createdAt: t.createdAt || '',
+        }));
+
+        const allTokens = [...coopTokens, ...normalizedSupplierTokens];
+        return (allTokens.find((t) => t.token === token) as CooperationToken) || null;
+      } catch { return null; }
+    };
     try {
-      const coopTokens: any[] = JSON.parse(localStorage.getItem('cooperation_tokens') || '[]');
-      const supplierTokens: any[] = JSON.parse(localStorage.getItem('supplier_cooperation_tokens') || '[]');
-
-      const normalizedSupplierTokens = supplierTokens.map((t: any) => ({
-        token: t.token,
-        purchaserName: t.purchaserName || '',
-        purchaserCompany: t.purchaserCompany || '',
-        purchaserContact: t.purchaserContact || '',
-        purchaserPhone: '',
-        supplierName: t.supplierCompany || t.supplierName || '',
-        supplierId: t.supplierUsername || t.supplierId || '',
-        status: t.status,
-        createdAt: t.createdAt || '',
-      }));
-
-      const allTokens = [...coopTokens, ...normalizedSupplierTokens];
-      const found = allTokens.find((t) => t.token === token);
-      setTokenData(found || null);
-    } catch {
-      setTokenData(null);
+      let found = readLocal();
+      if (!found) {
+        // 链接常由供应商在自己的电脑打开：本地无此令牌时按 URL 中的 token 从服务端精确拉取
+        await ensureDatasetFromServer(`cooperation_token_${token}`);
+        found = readLocal();
+      }
+      setTokenData(found);
     } finally {
       setLoading(false);
     }
@@ -57,6 +75,21 @@ const CooperationConfirmPage: React.FC = () => {
   useEffect(() => {
     loadToken();
   }, [loadToken]);
+
+  // 写回令牌状态：单令牌键会随同步上传（采购商端可拉到最新结果），本机列表仅作旧流程兼容
+  const persistTokenStatus = (status: 'approved' | 'rejected') => {
+    if (!token) return;
+    try {
+      const raw = localStorage.getItem(`cooperation_token_${token}`);
+      const rec = raw ? JSON.parse(raw) : tokenData;
+      if (rec) safeSetItem(`cooperation_token_${token}`, JSON.stringify({ ...rec, status }));
+    } catch { /* ignore */ }
+    try {
+      const tokens: CooperationToken[] = JSON.parse(localStorage.getItem('cooperation_tokens') || '[]');
+      const updatedTokens = tokens.map((t) => (t.token === token ? { ...t, status } : t));
+      safeSetItem('cooperation_tokens', JSON.stringify(updatedTokens));
+    } catch { /* ignore */ }
+  };
 
   // 供应商同意合作
   const handleApprove = () => {
@@ -72,14 +105,8 @@ const CooperationConfirmPage: React.FC = () => {
       return;
     }
 
-    // 1. 更新令牌状态
-    const tokens: CooperationToken[] = JSON.parse(
-      localStorage.getItem('cooperation_tokens') || '[]'
-    );
-    const updatedTokens = tokens.map((t) =>
-      t.token === token ? { ...t, status: 'approved' as const } : t
-    );
-    localStorage.setItem('cooperation_tokens', JSON.stringify(updatedTokens));
+    // 1. 更新令牌状态（单令牌键同步上云）
+    persistTokenStatus('approved');
 
     // 2. 更新采购商的供应商列表 - 标记为已合作，并同步供应商企业信息
     const storageKey = `purchaser_suppliers_${tokenData.purchaserName}`;
@@ -191,14 +218,8 @@ const CooperationConfirmPage: React.FC = () => {
   const handleReject = () => {
     if (!tokenData) return;
 
-    // 更新令牌状态
-    const tokens: CooperationToken[] = JSON.parse(
-      localStorage.getItem('cooperation_tokens') || '[]'
-    );
-    const updatedTokens = tokens.map((t) =>
-      t.token === token ? { ...t, status: 'rejected' as const } : t
-    );
-    localStorage.setItem('cooperation_tokens', JSON.stringify(updatedTokens));
+    // 更新令牌状态（单令牌键同步上云）
+    persistTokenStatus('rejected');
 
     // 更新采购商的供应商列表
     const storageKey = `purchaser_suppliers_${tokenData.purchaserName}`;
@@ -228,7 +249,7 @@ const CooperationConfirmPage: React.FC = () => {
     return (
       <div style={{ padding: '50px', textAlign: 'center' }}>
         <Title level={3} type="danger">无效的合作链接</Title>
-        <Paragraph>该链接已失效或不存在，请联系采购商重新获取。</Paragraph>
+        <Paragraph>该链接已失效或不存在，请联系采购商重新获取；若您是供应商，请先登录后再打开该链接。</Paragraph>
         <Button type="primary" onClick={() => navigate('/login')}>
           返回登录
         </Button>

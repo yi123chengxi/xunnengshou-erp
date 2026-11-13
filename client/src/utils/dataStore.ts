@@ -4,7 +4,7 @@
  * 刷新后数据丢失。IndexedDB 容量充足，作为可信存储；localStorage 仅作容量允许时的缓存，
  * 并以 `${key}_ts` 时间戳协调两份存储的新旧。
  */
-import { canCacheDataset, tryCacheDataset } from './storageQuota';
+import { canCacheDataset, tryCacheDataset, notifyDatasetWrite } from './storageQuota';
 const DB_NAME = 'factory_erp_data';
 const STORE = 'datasets';
 
@@ -125,9 +125,13 @@ export const writeProductList = (owner: string, list: Record<string, any>[]): vo
   try {
     const json = JSON.stringify(list);
     saveDataset(key, json);
-    if (canCacheDataset(key, json.length)) {
-      tryCacheDataset(key, json);
+    const cached = canCacheDataset(key, json.length) && tryCacheDataset(key, json);
+    if (cached) {
       tryCacheDataset(`${key}_ts`, String(Date.now()));
+    } else {
+      // 大表跳过本地缓存（或配额写不进）时不会触发写入钩子，
+      // 必须显式通知上传链路，否则服务端/其他电脑长期停留在旧清单
+      notifyDatasetWrite(key, json);
     }
   } catch { /* ignore */ }
 };

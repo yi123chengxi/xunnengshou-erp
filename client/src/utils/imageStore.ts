@@ -85,3 +85,47 @@ export const listFullImageKeys = (): Promise<string[]> =>
       }
     });
   });
+
+// ============ 旧版共享图片库 prodImages/imgs（BOM/款式设计图，key 直接是货品 key，无账号前缀） ============
+const LEGACY_DB = 'prodImages';
+const LEGACY_STORE = 'imgs';
+let legacyDbPromise: Promise<IDBDatabase | null> | null = null;
+const openLegacyDb = (): Promise<IDBDatabase | null> => {
+  if (legacyDbPromise) return legacyDbPromise;
+  legacyDbPromise = new Promise((resolve) => {
+    try {
+      const req = indexedDB.open(LEGACY_DB, 1);
+      req.onupgradeneeded = () => { try { req.result.createObjectStore(LEGACY_STORE); } catch { /* ignore */ } };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => resolve(null);
+      req.onblocked = () => resolve(null);
+    } catch { resolve(null); }
+  });
+  return legacyDbPromise;
+};
+
+/** 列出旧共享图片库的全部 key（BOM/款式图历史迁移用） */
+export const listLegacyImageKeys = (): Promise<string[]> =>
+  new Promise((resolve) => {
+    openLegacyDb().then((db) => {
+      if (!db) { resolve([]); return; }
+      try {
+        const req = db.transaction(LEGACY_STORE, 'readonly').objectStore(LEGACY_STORE).getAllKeys();
+        req.onsuccess = () => resolve((req.result || []).map(String));
+        req.onerror = () => resolve([]);
+      } catch { resolve([]); }
+    });
+  });
+
+/** 读取旧共享图片库中的图片（不存在返回空串） */
+export const getLegacyImage = (key: string): Promise<string> =>
+  new Promise((resolve) => {
+    openLegacyDb().then((db) => {
+      if (!db) { resolve(''); return; }
+      try {
+        const req = db.transaction(LEGACY_STORE, 'readonly').objectStore(LEGACY_STORE).get(key);
+        req.onsuccess = () => resolve(typeof req.result === 'string' ? req.result : '');
+        req.onerror = () => resolve('');
+      } catch { resolve(''); }
+    });
+  });

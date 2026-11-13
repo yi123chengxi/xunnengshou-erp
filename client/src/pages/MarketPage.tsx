@@ -20,6 +20,7 @@ import MoldMarketTab from './MoldMarketTab';
 import ChatPage from './ChatPage';
 import { triggerOpenChat, fetchUnreadCount, onNewMessage as onChatNewMessage } from '../utils/chatSocket';
 import { getDataOwner } from '../utils/brandAuth';
+import { attachImageToRecord, absoluteImageUrl } from '../utils/imageSpace';
 import { copyText } from '../utils/clipboard';
 
 const { Text, Paragraph } = Typography;
@@ -1582,38 +1583,56 @@ const MarketPage: React.FC = () => {
   };
 
   const handlePublish = useCallback(() => {
-    pubForm.validateFields().then(values => {
+    pubForm.validateFields().then(async values => {
       if (!pubImage) {
         message.warning('请上传图片');
         return;
       }
       const list = loadJson(MARKET_KEY, []);
       const now = new Date().toISOString();
+      const recordKey = pubEdit ? pubEdit.key : `mkt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      // 图片优先传图片空间：记录只存 URL（随 market_publish_orders 同步），换电脑/对方账号都能看到
+      let imageUrl = '';
+      if (pubImage.startsWith('data:')) {
+        try {
+          const asset = await attachImageToRecord(pubImage, {
+            name: values.shortName || recordKey,
+            tags: ['发包订单图'],
+            module: 'market', moduleLabel: '商机市场',
+            childKey: 'semi', childLabel: '发包市场',
+            recordKey, recordName: values.shortName || recordKey, field: 'image',
+          });
+          imageUrl = asset.url;
+        } catch { /* 云端不可用：退回本地图片键，保证当前机器能继续用 */ }
+      } else {
+        imageUrl = pubImage;
+      }
       if (pubEdit) {
         const updated = list.map((r: any) => (r.key === pubEdit.key ? {
           ...r, shortName: values.shortName, styleCode: values.styleCode, productCode: values.productCode || '',
           unit: values.unit || '件', quantity: Number(values.quantity) || 0, targetPrice: Number(values.targetPrice) || 0,
           deadline: values.deadline ? dayjs(values.deadline).format('YYYY-MM-DD') : '', processTypes: values.processTypes || [],
           deposit: Number(values.deposit) || 0, remark: values.remark || '', editTime: now,
+          ...(imageUrl ? { image: imageUrl } : {}),
         } : r));
         persist(updated);
-        // 保存图片
-        localStorage.setItem(`pubImg_${username}_${pubEdit.key}`, pubImage);
+        // 图片已上云则清掉本机 base64 副本（否则 5MB 配额会被旧图白占）
+        if (imageUrl) { try { localStorage.removeItem(`pubImg_${username}_${pubEdit.key}`); } catch { /* ignore */ } }
+        else localStorage.setItem(`pubImg_${username}_${pubEdit.key}`, pubImage);
         message.success('发布信息已修改');
       } else {
-        const key = `mkt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
         list.unshift({
-          key, id: nextMarketId(list), type: 'semi',
+          key: recordKey, id: nextMarketId(list), type: 'semi',
           publisherUsername: username, publisherCompany: companyName, publishTime: now, status: '待报价',
           shortName: values.shortName, styleCode: values.styleCode, productCode: values.productCode || '',
           unit: values.unit || '件', quantity: Number(values.quantity) || 0, targetPrice: Number(values.targetPrice) || 0,
           deadline: values.deadline ? dayjs(values.deadline).format('YYYY-MM-DD') : '', processTypes: values.processTypes || [],
           deposit: Number(values.deposit) || 0, depositStatus: Number(values.deposit) > 0 ? '需缴纳' : undefined,
           remark: values.remark || '', quotes: [],
+          ...(imageUrl ? { image: imageUrl } : {}),
         });
         persist(list);
-        // 保存图片
-        localStorage.setItem(`pubImg_${username}_${key}`, pubImage);
+        if (!imageUrl) localStorage.setItem(`pubImg_${username}_${recordKey}`, pubImage);
         message.success('发包订单已发布到商机市场');
       }
       setPubVisible(false); setPubEdit(null); pubForm.resetFields(); setPubImage('');
@@ -2081,7 +2100,7 @@ const addToCart = useCallback((rec: any, qty?: number) => {
       render: (_: any, r: any) => {
         // 优先产品自带 image（URL），回退发布者图片存储键（pubImg_ 或 prodImg_）
         const src = r.image || localStorage.getItem(`pubImg_${r.publisherUsername}_${r.key}`) || imgOf(r.publisherUsername, { key: r.productKey });
-        return src ? <Image src={src} alt="半成品图" width={40} style={{ maxHeight: 40, objectFit: 'cover', borderRadius: 4 }} /> : '—';
+        return src ? <Image src={absoluteImageUrl(src)} alt="半成品图" width={40} style={{ maxHeight: 40, objectFit: 'cover', borderRadius: 4 }} /> : '—';
       },
     },
     { key: 'shortName', title: '商品简称', dataIndex: 'shortName', width: 120, align: 'center' },
@@ -2124,7 +2143,7 @@ const addToCart = useCallback((rec: any, qty?: number) => {
           <Space size={4} wrap>
             <Button size="small" type="link" icon={<EyeOutlined />} onClick={() => openDetail(r)}>查看报价</Button>
             {mine && r.status !== '已中标' && r.status !== '已关闭' && (
-              <Button size="small" type="link" icon={<EditOutlined />} onClick={() => { setPubEdit(r); pubForm.setFieldsValue({ ...r, deadline: r.deadline ? dayjs(r.deadline) : undefined }); const img = localStorage.getItem(`pubImg_${owner}_${r.key}`) || ''; setPubImage(img); setPubVisible(true); }}>编辑</Button>
+              <Button size="small" type="link" icon={<EditOutlined />} onClick={() => { setPubEdit(r); pubForm.setFieldsValue({ ...r, deadline: r.deadline ? dayjs(r.deadline) : undefined }); const img = r.image || localStorage.getItem(`pubImg_${owner}_${r.key}`) || ''; setPubImage(img); setPubVisible(true); }}>编辑</Button>
             )}
             {mine && r.status !== '已中标' && r.status !== '已关闭' && (
               <Popconfirm title="关闭后不可再报价，确认关闭？" onConfirm={() => handleClose(r)}><Button size="small" type="link" danger icon={<CloseOutlined />}>关闭</Button></Popconfirm>

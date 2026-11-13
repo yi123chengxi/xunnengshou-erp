@@ -11,6 +11,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { PermScope, PermTri, isMenuPoint } from '../config/permRegistry';
 import { getAllRoles, getMergedPermissions, getRolesStorageKey } from '../config/permissions';
 import { getDevIdentity, getSubRole } from './devStore';
+import { isPermAllowed, PERM_V18_DEFAULT_KEYS } from './devPerms';
 
 export const PERM_EVENT = 'perm-changed';
 export const emitPermChanged = () => window.dispatchEvent(new Event(PERM_EVENT));
@@ -147,14 +148,19 @@ export const resolvePerm = (scope: PermScope, key: string): boolean => {
   //    细则：白名单含 fn:/field: 细粒度键时按显式清单严格执行；
   //    仅含菜单键的遗留白名单（客户权限编辑器按菜单树生成）中，fn:/field: 点
   //    由其父菜单隐含放行（否则成品页整表数据列与显示字段按键会被误杀）；
+  //    菜单点则套用版本哨兵兼容（isPermAllowed）：白名单保存于某菜单上线之前时，
+  //    该新增菜单点默认放行，否则主账号/客户会被历史勾选快照误判为未授权而看不到新菜单
+  //    （如基础数据-图片空间）；显式取消勾选后保存会写入新版哨兵，仍按实际勾选生效。
   //    细粒度拒绝仍走 dev deny 列表与用户覆写。
   if (loadDevDeny(username).includes(key)) return false;
   const wl = readDevWhitelist(username);
   if (wl && !wl.includes(key)) {
     const hasGranular = wl.some(k => k.startsWith('fn:') || k.startsWith('field:'));
     const parts = key.split(':');
-    const impliedByMenu = !hasGranular && (parts[0] === 'fn' || parts[0] === 'field') && wl.includes(parts[1]);
-    if (!impliedByMenu) return false;
+    const isGranular = parts[0] === 'fn' || parts[0] === 'field';
+    const impliedByMenu = !hasGranular && isGranular && wl.includes(parts[1]);
+    const legacyMenuDefault = !isGranular && isPermAllowed(new Set(wl), key);
+    if (!impliedByMenu && !legacyMenuDefault) return false;
   }
 
   // 3) 角色层（仅子账号；主账号 bypass）
@@ -182,7 +188,9 @@ export const resolvePerm = (scope: PermScope, key: string): boolean => {
     if (roleAllow) return true;
     // legacy 白名单：仅供应商菜单点保留「未列入=不可见」语义；其余默认放行
     if (isMenuPoint('supplier', key) && scope === 'supplier') {
-      return getMergedPermissions(roleNames, customPerms).includes(key);
+      if (getMergedPermissions(roleNames, customPerms).includes(key)) return true;
+      // 旧角色快照早于该菜单上线时默认放行（管理员可在角色三态/账号覆写中显式拒绝）
+      return PERM_V18_DEFAULT_KEYS.includes(key);
     }
     return true;
   }

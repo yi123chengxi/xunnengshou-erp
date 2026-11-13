@@ -10,6 +10,7 @@
  *   图片空间详情页据此展示「被引用在哪些地方」。
  */
 import { API_BASE, API_ORIGIN } from './apiBase';
+import { safeSetItem } from './storageQuota';
 
 export interface ImageRef {
   key: string;
@@ -162,6 +163,40 @@ export async function prepareImageDataUrl(raw: string): Promise<PreparedImage> {
   const dataUrl = drawToJpeg(img, 1600, 0.86);
   const thumbDataUrl = drawToJpeg(img, 320, 0.72);
   return { dataUrl, thumbDataUrl, width: img.naturalWidth, height: img.naturalHeight, size: raw.length };
+}
+
+/**
+ * 业务图片键 → 云端 URL 绑定表（prodImgUrl_<账号>）。
+ * BOM/款式规格图等图片的存储 key 是货品 key，业务记录里没有图片字段；
+ * 上传图片空间后把 url 记在这张表里随数据集同步，其他电脑据此把本地图片键还原成云端图。
+ */
+export const imageUrlMapKey = (owner: string): string => `prodImgUrl_${owner}`;
+
+export function loadImageUrlMap(owner: string): Record<string, string> {
+  if (!owner) return {};
+  try {
+    const raw = localStorage.getItem(imageUrlMapKey(owner));
+    const parsed = raw ? JSON.parse(raw) : null;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, string> : {};
+  } catch { return {}; }
+}
+
+/** 登记图片键→云端 URL；写入会触发同步上传，其他电脑随即可见 */
+export function bindImageUrl(owner: string, key: string, url: string): void {
+  if (!owner || !key || !url) return;
+  const map = loadImageUrlMap(owner);
+  if (map[key] === url) return;
+  map[key] = url;
+  safeSetItem(imageUrlMapKey(owner), JSON.stringify(map));
+}
+
+/** 解除图片键绑定（删除/替换图片时调用） */
+export function unbindImageUrl(owner: string, key: string): void {
+  if (!owner || !key) return;
+  const map = loadImageUrlMap(owner);
+  if (!(key in map)) return;
+  delete map[key];
+  safeSetItem(imageUrlMapKey(owner), JSON.stringify(map));
 }
 
 // ============ API ============

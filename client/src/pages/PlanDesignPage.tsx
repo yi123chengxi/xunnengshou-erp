@@ -21,6 +21,9 @@ import { readScopedItem, writeScopedItem } from '../utils/scopedStorage';
 import useResizableColumns from '../hooks/useResizableColumns';
 import BatchAddProductModal from '../components/BatchAddProductModal';
 import MoldPickerModal from '../components/MoldPickerModal';
+import {
+  attachImageToRecord, absoluteImageUrl, loadImageUrlMap, bindImageUrl, unbindImageUrl, registerImageRef,
+} from '../utils/imageSpace';
 
 const { Text, Title } = Typography;
 const PRIMARY = '#1e4a7e';
@@ -99,6 +102,47 @@ export const imgDB = {
   },
 };
 
+// 图片空间元信息：BOM/款式设计图属于基础数据的全部商品
+const IMG_SPACE_META = {
+  module: 'basic-data', moduleLabel: '基础数据', childKey: 'product-list', childLabel: '全部商品',
+};
+
+/**
+ * 图片上传图片空间，并把「本机图片键 → 云端 url」写入绑定表（prodImgUrl_<账号>，随数据集同步）。
+ * BOM/款式图的存储键是货品 key，业务记录里没有图片字段，其他电脑只能靠这张表还原图片。
+ * 失败时静默返回空串：保留本机图片，至少当前电脑可用。
+ */
+const uploadImageToCloud = async (
+  keys: string[],
+  dataUrl: string,
+  opts: { recordName?: string; field?: string } = {},
+): Promise<string> => {
+  // 已经是云端地址（从绑定表回填）时不重复上传
+  if (!dataUrl || keys.length === 0 || !dataUrl.startsWith('data:')) return '';
+  const owner = getDataOwner();
+  const first = keys[0];
+  try {
+    const asset = await attachImageToRecord(dataUrl, {
+      ...IMG_SPACE_META,
+      name: opts.recordName ? `${opts.recordName}-图` : first,
+      tags: ['产品图'],
+      recordKey: first,
+      recordName: opts.recordName || first,
+      field: opts.field || 'image',
+    });
+    keys.forEach(k => bindImageUrl(owner, k, asset.url));
+    // 同色多规格共用一张图：其余规格也登记引用位置，图片空间详情能看到全部引用
+    keys.slice(1).forEach(k => {
+      void registerImageRef(asset.imageId, {
+        ...IMG_SPACE_META, recordKey: k, recordName: opts.recordName || k, field: opts.field || 'image',
+      });
+    });
+    return asset.url;
+  } catch {
+    return '';
+  }
+};
+
 // 保存图片到 IndexedDB + localStorage 双写（IndexedDB 容量大，localStorage 供市场页 imgOf 同步读取）
 const saveImageToKeys = async (keys: string[], dataUrl: string): Promise<{ saved: number; failed: number }> => {
   if (!dataUrl || dataUrl.length < 50) {
@@ -116,13 +160,17 @@ const saveImageToKeys = async (keys: string[], dataUrl: string): Promise<{ saved
       failed++;
     }
   }
+  // 上传图片空间并绑定云端地址，其他电脑据此取图
+  if (saved > 0) await uploadImageToCloud(keys, dataUrl);
   return { saved, failed };
 };
 
-// 删除多个 key 的图片
+// 删除多个 key 的图片（同时解除云端地址绑定）
 const removeImageFromKeys = async (keys: string[]): Promise<void> => {
+  const owner = getDataOwner();
   for (const key of keys) {
     await imgDB.remove(key);
+    unbindImageUrl(owner, key);
   }
 };
 
@@ -1341,7 +1389,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
     setNewSemiUnit(rec.unit || '件');
     setNewSemiPrice(Number(rec.costPrice ?? rec.suggestedPrice) || undefined);
     setNewSemiImage('');
-    imgDB.get(rec.key).then(v => { if (v) setNewSemiImage(v); });
+    imgDB.get(rec.key).then(v => { if (v) setNewSemiImage(v); else { const url = loadImageUrlMap(getDataOwner())[rec.key]; if (url) setNewSemiImage(absoluteImageUrl(url)); } });
     let items: any[] = [];
     try {
       const bom = JSON.parse(localStorage.getItem(getBomKey(rec.key)) || 'null');
@@ -1392,10 +1440,17 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
         const storedBom = localStorage.getItem(getBomKey(src.key));
         if (storedBom) localStorage.setItem(getBomKey(newKey), storedBom);
       } catch { /* ignore */ }
-      // 复制图片（IndexedDB + 缓存）
+      // 复制图片（IndexedDB + 缓存 + 云端绑定）
       try {
         const img = await imgDB.get(src.key);
         if (img) { await imgDB.set(newKey, img); setProdImgCache(prev => ({ ...prev, [newKey]: img })); }
+        // 云端绑定同样复制，保证新货号在其他电脑上也能看到图片
+        const owner = getDataOwner();
+        const urlMap = loadImageUrlMap(owner);
+        for (const { suffix } of SIX_VIEWS) {
+          const oldKey = `${src.key}${suffix}`;
+          if (urlMap[oldKey]) bindImageUrl(owner, `${newKey}${suffix}`, urlMap[oldKey]);
+        }
       } catch { /* ignore */ }
     }
     const mergedJson = JSON.stringify(productList);
@@ -1408,7 +1463,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
   }, [bomSelectData, bomSelectKeys, openSemiEditForm]);
 
   // 新增半成品确认
-  const handleConfirmNewSemi = useCallback(() => {
+  const handleConfirmNewSemi = useCallback(async () => {
     if (!newSemiName.trim()) { message.warning('请输入名称'); return; }
     if (!newSemiStyleCode.trim()) { message.warning('请输入款式编码'); return; }
     const owner = getDataOwner();
@@ -1450,9 +1505,16 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
         } else {
           try { localStorage.removeItem(getBomKey(editKey)); } catch {}
         }
-        // 图片：有则保存，清除则删除
-        if (newSemiImage) { imgDB.set(editKey, newSemiImage); setProdImgCache(prev => ({ ...prev, [editKey]: newSemiImage })); }
-        else { imgDB.remove(editKey); setProdImgCache(prev => { const n = { ...prev }; delete n[editKey]; return n; }); }
+        // 图片：有则保存（同时上传图片空间），清除则删除
+        if (newSemiImage) {
+          await imgDB.set(editKey, newSemiImage);
+          setProdImgCache(prev => ({ ...prev, [editKey]: newSemiImage }));
+          await uploadImageToCloud([editKey], newSemiImage, { recordName: newSemiName.trim(), field: 'semiImage' });
+        } else {
+          await imgDB.remove(editKey);
+          unbindImageUrl(getDataOwner(), editKey);
+          setProdImgCache(prev => { const n = { ...prev }; delete n[editKey]; return n; });
+        }
         setBomSelectData(prev => prev.map(p => p.key === editKey ? { ...p, ...updates } : p));
         // 同步已加入BOM列表中的名称/编码/价格
         setBomSemiProducts(prev => prev.map(p => p.key === editKey ? { ...p, name: newSemiName.trim(), shortName: newSemiName.trim(), code: editCode, unit: newSemiUnit || '件', price: Number(newSemiPrice) || p.price } : p));
@@ -1509,8 +1571,12 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
         localStorage.setItem(`${plKey}_ts`, String(Date.now()));
       }
       saveDataset(plKey, mergedJson);
-      // 保存图片到 IndexedDB（key 与产品 key 一致，BOM 表格图片列可读取）
-      if (newSemiImage) { imgDB.set(uniqueKey, newSemiImage); setProdImgCache(prev => ({ ...prev, [uniqueKey]: newSemiImage })); }
+      // 保存图片到 IndexedDB（key 与产品 key 一致，BOM 表格图片列可读取），同时上传图片空间
+      if (newSemiImage) {
+        await imgDB.set(uniqueKey, newSemiImage);
+        setProdImgCache(prev => ({ ...prev, [uniqueKey]: newSemiImage }));
+        await uploadImageToCloud([uniqueKey], newSemiImage, { recordName: newSemiName.trim(), field: 'semiImage' });
+      }
       if (newSemiBomItems.length > 0) {
         const bom = { semiProducts: [] as any[], rawMaterials: [] as any[], processes: [] as any[] };
         newSemiBomItems.forEach((it: any) => {
@@ -1603,7 +1669,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
   }, [bomSelectData]);
 
   // 新增原材料确认（采购价即成本价）
-  const handleConfirmNewRaw = useCallback(() => {
+  const handleConfirmNewRaw = useCallback(async () => {
     if (!newRawName.trim()) { message.warning('请输入商品简称'); return; }
     if (!newRawStyleCode.trim()) { message.warning('请输入款式编码'); return; }
     if (!newRawSupplier.trim()) { message.warning('请输入供应商'); return; }
@@ -1651,8 +1717,12 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
         localStorage.setItem(`${plKey}_ts`, String(Date.now()));
       }
       saveDataset(plKey, mergedJson);
-      // 保存图片到 IndexedDB（key 与产品 key 一致，BOM 表格图片列可读取）
-      if (newRawImage) { imgDB.set(uniqueKey, newRawImage); setProdImgCache(prev => ({ ...prev, [uniqueKey]: newRawImage })); }
+      // 保存图片到 IndexedDB（key 与产品 key 一致，BOM 表格图片列可读取），同时上传图片空间
+      if (newRawImage) {
+        await imgDB.set(uniqueKey, newRawImage);
+        setProdImgCache(prev => ({ ...prev, [uniqueKey]: newRawImage }));
+        await uploadImageToCloud([uniqueKey], newRawImage, { recordName: newRawName.trim(), field: 'rawImage' });
+      }
       setBomSelectData(prev => {
         if (prev.some((p: any) => p.key === record.key)) return prev;
         return [record, ...prev];
@@ -1766,7 +1836,13 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
     useEffect(() => {
       if (src) return;
       let cancelled = false;
-      imgDB.get(k).then(v => { if (!cancelled && v) setSrc(v); });
+      imgDB.get(k).then(v => {
+        if (cancelled) return;
+        if (v) { setSrc(v); return; }
+        // 本机无图（换电脑）时用图片空间绑定表里的云端地址
+        const url = loadImageUrlMap(getDataOwner())[k];
+        if (url) setSrc(absoluteImageUrl(url));
+      });
       return () => { cancelled = true; };
     }, [k]);
     if (!src) return <span style={{ color: '#bbb' }}>—</span>;
@@ -1958,28 +2034,36 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
     });
   }, [selectedProduct, prodImgCache]);
 
-  // 从 IndexedDB 加载当前选中产品的所有图片到缓存
+  // 从 IndexedDB 加载当前选中产品的所有图片到缓存；本机没有图片时用图片空间的云端地址补齐
   useEffect(() => {
     if (!selectedProduct) return;
-    const variants = selectedProduct.variants || [];
-    if (variants.length === 0) return;
+    const variants = (selectedProduct.variants && selectedProduct.variants.length > 0)
+      ? selectedProduct.variants
+      : [selectedProduct];
     let cancelled = false;
     const load = async () => {
       const cache: Record<string, string> = {};
+      // 换电脑后本机图片库为空，靠绑定表里的云端地址还原图片
+      const urlMap = loadImageUrlMap(getDataOwner());
+      const put = (k: string, local: string) => {
+        if (local) cache[k] = local;
+        else if (urlMap[k]) cache[k] = absoluteImageUrl(urlMap[k]);
+      };
       for (const v of variants) {
         // 正面图
         const img = await imgDB.get(v.key);
         if (cancelled) return;
-        if (img) cache[v.key] = img;
+        put(v.key, img);
         // 六面图后缀
         for (const { suffix } of SIX_VIEWS) {
           if (suffix === '') continue;
           const viewImg = await imgDB.get(`${v.key}${suffix}`);
           if (cancelled) return;
-          if (viewImg) cache[`${v.key}${suffix}`] = viewImg;
+          put(`${v.key}${suffix}`, viewImg);
         }
       }
-      if (!cancelled) setProdImgCache(cache);
+      // 合并而非覆盖：BOM 表格还会用到其他货品的图片缓存
+      if (!cancelled) setProdImgCache(prev => ({ ...prev, ...cache }));
     };
     load();
     return () => { cancelled = true; };
@@ -3838,6 +3922,10 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
               if (!ok) { message.error('图片保存失败'); return; }
               try { localStorage.setItem(`prodImg_${getDataOwner()}_${actualKey}`, variantImgUploadCurrent); } catch { /* quota exceeded — IndexedDB 兆底 */ }
               setProdImgCache(prev => ({ ...prev, [actualKey]: variantImgUploadCurrent }));
+              // 上传图片空间并按图片键绑定云端地址，换电脑后仍能显示
+              await uploadImageToCloud([actualKey], variantImgUploadCurrent, {
+                recordName: variantImgUploadKey, field: `image${variantImgUploadSuffix}`,
+              });
               message.success('图片已保存');
             }
           } else {
@@ -3855,6 +3943,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
             } else {
               const actualKey = variantImgUploadKey + variantImgUploadSuffix;
               await imgDB.remove(actualKey);
+              unbindImageUrl(getDataOwner(), actualKey);
               setProdImgCache(prev => {
                 const next = { ...prev };
                 delete next[actualKey];

@@ -1,23 +1,26 @@
 /**
  * 历史图片迁移：把「只存在于本机」的旧版图片搬进云端图片空间。
  *
- * 覆盖三类来源：
+ * 覆盖五类来源：
  * 1) 产品图：localStorage 缩略图键 prodImg_<owner>_<recordKey> + IndexedDB 原图；
  * 2) 付款截图/凭证：页面数据里内嵌的 data:image/* 字符串（订单、财审、采购推送、交易单等）；
- * 3) 模具图：mold_img_<listingKey>_<idx> 引用键（模具租售市场）。
+ * 3) 模具图：mold_img_<listingKey>_<idx> 引用键（模具租售市场）；
+ * 4) 商机市场发包订单图：pubImg_<账号>_<单号> 本机键；
+ * 5) BOM/款式设计图：旧共享图片库 prodImages/imgs（key 直接是货品 key，含六面图后缀）。
  *
  * 迁移策略：上传成功后把记录里的图片替换为云端 URL（小字符串，能随数据集同步到其他电脑），
- * 同时登记引用位置；本机原图不删除，避免迁移出错时无法回头。
+ * 同时登记引用位置；BOM/款式图没有图片字段，托管到 prodImgUrl_<账号> 绑定表随数据集同步。
+ * 本机原图不删除，避免迁移出错时无法回头。
  */
-import { getFullImage, listFullImageKeys } from './imageStore';
-import { attachImageToRecord, isLocalImageRef } from './imageSpace';
+import { getFullImage, listFullImageKeys, listLegacyImageKeys, getLegacyImage } from './imageStore';
+import { attachImageToRecord, isLocalImageRef, bindImageUrl, loadImageUrlMap } from './imageSpace';
 import { safeSetItem } from './storageQuota';
 import { flushDatasetUploadAsync } from './serverSync';
 
 export interface LocalImageCandidate {
   /** 本机存储键或「数据集键#记录键#字段」 */
   storageKey: string;
-  kind: 'product' | 'payment' | 'mold';
+  kind: 'product' | 'payment' | 'mold' | 'market' | 'bom';
   label: string;
   size: number;
 }
@@ -33,8 +36,19 @@ const getOwner = (): string => {
 
 const PRODUCT_DATASET = (owner: string) => `pageData_basic-data_product-list_${owner}`;
 const MOLD_LISTINGS_KEY = 'market_mold_listings';
+const MARKET_PUBLISH_KEY = 'market_publish_orders';
 /** 可能内嵌付款截图/凭证的字段名 */
 const IMAGE_FIELDS = ['payScreenshot', 'payShot', 'screenshot', 'voucher', 'payVoucher', 'attachment'];
+/** 旧共享图片库中六面图的后缀 */
+const LEGACY_VIEW_SUFFIXES = ['_side', '_back', '_front2', '_top', '_bottom'];
+
+/** 拆分「货品 key + 六面图后缀」，供图片空间登记引用位置 */
+function splitLegacyKey(key: string): { recordKey: string; suffix: string } {
+  for (const suffix of LEGACY_VIEW_SUFFIXES) {
+    if (key.endsWith(suffix)) return { recordKey: key.slice(0, -suffix.length), suffix };
+  }
+  return { recordKey: key, suffix: '' };
+}
 
 function labelOfRecord(rec: any): string {
   return String(rec?.productCode || rec?.styleCode || rec?.orderNo || rec?.billNo || rec?.supplierName || rec?.name || rec?.key || '记录');
@@ -50,7 +64,7 @@ function readArray(key: string): any[] | null {
 }
 
 /** 扫描本机尚未上云的图片（只统计 data: 与本地引用键，已迁移的 URL 不计入） */
-export function scanLocalImages(): LocalImageCandidate[] {
+export async function scanLocalImages(): Promise<LocalImageCandidate[]> {
   const owner = getOwner();
   const out: LocalImageCandidate[] = [];
   const seen = new Set<string>();
@@ -127,6 +141,32 @@ export function scanLocalImages(): LocalImageCandidate[] {
     });
   } catch { /* ignore */ }
 
+  // 4) 商机市场发包订单图（旧版只存 pubImg_<账号>_<单号> 本机键）
+  try {
+    const list = readArray(MARKET_PUBLISH_KEY) || [];
+    list.forEach((rec: any) => {
+      if (!rec || typeof rec !== 'object' || !rec.key) return;
+      if (typeof rec.image === 'string' && rec.image && !isLocalImageRef(rec.image)) return;
+      const storageKey = `pubImg_${rec.publisherUsername || owner}_${rec.key}`;
+      let raw = '';
+      try { raw = localStorage.getItem(storageKey) || ''; } catch { /* ignore */ }
+      if (!raw.startsWith('data:image')) return;
+      out.push({ storageKey, kind: 'market', label: `发包订单图 · ${String(rec.shortName || rec.id || rec.key)}`, size: raw.length });
+    });
+  } catch { /* ignore */ }
+
+  // 5) BOM/款式设计图（旧共享图片库 prodImages/imgs，key 直接是货品 key）
+  try {
+    const bound = loadImageUrlMap(owner);
+    const legacyKeys = await listLegacyImageKeys();
+    for (const key of legacyKeys) {
+      if (bound[key]) continue; // 绑定表已有云端地址，说明迁移过了
+      const raw = await getLegacyImage(key).catch(() => '');
+      if (!raw.startsWith('data:image')) continue;
+      out.push({ storageKey: `bom:${key}`, kind: 'bom', label: `BOM/款式图 · ${key}`, size: raw.length });
+    }
+  } catch { /* ignore */ }
+
   // 去重（同一 storageKey 只保留一条）
   const uniq = new Map<string, LocalImageCandidate>();
   out.forEach(c => { if (!uniq.has(c.storageKey)) uniq.set(c.storageKey, c); });
@@ -142,7 +182,7 @@ export type MigrateProgress = (done: number, total: number) => void;
  */
 export async function migrateLocalImages(onProgress?: MigrateProgress): Promise<number> {
   const owner = getOwner();
-  const total = scanLocalImages().length;
+  const total = (await scanLocalImages()).length;
   let done = 0;
   let uploaded = 0;
   const tick = () => { done++; if (onProgress) onProgress(done, total); };
@@ -308,6 +348,66 @@ export async function migrateLocalImages(onProgress?: MigrateProgress): Promise<
           await flushDatasetUploadAsync(MOLD_LISTINGS_KEY, json).catch(() => false);
         }
       }
+    }
+  } catch { /* ignore */ }
+
+  // ============ 4) 商机市场发包订单图 ============
+  try {
+    const list = readArray(MARKET_PUBLISH_KEY);
+    if (list && list.length > 0) {
+      let touched = false;
+      for (const rec of list) {
+        if (!rec || typeof rec !== 'object' || !rec.key) continue;
+        if (typeof rec.image === 'string' && rec.image && !isLocalImageRef(rec.image)) continue;
+        const storageKey = `pubImg_${rec.publisherUsername || owner}_${rec.key}`;
+        let raw = '';
+        try { raw = localStorage.getItem(storageKey) || ''; } catch { /* ignore */ }
+        if (!raw.startsWith('data:image')) continue;
+        try {
+          const asset = await attachImageToRecord(raw, {
+            name: `${String(rec.shortName || rec.id || rec.key)}-发包图`,
+            tags: ['发包订单图'],
+            module: 'market', moduleLabel: '商机市场',
+            childKey: 'semi', childLabel: '发包市场',
+            recordKey: String(rec.key), recordName: String(rec.shortName || rec.id || rec.key), field: 'image',
+          });
+          rec.image = asset.url;
+          touched = true;
+          uploaded++;
+        } catch { /* ignore */ }
+        tick();
+      }
+      if (touched) {
+        const json = JSON.stringify(list);
+        if (safeSetItem(MARKET_PUBLISH_KEY, json)) {
+          await flushDatasetUploadAsync(MARKET_PUBLISH_KEY, json).catch(() => false);
+        }
+      }
+    }
+  } catch { /* ignore */ }
+
+  // ============ 5) BOM/款式设计图（旧共享图片库 prodImages/imgs） ============
+  try {
+    const legacyKeys = await listLegacyImageKeys();
+    const bound = loadImageUrlMap(owner);
+    for (const storageKey of legacyKeys) {
+      if (bound[storageKey]) continue; // 已迁移过（绑定表已有云端地址）
+      const raw = await getLegacyImage(storageKey).catch(() => '');
+      if (!raw.startsWith('data:image')) continue;
+      const { recordKey, suffix } = splitLegacyKey(storageKey);
+      try {
+        const asset = await attachImageToRecord(raw, {
+          name: `${recordKey}${suffix ? `-${suffix.slice(1)}` : ''}-图`,
+          tags: ['产品图', 'BOM款式图'],
+          module: 'basic-data', moduleLabel: '基础数据',
+          childKey: 'product-list', childLabel: '全部商品',
+          recordKey, recordName: recordKey, field: suffix ? `image${suffix}` : 'image',
+        });
+        // 图片键→云端 url 写入绑定表，随数据集同步到其他电脑（写表即触发上传）
+        bindImageUrl(owner, storageKey, asset.url);
+        uploaded++;
+      } catch { /* 单张失败不中断整批 */ }
+      tick();
     }
   } catch { /* ignore */ }
 

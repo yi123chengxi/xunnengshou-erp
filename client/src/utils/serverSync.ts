@@ -67,8 +67,18 @@ const SYNC_PREFIXES = [
   'salesFieldOrder_', 'salesFieldVisibility_', 'bizLicenseFieldOrder_', 'bizLicenseFieldVisibility_',
   'rechFieldOrder_', 'rechFieldVis_', 'salesOutboundDisplay_', 'chat_quick_company_', 'chat_quick_personal_',
   'picking_reject_reasons_', 'customBanks_', 'prBomManualQty_',
+  // 表格列显隐 / 列排序合并标记（列宽 colWidths_ 早已同步，显隐此前只存本机）
+  'visible_columns_', 'vc_merged_', 'product_visible_columns_',
+  // 供应商/采购商平台的绩效积分数据（CRM 订单、动作配置、积分记录、奖品、兑换）：键形如
+  // supplier_analytics_<账号>_crm_orders，账号在倒数第二段，归属由 keyOwner 特判
+  'supplier_analytics_', 'purchaser_analytics_',
+  // 合作邀约单令牌（cooperation_token_<token>）：合作链接常由对方在自己电脑打开，
+  // 令牌列表本身不同步（避免任意登录用户枚举全部邀请），只按 URL 里的 token 精确取用
+  'cooperation_token_',
   // 产品 BOM（成品/半成品/原材料/工序，键为 bom_<货品key>_<账号>）——换电脑后 BOM 必须一致
   'bom_',
+  // BOM/款式设计图片的云端 URL 绑定表（prodImgUrl_<账号>）：本机图片键 → 图片空间 URL
+  'prodImgUrl_',
 ];
 const SYNC_EXACT = ['registeredUsers', 'subscription_orders', 'storage_orders', 'market_publish_orders', 'market_ratings', 'market_trade_orders', 'market_visitor_cart_shares', 'market_mold_listings', 'purchaser_pushed_orders', 'cooperation_applications', 'cooperation_invites', 'recon_records', 'recon_feedback', 'company_renames'];
 // 图片块体积大，不参与跨浏览器同步（各浏览器独立）
@@ -128,6 +138,12 @@ function keyOwner(key: string): string | null {
   if (key === 'recon_records' || key === 'recon_feedback' || key === 'company_renames') return null;
   // 分平台对账独立库（recon_db_supplier_<账号> / recon_db_purchaser_<账号>）：跨租户协作数据，全局同步
   if (key.startsWith('recon_db_')) return null;
+  // 单令牌合作邀约：键内是随机令牌，不含账号；供应商凭 URL 中的 token 精确读取
+  if (key.startsWith('cooperation_token_')) return null;
+  // 供应商/采购商绩效键为 <platform>_analytics_<账号>_<后缀>，账号在倒数第二段
+  if (key.startsWith('supplier_analytics_') || key.startsWith('purchaser_analytics_')) {
+    return key.split('_')[2] || '';
+  }
   // 商机市场相关键为全局共享数据（跨账号可见），返回 null 使所有账号都能同步
   if (key.startsWith('market_')) return null;
   // 打印模板为系统级预设/共享数据：跨账号同步，部署后新浏览器自动拉取

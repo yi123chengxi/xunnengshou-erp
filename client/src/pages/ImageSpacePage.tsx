@@ -86,10 +86,14 @@ const ImageSpacePage: React.FC = () => {
 
   // 本机历史图片探测（有才显示迁移入口）
   useEffect(() => {
-    try {
-      const list = scanLocalImages();
-      setLocalCandidates(list);
-    } catch { /* ignore */ }
+    let cancelled = false;
+    (async () => {
+      try {
+        const list = await scanLocalImages();
+        if (!cancelled) setLocalCandidates(list);
+      } catch { /* ignore */ }
+    })();
+    return () => { cancelled = true; };
   }, []);
 
   const openDetail = useCallback(async (id: string) => {
@@ -208,7 +212,7 @@ const ImageSpacePage: React.FC = () => {
       });
       message.success(`历史图片迁移完成，共上传 ${count} 张`);
       setMigrateVisible(false);
-      setLocalCandidates(scanLocalImages());
+      setLocalCandidates(await scanLocalImages());
       void load();
       void loadTags();
     } catch (err: any) {
@@ -522,10 +526,10 @@ const ImageSpacePage: React.FC = () => {
         <div style={{ fontSize: 13, lineHeight: 1.8 }}>
           <p style={{ marginBottom: 8 }}>
             检测到本机还有 <b style={{ color: PRIMARY }}>{localCandidates.length}</b> 张图片只存在当前电脑上
-            （旧版产品图 / 付款截图 / 模具图）。迁移后会：上传到云端图片空间、在图片详情里登记原来的归属位置，
+            （旧版产品图 / 付款截图 / 模具图 / 发包订单图 / BOM款式图）。迁移后会：上传到云端图片空间、在图片详情里登记原来的归属位置，
             其他电脑登录同一账号即可直接看到这些图片。
           </p>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, marginBottom: 10 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 8, marginBottom: 10 }}>
             <Card size="small" bodyStyle={{ padding: 10 }}>
               <Statistic title="产品图" value={localCandidates.filter(x => x.kind === 'product').length} valueStyle={{ fontSize: 18 }} />
             </Card>
@@ -534,6 +538,12 @@ const ImageSpacePage: React.FC = () => {
             </Card>
             <Card size="small" bodyStyle={{ padding: 10 }}>
               <Statistic title="模具图" value={localCandidates.filter(x => x.kind === 'mold').length} valueStyle={{ fontSize: 18 }} />
+            </Card>
+            <Card size="small" bodyStyle={{ padding: 10 }}>
+              <Statistic title="发包订单图" value={localCandidates.filter(x => x.kind === 'market').length} valueStyle={{ fontSize: 18 }} />
+            </Card>
+            <Card size="small" bodyStyle={{ padding: 10 }}>
+              <Statistic title="BOM/款式图" value={localCandidates.filter(x => x.kind === 'bom').length} valueStyle={{ fontSize: 18 }} />
             </Card>
           </div>
           <div style={{ maxHeight: 180, overflow: 'auto', border: '1px solid #f0f0f0', borderRadius: 6, padding: 8 }}>
