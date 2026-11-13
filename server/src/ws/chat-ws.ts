@@ -93,6 +93,18 @@ function sendToUser(username: string, data: any): void {
   }
 }
 
+/**
+ * 数据集变更实时通知（权限类数据）：让在线端立即增量拉取。
+ * 目标为主账号时 sendToUser 会自动扇出到全部在线子账号，
+ * 因此主账号改子账号权限后，子账号浏览器（含其他电脑上的）无需刷新即可生效。
+ */
+export function notifyDatasetUpdated(usernames: string[], key: string): void {
+  const list = Array.from(new Set((usernames || []).filter(Boolean)));
+  if (list.length === 0) return;
+  const msg = { type: 'dataset_updated', key, ts: Date.now() };
+  list.forEach(u => sendToUser(u, msg));
+}
+
 // ============ WebSocket 服务初始化 ============
 
 export function initChatWebSocket(server: HTTPServer) {

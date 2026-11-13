@@ -36,6 +36,9 @@ type PresenceHandler = (username: string, online: boolean) => void;
 type SentHandler = (id: string, convId: string, ts: number) => void;
 type BlockedHandler = (cid: string, reason: string) => void;
 
+/** 服务端数据集变更信号（权限类）：由 SyncGate 监听并触发增量拉取 */
+export const REMOTE_UPDATE_EVENT = 'sync-remote-update';
+
 // ============ 单例状态 ============
 
 let ws: WebSocket | null = null;
@@ -230,6 +233,13 @@ function handleMessage(data: any): void {
       break;
     case 'history':
       // 历史消息由 getHistory API 处理
+      break;
+    case 'dataset_updated':
+      // 权限类数据集变更广播（其他浏览器刚改了角色/子账号权限）：
+      // 派发事件，由 SyncGate 增量拉取并重算菜单，无需刷新页面
+      try {
+        window.dispatchEvent(new CustomEvent(REMOTE_UPDATE_EVENT, { detail: { key: String(data.key || '') } }));
+      } catch { /* ignore */ }
       break;
     case 'ping':
       // 服务端心跳，无需响应

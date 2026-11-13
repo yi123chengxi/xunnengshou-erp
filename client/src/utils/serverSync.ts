@@ -107,6 +107,18 @@ export function isUploadOnlyKey(key: string): boolean {
 }
 
 /**
+ * 权限域键：从服务端拉取落地后必须派发权限事件，让已挂载布局的菜单/门控立即重算。
+ * 否则另一个浏览器即使拉到了新权限，也要手动刷新才生效（本地写入不触发跨标签 storage 事件）。
+ */
+const PERM_SYNC_PREFIXES = [
+  'role_permsettings_', 'roles_', 'preset_role_overrides_',
+  'accounts_', 'account_groups_',
+];
+export function isPermSyncKey(key: string): boolean {
+  return key === 'registeredUsers' || key.startsWith('dev_') || PERM_SYNC_PREFIXES.some(p => key.startsWith(p));
+}
+
+/**
  * 本地是否真的持有数据行：解析后行数为 0（"[]" / "null" / 空串）一律视为空基。
  * 早期以 getItem(key) !== null 判“有数据”，本地存成 "[]" 也算有数据，
  * 于是宽限期内的键永远不再回拉——本地一旦被意外写空就永久锁死在空副本上再也回不来。
@@ -118,6 +130,11 @@ export function localDatasetHasRows(rawJson: string | null): boolean {
     if (Array.isArray(parsed)) return parsed.length > 0;
     return parsed !== null && parsed !== '';
   } catch { return rawJson.length > 0; }
+}
+
+/** 当前是否为子账号/只读会话（不能作为注册表主编辑方上传） */
+function isSubAccountSession(): boolean {
+  try { return localStorage.getItem('isSubAccount') === 'true' || localStorage.getItem('isViewOnly') === 'true'; } catch { return false; }
 }
 
 /** 当前登录账号的数据归属者（子账号归父账号），与页面 getDataOwner 保持一致 */
@@ -554,7 +571,7 @@ function mergeRegisteredUsers(serverJson: string): any[] | null {
       // _permTs 版本守卫：仅服务端编辑版本更新才采纳，防主账号未上传的本地新编辑被服务端旧值回滚
       // （子账号会话不上传 registeredUsers，主账号为唯一编辑方）
       if ((Number(su._permTs) || 0) > (Number(lu._permTs) || 0)) {
-        (['roles', 'customPermissions', 'permOverrides', 'displayName', 'status', '_permTs'] as const).forEach(f => {
+        (['roles', 'customPermissions', 'permOverrides', 'displayName', 'status', 'accountStatus', '_permTs'] as const).forEach(f => {
           if ((su as any)[f] !== undefined) { (lu as any)[f] = (su as any)[f]; changed = true; permsChanged = true; }
         });
       }
@@ -565,7 +582,9 @@ function mergeRegisteredUsers(serverJson: string): any[] | null {
       raw('registeredUsers', json);
       raw('registeredUsers_ts', String(Date.now()));
       saveDataset('registeredUsers', json);
-      flushDatasetUpload('registeredUsers', json);
+      // 上传收敛：子账号/只读会话的本地副本可能较旧，回传会把主账号刚改的权限/手机号滚回旧值
+      // （服务端另有 _permTs 字段级保护，此处再收敛一次流量与风险）
+      if (!isSubAccountSession()) flushDatasetUpload('registeredUsers', json);
     }
     // 权限字段落地后同标签页派发 perm-changed：已挂载布局的菜单/门控立即按新权限重算
     if (permsChanged) {
@@ -620,6 +639,12 @@ export async function pullAllDatasets(): Promise<number> {
   // 安全策略：仅当服务端数据比本地新超过 5 秒时才覆盖，避免时钟偏差导致本地新数据被服务端旧数据覆盖
   // 全局共享键（market_* 等）跳过宽限期，始终拉取并与本地合并（并集），确保跨账号数据实时可见
   const GRACE_PERIOD_MS = 5000;
+  // 权限域键拉取前快照：落地后对比，有变化就派发权限事件（子账号/开发者权限跨浏览器即时生效）
+  const permSnapBefore = new Map<string, string | null>();
+  for (const key of Object.keys(meta)) {
+    if (!isPermSyncKey(key)) continue;
+    try { permSnapBefore.set(key, localStorage.getItem(key)); } catch { /* ignore */ }
+  }
   for (const key of Object.keys(meta)) {
     if (!isSyncKey(key) || !isKeyForCurrentAccount(key)) continue;
     // 仅上传不拉取的键（如 credit_adjustments_）：跳过拉取，避免宽限期竞态覆盖本地新数据
@@ -778,6 +803,16 @@ export async function pullAllDatasets(): Promise<number> {
     } catch { /* ignore */ }
   }
 
+  // 权限域键内容发生变化 → 派发权限事件：其他浏览器/在线页面无需刷新即可重算菜单与门控
+  let permPulled = false;
+  permSnapBefore.forEach((before, key) => {
+    try { if (localStorage.getItem(key) !== before) permPulled = true; } catch { /* ignore */ }
+  });
+  if (permPulled) {
+    try { window.dispatchEvent(new Event('perm-changed')); } catch { /* ignore */ }
+    try { window.dispatchEvent(new Event('dev-perms-changed')); } catch { /* ignore */ }
+  }
+
   // 拉取完成后再次闭环对账：服务端拉下的镜像若与本地其他镜像状态分叉，立即对齐
   try { reconcileCooperationPairs(); } catch { /* ignore */ }
 
@@ -822,6 +857,68 @@ export async function pullAllDatasets(): Promise<number> {
   if (applied > 0) {
     // 通知已挂载页面重新读取本地存储，实现多浏览器在线时自动刷新
     try { window.dispatchEvent(new Event('sync-data-updated')); } catch { /* ignore */ }
+  }
+  return applied;
+}
+
+/**
+ * 权限增量拉取（轻量）：只拉权限域数据集，落地后派发权限事件。
+ * 服务端在权限类数据集写入成功后经 WebSocket 广播 dataset_updated，
+ * 在线端（其他浏览器里的主账号/子账号）收到后调用本函数，
+ * 即可在 1 秒级把角色、独立权限、个人覆写、分组权限、开发者白名单全部刷新到本地。
+ */
+export async function pullPermDatasets(): Promise<number> {
+  if (!(await serverAvailable())) return 0;
+  // 增量拉取只看与本账号权限相关的键：
+  // dev_ 下还有大量开发者后台数据（客户名单/跟进/日志等），全拉一遍代价过大，
+  // 且当前用户的菜单只取决于 dev_customer_perms_<自己> / dev_customer_deny_<自己>。
+  let me = '';
+  try { me = localStorage.getItem('username') || ''; } catch { /* ignore */ }
+  const isMyPermKey = (key: string): boolean => {
+    if (!isPermSyncKey(key)) return false;
+    if (key.startsWith('dev_customer_perms_') || key.startsWith('dev_customer_deny_')) {
+      return !!me && key.endsWith(`_${me}`);
+    }
+    if (key.startsWith('dev_')) return false;
+    return true;
+  };
+  let meta: Record<string, number> = {};
+  try {
+    const res = await fetchWithTimeout(`${API_BASE}/sync/meta`, { headers: authHeaders() }, 5000);
+    if (res.status === 401) { handleSyncAuthRequired(); return 0; }
+    if (!res.ok) return 0;
+    meta = (await res.json()) || {};
+  } catch {
+    return 0;
+  }
+  let applied = 0;
+  for (const key of Object.keys(meta)) {
+    if (!isMyPermKey(key)) continue;
+    if (!isSyncKey(key) || !isKeyForCurrentAccount(key)) continue;
+    try {
+      const serverTs = Number(meta[key]) || 0;
+      const rec = await fetchServerDataset(key);
+      if (!rec || !rec.json) continue;
+      if (key === 'registeredUsers') {
+        // 内部按 _permTs 采纳较新权限，并自行派发 perm-changed
+        if (mergeRegisteredUsers(rec.json)) applied++;
+        continue;
+      }
+      // 本地时间戳不旧于服务端则跳过（避免无意义的覆盖读写）
+      const localTs = await localTimestamp(key);
+      if (serverTs <= localTs) continue;
+      const raw = getOriginalSetItem();
+      raw(key, rec.json);
+      raw(`${key}_ts`, String(rec.updatedAt || serverTs));
+      saveDataset(key, rec.json);
+      knownTs.set(key, serverTs);
+      applied++;
+    } catch { /* ignore */ }
+  }
+  if (applied > 0) {
+    // 菜单/按钮门控一律走 resolvePerm 实时解析，派发事件即可让已挂载布局立刻重算
+    try { window.dispatchEvent(new Event('perm-changed')); } catch { /* ignore */ }
+    try { window.dispatchEvent(new Event('dev-perms-changed')); } catch { /* ignore */ }
   }
   return applied;
 }

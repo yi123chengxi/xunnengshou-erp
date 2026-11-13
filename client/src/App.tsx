@@ -1,8 +1,8 @@
 import React from 'react';
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
-import { pullAllDatasets } from './utils/serverSync';
+import { pullAllDatasets, pullPermDatasets, isPermSyncKey } from './utils/serverSync';
 import { PRESET_PRINT_TEMPLATES, seedPresetPrintTemplates } from './config/presetPrintTemplates';
-import { connectChatWS, disconnectChatWS } from './utils/chatSocket';
+import { connectChatWS, disconnectChatWS, REMOTE_UPDATE_EVENT } from './utils/chatSocket';
 import MainLayout from './layouts/MainLayout';
 import PurchaserLayout from './layouts/PurchaserLayout';
 import FactoryLayout from './layouts/FactoryLayout';
@@ -152,6 +152,26 @@ const SyncGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   }, []);
 
   React.useEffect(() => () => { if (intervalRef.current) clearInterval(intervalRef.current); }, []);
+
+  // 权限变更实时生效：其他浏览器/其他电脑改了角色或子账号权限 →
+  // 服务端经 WebSocket 广播 dataset_updated → 这里立即增量拉取并重算菜单（无需刷新，也不等 60 秒轮询）
+  React.useEffect(() => {
+    let timer: any = null;
+    const onRemoteUpdate = (e: Event) => {
+      const key = String((e as CustomEvent)?.detail?.key || '');
+      if (!key || !isPermSyncKey(key)) return;
+      if (timer) return; // 600ms 内的多次写入合并为一次拉取
+      timer = setTimeout(() => {
+        timer = null;
+        void pullPermDatasets();
+      }, 600);
+    };
+    window.addEventListener(REMOTE_UPDATE_EVENT, onRemoteUpdate);
+    return () => {
+      window.removeEventListener(REMOTE_UPDATE_EVENT, onRemoteUpdate);
+      if (timer) clearTimeout(timer);
+    };
+  }, []);
 
   return ready ? <>{children}</> : <Loading />;
 };

@@ -228,6 +228,44 @@ export function sanitizeRegisteredUsersJson(json: string): string {
 }
 
 /**
+ * registeredUsers 写入合并：按行 _permTs 保护权限字段，防陈旧副本回滚。
+ *
+ * 注册表是「整键覆盖」数据集（行内没有 key/id，服务端并集合并用不上），因此任何浏览器
+ * ——尤其是长期没拉取到最新数据的子账号端——只要写一次注册表（改密、保存企业信息、
+ * 首次登录强制改密等），就会把本地那份陈旧副本整体推到服务端，把主账号刚改的角色/
+ * 独立权限/个人覆写覆盖回旧值。表现为「另一个浏览器改了子账号权限，这边一直不更新」。
+ *
+ * 规则：同一 username，服务端已有记录的 _permTs 更新时，权限类字段沿用服务端版本；
+ * 其余字段（手机号、企业信息、密码哈希、lastLogin 等）仍以本次上传为准；
+ * incoming 中缺少的记录照常视为删除，不做并集复活。
+ */
+const REGISTERED_USER_PERM_FIELDS = ['roles', 'customPermissions', 'permOverrides', 'displayName', 'status', 'accountStatus', '_permTs'] as const;
+
+export function mergeRegisteredUsersJson(existingJson: string, incomingJson: string): string {
+  try {
+    const existing = JSON.parse(existingJson);
+    const incoming = JSON.parse(incomingJson);
+    if (!Array.isArray(existing) || !Array.isArray(incoming)) return incomingJson;
+    const existByName = new Map<string, any>();
+    existing.forEach((u: any) => { if (u && u.username) existByName.set(String(u.username), u); });
+    let protectedAny = false;
+    const merged = incoming.map((u: any) => {
+      if (!u || !u.username) return u;
+      const old = existByName.get(String(u.username));
+      if (!old) return u;
+      const oldTs = Number(old._permTs) || 0;
+      const newTs = Number(u._permTs) || 0;
+      if (oldTs <= newTs) return u;
+      const out: any = { ...u };
+      REGISTERED_USER_PERM_FIELDS.forEach((f) => { if (old[f] !== undefined) out[f] = old[f]; });
+      protectedAny = true;
+      return out;
+    });
+    return JSON.stringify(protectedAny ? merged : incoming);
+  } catch { return incomingJson; }
+}
+
+/**
  * 写入前处理 registeredUsers：
  * - 明文 password → bcrypt passwordHash，并从记录中删除 password
  * - 明文缺省时沿用服务端已有哈希（客户端拉到的记录本就没有密码凭据）

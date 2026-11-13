@@ -377,9 +377,38 @@ const AccountManage: React.FC = () => {
   }, [dataSource]);
 
   // 数据变化时自动持久化到 localStorage
+  // 内容相同不重复写入：写入钩子会上传服务端并广播，而拉取落地也会触发重载，
+  // 无差异写入会让两个浏览器之间来回镜像（隐患：同步事件风暴）
   useEffect(() => {
-    localStorage.setItem(getAccountsStorageKey(), JSON.stringify(dataSource));
+    const json = JSON.stringify(dataSource);
+    try { if (localStorage.getItem(getAccountsStorageKey()) === json) return; } catch { /* ignore */ }
+    localStorage.setItem(getAccountsStorageKey(), json);
   }, [dataSource]);
+
+  // 跨浏览器同步：其他浏览器/其他电脑改了账号、分组或子账号权限 → 自动刷新列表
+  // （仅在存储里确实有数据时重载，避免回退到初始演示数据）
+  useEffect(() => {
+    const reload = () => {
+      try {
+        const raw = localStorage.getItem(getAccountsStorageKey());
+        if (!raw) return;
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed) || parsed.length === 0) return;
+        setDataSource(parsed as AccountRecord[]);
+        setGroups(loadGroups());
+      } catch { /* ignore */ }
+    };
+    const onStorage = (e: StorageEvent) => {
+      const k = e.key || '';
+      if (!k || k === getAccountsStorageKey() || k === getGroupsStorageKey() || k === 'registeredUsers') reload();
+    };
+    window.addEventListener('perm-changed', reload);
+    window.addEventListener('storage', onStorage);
+    return () => {
+      window.removeEventListener('perm-changed', reload);
+      window.removeEventListener('storage', onStorage);
+    };
+  }, []);
 
   // 自动修正：主账号姓名固定为注册时的联系人（历史数据可能仍为“系统管理员”）
   useEffect(() => {
@@ -459,6 +488,9 @@ const AccountManage: React.FC = () => {
       roles: record.roles || [],
       remark: record.remark,
       phone: record.phone || '',
+      // 必须回填所属部门：不回填时下拉为空，保存会把 group 写成 ''，
+      // 子账号会静默退出分组，分组权限层（role_permsettings__group__）随之失效
+      group: record.group || '',
     });
     updateEditPerms(initPerms);
     setOverrideDraft(loadUserPermOverrides(record.username));
@@ -566,6 +598,8 @@ const AccountManage: React.FC = () => {
       const idx = regUsers.findIndex((u: any) => u.username === record.username);
       if (idx >= 0) {
         regUsers[idx].accountStatus = newStatus;
+        // 版本戳：启用/禁用也属于管理端权威变更，需同步到子账号所在的其他浏览器
+        regUsers[idx]._permTs = Date.now();
         persistRegisteredUsers(regUsers);
       }
     } catch { /* ignore */ }

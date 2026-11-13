@@ -11,8 +11,9 @@ import {
 } from '../services/storageUsage';
 import {
   attachSyncUser, currentSyncUser, requireSyncAuth, isKeyAllowed, filterMetaForUser,
-  sanitizeRegisteredUsersJson, hashRegisteredUsersJson, hashPassword, SyncUser,
+  sanitizeRegisteredUsersJson, hashRegisteredUsersJson, hashPassword, mergeRegisteredUsersJson, SyncUser,
 } from '../middleware/syncGuard';
+import { notifyDatasetUpdated } from '../ws/chat-ws';
 
 const router = Router();
 router.use(express.json({ limit: '60mb' }));
@@ -54,6 +55,31 @@ const isMergeAlwaysKey = (key: string): boolean => MERGE_ALWAYS_KEYS.includes(ke
 // 对方刚新增的供应商/采购商卡片被陈旧副本擦掉、刚建立的合作被改回旧状态。表现为列表数量与状态来回跳动。
 const NEVER_SHRINK_PREFIXES = ['purchaser_bills_', 'pageData_customer_bill-detail_', 'pageData_sales_order-manage_', 'purchaser_suppliers_', 'boundPurchasers_'];
 const isNeverShrinkKey = (key: string): boolean => NEVER_SHRINK_PREFIXES.some(p => key.startsWith(p));
+
+// ============ 权限类数据集变更实时通知 ============
+// 权限数据写入成功后，经聊天 WebSocket 通知该租户所有在线端（主账号 + 全部子账号）
+// 立即增量拉取，使「另一个浏览器给子账号改权限」无需刷新/等轮询即可生效。
+const PERM_NOTIFY_EXACT = ['registeredUsers'];
+const PERM_NOTIFY_PREFIXES = ['dev_', 'roles_', 'role_permsettings_', 'preset_role_overrides_', 'accounts_', 'account_groups_'];
+
+function permNotifyTargets(key: string, user: SyncUser | null): string[] {
+  if (!user) return [];
+  if (!(PERM_NOTIFY_EXACT.includes(key) || PERM_NOTIFY_PREFIXES.some(p => key.startsWith(p)))) return [];
+  const targets = new Set<string>();
+  if (user.owner) targets.add(user.owner);
+  if (user.username) targets.add(user.username);
+  // 开发者后台改客户权限：键内后缀是被改的客户账号，直接通知该客户
+  const m = key.match(/^dev_customer_(?:perms|deny)_(.+)$/);
+  if (m && m[1]) targets.add(m[1]);
+  return [...targets];
+}
+
+/** 写入成功后通知在线端拉取（静默失败：不影响写库结果，仍有 60 秒轮询兜底） */
+function notifyPermDatasetChanged(key: string, user: SyncUser | null): void {
+  const targets = permNotifyTargets(key, user);
+  if (targets.length === 0) return;
+  try { notifyDatasetUpdated(targets, key); } catch { /* ignore */ }
+}
 
 // 合作镜像键的状态单调保护：双方都携带显式 statusTs（状态变更时刻）且服务端记录的事件更新时，
 // 不允许陈旧副本把状态字段写回旧值；其余字段仍以 incoming 为准。任一侧缺少 statusTs 时不改写原语义，
@@ -179,10 +205,15 @@ router.put('/dataset', async (req: Request, res: Response) => {
     if (!key || typeof json !== 'string') { res.status(400).json({ error: 'missing key or json' }); return; }
     const user = currentSyncUser(req);
     if (!isKeyAllowed(key, user, 'write')) { denyKey(res, user, key, '写入'); return; }
+    // 权限类数据集落库成功后通知该租户在线端立即拉取（响应正常结束才算保存成功）
+    res.on('finish', () => { if (res.statusCode < 400) notifyPermDatasetChanged(key, user); });
     // 账号数据集写入前处理：明文密码统一转 bcrypt 哈希，服务端不再落明文
     if (key === 'registeredUsers') {
       const existing = await store.getDataset(key).catch(() => null);
-      json = await hashRegisteredUsersJson(json, existing ? existing.dataset_json : null);
+      const existingJson = existing ? existing.dataset_json : null;
+      // 陈旧副本保护：行内权限字段按 _permTs 以服务端较新者为准（详见 mergeRegisteredUsersJson）
+      const guarded = existingJson ? mergeRegisteredUsersJson(existingJson, json) : json;
+      json = await hashRegisteredUsersJson(guarded, existingJson);
     }
     const ts = Number(updatedAt) || Date.now();
     const owner = extractOwner(key);
