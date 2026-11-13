@@ -235,8 +235,9 @@ const CooperationManage: React.FC = () => {
               }
             } catch { /* ignore */ }
           }
+          // 匹配兼顾公司名与采购商账号：公司名可能因改名/简称与快照不一致，仅按名称匹配会重复新建一条
           const existingIdx = boundPurchasers.findIndex(
-            (bp: any) => bp.purchaserName === purchaserCompany
+            (bp: any) => bp.purchaserName === purchaserCompany || (purchaserUsername && bp.purchaserUsername === purchaserUsername)
           );
           if (existingIdx >= 0) {
             // 已存在的采购商（如曾终止合作后重新合作），更新状态为已合作并同步企业信息
@@ -254,6 +255,7 @@ const CooperationManage: React.FC = () => {
               key: `bp-${Date.now()}`,
               id: `BIND-${Date.now()}`,
               purchaserName: purchaserCompany,
+              purchaserUsername: purchaserUsername || '',
               purchaserContact: record.purchaserContact || '',
               purchaserPhone: record.purchaserPhone || '',
               ...purchaserInfo,

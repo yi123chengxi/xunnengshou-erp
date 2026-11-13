@@ -54,6 +54,7 @@ import type { InviteRecord } from '../utils/inviteRegistry';
 import { startCooperationTermination, cancelCooperationTermination, TERMINATE_GRACE_MS } from '../utils/cooperationTerminate';
 import { resolveLatestCompanyName, buildCredIndex } from '../utils/nameSync';
 import { reconcileCooperationPairs } from '../utils/cooperationReconcile';
+import { dedupeBoundPurchasers } from '../utils/boundPurchaserDedupe';
 import { copyText } from '../utils/clipboard';
 
 const { Text } = Typography;
@@ -268,6 +269,9 @@ const ReceiptVoucherUpload: React.FC<{ value?: string; onChange?: (v: string) =>
 
 // 从 localStorage 读取当前登录供应商的真实绑定数据（按数据归属账号隔离）
 export const loadBoundPurchasersFromStorage = (): BoundPurchaser[] => {
+  // 同一采购商被不同写点以不同 id 重复落行（供应商审批 BIND-<时间戳> / 派生补入 BIND-<账号后6位>）时先归并自愈：
+  // 只显示一行，并申报被合并行的删除，避免服务端并集把旧行复活
+  dedupeBoundPurchasers(getDataOwner());
   let bound: BoundPurchaser[] = [];
   try {
     const storageKey = 'boundPurchasers_' + getDataOwner();
@@ -1406,8 +1410,10 @@ const CustomerInfo: React.FC = () => {
           const filtered = boundPurchasers.filter(
             (bp) => bp.purchaserName !== record.name
           );
-          // boundPurchasers_ 已纳入服务端「永不缩水键」防擦除：这里是从本端真正移除绑定关系，必须申报被删行 id
-          declareShrink(storageKey, boundPurchasers.filter((bp: any) => bp.purchaserName === record.name).map((bp: any) => String(bp.id || '')).filter(Boolean));
+          // boundPurchasers_ 已纳入服务端「永不缩水键」防擦除：这里是从本端真正移除绑定关系，必须申报被删行主键；
+          // 服务端按 key || id 匹配，两列都要申报，否则带 key 的行删不掉、刷新后被并集复活
+          declareShrink(storageKey, boundPurchasers.filter((bp: any) => bp.purchaserName === record.name)
+            .flatMap((bp: any) => [String(bp.key || ''), String(bp.id || '')]).filter(Boolean));
           localStorage.setItem(storageKey, JSON.stringify(filtered));
           setBoundPurchasers(filtered);
         }

@@ -243,8 +243,9 @@ const PurchaserCooperationConfirmPage: React.FC = () => {
         businessAddress: currentUser.businessAddress || '',
         email: currentUser.email || '',
       };
+      // 匹配兼顾公司名与采购商账号：仅按名称匹配时，名称快照与注册名不一致会重复新建一条
       const existingIdx = boundPurchasers.findIndex(
-        (bp: any) => bp.purchaserName === purchaserCompany
+        (bp: any) => bp.purchaserName === purchaserCompany || (purchaserUsername && bp.purchaserUsername === purchaserUsername)
       );
       if (existingIdx >= 0) {
         // 已存在的采购商（如曾终止合作后重新合作），更新状态和企业信息

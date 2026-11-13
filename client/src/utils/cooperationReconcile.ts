@@ -233,7 +233,9 @@ export function reconcileCooperationPairs(): void {
       const removed: string[] = [];
       idxs.sort((a, b) => b - a).forEach(idx => {
         const gone = holder.list[idx];
-        if (gone && gone.id) removed.push(String(gone.id));
+        // 服务端永不缩水键按 key || id 匹配：两列都申报，否则带 key 的行删不掉、刷新后被并集复活
+        if (gone && gone.key) removed.push(String(gone.key));
+        if (gone && gone.id && String(gone.id) !== String(gone.key || '')) removed.push(String(gone.id));
         holder.list.splice(idx, 1);
       });
       if (removed.length) declareShrink(key, removed);
