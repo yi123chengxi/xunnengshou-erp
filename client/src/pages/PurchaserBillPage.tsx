@@ -145,6 +145,16 @@ interface BillRecord {
   returnReason?: string;
 }
 
+// 供应商候选排序：已合作优先，其余按合作流程推进程度，账单兜底项排最后
+const SUP_STATUS_ORDER: Record<string, number> = { approved: 0, terminating: 1, pending: 2, terminated: 3, bill: 9 };
+// 非「已合作」状态在候选列表中显式标注，避免误选未建立合作的供应商
+const SUP_STATUS_TAG: Record<string, { text: string; color: string }> = {
+  pending: { text: '待合作', color: 'orange' },
+  terminating: { text: '解除中', color: 'gold' },
+  terminated: { text: '已解除', color: 'default' },
+  bill: { text: '历史账单', color: 'blue' },
+};
+
 const PurchaserBillPage: React.FC = () => {
   const username = localStorage.getItem('username') || '';
   const getDataOwner = () => {
@@ -260,6 +270,7 @@ const PurchaserBillPage: React.FC = () => {
 
   // 供应商选择弹窗
   const [supplierPickVisible, setSupplierPickVisible] = useState(false);
+  const [supplierPickSearch, setSupplierPickSearch] = useState('');
   // 图片上传弹窗
   const [imageUpVisible, setImageUpVisible] = useState(false);
   // 摄像头拍照弹窗
@@ -446,13 +457,44 @@ const PurchaserBillPage: React.FC = () => {
     } catch { /* ignore */ }
     return '';
   };
+  // 供应商候选：与「供应商 - 供应商列表」页保持同一口径（显示全部合作方，不再只取 approved）
+  // 卡片状态只有供应商列表页加载时才会把 pending 升级为 approved，账单页直接读原始键会长期判空，
+  // 表现为「选择供应商」弹窗提示“暂无已合作供应商”，因此这里同步套用审批自愈 + 历史账单兜底
   const supplierOptions = useMemo(() => {
-    try {
-      const data: any[] = JSON.parse(localStorage.getItem(supplierStorageKey) || '[]');
-      return data.filter(s => s.cooperationStatus === 'approved')
-        .map(s => ({ name: s.supplierName as string, prefix: (s.orderPrefix || resolvePrefix(s.supplierName)) as string }));
-    } catch { return []; }
-  }, [supplierStorageKey, createVisible]);
+    const out: { name: string; prefix: string; status: string }[] = [];
+    const seen = new Set<string>();
+    let list: any[] = [];
+    let apps: any[] = [];
+    try { list = JSON.parse(localStorage.getItem(supplierStorageKey) || '[]'); } catch { /* ignore */ }
+    try { apps = JSON.parse(localStorage.getItem('cooperation_applications') || '[]'); } catch { /* ignore */ }
+    const owner = getDataOwner();
+    (Array.isArray(list) ? list : []).forEach((s: any) => {
+      if (!s) return;
+      const name = String(s.supplierName || '').trim();
+      if (!name || seen.has(name)) return;
+      let status = String(s.cooperationStatus || 'pending');
+      // 审批自愈：卡片仍为 pending，但存在已通过且未作废的合作申请 → 视为已合作（与供应商列表页判定一致）
+      if (status === 'pending') {
+        const ok = (Array.isArray(apps) ? apps : []).some((a: any) => a
+          && (a.type || 'cooperation') === 'cooperation' && a.status === 'approved' && !a.superseded
+          && (String(a.purchaserUsername || '') === owner || String(a.purchaserUsername || '') === username)
+          && ((a.purchaserSupplierEntryId && a.purchaserSupplierEntryId === s.id) || a.targetSupplierName === name || a.targetSupplierId === s.id));
+        if (ok) status = 'approved';
+      }
+      if (status === 'rejected') return;
+      seen.add(name);
+      out.push({ name, prefix: String(s.orderPrefix || resolvePrefix(name) || ''), status });
+    });
+    // 历史账单兜底：换浏览器后供应商卡片可能尚未同步到位，账单里出现过的供应商必须仍可选
+    bills.forEach((b: any) => {
+      const name = String(b?.supplier || '').trim();
+      if (!name || seen.has(name)) return;
+      seen.add(name);
+      out.push({ name, prefix: resolvePrefix(name), status: 'bill' });
+    });
+    out.sort((a, b) => (SUP_STATUS_ORDER[a.status] ?? 9) - (SUP_STATUS_ORDER[b.status] ?? 9));
+    return out;
+  }, [supplierStorageKey, bills, username, createVisible, editVisible, supplierPickVisible]);
 
   // 搜索栏供应商下拉选项（账单中出现过的 + 已合作供应商）
   const supplierSearchOptions = useMemo(() => {
@@ -1382,7 +1424,7 @@ const PurchaserBillPage: React.FC = () => {
           </Col>
           <Col span={6}>
             <Text style={{ fontSize: 12 }}>供应商</Text>
-            <Input value={supplier} readOnly placeholder="点击选择供应商" onClick={() => { setSupplierPickTarget('create'); setSupplierPickVisible(true); }}
+            <Input value={supplier} readOnly placeholder="点击选择供应商" onClick={() => { setSupplierPickTarget('create'); setSupplierPickSearch(''); setSupplierPickVisible(true); }}
               suffix={<TeamOutlined style={{ color: PRIMARY }} />} style={{ cursor: 'pointer' }} />
           </Col>
           <Col span={6}>
@@ -1476,20 +1518,29 @@ const PurchaserBillPage: React.FC = () => {
         </div>
       </Modal>
 
-      {/* 供应商选择弹窗 */}
-      <Modal title="选择供应商" open={supplierPickVisible} onCancel={() => setSupplierPickVisible(false)} footer={null} width={420}>
-        {supplierOptions.length === 0 ? (
-          <Empty description="暂无已合作供应商" />
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {supplierOptions.map(o => (
-              <Button key={o.name} block onClick={() => { if (supplierPickTarget === 'create') setSupplier(o.name); else setESupplier(o.name); setSupplierPickVisible(false); }}
-                style={{ justifyContent: 'flex-start', textAlign: 'left' }}>
-                {o.name}{o.prefix ? <Tag color="green" style={{ marginLeft: 8 }}>{o.prefix}</Tag> : null}
-              </Button>
-            ))}
-          </div>
-        )}
+      {/* 供应商选择弹窗：从新建/编辑账单弹窗内打开，必须压在父弹窗之上（父弹窗为默认 1000） */}
+      <Modal title="选择供应商" open={supplierPickVisible} onCancel={() => setSupplierPickVisible(false)} footer={null} width={420} zIndex={1200}>
+        <Input.Search placeholder="搜索供应商名称/前缀" allowClear value={supplierPickSearch}
+          onChange={(e) => setSupplierPickSearch(e.target.value)} style={{ marginBottom: 12 }} />
+        {(() => {
+          const kw = supplierPickSearch.trim().toLowerCase();
+          const opts = kw ? supplierOptions.filter(o => o.name.toLowerCase().includes(kw) || String(o.prefix || '').toLowerCase().includes(kw)) : supplierOptions;
+          if (opts.length === 0) {
+            return <Empty description={supplierOptions.length === 0 ? '暂无可选供应商，请先在「供应商 - 供应商列表」添加或建立合作' : '无匹配供应商'} />;
+          }
+          return (
+            <div style={{ maxHeight: 360, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {opts.map(o => (
+                <Button key={o.name} block onClick={() => { if (supplierPickTarget === 'create') setSupplier(o.name); else setESupplier(o.name); setSupplierPickVisible(false); }}
+                  style={{ justifyContent: 'flex-start', textAlign: 'left' }}>
+                  {o.name}
+                  {o.prefix ? <Tag color="green" style={{ marginLeft: 8 }}>{o.prefix}</Tag> : null}
+                  {SUP_STATUS_TAG[o.status] ? <Tag color={SUP_STATUS_TAG[o.status].color} style={{ marginLeft: 4 }}>{SUP_STATUS_TAG[o.status].text}</Tag> : null}
+                </Button>
+              ))}
+            </div>
+          );
+        })()}
       </Modal>
 
       {/* 图片上传弹窗（单张，参考批量修改图片组件 + 拍照） */}
@@ -1542,7 +1593,7 @@ const PurchaserBillPage: React.FC = () => {
         <Row gutter={16} style={{ marginBottom: 12 }}>
           <Col span={7}><Text style={{ fontSize: 12 }}>出库单号</Text><Input value={eOutboundNo} onChange={e => handleEditOutboundChange(e.target.value)} /></Col>
           <Col span={5}><Text style={{ fontSize: 12 }}>单号前缀</Text><Input value={ePrefix} readOnly style={{ background: '#fafafa' }} /></Col>
-          <Col span={6}><Text style={{ fontSize: 12 }}>供应商</Text><Input value={eSupplier} readOnly onClick={() => { setSupplierPickTarget('edit'); setSupplierPickVisible(true); }} suffix={<TeamOutlined style={{ color: PRIMARY }} />} style={{ cursor: 'pointer' }} /></Col>
+          <Col span={6}><Text style={{ fontSize: 12 }}>供应商</Text><Input value={eSupplier} readOnly onClick={() => { setSupplierPickTarget('edit'); setSupplierPickSearch(''); setSupplierPickVisible(true); }} suffix={<TeamOutlined style={{ color: PRIMARY }} />} style={{ cursor: 'pointer' }} /></Col>
           <Col span={6}><Text style={{ fontSize: 12 }}>日期</Text><DatePicker value={eDate} onChange={d => setEDate(d || dayjs())} style={{ width: '100%' }} /></Col>
         </Row>
 
