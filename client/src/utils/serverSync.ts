@@ -26,6 +26,7 @@ const SYNC_PREFIXES = [
   'pageData_', 'custom_', 'warehouses_', 'purchaser_suppliers_', 'boundPurchasers_', 'accounts_', 'shop_info_', 'shop_profit_', 'month_end_check_', 'withdrawal_record_', 'dev_', 'hr_', 'newstyle_', 'brandauth_', 'molds_', 'credit_adjustments_', 'published_credit_', 'payment_requests_', 'payment_request_managers_', 'notification_settings_', 'print_template_', 'price_strategy_', 'user_notice_', 'invoice_record_', 'invoice_apply_requests_', 'purchaser_bills_', 'recon_db_', 'roles_', 'preset_role_overrides_', 'role_permsettings_', 'customers_', 'supplier_payments_', 'customerReceipts_', 'inventory_check_', 'stock_change_log_', 'sales_outbound_',
   // ==== 财务/账务（此前仅存本机，换电脑即丢）====
   'reimbursement_',            // 报销单 + 报销付款 + 报销负责人（三者同前缀）
+  'receiving_accounts_',       // 报销/日常记账-本人垫付收款账户库（键后缀为登录账号，子账号各自独立）
   'daily_bookkeeping_',        // 日常记账流水
   'daily_book_categories_',    // 日常记账支出分类
   'daily_book_main_categories_', // 日常记账主分类
@@ -164,6 +165,11 @@ function isGlobalKey(key: string): boolean {
 /** 仅同步当前账号自己的数据集 + 全局键（registeredUsers / market_*），避免拉取他人账号数据造成本地配额溢出/串号 */
 function isKeyForCurrentAccount(key: string): boolean {
   if (key.startsWith('dev_')) return true; // 开发者后台数据（子账号/客户分组/客户权限）为全局数据，跨浏览器同步
+  // 本人垫付收款账户库按登录账号独立存储（receiving_accounts_<登录账号>）：
+  // 子账号登录时键后缀是子账号名，而 currentOwner 是父账号，需显式放行本账号自己的库
+  if (key.startsWith('receiving_accounts_')) {
+    return key === `receiving_accounts_${localStorage.getItem('username') || ''}`;
+  }
   const owner = keyOwner(key);
   if (owner === null) return true; // 全局 key
   const cur = currentOwner();

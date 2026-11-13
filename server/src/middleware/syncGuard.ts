@@ -106,6 +106,8 @@ const STRICT_PRIVATE_PREFIXES = [
   'notification_settings_',
   // 图片空间索引（图片空间页面走 /api/images；此处防止经 /api/sync 直读他人图片清单）
   'image_assets_',
+  // 报销/日常记账-本人垫付收款账户库（键后缀为登录账号）：账户名称/账号属敏感信息，仅本人可读写
+  'receiving_accounts_',
   // 财务/账务/业务配置（本租户独有，不允许跨租户读写）
   'reimbursement_', 'daily_bookkeeping_', 'daily_book_categories_', 'daily_book_main_categories_',
   'general_ledger_subjects_', 'ledger_auto_subjects_', 'ledger_mode_', 'ledger_period_amounts_',

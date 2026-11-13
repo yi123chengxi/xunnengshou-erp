@@ -127,6 +127,11 @@ interface ReimbursementRecord {
   source?: string;            // 来源标识：'daily_book' 表示日常记账自动生成
   sourceBookKey?: string;     // 关联的日常记账记录key
   receivingAccount?: string;  // 收款账户（支付宝/银行账户/收款码）
+  // 收款账户快照：审核/支付端在另一浏览器或账户库已删时仍能展示账户信息
+  receivingAccountName?: string;
+  receivingAccountNo?: string;
+  receivingAccountType?: string;
+  receivingAccountBank?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -434,7 +439,14 @@ const ReimbursementPage: React.FC = () => {
   }, [receivingAccounts, allRecvAccounts]);
   // 收款账户信息渲染（含收款码图片）
   const recvAccountRender = (r: ReimbursementRecord) => {
-    const acc = resolveRecvAccount(r);
+    // 账户库缺失（跨浏览器未同步/账户已删）时回退到单据内快照
+    const acc = resolveRecvAccount(r) || (r.receivingAccountName ? {
+      name: r.receivingAccountName,
+      account: r.receivingAccountNo || '',
+      type: r.receivingAccountType || '',
+      bankName: r.receivingAccountBank || '',
+      image: '',
+    } : null);
     if (!acc) return <span style={{ color: '#999' }}>—</span>;
     const icon = acc.type === '支付宝' ? '🟢' : acc.type === '银行账户' ? '🏦' : '📱';
     return (
@@ -570,6 +582,10 @@ const ReimbursementPage: React.FC = () => {
     if (!formCategory) { message.warning('请选择费用分类'); return; }
     if (!formAmount || formAmount <= 0) { message.warning('请输入大于0的报销金额'); return; }
     const now = new Date().toISOString();
+    // 收款账户快照：写入当时选中的账户信息，供其他浏览器/账户库缺失时展示
+    const recv = receivingAccounts.find((x: any) => x.key === formReceivingAccount)
+      || allRecvAccounts.find((x: any) => x.key === formReceivingAccount);
+    const keepSnapshot = !!editRecord && editRecord.receivingAccount === formReceivingAccount;
     const rec: ReimbursementRecord = {
       key: editRecord?.key || `reim-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       reimbursementNo: editRecord?.reimbursementNo || generateReimbursementNo(records),
@@ -584,6 +600,10 @@ const ReimbursementPage: React.FC = () => {
       status: 'pending_review',
       receipts: [...formReceipts],
       receivingAccount: formReceivingAccount || undefined,
+      receivingAccountName: recv?.name || (keepSnapshot ? editRecord?.receivingAccountName : undefined),
+      receivingAccountNo: recv?.account || (keepSnapshot ? editRecord?.receivingAccountNo : undefined),
+      receivingAccountType: recv?.type || (keepSnapshot ? editRecord?.receivingAccountType : undefined),
+      receivingAccountBank: recv?.bankName || (keepSnapshot ? editRecord?.receivingAccountBank : undefined),
       createdAt: editRecord?.createdAt || now,
       updatedAt: now,
     };
@@ -954,9 +974,11 @@ const ReimbursementPage: React.FC = () => {
     { title: '支付账户', dataIndex: 'payBankAccount', key: 'payBankAccount', width: 160, render: (v: string, r: ReimbursementRecord) => (
       v ? <div style={{ wordBreak: 'break-all' }}><div style={{ fontWeight: 500, fontSize: 12 }}>{v}</div><div style={{ fontSize: 11, color: '#888' }}>{r.payBankName}</div></div> : '—'
     ) },
-    { title: '收款账户', dataIndex: 'receivingAccount', key: 'receivingAccount', width: 150, align: 'center', render: (v: string) => {
-      if (!v) return '—';
-      const acc = receivingAccounts.find((r: any) => r.key === v) || allRecvAccounts.find((r: any) => r.key === v);
+    { title: '收款账户', dataIndex: 'receivingAccount', key: 'receivingAccount', width: 150, align: 'center', render: (v: string, r: ReimbursementRecord) => {
+      if (!v && !r.receivingAccountName) return '—';
+      const acc = receivingAccounts.find((x: any) => x.key === v)
+        || allRecvAccounts.find((x: any) => x.key === v)
+        || (r.receivingAccountName ? { name: r.receivingAccountName, account: r.receivingAccountNo || '', type: r.receivingAccountType || '' } : null);
       if (!acc) return <span style={{ color: '#999' }}>账户已删除</span>;
       const icon = acc.type === '支付宝' ? '🟢' : acc.type === '银行账户' ? '🏦' : '📱';
       return <span style={{ fontSize: 12 }}>{icon} {acc.name}<div style={{ fontSize: 11, color: '#888' }}>{acc.account}</div></span>;
