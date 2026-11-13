@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Button, Card, Drawer, Empty, Image as AntdImage, Input, message, Modal, Popconfirm, Segmented,
+  Alert, Button, Card, Checkbox, Drawer, Empty, Image as AntdImage, Input, message, Modal, Popconfirm, Segmented,
   Select, Space, Spin, Statistic, Tag, Tooltip, Progress, Badge,
 } from 'antd';
 import {
   CloudUploadOutlined, CopyOutlined, DeleteOutlined, EditOutlined, LinkOutlined, PictureOutlined,
   ReloadOutlined, SearchOutlined, TagsOutlined, ArrowRightOutlined, DatabaseOutlined, CheckCircleOutlined,
+  ExclamationCircleOutlined,
 } from '@ant-design/icons';
 import { copyText } from '../utils/clipboard';
 import {
@@ -13,8 +14,12 @@ import {
   prepareImageFile, updateImage, uploadImage, ImageAsset, ImageRef, PreparedImage,
 } from '../utils/imageSpace';
 import { migrateLocalImages, scanLocalImages, LocalImageCandidate } from '../utils/imageMigration';
+import { sessionDataOwner } from '../utils/storageQuota';
 
 const PRIMARY = '#1e4a7e';
+
+// 列表项唯一键：全平台视图会混排多个租户，单用 id 可能撞键
+const assetKey = (a: ImageAsset): string => `${a.owner}_${a.id}`;
 
 const fmtSize = (bytes: number): string => {
   const n = Number(bytes) || 0;
@@ -39,6 +44,14 @@ const ImageSpacePage: React.FC = () => {
   const [items, setItems] = useState<ImageAsset[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
+
+  // 批量选择与删除
+  const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
+  const [batchDeleting, setBatchDeleting] = useState(false);
+  // 当前租户归属（与 /api/images 的服务端 owner 同口径：子账号归父账号）
+  const myOwner = useMemo(() => sessionDataOwner(), []);
+  // 「我的图片」视图全是本租户数据，直接可删；全平台视图才按 owner 区分（服务端只删本租户索引）
+  const canDelete = useCallback((a: ImageAsset) => scope === 'mine' || !a.owner || a.owner === myOwner, [scope, myOwner]);
 
   // 上传
   const [uploadVisible, setUploadVisible] = useState(false);
@@ -150,6 +163,107 @@ const ImageSpacePage: React.FC = () => {
       message.error(err?.message || '删除失败');
     }
   }, [detail, load, loadTags]);
+
+  // ============ 批量选择与删除 ============
+  const selectedKeySet = useMemo(() => new Set(selectedKeys), [selectedKeys]);
+
+  // 列表刷新/筛选后剔除已不在列表中的选择，避免误删看不见的图片
+  useEffect(() => {
+    setSelectedKeys(prev => {
+      if (prev.length === 0) return prev;
+      const valid = new Set(items.map(assetKey));
+      const next = prev.filter(k => valid.has(k));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [items]);
+
+  // 切换视图或筛选条件时清空选择（避免把上一批筛选的图片误删）
+  useEffect(() => { setSelectedKeys([]); }, [scope, appliedKeyword, tag]);
+
+  const selectedAssets = useMemo(() => items.filter(a => selectedKeySet.has(assetKey(a))), [items, selectedKeySet]);
+  const selectedSize = useMemo(() => selectedAssets.reduce((s, a) => s + (Number(a.size) || 0), 0), [selectedAssets]);
+  // 全平台视图混有其他租户上传的图片，服务端只允许删除本租户索引，这里只勾选可删的
+  const selectableAssets = useMemo(() => items.filter(canDelete), [items, canDelete]);
+
+  const toggleSelect = useCallback((a: ImageAsset) => {
+    const k = assetKey(a);
+    setSelectedKeys(prev => prev.includes(k) ? prev.filter(x => x !== k) : [...prev, k]);
+  }, []);
+
+  const selectAll = useCallback(() => {
+    setSelectedKeys(selectableAssets.map(assetKey));
+  }, [selectableAssets]);
+
+  const runBatchDelete = useCallback(async (force: boolean) => {
+    if (selectedAssets.length === 0) return;
+    setBatchDeleting(true);
+    let ok = 0;
+    const failed: string[] = [];
+    const progressKey = 'image-batch-delete';
+    message.loading({ content: `正在删除 0/${selectedAssets.length}`, key: progressKey, duration: 0 });
+    // 逐张删除（服务端单删接口带引用校验），保证每张都能回溯失败原因
+    for (const asset of selectedAssets) {
+      try {
+        await deleteImage(asset.id, force);
+        ok++;
+      } catch {
+        failed.push(asset.name || asset.id);
+      }
+      message.loading({ content: `正在删除 ${ok + failed.length}/${selectedAssets.length}`, key: progressKey, duration: 0 });
+    }
+    message.destroy(progressKey);
+    setBatchDeleting(false);
+    setSelectedKeys([]);
+    if (detail && selectedAssets.some(a => a.id === detail.id)) { setDetailOpen(false); setDetail(null); }
+    if (ok > 0) message.success(`已删除 ${ok} 张图片`);
+    if (failed.length > 0) {
+      message.error(`${failed.length} 张删除失败（可能仍被引用或无权限）：${failed.slice(0, 3).join('、')}${failed.length > 3 ? ' 等' : ''}`);
+    }
+    void load();
+    void loadTags();
+  }, [selectedAssets, detail, load, loadTags]);
+
+  const confirmBatchDelete = useCallback(() => {
+    if (selectedAssets.length === 0) { message.warning('请先勾选要删除的图片'); return; }
+    const refAssets = selectedAssets.filter(a => (a.refCount || 0) > 0);
+    const refTotal = refAssets.reduce((s, a) => s + (a.refCount || 0), 0);
+    const hasRef = refAssets.length > 0;
+    Modal.confirm({
+      title: `确认删除选中的 ${selectedAssets.length} 张图片？`,
+      width: 560,
+      icon: <ExclamationCircleOutlined style={{ color: '#faad14' }} />,
+      content: (
+        <div style={{ fontSize: 13 }}>
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginBottom: 10 }}
+            message="删除后不可恢复，请确认这些图片已不再使用"
+            description={hasRef
+              ? `选中的图片中有 ${refAssets.length} 张正被业务数据使用（共 ${refTotal} 处引用），删除后这些位置会显示空图。`
+              : '选中的图片目前没有被任何业务数据引用。'}
+          />
+          {hasRef && (
+            <div style={{ maxHeight: 150, overflow: 'auto', border: '1px solid #ffe58f', background: '#fffbe6', borderRadius: 6, padding: '6px 10px', marginBottom: 8 }}>
+              {refAssets.slice(0, 10).map(a => (
+                <div key={assetKey(a)} style={{ color: '#ad6800', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  · {a.name}（{a.refCount} 处引用）
+                </div>
+              ))}
+              {refAssets.length > 10 && <div style={{ color: '#d48806' }}>…… 其余 {refAssets.length - 10} 张</div>}
+            </div>
+          )}
+          <div style={{ color: '#8c8c8c' }}>
+            共 {selectedAssets.length} 张 · {fmtSize(selectedSize)}。可先点击图片查看「引用位置」，确认无影响后再删除。
+          </div>
+        </div>
+      ),
+      okText: hasRef ? '仍然删除' : '删除',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: () => runBatchDelete(hasRef),
+    });
+  }, [selectedAssets, selectedSize, runBatchDelete]);
 
   // ============ 上传 ============
   const addFiles = useCallback(async (files: FileList | File[]) => {
@@ -288,6 +402,39 @@ const ImageSpacePage: React.FC = () => {
         </div>
       </Card>
 
+      {/* ============ 批量操作条（勾选后出现） ============ */}
+      {(selectedAssets.length > 0 || batchDeleting) && (
+        <Card
+          size="small"
+          style={{ marginBottom: 12, borderRadius: 8, background: '#f0f5ff', borderColor: '#adc6ff' }}
+          bodyStyle={{ padding: '8px 16px' }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+            <Checkbox
+              checked={selectableAssets.length > 0 && selectedAssets.length >= selectableAssets.length}
+              indeterminate={selectedAssets.length > 0 && selectedAssets.length < selectableAssets.length}
+              onChange={e => (e.target.checked ? selectAll() : setSelectedKeys([]))}
+            >
+              全选当前列表
+            </Checkbox>
+            <span style={{ fontSize: 13 }}>
+              已选 <b style={{ color: PRIMARY }}>{selectedAssets.length}</b> 张 · {fmtSize(selectedSize)}
+            </span>
+            <Button size="small" onClick={() => setSelectedKeys([])}>取消选择</Button>
+            <div style={{ flex: 1 }} />
+            <Button
+              danger
+              icon={<DeleteOutlined />}
+              loading={batchDeleting}
+              disabled={selectedAssets.length === 0}
+              onClick={confirmBatchDelete}
+            >
+              批量删除{selectedAssets.length > 0 ? `（${selectedAssets.length}）` : ''}
+            </Button>
+          </div>
+        </Card>
+      )}
+
       <Spin spinning={loading}>
         {items.length === 0 && !loading ? (
           <Card style={{ borderRadius: 8 }}>
@@ -297,12 +444,16 @@ const ImageSpacePage: React.FC = () => {
           </Card>
         ) : (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(168px, 1fr))', gap: 12 }}>
-            {items.map(asset => (
+            {items.map(asset => {
+              const k = assetKey(asset);
+              const checked = selectedKeySet.has(k);
+              const deletable = canDelete(asset);
+              return (
               <Card
-                key={`${asset.owner}_${asset.id}`}
+                key={k}
                 hoverable
                 size="small"
-                style={{ borderRadius: 8, overflow: 'hidden' }}
+                style={{ borderRadius: 8, overflow: 'hidden', boxShadow: checked ? `0 0 0 2px ${PRIMARY}` : undefined }}
                 bodyStyle={{ padding: 8 }}
                 cover={
                   <div style={{ position: 'relative', height: 132, background: '#f5f6f8', cursor: 'pointer' }} onClick={() => openDetail(asset.id)}>
@@ -312,6 +463,25 @@ const ImageSpacePage: React.FC = () => {
                       style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
                       onError={e => { (e.currentTarget as HTMLImageElement).style.opacity = '0.15'; }}
                     />
+                    {/* 批量勾选复选框：仅本账号上传的图片可删（全平台视图会混排其他租户图片） */}
+                    <div
+                      style={{
+                        position: 'absolute', top: 6, left: 6, zIndex: 3,
+                        background: 'rgba(255,255,255,0.92)', borderRadius: 4, padding: '0 4px',
+                        lineHeight: '18px', boxShadow: '0 1px 2px rgba(0,0,0,0.12)',
+                      }}
+                      onClick={e => e.stopPropagation()}
+                    >
+                      {deletable ? (
+                        <Tooltip title={checked ? '取消选择' : '选择这张图片'}>
+                          <Checkbox checked={checked} onChange={() => toggleSelect(asset)} />
+                        </Tooltip>
+                      ) : (
+                        <Tooltip title="仅能删除本账号上传的图片">
+                          <Checkbox disabled />
+                        </Tooltip>
+                      )}
+                    </div>
                     {(asset.refCount || 0) > 0 && (
                       <Badge
                         count={asset.refCount}
@@ -334,7 +504,8 @@ const ImageSpacePage: React.FC = () => {
                 </Tooltip>
                 <div style={{ fontSize: 11, color: '#999', marginTop: 2 }}>{fmtSize(asset.size)} · {fmtTime(asset.createdAt).slice(0, 10)}</div>
               </Card>
-            ))}
+              );
+            })}
           </div>
         )}
       </Spin>
