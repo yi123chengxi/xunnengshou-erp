@@ -169,7 +169,8 @@ export function emergencyFreeSpace(protectKey?: string): void {
   const del = (k: string) => { try { localStorage.removeItem(k); } catch { /* ignore */ } };
   // 绝对不可删除的认证/关键键（写入失败留痕也必须保住，否则取证链路本身会被清理掉）
   const CRITICAL = new Set(['username', 'isSubAccount', 'parentAccount', 'registeredUsers', WRITE_FAIL_LOG_KEY]);
-  const isProtected = (k: string) => CRITICAL.has(k) || k === protectKey || k === `${protectKey}_ts` || k.startsWith('credit_adjustments_');
+  // prodImgUrl_ 是「图片键 → 云端 url」绑定表：本身不是图片块、删了本机就找不到跨机取图入口，必须保护
+  const isProtected = (k: string) => CRITICAL.has(k) || k === protectKey || k === `${protectKey}_ts` || k.startsWith('credit_adjustments_') || k.startsWith('prodImgUrl_');
   try {
     const keys: string[] = [];
     for (let i = 0; i < localStorage.length; i++) {
@@ -196,8 +197,8 @@ export function emergencyFreeSpace(protectKey?: string): void {
           }
         } catch { /* ignore */ }
       }
-      // 2) 删除旧版未压缩图片块
-      if ((key.startsWith('prodImg_') || key.startsWith('payShot_')) && raw.length > 300000) {
+      // 2) 删除旧版未压缩图片块（prodImgUrl_ 属绑定表，与被淘汰的图片块前缀相似但不可删）
+      if ((key.startsWith('prodImg_') || key.startsWith('payShot_')) && !key.startsWith('prodImgUrl_') && raw.length > 300000) {
         del(key);
         continue;
       }
