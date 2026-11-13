@@ -98,6 +98,7 @@ const modules: MenuModule[] = [
       { key: 'prod-process', label: '生产工序' },
       { key: 'plan-design', label: '新款研发' },
       { key: 'mold', label: '模具管理' },
+      { key: 'image-space', label: '图片空间' },
       { key: 'product-print', label: '商品打印' },
     ],
   },

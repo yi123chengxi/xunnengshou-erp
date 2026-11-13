@@ -33,6 +33,7 @@ import chatRoutes from './routes/chat.routes';
 import smsRoutes from './routes/sms.routes';
 import enterpriseRoutes from './routes/enterprise.routes';
 import systemRoutes from './routes/system.routes';
+import imageRoutes from './routes/image.routes';
 import { startEnterprisePatrol } from './services/enterprisePatrol';
 import { initPrintWebSocket } from './ws/print-ws';
 import { initChatWebSocket } from './ws/chat-ws';
@@ -59,6 +60,8 @@ app.use('/api/auth', rateLimit({ name: 'auth', windowMs: 60_000, max: 120 }));
 app.use('/api/sms', rateLimit({ name: 'sms', windowMs: 60_000, max: 60, message: '验证码请求过于频繁，请稍后再试' }));
 // 同步轮询：60s 一轮会拉取多键 + 写回，单 IP 每分钟上限 2400 次以拦截脚本扫描，不拦截正常轮询
 app.use('/api/sync', rateLimit({ name: 'sync', windowMs: 60_000, max: 2400, message: '同步请求过于频繁，请稍后再试' }));
+// 图片空间：上传为 MB 级请求，单独限流避免挤占同步通道
+app.use('/api/images', rateLimit({ name: 'images', windowMs: 60_000, max: 300, message: '图片操作过于频繁，请稍后再试' }));
 
 app.use('/api/auth', authRoutes);
 app.use('/api/sms', smsRoutes);
@@ -82,6 +85,7 @@ app.use('/api/push', pushRoutes);
 app.use('/api/print', printRoutes);
 app.use('/api/chat', chatRoutes);
 app.use('/api/system', systemRoutes);
+app.use('/api/images', imageRoutes);
 
 // 健康检查
 app.get('/api/health', (_req, res) => {

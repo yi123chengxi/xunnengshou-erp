@@ -33,6 +33,7 @@ export const PERM_MENUS: Record<PermScope, PermMenuGroup[]> = {
         { key: 'basic-data/prod-process', label: '生产工序' },
         { key: 'basic-data/plan-design', label: '新款研发' },
         { key: 'basic-data/mold', label: '模具管理' },
+        { key: 'basic-data/image-space', label: '图片空间' },
         { key: 'basic-data/product-print', label: '商品打印' },
       ],
     },

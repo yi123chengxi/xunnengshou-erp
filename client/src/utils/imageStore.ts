@@ -70,3 +70,18 @@ export const batchDeleteFullImages = (keys: string[]): void => {
     } catch { /* ignore */ }
   });
 };
+
+// 列出 IndexedDB 中全部原图键（历史图片迁移用：localStorage 缩略图丢失时仍能找回原图）
+export const listFullImageKeys = (): Promise<string[]> =>
+  new Promise((resolve) => {
+    openDb().then((db) => {
+      if (!db) { resolve([]); return; }
+      try {
+        const req = db.transaction(STORE, 'readonly').objectStore(STORE).getAllKeys();
+        req.onsuccess = () => resolve((req.result || []).map(String));
+        req.onerror = () => resolve([]);
+      } catch {
+        resolve([]);
+      }
+    });
+  });

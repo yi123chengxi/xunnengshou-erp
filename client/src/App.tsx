@@ -84,6 +84,8 @@ const ProdInboundStatsPage = React.lazy(() => import('./pages/inventory/ProdInbo
 const OrderProfitPage = React.lazy(() => import('./pages/OrderProfitPage'));
 const WarehouseStatsPage = React.lazy(() => import('./pages/WarehouseStatsPage'));
 const MoldPage = React.lazy(() => import('./pages/MoldPage'));
+// 图片空间：基础数据下的云端统一图片库（须注册在通配路由之前）
+const ImageSpacePage = React.lazy(() => import('./pages/ImageSpacePage'));
 
 const Loading = () => (
   <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', padding: 40 }}>
@@ -248,6 +250,7 @@ function App() {
           <Route path="inventory/prod-in-stats" element={<ProdInboundStatsPage />} />
           {/* 模具管理 */}
           <Route path="basic-data/mold" element={<MoldPage />} />
+          <Route path="basic-data/image-space" element={<ImageSpacePage />} />
           {/* 各模块的子功能页面 */}
           <Route path=":moduleKey" element={<ModulePage />} />
           <Route path=":moduleKey/:childKey" element={<ModuleChildPage />} />
