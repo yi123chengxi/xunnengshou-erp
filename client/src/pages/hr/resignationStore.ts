@@ -70,6 +70,8 @@ export const setAccountStatus = (username: string, status: 'normal' | 'disabled'
     const ri = regUsers.findIndex((u: any) => u.username === username);
     if (ri >= 0) {
       regUsers[ri].accountStatus = status;
+      // 版本戳：离职停用/复职启用属管理端权威变更，不带戳会被服务端按旧版本保护回去
+      regUsers[ri]._permTs = Date.now();
       localStorage.setItem('registeredUsers', JSON.stringify(regUsers));
     }
   } catch { /* ignore */ }

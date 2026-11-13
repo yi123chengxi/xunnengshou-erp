@@ -228,40 +228,76 @@ export function sanitizeRegisteredUsersJson(json: string): string {
 }
 
 /**
- * registeredUsers 写入合并：按行 _permTs 保护权限字段，防陈旧副本回滚。
+ * registeredUsers 写入合并：行级并集 + 权限字段版本保护。
  *
- * 注册表是「整键覆盖」数据集（行内没有 key/id，服务端并集合并用不上），因此任何浏览器
- * ——尤其是长期没拉取到最新数据的子账号端——只要写一次注册表（改密、保存企业信息、
- * 首次登录强制改密等），就会把本地那份陈旧副本整体推到服务端，把主账号刚改的角色/
- * 独立权限/个人覆写覆盖回旧值。表现为「另一个浏览器改了子账号权限，这边一直不更新」。
+ * 注册表行内没有 key/id，通用并集合并（mergeArrayDatasets）用不上，历史上走整键替换，
+ * 于是一份陈旧副本（尤其是长期没拉到最新数据的子账号端、或干脆把写入拦下来的子账号会话）
+ * 要么覆盖主账号刚改的权限，要么把别人刚建的账号整行擦掉。两条都表现为
+ * 「另一个浏览器看不到新账号 / 权限改了不生效」。
  *
- * 规则：同一 username，服务端已有记录的 _permTs 更新时，权限类字段沿用服务端版本；
- * 其余字段（手机号、企业信息、密码哈希、lastLogin 等）仍以本次上传为准；
- * incoming 中缺少的记录照常视为删除，不做并集复活。
+ * 规则：
+ * 1) incoming 新增的行（服务端无同 username）一律采纳 —— 子账号在自己会话里建的子账号
+ *    必须能落到服务端，否则新账号在其它浏览器登录时报「用户名或密码错误」。
+ * 2) 同 username 按 _permTs 判定权限字段：incoming 不更新时沿用服务端的角色/独立权限/
+ *    个人覆写/状态，其余字段（手机号、备注、企业信息、lastLogin 等）仍以 incoming 为准。
+ * 3) 密码凭据以服务端存量为准（读取下发已脱敏，客户端不带 passwordHash）；
+ *    incoming 显式携带新明文密码时才丢掉继承的旧哈希，交给哈希阶段重算。
+ * 4) 缩水保护：incoming 缺失的行默认保留，只有随 body 显式申报 removedIds 的 username
+ *    才真正删除（且仅认可存量中确实存在的账号、限量），防陈旧副本整表擦除他人账号。
  */
 const REGISTERED_USER_PERM_FIELDS = ['roles', 'customPermissions', 'permOverrides', 'displayName', 'status', 'accountStatus', '_permTs'] as const;
+const MAX_REGISTERED_USER_REMOVALS = 200;
 
-export function mergeRegisteredUsersJson(existingJson: string, incomingJson: string): string {
+export function mergeRegisteredUsersJson(existingJson: string, incomingJson: string, removedNames?: any): string {
   try {
     const existing = JSON.parse(existingJson);
     const incoming = JSON.parse(incomingJson);
     if (!Array.isArray(existing) || !Array.isArray(incoming)) return incomingJson;
+
     const existByName = new Map<string, any>();
     existing.forEach((u: any) => { if (u && u.username) existByName.set(String(u.username), u); });
-    let protectedAny = false;
-    const merged = incoming.map((u: any) => {
-      if (!u || !u.username) return u;
-      const old = existByName.get(String(u.username));
-      if (!old) return u;
+
+    // 显式删除只认可存量中确实存在的 username（交集 + 上限），防伪造超量删除
+    const rmSet = new Set<string>();
+    (Array.isArray(removedNames) ? removedNames : [])
+      .slice(0, MAX_REGISTERED_USER_REMOVALS)
+      .map((x: any) => String(x))
+      .forEach((n: string) => { if (existByName.has(n)) rmSet.add(n); });
+
+    const seen = new Set<string>();
+    const out: any[] = [];
+    for (const u of incoming) {
+      if (!u || typeof u !== 'object') { out.push(u); continue; }
+      const name = u.username ? String(u.username) : '';
+      if (!name) { out.push(u); continue; }
+      if (rmSet.has(name)) continue; // 显式删除：不再写入
+      seen.add(name);
+      const old = existByName.get(name);
+      if (!old) { out.push(u); continue; } // 新增账号：采纳
+
+      // 服务端为底：继承客户端看不到的 passwordHash 等字段，再由 incoming 覆盖
+      const row: any = { ...old, ...u };
       const oldTs = Number(old._permTs) || 0;
       const newTs = Number(u._permTs) || 0;
-      if (oldTs <= newTs) return u;
-      const out: any = { ...u };
-      REGISTERED_USER_PERM_FIELDS.forEach((f) => { if (old[f] !== undefined) out[f] = old[f]; });
-      protectedAny = true;
-      return out;
+      if (newTs <= oldTs) {
+        REGISTERED_USER_PERM_FIELDS.forEach((f) => { if (old[f] !== undefined) row[f] = old[f]; });
+      }
+      // 客户端显式改密（明文）：丢掉继承的旧哈希，交给 hashRegisteredUsersJson 重算
+      if (typeof u.password === 'string' && u.password && u.passwordHash === undefined) {
+        delete row.passwordHash;
+      }
+      out.push(row);
+    }
+
+    // 服务端有、本次未携带且未申报删除的账号：保留（陈旧副本不得整表擦除）
+    existing.forEach((old: any) => {
+      if (!old || !old.username) return;
+      const name = String(old.username);
+      if (seen.has(name) || rmSet.has(name)) return;
+      out.push(old);
     });
-    return JSON.stringify(protectedAny ? merged : incoming);
+
+    return JSON.stringify(out);
   } catch { return incomingJson; }
 }
 

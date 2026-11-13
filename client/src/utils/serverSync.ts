@@ -132,11 +132,6 @@ export function localDatasetHasRows(rawJson: string | null): boolean {
   } catch { return rawJson.length > 0; }
 }
 
-/** 当前是否为子账号/只读会话（不能作为注册表主编辑方上传） */
-function isSubAccountSession(): boolean {
-  try { return localStorage.getItem('isSubAccount') === 'true' || localStorage.getItem('isViewOnly') === 'true'; } catch { return false; }
-}
-
 /** 当前登录账号的数据归属者（子账号归父账号），与页面 getDataOwner 保持一致 */
 function currentOwner(): string {
   try {
@@ -582,9 +577,8 @@ function mergeRegisteredUsers(serverJson: string): any[] | null {
       raw('registeredUsers', json);
       raw('registeredUsers_ts', String(Date.now()));
       saveDataset('registeredUsers', json);
-      // 上传收敛：子账号/只读会话的本地副本可能较旧，回传会把主账号刚改的权限/手机号滚回旧值
-      // （服务端另有 _permTs 字段级保护，此处再收敛一次流量与风险）
-      if (!isSubAccountSession()) flushDatasetUpload('registeredUsers', json);
+      // 不回传：本次改动只是把服务端内容合并进本地，本地没有服务端不知道的新信息；
+      // 回传反而会让一份尚未拉到全量账号的副本去推进版本号（子账号建号已由写入钩子直接上传）
     }
     // 权限字段落地后同标签页派发 perm-changed：已挂载布局的菜单/门控立即按新权限重算
     if (permsChanged) {

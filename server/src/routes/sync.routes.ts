@@ -53,7 +53,10 @@ const isMergeAlwaysKey = (key: string): boolean => MERGE_ALWAYS_KEYS.includes(ke
 // 而这类非本账号键不参与本端启动拉取（isKeyForCurrentAccount 过滤），代写端持有的可能是一份陈旧快照；
 // 又因共享键对任何登录用户都下发 meta，陈旧副本会拿到「与服务端一致的 baseTs」→ 走整键替换分支 →
 // 对方刚新增的供应商/采购商卡片被陈旧副本擦掉、刚建立的合作被改回旧状态。表现为列表数量与状态来回跳动。
-const NEVER_SHRINK_PREFIXES = ['purchaser_bills_', 'pageData_customer_bill-detail_', 'pageData_sales_order-manage_', 'purchaser_suppliers_', 'boundPurchasers_'];
+const NEVER_SHRINK_PREFIXES = ['purchaser_bills_', 'pageData_customer_bill-detail_', 'pageData_sales_order-manage_', 'purchaser_suppliers_', 'boundPurchasers_', 'accounts_'];
+// accounts_<主账号> 为账号列表：多个浏览器共同维护同一份名单，任何一端拿着陈旧名单整键上传
+// 都会把另一端刚建的账号擦掉（表现为「新增的子账号在别的浏览器没有」）。
+// 行内有 key/id，可按 removedIds 精确删除；未申报的缩水一律并集保留。
 const isNeverShrinkKey = (key: string): boolean => NEVER_SHRINK_PREFIXES.some(p => key.startsWith(p));
 
 // ============ 权限类数据集变更实时通知 ============
@@ -211,8 +214,9 @@ router.put('/dataset', async (req: Request, res: Response) => {
     if (key === 'registeredUsers') {
       const existing = await store.getDataset(key).catch(() => null);
       const existingJson = existing ? existing.dataset_json : null;
-      // 陈旧副本保护：行内权限字段按 _permTs 以服务端较新者为准（详见 mergeRegisteredUsersJson）
-      const guarded = existingJson ? mergeRegisteredUsersJson(existingJson, json) : json;
+      // 行级并集：新增账号采纳、权限字段按 _permTs 保护、缩水需显式申报 removedIds
+      // （子账号会话也要能建号：旧逻辑把子账号写入直接拦在客户端，导致新账号只留在本机）
+      const guarded = existingJson ? mergeRegisteredUsersJson(existingJson, json, req.body.removedIds) : json;
       json = await hashRegisteredUsersJson(guarded, existingJson);
     }
     const ts = Number(updatedAt) || Date.now();

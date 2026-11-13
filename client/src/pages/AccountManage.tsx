@@ -4,9 +4,10 @@ import {
   Space, Tag, message, Modal, Form, Drawer, Descriptions, Dropdown,
   Popconfirm, DatePicker, Badge, Tooltip, Checkbox, Divider, Upload, Alert,
 } from 'antd';
-import { reloadAfterPull } from '../utils/serverSync';
+import { reloadAfterPull, fetchServerDataset, flushDatasetUpload } from '../utils/serverSync';
 import { validatePassword } from '../utils/passwordPolicy';
 import { saveDataset } from '../utils/dataStore';
+import { declareShrink } from '../utils/shrinkRegistry';
 import {
   PlusOutlined,
   SearchOutlined,
@@ -108,16 +109,13 @@ interface AccountRecord {
   phone?: string; // 手机号码（可用于登录；同号多账号时禁用手机号登录）
 }
 
-/** registeredUsers 写入并同步上传：仅 setItem 时手机号/角色等编辑只留本浏览器，
- * 其他设备（子账号登录端）拉取服务端旧副本会报「未绑定有效手机号」 */
+/** registeredUsers 写入并同步上传：setItem 会经写入钩子推到服务端共享数据集。
+ * 子账号会话也必须上传——子账号在「账号管理」新建的子账号若只落本机，
+ * 其它浏览器拉不到注册表，登录时服务端也会判为「用户名或密码错误」。
+ * 陈旧副本的回滚风险由服务端 mergeRegisteredUsersJson（行级并集 + _permTs 保护）兜底。 */
 const persistRegisteredUsers = (list: any[]) => {
   const json = JSON.stringify(list);
   localStorage.setItem('registeredUsers', json);
-  // 上传权限收敛：仅主账号（管理员）会话可把账号注册表写入共享数据集；
-  // 子账号/只读会话改动只留本地，收窄客户端越权写注册表（角色/状态/手机号）的攻击面
-  try {
-    if (localStorage.getItem('isSubAccount') === 'true' || localStorage.getItem('isViewOnly') === 'true') return;
-  } catch { return; }
   saveDataset('registeredUsers', json);
 };
 
@@ -381,7 +379,13 @@ const AccountManage: React.FC = () => {
   // 无差异写入会让两个浏览器之间来回镜像（隐患：同步事件风暴）
   useEffect(() => {
     const json = JSON.stringify(dataSource);
-    try { if (localStorage.getItem(getAccountsStorageKey()) === json) return; } catch { /* ignore */ }
+    try {
+      const stored = localStorage.getItem(getAccountsStorageKey());
+      if (stored === json) return;
+      // 本地还没有账号存储时（首次打开 / 云端尚未拉到）内存里只是 initialAccounts 演示行，
+      // 直接上传会把其他浏览器已经建好的账号列表整键覆盖掉
+      if (!stored && json === JSON.stringify(initialAccounts)) return;
+    } catch { /* ignore */ }
     localStorage.setItem(getAccountsStorageKey(), json);
   }, [dataSource]);
 
@@ -408,6 +412,31 @@ const AccountManage: React.FC = () => {
       window.removeEventListener('perm-changed', reload);
       window.removeEventListener('storage', onStorage);
     };
+  }, []);
+
+  // 自愈：历史上子账号会话的注册表写入被客户端拦截，新建的子账号只留在本机，
+  // 其它浏览器看不到、服务端登录也判「用户名或密码错误」。进入账号管理时比对
+  // 服务端注册表，把本地独有的账号补传一次（服务端按行并集，不会擦除他人记录）。
+  useEffect(() => {
+    const heal = async () => {
+      try {
+        const localRaw = localStorage.getItem('registeredUsers');
+        if (!localRaw) return;
+        const local: any[] = JSON.parse(localRaw);
+        if (!Array.isArray(local) || local.length === 0) return;
+        const rec = await fetchServerDataset('registeredUsers');
+        if (!rec) return;
+        const remote = JSON.parse(rec.json || '[]');
+        const remoteNames = new Set(
+          (Array.isArray(remote) ? remote : []).map((u: any) => String((u && u.username) || ''))
+        );
+        const missing = local.filter(u => u && u.username && !remoteNames.has(String(u.username)));
+        if (missing.length === 0) return;
+        flushDatasetUpload('registeredUsers', localRaw);
+        message.info(`检测到 ${missing.length} 个账号尚未同步到云端，正在补传`);
+      } catch { /* 服务端不可用：交给写入钩子/补传队列下次重试 */ }
+    };
+    void heal();
   }, []);
 
   // 自动修正：主账号姓名固定为注册时的联系人（历史数据可能仍为“系统管理员”）
@@ -565,11 +594,15 @@ const AccountManage: React.FC = () => {
       message.warning('不能删除当前登录的账号');
       return;
     }
+    // 账号列表也按行并集保留：删除必须在写存储前显式申报，否则刷新后被删账号复活
+    declareShrink(getAccountsStorageKey(), [String(record.key)]);
     setDataSource(prev => prev.filter(item => item.key !== record.key));
     // 同步到 registeredUsers 中移除该子账号，使其无法再登录
     try {
       const regUsers: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
       const updated = regUsers.filter((u: any) => u.username !== record.username);
+      // 显式申报删除：服务端注册表按行并集保留，不申报会导致被删账号刷新后复活
+      declareShrink('registeredUsers', [record.username]);
       persistRegisteredUsers(updated);
     } catch { /* ignore */ }
     message.success(`账号 ${record.displayName} 已删除`);
@@ -792,10 +825,16 @@ const AccountManage: React.FC = () => {
         : currentUsername;
       const currentUser = registeredUsers.find((u: any) => u.username === currentUsername);
 
-      const newKey = String(dataSource.length + 1);
+      // 账号行主键必须跨端唯一：多端各自按「列表长度+1」会撞出同一个 key/id，
+      // 服务端并集合并按 key 去重时会把另一端刚建的账号覆盖掉
+      const newKey = `acc_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+      const nextIdNo = dataSource.reduce((m, a) => {
+        const n = Number(String(a.id || '').replace('ACC-', ''));
+        return Number.isFinite(n) ? Math.max(m, n) : m;
+      }, 0) + 1;
       const newAccount: AccountRecord = {
         key: newKey,
-        id: `ACC-${String(dataSource.length + 1).padStart(3, '0')}`,
+        id: `ACC-${String(nextIdNo).padStart(3, '0')}`,
         username: values.username,
         displayName: values.displayName,
         role: values.role,
@@ -841,7 +880,7 @@ const AccountManage: React.FC = () => {
       updateAddPerms([]);
       addForm.resetFields();
     }).catch(() => { /* 校验失败：表单行内提示并滚动到首个错误项 */ });
-  }, [addForm, dataSource.length]);
+  }, [addForm, dataSource]);
 
   // ==================== 账号导入 ====================
   const [importVisible, setImportVisible] = useState(false);
@@ -948,6 +987,8 @@ const AccountManage: React.FC = () => {
         role: currentUserRole,
         roles: [],
         customPermissions: groupPerms,
+        // 版本戳：后续陈旧副本上传时服务端据此保留本次导入的权限/启用状态
+        _permTs: Date.now(),
         companyName: currentUser?.companyName || currentUsername,
         contactPerson: r.displayName,
         email: '',
@@ -1017,7 +1058,11 @@ const AccountManage: React.FC = () => {
             .filter(d => selectedRowKeys.includes(d.key) && d.accountType !== '主账号')
             .map(d => d.username);
           regUsers.forEach((u: any) => {
-            if (targetUsernames.includes(u.username)) u.accountStatus = 'normal';
+            if (targetUsernames.includes(u.username)) {
+              u.accountStatus = 'normal';
+              // 版本戳：批量启用也是管理端权威变更，不打戳会被服务端按旧版本保护回去
+              u._permTs = Date.now();
+            }
           });
           persistRegisteredUsers(regUsers);
         } catch { /* ignore */ }
@@ -1036,7 +1081,10 @@ const AccountManage: React.FC = () => {
             .filter(d => selectedRowKeys.includes(d.key) && d.accountType !== '主账号' && d.username !== currentUser)
             .map(d => d.username);
           regUsers.forEach((u: any) => {
-            if (targetUsernames.includes(u.username)) u.accountStatus = 'disabled';
+            if (targetUsernames.includes(u.username)) {
+              u.accountStatus = 'disabled';
+              u._permTs = Date.now();
+            }
           });
           persistRegisteredUsers(regUsers);
         } catch { /* ignore */ }
@@ -1059,10 +1107,14 @@ const AccountManage: React.FC = () => {
             setDataSource(prev => prev.filter(item =>
               (!selectedRowKeys.includes(item.key) || item.accountType === '主账号' || item.username === currentUser)
             ));
+            // 账号列表按行并集保留，批量删除同样需显式申报
+            declareShrink(getAccountsStorageKey(), selectedRowKeys.map(String));
             // 同步到 registeredUsers 中移除
             try {
               const regUsers: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
               const updated = regUsers.filter((u: any) => !deleteTargets.includes(u.username));
+              // 显式申报删除：服务端注册表按行并集保留，不申报会导致被删账号刷新后复活
+              declareShrink('registeredUsers', deleteTargets);
               persistRegisteredUsers(updated);
             } catch { /* ignore */ }
             setSelectedRowKeys([]);
