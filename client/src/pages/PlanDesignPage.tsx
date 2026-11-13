@@ -17,6 +17,7 @@ import type { ChildPageConfig } from '../config/pageConfig';
 import { saveDataset } from '../utils/dataStore';
 import { loadTenantUsers } from '../utils/tenantUsers';
 import { safeSetItem } from '../utils/storageQuota';
+import { readScopedItem, writeScopedItem } from '../utils/scopedStorage';
 import useResizableColumns from '../hooks/useResizableColumns';
 import BatchAddProductModal from '../components/BatchAddProductModal';
 import MoldPickerModal from '../components/MoldPickerModal';
@@ -363,7 +364,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
   const [materialListFieldConfigVisible, setMaterialListFieldConfigVisible] = useState(false);
   // 规格模版
   const [specTemplates, setSpecTemplates] = useState<{ name: string; specs: string[] }[]>(() => {
-    try { return JSON.parse(localStorage.getItem('addColorSpecTemplates') || '[]'); } catch { return []; }
+    try { return JSON.parse(readScopedItem('addColorSpecTemplates') || '[]'); } catch { return []; }
   });
   const [specTemplateModalVisible, setSpecTemplateModalVisible] = useState(false);
   const [specTemplateName, setSpecTemplateName] = useState('');
@@ -3762,7 +3763,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
                   >
                     {tpl.name}
                     <CloseCircleOutlined style={{ marginLeft: 4, color: '#bfbfbf' }}
-                      onClick={(e: React.MouseEvent) => { e.stopPropagation(); const next = specTemplates.filter((_, i) => i !== idx); setSpecTemplates(next); try { localStorage.setItem('addColorSpecTemplates', JSON.stringify(next)); } catch {} }} />
+                      onClick={(e: React.MouseEvent) => { e.stopPropagation(); const next = specTemplates.filter((_, i) => i !== idx); setSpecTemplates(next); try { writeScopedItem('addColorSpecTemplates', JSON.stringify(next)); } catch {} }} />
                   </Tag>
                 ))
               )}
@@ -3786,7 +3787,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
           if (specs.length === 0) { message.warning('当前没有规格，无法保存模版'); return; }
           const next = [...specTemplates, { name, specs }];
           setSpecTemplates(next);
-          try { localStorage.setItem('addColorSpecTemplates', JSON.stringify(next)); } catch {}
+          try { writeScopedItem('addColorSpecTemplates', JSON.stringify(next)); } catch {}
           setSpecTemplateModalVisible(false);
           message.success(`模版“${name}”已保存`);
         }}

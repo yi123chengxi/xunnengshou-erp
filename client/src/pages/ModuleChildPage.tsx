@@ -98,6 +98,8 @@ import * as XLSX from 'xlsx-js-style';
 import { unzipSync, zipSync } from 'fflate';
 import { copyText } from '../utils/clipboard';
 import { getFullImage, saveFullImage, deleteFullImage, batchDeleteFullImages } from '../utils/imageStore';
+import { absoluteImageUrl, registerImageRef, uploadImage } from '../utils/imageSpace';
+import { readScopedItem, writeScopedItem, readOwnerSuffixItem, writeOwnerSuffixItem, removeOwnerSuffixItem } from '../utils/scopedStorage';
 import BatchAddProductModal from '../components/BatchAddProductModal';
 import ScheduleBoard from '../components/ScheduleBoard';
 import MoldPickerModal from '../components/MoldPickerModal';
@@ -539,10 +541,39 @@ const parseSmartAddress = (text: string): {
 };
 
 // ============ 付款截图上传组件 ============
+// 优先落到云端图片空间（记录里只存 URL，体积小且能跨端同步）；云端不可用时退回本机 base64
 const PayScreenshotUpload: React.FC<{
   value?: string; onChange?: (val: string) => void;
-}> = ({ value, onChange }) => {
+  getRef?: () => { module: string; moduleLabel?: string; childKey?: string; childLabel?: string; recordKey: string; recordName?: string; field?: string };
+}> = ({ value, onChange, getRef }) => {
   const [previewVisible, setPreviewVisible] = useState(false);
+  const [uploading, setUploading] = useState(false);
+
+  const acceptFile = useCallback(async (file: File) => {
+    if (!file.type.startsWith('image/')) { message.error('请选择图片文件'); return; }
+    if (file.size > 20 * 1024 * 1024) { message.error('图片不能超过 20MB'); return; }
+    setUploading(true);
+    try {
+      const compressed = await compressImageFile(file);
+      const ref = getRef ? getRef() : null;
+      if (ref && ref.recordKey) {
+        try {
+          const asset = await uploadImage({
+            dataUrl: compressed, thumbDataUrl: compressed, width: 0, height: 0,
+            name: ref.recordName || '付款截图', tags: ['付款截图'], ref: { ...ref, field: ref.field || 'payScreenshot' },
+          });
+          onChange?.(absoluteImageUrl(asset.url));
+          return;
+        } catch { /* 落云失败→退回本地 */ }
+      }
+      onChange?.(compressed);
+    } catch {
+      message.error('图片处理失败');
+    } finally {
+      setUploading(false);
+    }
+  }, [onChange, getRef]);
+
   const handlePaste = useCallback((e: React.ClipboardEvent) => {
     const items = e.clipboardData?.items;
     if (!items) return;
@@ -550,13 +581,11 @@ const PayScreenshotUpload: React.FC<{
       if (item.type.startsWith('image/')) {
         const file = item.getAsFile();
         if (!file) continue;
-        compressImageFile(file).then(compressed => {
-          onChange?.(compressed);
-        }).catch(() => message.error('图片压缩失败'));
+        void acceptFile(file);
         break;
       }
     }
-  }, [onChange]);
+  }, [acceptFile]);
   return (
     <div onPaste={handlePaste} tabIndex={0} style={{ outline: 'none' }}>
       {value ? (
@@ -575,16 +604,14 @@ const PayScreenshotUpload: React.FC<{
             input.type = 'file'; input.accept = 'image/*';
             input.onchange = () => {
               const file = input.files?.[0]; if (!file) return;
-              compressImageFile(file).then(compressed => {
-                onChange?.(compressed);
-              }).catch(() => message.error('图片处理失败'));
+              void acceptFile(file);
             };
             input.click();
           }}
-          style={{ width: 96, height: 96, border: '1px dashed #d9d9d9', borderRadius: 6, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', background: '#fafafa' }}
+          style={{ width: 96, height: 96, border: '1px dashed #d9d9d9', borderRadius: 6, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: uploading ? 'progress' : 'pointer', background: '#fafafa' }}
         >
           <PictureOutlined style={{ fontSize: 20, color: '#bbb' }} />
-          <span style={{ fontSize: 10, color: '#bbb', marginTop: 4 }}>点击或Ctrl+V</span>
+          <span style={{ fontSize: 10, color: '#bbb', marginTop: 4 }}>{uploading ? '上传中…' : '点击或Ctrl+V'}</span>
         </div>
       )}
     </div>
@@ -763,6 +790,17 @@ const loadAutoReconSettings = (owner: string) => {
     scope: (s?.scope === 'selected' ? 'selected' : 'all') as 'all' | 'selected',
     customers: Array.isArray(s?.customers) ? (s.customers as string[]) : [],
   };
+};
+
+/**
+ * 本地配额写不进时的上传兜底：直接按内存中的最新 JSON 上传服务端（最多退避重试 3 次）。
+ * 背景：同步上传挂在 localStorage 写入成功的钩子上，一旦本地 5MB 配额满，数据只留在本机 IndexedDB，
+ * 其他端与换机后都看不到；此处补一条与本地写盘结果无关的直传通道。
+ */
+const uploadDatasetWithRetry = (key: string, json: string, attempt = 0): void => {
+  const delays = [1000, 3000, 8000];
+  const retry = () => { if (attempt < delays.length) setTimeout(() => uploadDatasetWithRetry(key, json, attempt + 1), delays[attempt]); };
+  flushDatasetUploadAsync(key, json).then(ok => { if (!ok) retry(); }).catch(retry);
 };
 
 const ModuleChildPage: React.FC = () => {
@@ -986,7 +1024,7 @@ const ModuleChildPage: React.FC = () => {
   const BOM_PRINT_ALL_COLS = useMemo(() => ['款式编码', '商品简称', '商品编码', '层级', '单位', '单价', '每双所需数量', '计划生产数量', '库存数量', '需求总数量', '需采购数量', '小计', '供应商', '上级货品'], []);
   const [bomPrintCols, setBomPrintCols] = useState<string[]>(() => {
     try {
-      const saved = localStorage.getItem('bomPrintCols');
+      const saved = readScopedItem('bomPrintCols');
       if (saved) { const arr = JSON.parse(saved); if (Array.isArray(arr) && arr.length) return arr; }
     } catch { /* ignore */ }
     return ['款式编码', '商品简称', '商品编码', '单位', '单价', '库存数量', '需求总数量', '需采购数量', '小计', '供应商'];
@@ -1029,7 +1067,7 @@ const ModuleChildPage: React.FC = () => {
   // 主表格分页状态
   const [mainTablePage, setMainTablePage] = useState(1);
   const [mainTablePageSize, setMainTablePageSize] = useState(() => {
-    try { return Number(localStorage.getItem('mainTablePageSize')) || 10; } catch { return 10; }
+    try { return Number(readScopedItem('mainTablePageSize')) || 10; } catch { return 10; }
   });
   // 表格体动态高度：实测表体顶边到视口底边的剩余空间（顶边不随表体高度变化，无反馈循环），
   // 使页面不出现窗口级垂直滚动条、横向滚动条固定在窗口最下方
@@ -1207,7 +1245,7 @@ const ModuleChildPage: React.FC = () => {
   const [batchPreviewItems, setBatchPreviewItems] = useState<any[]>([]);
   // 批量新增 - 模版状态
   const [batchTemplates, setBatchTemplates] = useState<any[]>(() => {
-    try { return JSON.parse(localStorage.getItem('batchAddTemplates') || '[]'); } catch { return []; }
+    try { return JSON.parse(readScopedItem('batchAddTemplates') || '[]'); } catch { return []; }
   });
   const [templateModalVisible, setTemplateModalVisible] = useState(false);
   const [templateName, setTemplateName] = useState('');
@@ -1558,7 +1596,7 @@ const ModuleChildPage: React.FC = () => {
   const [rejectReason, setRejectReason] = useState('');
   const [rejectReasons, setRejectReasons] = useState<string[]>(() => {
     try {
-      const saved = localStorage.getItem('picking_reject_reasons_default');
+      const saved = readScopedItem('picking_reject_reasons_default');
       return saved ? JSON.parse(saved) : [];
     } catch { return []; }
   });
@@ -1734,7 +1772,7 @@ const ModuleChildPage: React.FC = () => {
   // 账单明细弹窗：列配置（可见性 + 顺序）
   const [billDetailColConfig, setBillDetailColConfig] = useState<{ keys: string[]; visible: string[] }>(() => {
     try {
-      const saved = localStorage.getItem('billDetailColConfig');
+      const saved = readScopedItem('billDetailColConfig');
       if (saved) return JSON.parse(saved);
     } catch { /* ignore */ }
     return { keys: ['productCode', 'productName', 'color', 'spec', 'quantity', 'price', 'subtotal', 'note'], visible: ['productCode', 'productName', 'quantity', 'price', 'subtotal'] };
@@ -3660,7 +3698,7 @@ const ModuleChildPage: React.FC = () => {
   ], []);
   const [prBomFieldKeys, setPrBomFieldKeys] = useState<string[]>(() => {
     try {
-      const saved = localStorage.getItem('prBomFieldConfig');
+      const saved = readScopedItem('prBomFieldConfig');
       if (saved) { const arr = JSON.parse(saved); if (Array.isArray(arr) && arr.length) return arr; }
     } catch { /* ignore */ }
     return ['image', 'supplierName', 'styleCode', 'shortName', 'code', 'level', 'unit', 'price', 'perPair', 'planQty', 'stock', 'totalQty', 'purchaseQty', 'subtotal'];
@@ -3715,9 +3753,9 @@ const ModuleChildPage: React.FC = () => {
   const openPrBomList = useCallback((rec: any) => {
     const rows = computePrBomRows(rec);
     const title = String(rec.poId || '');
-    // 加载人工修改过的需采购数量
+    // 加载人工修改过的需采购数量（按账号隔离，随数据集上云）
     try {
-      const saved = JSON.parse(localStorage.getItem(`prBomManualQty_${title}`) || '');
+      const saved = JSON.parse(readOwnerSuffixItem('prBomManualQty_', title) || '');
       if (Array.isArray(saved) && saved.length) {
         const map = new Map(saved.map((s: any) => [s.key, s.purchaseQty]));
         rows.forEach((r: any) => {
@@ -3740,7 +3778,7 @@ const ModuleChildPage: React.FC = () => {
     // 加载人工修改过的需采购数量
     const title = String(rec.poId || '');
     try {
-      const saved = JSON.parse(localStorage.getItem(`prBomManualQty_${title}`) || '');
+      const saved = JSON.parse(readOwnerSuffixItem('prBomManualQty_', title) || '');
       if (Array.isArray(saved) && saved.length) {
         const map = new Map(saved.map((s: any) => [s.key, s.purchaseQty]));
         rows.forEach((r: any) => { const k = r.key || r.code; if (map.has(k)) r.purchaseQty = Number(map.get(k)) || 0; });
@@ -5207,7 +5245,7 @@ const ModuleChildPage: React.FC = () => {
         if (needsRepair) {
           try {
             const repairJson = JSON.stringify(data.map(item => {
-              if (item.image && item.key) { const { image: _, ...rest } = item; return rest; }
+              if (typeof item.image === 'string' && item.image.startsWith('data:') && item.key) { const { image: _, ...rest } = item; return rest; }
               return item;
             }));
             safeSetItem(sharedDataKey, repairJson);
@@ -5545,11 +5583,11 @@ const ModuleChildPage: React.FC = () => {
 
       // 对比当前 dataSource，只有内容确实不同时才更新
       const curJson = JSON.stringify(dataSourceRef.current.map((item: any) => {
-        if (item.image && item.key) { const { image: _, ...rest } = item; return rest; }
+        if (typeof item.image === 'string' && item.image.startsWith('data:') && item.key) { const { image: _, ...rest } = item; return rest; }
         return item;
       }));
       const newJson = JSON.stringify(parsed.map((item: any) => {
-        if (item.image && item.key) { const { image: _, ...rest } = item; return rest; }
+        if (typeof item.image === 'string' && item.image.startsWith('data:') && item.key) { const { image: _, ...rest } = item; return rest; }
         return item;
       }));
       if (curJson === newJson) return; // 内容相同，跳过
@@ -5629,9 +5667,9 @@ const ModuleChildPage: React.FC = () => {
         } catch { /* ignore */ }
         let json: string;
         if (isProductList) {
-          // 主数据不含图片，图片已按行单独存储
+          // 主数据不含图片：仅剥离 base64 大图；云端图片 URL（图片空间引用）体积很小，必须保留，换电脑才能显示
           const dataWithoutImages = outList.map(item => {
-            if (item.image && item.key) {
+            if (typeof item.image === 'string' && item.image.startsWith('data:') && item.key) {
               const { image: _, ...rest } = item;
               return rest;
             }
@@ -5661,6 +5699,9 @@ const ModuleChildPage: React.FC = () => {
         if (writeOk) {
           safeSetItem(`${sharedDataKey}_ts`, String(writeTs));
         }
+        // 本地配额写不进（浏览器 5MB 上限）：写入钩子不会触发上传，必须直传服务端，
+        // 避免“本机未落盘 + 他端看不到”的双重丢失；本地显示仍由下方 IndexedDB 兼底
+        if (!writeOk) uploadDatasetWithRetry(sharedDataKey, json);
         // IndexedDB 作可信存储兜底：localStorage 配额溢出静默失败时，刷新后可从 IndexedDB 恢复
         saveDataset(sharedDataKey, json);
         // 更新加载快照为本次写入内容
@@ -10258,7 +10299,7 @@ const ModuleChildPage: React.FC = () => {
 
   // 银行账户-自定义银行列表
   const [customBanks, setCustomBanks] = useState<string[]>(() => {
-    try { return JSON.parse(localStorage.getItem('customBanks') || '[]'); } catch { return []; }
+    try { return JSON.parse(readScopedItem('customBanks') || '[]'); } catch { return []; }
   });
   const [newBankName, setNewBankName] = useState('');
 
@@ -10331,6 +10372,40 @@ const ModuleChildPage: React.FC = () => {
       const rawBase64 = ev.target?.result as string;
       // 压缩图片以减小 localStorage 占用（原图 ~170KB → 压缩后 ~10-20KB）
       const base64 = await compressImage(rawBase64);
+      // 云端图片空间：上传后把记录改为引用云端 URL（换电脑/换浏览器可见）；
+      // 上传失败时静默保留本机存储，不阻断原有上传流程
+      const pushToCloud = async (targets: Array<{ key: string; label?: string }>) => {
+        if (targets.length === 0) return;
+        const moduleLabel = pageConfig?.title || moduleKey;
+        try {
+          const first = targets[0];
+          const asset = await uploadImage({
+            dataUrl: rawBase64,
+            thumbDataUrl: base64,
+            width: 0,
+            height: 0,
+            name: first.label || `产品图-${first.key}`,
+            tags: ['产品图'],
+            ref: {
+              module: moduleKey, moduleLabel,
+              childKey, childLabel: pageConfig?.title || childKey,
+              recordKey: first.key, recordName: first.label || first.key, field: 'image',
+            },
+          });
+          const url = absoluteImageUrl(asset.url);
+          for (let i = 1; i < targets.length; i++) {
+            void registerImageRef(asset.id, {
+              module: moduleKey, moduleLabel,
+              childKey, childLabel: pageConfig?.title || childKey,
+              recordKey: targets[i].key, recordName: targets[i].label || targets[i].key, field: 'image',
+            });
+          }
+          const keySet = new Set(targets.map(t => t.key));
+          setDataSource(prev => prev.map(it =>
+            keySet.has(String(it.key)) ? { ...it, image: url, imageUrl: asset.url, imageId: asset.id } : it
+          ));
+        } catch { /* 云端不可用时保留本机存储 */ }
+      };
       if (imageUploadMode === 'single' && imageUploadTarget) {
         const imgKey = getImgKey(imageUploadTarget.key);
         // 同步写入共享图片库（与新品研发同一 IndexedDB），保证两边图片一致
@@ -10353,6 +10428,7 @@ const ModuleChildPage: React.FC = () => {
         }
         // 触发成品市场自动上架刷新
         window.dispatchEvent(new CustomEvent('product-image-updated'));
+        void pushToCloud([{ key: String(imageUploadTarget.key), label: String(imageUploadTarget.productCode || imageUploadTarget.name || imageUploadTarget.key) }]);
       } else if (imageUploadMode === 'batch') {
         const keySet = new Set(selectedRowKeys);
         setDataSource(prev => prev.map(item =>
@@ -10375,11 +10451,15 @@ const ModuleChildPage: React.FC = () => {
         }
         // 触发成品市场自动上架刷新
         window.dispatchEvent(new CustomEvent('product-image-updated'));
+        void pushToCloud(selectedRowKeys.map(k => {
+          const rec = dataSource.find((r: any) => String(r.key) === String(k));
+          return { key: String(k), label: String(rec?.productCode || rec?.name || k) };
+        }));
       }
       setImageModalVisible(false);
     };
     reader.readAsDataURL(file);
-  }, [imageUploadMode, imageUploadTarget, selectedRowKeys, getImgKey, compressImage, cleanupOrphanedImages, getStorageUsageMB]);
+  }, [imageUploadMode, imageUploadTarget, selectedRowKeys, getImgKey, compressImage, cleanupOrphanedImages, getStorageUsageMB, dataSource, moduleKey, childKey, pageConfig]);
 
   // 处理图片文件选择（来自input）
   const handleImageFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -14548,7 +14628,7 @@ const handleBatchAttrsConfirm = () => {
               if (size !== mainTablePageSize) {
                 setMainTablePageSize(size);
                 setMainTablePage(1);
-                try { localStorage.setItem('mainTablePageSize', String(size)); } catch {}
+                try { writeScopedItem('mainTablePageSize', String(size)); } catch {}
               }
             },
           }}
@@ -15482,7 +15562,15 @@ const handleBatchAttrsConfirm = () => {
                           </ConfigProvider>
                           <div>
                             <Form.Item name="payScreenshot" label={<span style={{ fontSize: 12 }}>付款截图</span>} style={{ marginBottom: 0 }}>
-                              <PayScreenshotUpload />
+                              <PayScreenshotUpload getRef={() => ({
+                                module: moduleKey,
+                                moduleLabel: pageConfig?.title || moduleKey,
+                                childKey,
+                                childLabel: pageConfig?.title || childKey,
+                                recordKey: String(editForm.getFieldValue('key') || editForm.getFieldValue('orderNo') || editForm.getFieldValue('id') || ''),
+                                recordName: String(editForm.getFieldValue('orderNo') || editForm.getFieldValue('customerName') || '订单付款截图'),
+                                field: 'payScreenshot',
+                              })} />
                             </Form.Item>
                           </div>
                           {wPayMethod !== '分段付款' && (
@@ -15752,7 +15840,7 @@ const handleBatchAttrsConfirm = () => {
                                 if (!n) { message.warning('请输入银行名称'); return; }
                                 setCustomBanks(prev => {
                                   const list = prev.includes(n) ? prev : [...prev, n];
-                                  try { localStorage.setItem('customBanks', JSON.stringify(list)); } catch { /* ignore */ }
+                                  try { writeScopedItem('customBanks', JSON.stringify(list)); } catch { /* ignore */ }
                                   return list;
                                 });
                                 editForm.setFieldsValue({ bankName: n });
@@ -16701,7 +16789,7 @@ const handleBatchAttrsConfirm = () => {
                                   if (!n) { message.warning('请输入银行名称'); return; }
                                   setCustomBanks(prev => {
                                     const list = prev.includes(n) ? prev : [...prev, n];
-                                    try { localStorage.setItem('customBanks', JSON.stringify(list)); } catch { /* ignore */ }
+                                    try { writeScopedItem('customBanks', JSON.stringify(list)); } catch { /* ignore */ }
                                     return list;
                                   });
                                   addForm.setFieldsValue({ bankName: n });
@@ -17543,7 +17631,7 @@ const handleBatchAttrsConfirm = () => {
                   const rows = computePrBomRows(r);
                   // 加载人工修改的需采购数量
                   try {
-                    const saved = JSON.parse(localStorage.getItem(`prBomManualQty_${r.poId || ''}`) || '');
+                    const saved = JSON.parse(readOwnerSuffixItem('prBomManualQty_', String(r.poId || '')) || '');
                     if (Array.isArray(saved) && saved.length) {
                       const map = new Map(saved.map((s: any) => [s.key, s.purchaseQty]));
                       rows.forEach((row: any) => {
@@ -18003,7 +18091,7 @@ const handleBatchAttrsConfirm = () => {
               </div>
               <Checkbox.Group
                 value={bomPrintCols}
-                onChange={(vals) => { const arr = vals as string[]; setBomPrintCols(arr); try { localStorage.setItem('bomPrintCols', JSON.stringify(arr)); } catch { /* ignore */ } }}
+                onChange={(vals) => { const arr = vals as string[]; setBomPrintCols(arr); try { writeScopedItem('bomPrintCols', JSON.stringify(arr)); } catch { /* ignore */ } }}
                 style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 12px' }}
               >
                 {BOM_PRINT_ALL_COLS.map(c => (
@@ -19722,7 +19810,7 @@ const handleBatchAttrsConfirm = () => {
                           e.preventDefault();
                           const updated = rejectReasons.filter(x => x !== r);
                           setRejectReasons(updated);
-                          localStorage.setItem('picking_reject_reasons_default', JSON.stringify(updated));
+                          writeScopedItem('picking_reject_reasons_default', JSON.stringify(updated));
                           if (rejectReason === r) setRejectReason('');
                         }}
                       />
@@ -19747,7 +19835,7 @@ const handleBatchAttrsConfirm = () => {
                 if (allRejectReasons.includes(val)) { message.warning('该原因已存在'); return; }
                 const updated = [...rejectReasons, val];
                 setRejectReasons(updated);
-                localStorage.setItem('picking_reject_reasons_default', JSON.stringify(updated));
+                writeScopedItem('picking_reject_reasons_default', JSON.stringify(updated));
                 setRejectNewReason('');
                 message.success('已新增驳回原因');
               }}
@@ -19759,7 +19847,7 @@ const handleBatchAttrsConfirm = () => {
                 if (allRejectReasons.includes(val)) { message.warning('该原因已存在'); return; }
                 const updated = [...rejectReasons, val];
                 setRejectReasons(updated);
-                localStorage.setItem('picking_reject_reasons_default', JSON.stringify(updated));
+                writeScopedItem('picking_reject_reasons_default', JSON.stringify(updated));
                 setRejectNewReason('');
                 message.success('已新增驳回原因');
               }}
@@ -20341,7 +20429,7 @@ tr:nth-child(even) { background: #f5f9ff; }
                                           ? [...next.visible, col.key]
                                           : next.visible.filter(k => k !== col.key);
                                         setBillDetailColConfig(next);
-                                        try { localStorage.setItem('billDetailColConfig', JSON.stringify(next)); } catch { /* ignore */ }
+                                        try { writeScopedItem('billDetailColConfig', JSON.stringify(next)); } catch { /* ignore */ }
                                       }}
                                     />
                                     <span style={{ flex: 1, fontSize: 12 }}>{col.title}</span>
@@ -20351,7 +20439,7 @@ tr:nth-child(even) { background: #f5f9ff; }
                                         [keys[idx - 1], keys[idx]] = [keys[idx], keys[idx - 1]];
                                         const next = { ...billDetailColConfig, keys };
                                         setBillDetailColConfig(next);
-                                        try { localStorage.setItem('billDetailColConfig', JSON.stringify(next)); } catch { /* ignore */ }
+                                        try { writeScopedItem('billDetailColConfig', JSON.stringify(next)); } catch { /* ignore */ }
                                       }} />
                                     <Button type="text" size="small" disabled={idx === ordered.length - 1} icon={<ArrowDownOutlined />} style={{ padding: '0 2px', fontSize: 10 }}
                                       onClick={() => {
@@ -20359,7 +20447,7 @@ tr:nth-child(even) { background: #f5f9ff; }
                                         [keys[idx], keys[idx + 1]] = [keys[idx + 1], keys[idx]];
                                         const next = { ...billDetailColConfig, keys };
                                         setBillDetailColConfig(next);
-                                        try { localStorage.setItem('billDetailColConfig', JSON.stringify(next)); } catch { /* ignore */ }
+                                        try { writeScopedItem('billDetailColConfig', JSON.stringify(next)); } catch { /* ignore */ }
                                       }} />
                                   </div>
                                 ))}
@@ -20521,7 +20609,7 @@ tr:nth-child(even) { background: #f5f9ff; }
                                     ? [...next.visible, col.key]
                                     : next.visible.filter(k => k !== col.key);
                                   setBillDetailColConfig(next);
-                                  try { localStorage.setItem('billDetailColConfig', JSON.stringify(next)); } catch { /* ignore */ }
+                                  try { writeScopedItem('billDetailColConfig', JSON.stringify(next)); } catch { /* ignore */ }
                                 }}
                               />
                               <span style={{ flex: 1, fontSize: 12 }}>{col.title}</span>
@@ -20531,7 +20619,7 @@ tr:nth-child(even) { background: #f5f9ff; }
                                   [keys[idx - 1], keys[idx]] = [keys[idx], keys[idx - 1]];
                                   const next = { ...billDetailColConfig, keys };
                                   setBillDetailColConfig(next);
-                                  try { localStorage.setItem('billDetailColConfig', JSON.stringify(next)); } catch { /* ignore */ }
+                                  try { writeScopedItem('billDetailColConfig', JSON.stringify(next)); } catch { /* ignore */ }
                                 }} />
                               <Button type="text" size="small" disabled={idx === ordered.length - 1} icon={<ArrowDownOutlined />} style={{ padding: '0 2px', fontSize: 10 }}
                                 onClick={() => {
@@ -20539,7 +20627,7 @@ tr:nth-child(even) { background: #f5f9ff; }
                                   [keys[idx], keys[idx + 1]] = [keys[idx + 1], keys[idx]];
                                   const next = { ...billDetailColConfig, keys };
                                   setBillDetailColConfig(next);
-                                  try { localStorage.setItem('billDetailColConfig', JSON.stringify(next)); } catch { /* ignore */ }
+                                  try { writeScopedItem('billDetailColConfig', JSON.stringify(next)); } catch { /* ignore */ }
                                 }} />
                             </div>
                           ))}
@@ -21331,7 +21419,7 @@ tr:nth-child(even) { background: #f5f9ff; }
                 const title = String(cgDetailRec.poId || '');
                 try {
                   const saved = cgDetailRows.map((r: any) => ({ key: r.key || r.code, purchaseQty: r.purchaseQty }));
-                  localStorage.setItem(`prBomManualQty_${title}`, JSON.stringify(saved));
+                  writeOwnerSuffixItem('prBomManualQty_', title, JSON.stringify(saved));
                 } catch { /* ignore */ }
                 message.success('采购申请单已保存');
                 setCgDetailRec(null); setCgDetailRows([]); setCgEditMode(false);
@@ -21698,7 +21786,7 @@ tr:nth-child(even) { background: #f5f9ff; }
                   </div>
                   <Checkbox.Group
                     value={prBomFieldKeys}
-                    onChange={(vals) => { const arr = vals as string[]; setPrBomFieldKeys(arr); try { localStorage.setItem('prBomFieldConfig', JSON.stringify(arr)); } catch { /* ignore */ } }}
+                    onChange={(vals) => { const arr = vals as string[]; setPrBomFieldKeys(arr); try { writeScopedItem('prBomFieldConfig', JSON.stringify(arr)); } catch { /* ignore */ } }}
                     style={{ display: 'flex', flexDirection: 'column', gap: 6 }}
                   >
                     {PR_BOM_ALL_FIELDS.map(f => (
@@ -21756,7 +21844,7 @@ tr:nth-child(even) { background: #f5f9ff; }
                 return { ...r, purchaseQty: Math.max(0, Math.round((totalQty - stock) * 100000) / 100000) };
               });
               setPrBomViewRows(updated);
-              try { localStorage.removeItem(`prBomManualQty_${prBomViewTitle}`); } catch { /* ignore */ }
+              try { removeOwnerSuffixItem('prBomManualQty_', prBomViewTitle); } catch { /* ignore */ }
               message.success('已重算需采购数量');
             }}>重算</Button>
             <Button onClick={() => setPrBomViewVisible(false)}>关闭</Button>
@@ -21796,7 +21884,7 @@ tr:nth-child(even) { background: #f5f9ff; }
                     setPrBomViewRows(updated);
                   }}
                   onBlur={() => {
-                    try { localStorage.setItem(`prBomManualQty_${prBomViewTitle}`, JSON.stringify(prBomViewRows.map((r: any) => ({ key: r.key || r.code, purchaseQty: r.purchaseQty })))); } catch { /* ignore */ }
+                    try { writeOwnerSuffixItem('prBomManualQty_', prBomViewTitle, JSON.stringify(prBomViewRows.map((r: any) => ({ key: r.key || r.code, purchaseQty: r.purchaseQty })))); } catch { /* ignore */ }
                   }}
                 />
               ) },

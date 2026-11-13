@@ -8,6 +8,7 @@ import {
 import { saveDataset } from '../utils/dataStore';
 import { safeSetItem } from '../utils/storageQuota';
 import { saveFullImage } from '../utils/imageStore';
+import { readScopedItem, writeScopedItem } from '../utils/scopedStorage';
 import MoldPickerModal from './MoldPickerModal';
 
 const PRIMARY = '#1e4a7e';
@@ -74,7 +75,7 @@ const BatchAddProductModal: React.FC<BatchAddProductModalProps> = ({
   const [barcodeOffset, setBarcodeOffset] = useState(0);
   // 模版
   const [batchTemplates, setBatchTemplates] = useState<any[]>(() => {
-    try { return JSON.parse(localStorage.getItem('batchAddTemplates') || '[]'); } catch { return []; }
+    try { return JSON.parse(readScopedItem('batchAddTemplates') || '[]'); } catch { return []; }
   });
   const [templateModalVisible, setTemplateModalVisible] = useState(false);
   const [templateName, setTemplateName] = useState('');
@@ -587,7 +588,7 @@ const BatchAddProductModal: React.FC<BatchAddProductModalProps> = ({
             };
             const updated = [...batchTemplates, tpl];
             setBatchTemplates(updated);
-            try { localStorage.setItem('batchAddTemplates', JSON.stringify(updated)); } catch { /* ignore */ }
+            writeScopedItem('batchAddTemplates', JSON.stringify(updated));
             setTemplateName(''); setTemplateSpecPreset(''); setTemplateColorPreset('');
             message.success('模版已保存');
           }}>保存当前为模版</Button>
@@ -600,7 +601,7 @@ const BatchAddProductModal: React.FC<BatchAddProductModalProps> = ({
               <Button size="small" danger type="text" icon={<DeleteOutlined />} onClick={() => {
                 const updated = batchTemplates.filter((_, i) => i !== idx);
                 setBatchTemplates(updated);
-                try { localStorage.setItem('batchAddTemplates', JSON.stringify(updated)); } catch { /* ignore */ }
+                writeScopedItem('batchAddTemplates', JSON.stringify(updated));
               }} />
             </div>
           ))}

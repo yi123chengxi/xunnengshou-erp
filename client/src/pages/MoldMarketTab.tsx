@@ -7,6 +7,7 @@ import {
   SearchOutlined, ReloadOutlined, CameraOutlined, CloseOutlined, MessageOutlined,
 } from '@ant-design/icons';
 import { compressImageFile } from '../utils/imageCompress';
+import { absoluteImageUrl, prepareImageFile, uploadImage } from '../utils/imageSpace';
 import { safeSetItem } from '../utils/storageQuota';
 import { flushDatasetUpload, reloadAfterPull } from '../utils/serverSync';
 import { computeSubjectFeatures, subjectSimilarity } from '../utils/imageSimilarity';
@@ -241,7 +242,7 @@ const MoldMarketTab: React.FC<{ onContact?: (username: string, subject: string) 
     const arr = Array.from(files) as File[];
     const newImgs: string[] = [];
     for (const f of arr) {
-      try { const url = await compressImageFile(f); newImgs.push(url); } catch { /* skip */ }
+      try { const url = await imageToStoredUrl(f); newImgs.push(url); } catch { /* skip */ }
     }
     if (newImgs.length) setEditImages(prev => [...prev, ...newImgs]);
   };
@@ -253,7 +254,7 @@ const MoldMarketTab: React.FC<{ onContact?: (username: string, subject: string) 
         const type = (it.types || []).find((t: string) => t.startsWith('image/'));
         if (type) {
           const blob = await it.getType(type);
-          const url = await compressImageFile(blob);
+          const url = await imageToStoredUrl(blob);
           setEditImages(prev => [...prev, url]);
           message.success('已粘贴剪切板图片');
           return;
@@ -308,11 +309,32 @@ const MoldMarketTab: React.FC<{ onContact?: (username: string, subject: string) 
   const publishedMoldKeys = useMemo(() => new Set(listings.map(l => l.moldKey)), [listings]);
 
   // ============ 图片处理 ============
+  // 优先上传云端图片空间：列表里只存 URL，其他账号/其他电脑也能看到模具图；失败时退回本机 base64
+  const imageToStoredUrl = async (input: File | Blob): Promise<string> => {
+    try {
+      const file = input instanceof File ? input : new File([input], `模具图-${Date.now()}.png`, { type: input.type || 'image/png' });
+      const prepared = await prepareImageFile(file);
+      const asset = await uploadImage({
+        ...prepared,
+        name: file.name || '模具图',
+        tags: ['模具图'],
+        ref: {
+          module: 'market', moduleLabel: '商机市场',
+          childKey: 'mold', childLabel: '模具租售',
+          recordKey: 'mold-listing-image', recordName: file.name || '模具图', field: 'images',
+        },
+      });
+      return absoluteImageUrl(asset.url);
+    } catch {
+      return await compressImageFile(input);
+    }
+  };
+
   const handleImageFiles = async (files: FileList | File[]) => {
     const arr = Array.from(files) as File[];
     const newImgs: string[] = [];
     for (const f of arr) {
-      try { const url = await compressImageFile(f); newImgs.push(url); } catch { /* skip */ }
+      try { const url = await imageToStoredUrl(f); newImgs.push(url); } catch { /* skip */ }
     }
     if (newImgs.length) setListingImages(prev => [...prev, ...newImgs]);
   };
@@ -324,7 +346,7 @@ const MoldMarketTab: React.FC<{ onContact?: (username: string, subject: string) 
         const type = (it.types || []).find((t: string) => t.startsWith('image/'));
         if (type) {
           const blob = await it.getType(type);
-          const url = await compressImageFile(blob);
+          const url = await imageToStoredUrl(blob);
           setListingImages(prev => [...prev, url]);
           message.success('已粘贴剪切板图片');
           return;

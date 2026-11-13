@@ -305,6 +305,9 @@ export function safeSetItem(key: string, value: string): boolean {
       notifyUsageWrite(key, oldLen, value.length);
       return true;
     } catch (err2) {
+      // 本地配额写不进时，同步上传钩子不能跟着断链：仍按内存中的最新值上传服务端，
+      // 保证数据在其他端/换机后可恢复（本地显示由 IndexedDB 或服务端回灌兜底）
+      fireHooks(key, value);
       reportWriteFailure(key, value.length, `safeSetItem(重试后仍失败;首次:${String((err1 as any)?.message || err1).slice(0, 60)})`, err2);
       return false;
     }
@@ -355,8 +358,11 @@ export function installStorageQuotaGuard(): void {
         originalSetItem.call(this, key, value);
         if (this === localStorage) { fireHooks(key, value); notifyUsageWrite(key, oldLen, value.length); }
       } catch (err2) {
-        // 清理后仍失败：放弃本次写入保持页面可用，但必须留痕并对外告警
+        // 清理后仍失败：放弃本次本地写入（保持页面可用），但同步钩子仍要触发一次，
+        // 由上传链路把内存中的最新值送到服务端，避免“本地没存 + 服务端也没存”的双重丢失；
+        // 同时留痕并对外告警
         if (this === localStorage) {
+          fireHooks(key, value);
           reportWriteFailure(key, (value || '').length, `setItem(重试后仍失败;首次:${String((err1 as any)?.message || err1).slice(0, 60)})`, err2);
         }
       }

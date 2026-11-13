@@ -18,7 +18,55 @@ import { healReconTerminalLinks } from './reconHeal';
 // 需要同步的业务数据 key 前缀/精确名
 // 注意：customer_pay_summary_/supplier_pay_summary_ 为本地派生快照（由订单/账单/台账重算），禁止跨端同步——
 // 否则任一端在源数据未拉全时算出 0 快照上传，会经 pull 宽限期覆盖其他端的正确快照，表现为采购总额跳动/归 0
-const SYNC_PREFIXES = ['pageData_', 'custom_', 'warehouses_', 'purchaser_suppliers_', 'boundPurchasers_', 'accounts_', 'shop_info_', 'shop_profit_', 'month_end_check_', 'withdrawal_record_', 'dev_', 'hr_', 'newstyle_', 'brandauth_', 'molds_', 'credit_adjustments_', 'published_credit_', 'payment_requests_', 'payment_request_managers_', 'notification_settings_', 'print_template_', 'price_strategy_', 'user_notice_', 'invoice_record_', 'invoice_apply_requests_', 'purchaser_bills_', 'recon_db_', 'roles_', 'preset_role_overrides_', 'role_permsettings_', 'customers_', 'supplier_payments_', 'customerReceipts_', 'inventory_check_', 'stock_change_log_', 'sales_outbound_'];
+const SYNC_PREFIXES = [
+  // ==== 原有业务数据 ====
+  'pageData_', 'custom_', 'warehouses_', 'purchaser_suppliers_', 'boundPurchasers_', 'accounts_', 'shop_info_', 'shop_profit_', 'month_end_check_', 'withdrawal_record_', 'dev_', 'hr_', 'newstyle_', 'brandauth_', 'molds_', 'credit_adjustments_', 'published_credit_', 'payment_requests_', 'payment_request_managers_', 'notification_settings_', 'print_template_', 'price_strategy_', 'user_notice_', 'invoice_record_', 'invoice_apply_requests_', 'purchaser_bills_', 'recon_db_', 'roles_', 'preset_role_overrides_', 'role_permsettings_', 'customers_', 'supplier_payments_', 'customerReceipts_', 'inventory_check_', 'stock_change_log_', 'sales_outbound_',
+  // ==== 财务/账务（此前仅存本机，换电脑即丢）====
+  'reimbursement_',            // 报销单 + 报销付款 + 报销负责人（三者同前缀）
+  'daily_bookkeeping_',        // 日常记账流水
+  'daily_book_categories_',    // 日常记账支出分类
+  'daily_book_main_categories_', // 日常记账主分类
+  'general_ledger_subjects_',  // 总账科目
+  'ledger_auto_subjects_',     // 自动记账科目映射
+  'ledger_mode_',              // 简易账/会计账模式
+  'ledger_period_amounts_',    // 期间发生额
+  'other_payables_',           // 其他应付款
+  'other_receivables_',        // 其他应收款
+  'customer_statements_',      // 客户对账单
+  'autoReconSettings_',        // 自动对账设置
+  // ==== 业务配置/模版（用户反馈换电脑后模版丢失）====
+  'batchAddTemplates_',        // 批量新增产品模版
+  'orderQtyTemplates_',        // 订单数量模版
+  'billQtyTemplates_',         // 账单数量模版
+  'addColorSpecTemplates_',    // 新款研发颜色规格模版
+  'order_tags_',               // 订单标签
+  'tax_rate_templates_',       // 税率模版
+  'productionFeeQty_',         // 生产管理费产量
+  'production_schedule_lines_', // 生产排期明细
+  'sb_deferred_',              // 排期看板推迟标记
+  'market_settings_',          // 商机市场偏好
+  'account_groups_',           // 薪资账号分组
+  'business_license_',         // 营业执照信息
+  'month_end_return_',         // 月末退货统计（开发者后台跨账号读取）
+  'month_end_ship_',           // 月末出货统计（开发者后台跨账号读取）
+  'recharge_record_',          // 充值记录（开发者后台跨账号读取）
+  'bound_purchasers_',         // 已绑定采购商（供应商↔采购商协作）
+  'independent_purchasers_',   // 独立采购商（跨账号协作）
+  // ==== 表格列配置（换电脑后列顺序/显隐保持一致）====
+  'colWidths_', 'mainTablePageSize_', 'billAddColConfig_', 'billDetailColConfig_', 'billFieldOrder_', 'billFieldVisibility_', 'billItemDisplay_',
+  'pickListFields_', 'po_view_mode_', 'print_dialog_tpl_', 'bomPrintCols_', 'prBomFieldConfig_', 'returnRegColConfig_',
+  'purchbill_debit_subject_', 'recon_feedback_seen_', 'inventoryBanner_',
+  'monthEndFieldOrder_', 'monthEndFieldVis_', 'retFieldOrder_', 'retFieldVis_', 'shipFieldOrder_', 'shipFieldVis_',
+  'moldFieldOrder_', 'moldFieldVis_', 'customerFieldOrder_', 'customerFieldVisibility_',
+  'supplierFieldOrder_', 'supplierFieldVisibility_', 'facFieldOrder_', 'facFieldVis_',
+  'facCoopFieldOrder_', 'facCoopFieldVis_', 'ownbrand_fieldorder_', 'ownbrand_fieldvis_',
+  'sos_fieldOrder_', 'sos_fieldVis_', 'ws_stockFieldOrder_', 'ws_stockFieldVis_',
+  'salesFieldOrder_', 'salesFieldVisibility_', 'bizLicenseFieldOrder_', 'bizLicenseFieldVisibility_',
+  'rechFieldOrder_', 'rechFieldVis_', 'salesOutboundDisplay_', 'chat_quick_company_', 'chat_quick_personal_',
+  'picking_reject_reasons_', 'customBanks_', 'prBomManualQty_',
+  // 产品 BOM（成品/半成品/原材料/工序，键为 bom_<货品key>_<账号>）——换电脑后 BOM 必须一致
+  'bom_',
+];
 const SYNC_EXACT = ['registeredUsers', 'subscription_orders', 'storage_orders', 'market_publish_orders', 'market_ratings', 'market_trade_orders', 'market_visitor_cart_shares', 'market_mold_listings', 'purchaser_pushed_orders', 'cooperation_applications', 'cooperation_invites', 'recon_records', 'recon_feedback', 'company_renames'];
 // 图片块体积大，不参与跨浏览器同步（各浏览器独立）
 const EXCLUDE_PREFIXES = ['prodImg_', 'thumb_', 'payShot_', 'mold_img_'];
@@ -81,6 +129,9 @@ function keyOwner(key: string): string | null {
   if (key.startsWith('market_')) return null;
   // 打印模板为系统级预设/共享数据：跨账号同步，部署后新浏览器自动拉取
   if (key.startsWith('print_template_')) return null;
+  // 跨租户协作键：键内后缀是对方账号（供应商写的已绑定采购商、开发者后台读取的月末统计/充值记录）
+  if (key.startsWith('bound_purchasers_') || key.startsWith('independent_purchasers_') ||
+    key.startsWith('month_end_return_') || key.startsWith('month_end_ship_') || key.startsWith('recharge_record_')) return null;
   const idx = key.lastIndexOf('_');
   if (idx < 0) return key;
   return key.slice(idx + 1);

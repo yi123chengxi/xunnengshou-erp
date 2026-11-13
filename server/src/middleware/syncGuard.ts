@@ -92,6 +92,9 @@ const SHARED_PREFIXES = [
   'invoice_record_', 'invoice_apply_requests_', 'purchaser_suppliers_', 'boundPurchasers_',
   'published_credit_', 'credit_adjustments_', 'price_strategy_',
   'roles_', 'role_permsettings_', 'preset_role_overrides_',
+  // 跨租户协作 / 开发者后台需要跨账号读取的业务键（后缀是对方账号，不能按末段判归属）
+  'bound_purchasers_', 'independent_purchasers_',
+  'month_end_return_', 'month_end_ship_', 'recharge_record_',
 ];
 
 /** 严格私有：只允许本租户读写（跨租户不会访问这些键）
@@ -101,6 +104,18 @@ const STRICT_PRIVATE_PREFIXES = [
   'shop_info_', 'shop_profit_', 'inventory_check_', 'stock_change_log_', 'sales_outbound_',
   'customerReceipts_', 'supplier_payments_', 'warehouses_', 'hr_', 'newstyle_', 'custom_',
   'notification_settings_',
+  // 图片空间索引（图片空间页面走 /api/images；此处防止经 /api/sync 直读他人图片清单）
+  'image_assets_',
+  // 财务/账务/业务配置（本租户独有，不允许跨租户读写）
+  'reimbursement_', 'daily_bookkeeping_', 'daily_book_categories_', 'daily_book_main_categories_',
+  'general_ledger_subjects_', 'ledger_auto_subjects_', 'ledger_mode_', 'ledger_period_amounts_',
+  'other_payables_', 'other_receivables_', 'customer_statements_', 'autoReconSettings_',
+  'batchAddTemplates_', 'orderQtyTemplates_', 'billQtyTemplates_', 'addColorSpecTemplates_',
+  'order_tags_', 'tax_rate_templates_', 'productionFeeQty_', 'production_schedule_lines_',
+  'sb_deferred_', 'account_groups_', 'customBanks_', 'picking_reject_reasons_', 'prBomManualQty_',
+  // 产品 BOM 与列/字段配置（键末段为账号，不得跨租户读取）
+  'bom_', 'mainTablePageSize_', 'bomPrintCols_', 'billDetailColConfig_', 'prBomFieldConfig_',
+  'billAddColConfig_', 'pickListFields_',
 ];
 
 /** 键的归属账号；共享键返回 null（与客户端 keyOwner 一致：取最后一个下划线后的账号名） */
