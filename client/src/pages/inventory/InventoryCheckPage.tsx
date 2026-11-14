@@ -73,6 +73,8 @@ const InventoryCheckPage: React.FC = () => {
   const [pickVisible, setPickVisible] = useState(false);
   const [pickSearch, setPickSearch] = useState('');
   const [pickQty, setPickQty] = useState<Record<string, number>>({});
+  // 添加商品弹窗：勾选的商品编码（支持勾选多行后批量添加）
+  const [pickSelected, setPickSelected] = useState<string[]>([]);
   // 数量模版（与订单管理共用存储键）
   const [qtyTemplates, setQtyTemplates] = useState<QtyTemplate[]>(() => loadQtyTemplates(getDataOwner()));
   const [qtyTplVisible, setQtyTplVisible] = useState(false);
@@ -151,6 +153,35 @@ const InventoryCheckPage: React.FC = () => {
     message.success(`已添加 ${prod.productCode}，盘点数量 +${qty}`);
   }, [pickQty, scanDefaultQty, formItems]);
 
+  // 批量添加勾选商品：按各自「添加数量」并入盘点明细（已存在的商品累加盘点数量）
+  const handlePickAddBatch = useCallback(() => {
+    if (pickSelected.length === 0) { message.warning('请先勾选要添加的商品'); return; }
+    const selSet = new Set(pickSelected.map(String));
+    const picked = productList.filter((p: any) => selSet.has(String(p.productCode)));
+    if (picked.length === 0) { message.warning('勾选的商品在当前商品列表中不存在'); return; }
+    const items = formItems.map(i => ({ ...i }));
+    let added = 0; let accumulated = 0;
+    picked.forEach((prod: any) => {
+      const qty = pickQty[prod.productCode] ?? scanDefaultQty;
+      const idx = items.findIndex(i => i.productCode === prod.productCode);
+      if (idx >= 0) {
+        const newCheck = (items[idx].checkQty || 0) + qty;
+        items[idx] = { ...items[idx], checkQty: newCheck, diff: newCheck - items[idx].systemStock };
+        accumulated++;
+      } else {
+        const sysStock = Number(prod.actualStock) || 0;
+        items.push({
+          productCode: prod.productCode, productName: prod.shortName || prod.name || '',
+          unit: prod.unit || '', spec: prod.spec || '', systemStock: sysStock, checkQty: sysStock + qty, diff: qty, remark: '',
+        });
+        added++;
+      }
+    });
+    setFormItems(items);
+    setPickSelected([]);
+    message.success(`已批量添加 ${added} 个商品${accumulated ? `，累加 ${accumulated} 个已存在商品` : ''}`);
+  }, [pickSelected, productList, formItems, pickQty, scanDefaultQty]);
+
   // 数量模版：保存/删除（与订单管理共用存储键）
   const handleChangeQtyTemplates = useCallback((list: QtyTemplate[]) => {
     setQtyTemplates(list);
@@ -192,7 +223,7 @@ const InventoryCheckPage: React.FC = () => {
     });
   }, [qtyFillTemplate, formItems]);
 
-  const resetForm = () => { setFormItems([]); setFormRemark(''); setScanCode(''); setPickSearch(''); setPickQty({}); setCheckedTpl({}); setImportState(null); };
+  const resetForm = () => { setFormItems([]); setFormRemark(''); setScanCode(''); setPickSearch(''); setPickQty({}); setPickSelected([]); setCheckedTpl({}); setImportState(null); };
 
   // 解析导入表格（xlsx/xls/csv）：首行为表头，自动匹配字段后进入映射确认态
   const handleImportFile = async (file: File) => {
@@ -516,7 +547,7 @@ const InventoryCheckPage: React.FC = () => {
       {/* 添加商品选择弹窗 */}
       <Modal
         title={<span><AppstoreOutlined style={{ marginRight: 8, color: PRIMARY }} />选择商品</span>}
-        open={pickVisible} onCancel={() => setPickVisible(false)}
+        open={pickVisible} onCancel={() => { setPickVisible(false); setPickSelected([]); }}
         footer={null} centered width={800} zIndex={1200}
       >
         <Input.Search
@@ -526,6 +557,13 @@ const InventoryCheckPage: React.FC = () => {
         <Table
           bordered size="small" pagination={{ pageSize: 8, showTotal: t => `共 ${t} 条` }}
           dataSource={pickProducts} rowKey="productCode"
+          rowSelection={{
+            type: 'checkbox',
+            columnWidth: 44,
+            preserveSelectedRowKeys: true,
+            selectedRowKeys: pickSelected,
+            onChange: keys => setPickSelected(keys.map(String)),
+          }}
           columns={[
             { title: '商品编码', dataIndex: 'productCode', width: 130, align: 'center' as const },
             { title: '商品简称', key: 'name', width: 130, align: 'center' as const, render: (_: any, r: any) => r.shortName || r.name || '' },
@@ -549,6 +587,21 @@ const InventoryCheckPage: React.FC = () => {
             },
           ]}
         />
+        {/* 勾选批量添加操作条：勾选多行后一次性并入盘点明细 */}
+        <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            已勾选 <Text strong style={{ color: PRIMARY }}>{pickSelected.length}</Text> 个商品，按各行「添加数量」批量并入盘点明细
+          </Text>
+          <Space>
+            <Button size="small" disabled={pickProducts.length === 0} onClick={() => setPickSelected(pickProducts.map((p: any) => String(p.productCode)))}>
+              全选筛选结果（{pickProducts.length}）
+            </Button>
+            <Button size="small" disabled={pickSelected.length === 0} onClick={() => setPickSelected([])}>清空选择</Button>
+            <Button size="small" type="primary" disabled={pickSelected.length === 0} onClick={handlePickAddBatch}>
+              批量添加（{pickSelected.length}）
+            </Button>
+          </Space>
+        </div>
       </Modal>
 
       {/* 数量模版管理弹窗 */}
