@@ -63,6 +63,74 @@ const isNeverShrinkKey = (key: string): boolean => NEVER_SHRINK_PREFIXES.some(p 
 const STICKY_HANDLED_PREFIXES = ['supplier_receipt_inbox_'];
 const isStickyHandledKey = (key: string): boolean => STICKY_HANDLED_PREFIXES.some(p => key.startsWith(p));
 
+// ============ meta 版本表缓存（可用性关键路径） ============
+// dataset_store 单表承载全部业务 JSON（含图片 dataURL），SELECT dataset_key, updated_at 需要回表遍历整表，
+// 数据量上来后单次可达 60~100 秒。而每个在线客户端每 60 秒轮询一次 /meta，几条慢查询就占满 MySQL 连接池（10 条），
+// 连登录（主键查询 + bcrypt）都要排队近百秒 —— 表现为「偶尔提示密码错误 / 登录后被踢回登录页 / 刷新十几秒」。
+// 处理：进程内合并 + 陈旧返回（stale-while-revalidate），请求永不等待慢查询；写入后按 key 就地增量更新。
+const META_TTL_MS = 60_000;
+let metaCacheAt = 0;
+let metaCacheData: Record<string, number> | null = null;
+let metaInflight: Promise<Record<string, number>> | null = null;
+
+function refreshMetaCache(): Promise<Record<string, number>> {
+  if (metaInflight) return metaInflight;
+  const startedAt = Date.now();
+  const p = (async () => {
+    const rows = await store.getAllMeta();
+    const meta: Record<string, number> = {};
+    for (const r of rows) meta[r.dataset_key] = r.updated_at;
+    metaCacheData = meta;
+    metaCacheAt = Date.now();
+    const cost = metaCacheAt - startedAt;
+    // 慢查询自证：>3 秒说明仍在回表全扫，覆盖索引尚未建成或未生效
+    if (cost > 3000) console.warn(`[sync] meta 版本表刷新耗时 ${cost}ms（${rows.length} 键），疑似缺少覆盖索引`);
+    return meta;
+  })();
+  metaInflight = p;
+  // 单飞：无论成功失败都释放，失败时由调用方兜底
+  void p.catch(() => { /* 调用方处理 */ }).finally(() => { if (metaInflight === p) metaInflight = null; });
+  return p;
+}
+
+async function getMetaCached(): Promise<Record<string, number>> {
+  if (metaCacheData && Date.now() - metaCacheAt < META_TTL_MS) return metaCacheData;
+  if (metaInflight) return metaCacheData || await metaInflight;
+  if (metaCacheData) { void refreshMetaCache().catch(() => { /* 保留旧值 */ }); return metaCacheData; }
+  return await refreshMetaCache();
+}
+
+/** 写入/删除后就地更新键版本：本进程立即可见，无需等整表刷新 */
+function touchMetaCache(key: string, ts: number | null): void {
+  if (!metaCacheData) return;
+  if (ts === null) delete metaCacheData[key]; else metaCacheData[key] = ts;
+}
+
+/** 启动预热：后台先把版本表读进缓存，避免部署后第一个用户等整表扫描 */
+export function warmMetaCache(): void {
+  void refreshMetaCache().catch(() => { /* 首次失败由后续请求重试 */ });
+}
+
+/** 一次性创建覆盖索引：让 meta 查询只扫索引不回表（MySQL 在线 DDL，不阻塞读写） */
+export async function ensureMetaCoverIndex(): Promise<void> {
+  if (STORE_DRIVER !== 'mysql') return;
+  try {
+    if ((await store.getSetting('dataset_store_meta_index_v1')) === 'done') return;
+    const pool = (await import('../database/init')).default;
+    // DDL 走 query（服务端预处理协议对 ALTER TABLE 支持不一致）
+    await pool.query('ALTER TABLE dataset_store ADD INDEX idx_ds_meta (dataset_key, updated_at), ALGORITHM=INPLACE, LOCK=NONE');
+    await store.setSetting('dataset_store_meta_index_v1', 'done').catch(() => { /* ignore */ });
+    console.log('[sync] dataset_store 版本表覆盖索引已就绪，meta 查询不再回表');
+  } catch (err: any) {
+    const msg = String(err?.message || err || '');
+    if (/Duplicate key name|already exists/i.test(msg)) {
+      await store.setSetting('dataset_store_meta_index_v1', 'done').catch(() => { /* ignore */ });
+      return;
+    }
+    console.warn('[sync] 覆盖索引创建跳过:', msg.slice(0, 160));
+  }
+}
+
 // ============ 权限类数据集变更实时通知 ============
 // 权限数据写入成功后，经聊天 WebSocket 通知该租户所有在线端（主账号 + 全部子账号）
 // 立即增量拉取，使「另一个浏览器给子账号改权限」无需刷新/等轮询即可生效。
@@ -168,11 +236,7 @@ async function notifyNewPayRequests(key: string, oldJson: string, newJson: strin
 /** 获取所有数据集的元信息（key + 更新时间） */
 router.get('/meta', async (req: Request, res: Response) => {
   try {
-    const rows = await store.getAllMeta();
-    const meta: Record<string, number> = {};
-    for (const r of rows) {
-      meta[r.dataset_key] = r.updated_at;
-    }
+    const meta = await getMetaCached();
     // 匿名只返回公开键（避免被枚举他人账号下的数据集名称）
     res.json(filterMetaForUser(meta, currentSyncUser(req)));
   } catch (err: any) {
@@ -230,6 +294,7 @@ router.put('/dataset', async (req: Request, res: Response) => {
     if (!row) {
       await store.forceUpsertDataset(key, json, owner, ts);
       await applyUsageDeltaForWrite(key, null, json);
+      touchMetaCache(key, ts);
       res.json({ saved: true, newTs: ts });
       return;
     }
@@ -238,6 +303,7 @@ router.put('/dataset', async (req: Request, res: Response) => {
       await store.forceUpsertDataset(key, json, owner, finalTs);
       await applyUsageDeltaForWrite(key, row.dataset_json, json);
       if (key.startsWith('payment_requests_')) void notifyNewPayRequests(key, row.dataset_json, json);
+      touchMetaCache(key, finalTs);
       res.json({ saved: true, newTs: finalTs });
       return;
     }
@@ -252,6 +318,7 @@ router.put('/dataset', async (req: Request, res: Response) => {
           const gTs = Math.max(ts, row.updated_at);
           await store.forceUpsertDataset(key, guarded, owner, gTs);
           await applyUsageDeltaForWrite(key, row.dataset_json, guarded);
+          touchMetaCache(key, gTs);
           res.json({ saved: true, merged: true, newTs: gTs });
           return;
         }
@@ -265,6 +332,7 @@ router.put('/dataset', async (req: Request, res: Response) => {
           await store.forceUpsertDataset(key, guarded, owner, gTs);
           await applyUsageDeltaForWrite(key, row.dataset_json, guarded);
           if (key.startsWith('payment_requests_')) void notifyNewPayRequests(key, row.dataset_json, guarded);
+          touchMetaCache(key, gTs);
           res.json({ saved: true, merged: true, newTs: gTs });
           return;
         }
@@ -274,6 +342,7 @@ router.put('/dataset', async (req: Request, res: Response) => {
       await store.forceUpsertDataset(key, json, owner, finalTs);
       await applyUsageDeltaForWrite(key, row.dataset_json, json);
       if (key.startsWith('payment_requests_')) void notifyNewPayRequests(key, row.dataset_json, json);
+      touchMetaCache(key, finalTs);
       res.json({ saved: true, newTs: finalTs });
       return;
     }
@@ -287,6 +356,7 @@ router.put('/dataset', async (req: Request, res: Response) => {
     await store.forceUpsertDataset(key, finalJson, owner, finalTs);
     await applyUsageDeltaForWrite(key, row.dataset_json, finalJson);
     if (key.startsWith('payment_requests_')) void notifyNewPayRequests(key, row.dataset_json, finalJson);
+    touchMetaCache(key, finalTs);
     res.json({ saved: true, merged: !!merged, newTs: finalTs });
   } catch (err: any) {
     console.error('[sync] /dataset PUT error:', err.message);
@@ -374,6 +444,7 @@ router.delete('/dataset', async (req: Request, res: Response) => {
     const oldJson = await getDatasetJson(key);
     await store.deleteDataset(key);
     await applyUsageDeltaForWrite(key, oldJson, null);
+    touchMetaCache(key, null);
     res.json({ deleted: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });

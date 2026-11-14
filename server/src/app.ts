@@ -25,7 +25,7 @@ import financeReconciliationRoutes from './routes/finance/reconciliation.routes'
 import financeAccountRoutes from './routes/finance/account.routes';
 import dashboardRoutes from './routes/dashboard.routes';
 import authRoutes from './routes/auth.routes';
-import syncRoutes from './routes/sync.routes';
+import syncRoutes, { ensureMetaCoverIndex, warmMetaCache } from './routes/sync.routes';
 import jstRoutes from './routes/jst.routes';
 import pushRoutes from './routes/push.routes';
 import printRoutes from './routes/print.routes';
@@ -119,6 +119,12 @@ initChatWebSocket(server);
 server.listen(PORT, async () => {
   console.log(`🚀 工厂管理系统服务已启动: http://localhost:${PORT}`);
   console.log(`✅ 数据库已就绪（驱动：${STORE_DRIVER}）`);
+  // 版本表（/api/sync/meta）缓存预热：dataset_store 整表扫描可能很慢，
+  // 不预热会让部署后第一个登录/刷新的人等满一次慢查询
+  setTimeout(() => warmMetaCache(), 2000);
+  // 一次性覆盖索引（在线 DDL）：让上述 meta 查询只扫索引不回表。
+  // 延到 5 分钟后执行，先保证部署后立即可用，再在后台完成根治。
+  setTimeout(() => { void ensureMetaCoverIndex(); }, 5 * 60_000);
   // 存储用量计数器背填：仅首次升级（计数器表为空）时全量聚合一次，后续走增量
   void ensureUsageBackfill().catch(() => { /* ignore */ });
   // 安全迁移：存量明文密码升级为 bcrypt（registered_users 表 + registeredUsers 数据集）
