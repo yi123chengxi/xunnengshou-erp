@@ -10,8 +10,24 @@ const pool = mysql.createPool({
   password: process.env.DB_PASSWORD || '',
   database: process.env.DB_NAME || 'xinnengshu',
   waitForConnections: true,
-  connectionLimit: 10,
+  connectionLimit: 15,
   queueLimit: 0,
+  // 建连超时：数据库主机不可达时不要在 TCP 握手阶段无限等待（会占死连接池）
+  connectTimeout: 10000,
+  enableKeepAlive: true,
+  keepAliveInitialDelay: 10000,
+});
+
+// ============ 连接就会话级快速失败（可用性保护） ============
+// 默认 innodb_lock_wait_timeout=50s、lock_wait_timeout=31536000s：数据库写满/长时间事务时会话
+// 会各卡 50 秒以上，10~15 条连接很快被写请求占满，连登录这种纯读请求也排不上队（表现为
+// 登录超时、提示密码错误、刷新十几秒）。这里把等待压到秒级：写不进去就立刻报错返回，
+// 让连接尽快归还连接池，保证登录与其它只读接口不受写风暴影响。
+const SESSION_FAST_FAIL_SQL =
+  'SET SESSION innodb_lock_wait_timeout = 5, lock_wait_timeout = 5, max_execution_time = 15000';
+
+pool.on('connection', (conn: any) => {
+  conn.query(SESSION_FAST_FAIL_SQL, () => {});
 });
 
 // ============================================================

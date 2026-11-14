@@ -26,12 +26,14 @@ import { validatePassword } from '../utils/passwordPolicy';
 
 /**
  * Web 登录服务端裁决：服务端可用时以其结论为准（服务端只存 bcrypt 哈希，本地不再作为凭据来源）。
- * 返回 ok 时同时带回 JWT，供 /api/sync 鉴权使用；网络不可达返回 offline，由调用方回退本地校验。
+ * 返回 ok 时同时带回 JWT，供 /api/sync 鉴权使用；
+ * 网络不可达返回 offline，由调用方回退本地校验；服务端可达但超时/5xx 返回 busy，
+ * 调用方必须直接提示“稍后重试”——否则回退本地校验会因本地密码已哈希而误报“密码错误”。
  */
 const serverWebLogin = async (
   username: string,
   password: string
-): Promise<{ status: 'ok' | 'invalid' | 'offline'; token?: string; user?: any; message?: string }> => {
+): Promise<{ status: 'ok' | 'invalid' | 'offline' | 'busy'; token?: string; user?: any; message?: string }> => {
   try {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 8000);
@@ -53,9 +55,12 @@ const serverWebLogin = async (
     if (res.status === 401 || res.status === 403) {
       return { status: 'invalid', message: data?.message || '用户名或密码错误' };
     }
-    // 5xx / 网关异常视同服务不可用，回退本地校验
-    return { status: 'offline' };
-  } catch {
+    // 5xx / 网关异常：服务端在线但暂时不可用，区别于真断网
+    return { status: 'busy' };
+  } catch (e: any) {
+    // 超时（AbortController 主动中止）说明请求已到达服务端但响应不过来，同样归为 busy；
+    // 只有真正的网络失败才回退本地校验
+    if (e && e.name === 'AbortError') return { status: 'busy' };
     return { status: 'offline' };
   }
 };
@@ -759,7 +764,20 @@ const Auth: React.FC = () => {
           setLoading(false);
         };
         if (!phoneLike) {
-          const verdict = await serverWebLogin(username, password);
+          let verdict = await serverWebLogin(username, password);
+          if (verdict.status === 'busy') {
+            // 服务端暂时不可用：重试一次，仍失败则明确告知“稍后重试”，
+            // 不能回退本地校验（本地密码已哈希，会误报“密码错误”）；也不能本地放行，
+            // 否则拿不到 JWT，登录后拉数据失败会被踢回登录页
+            await new Promise(r => setTimeout(r, 800));
+            verdict = await serverWebLogin(username, password);
+            if (verdict.status === 'busy') {
+              recordLoginLog(username, false, '服务端不可用（超时或 5xx）');
+              message.error('服务器暂时繁忙（数据库正在恢复），请稍后重试');
+              setLoading(false);
+              return;
+            }
+          }
           if (verdict.status === 'invalid') { failLocal('服务端校验失败', verdict.message); return; }
           if (verdict.status === 'ok') {
             serverAuthed = true;
@@ -873,6 +891,12 @@ const Auth: React.FC = () => {
           // 手机号已解析出账号：再由服务端裁决密码（服务端只存哈希）
           if (loginName !== username) {
             const phoneVerdict = await serverWebLogin(loginName, password);
+            if (phoneVerdict.status === 'busy') {
+              recordLoginLog(username, false, '服务端不可用（超时或 5xx）');
+              message.error('服务器暂时繁忙（数据库正在恢复），请稍后重试');
+              setLoading(false);
+              return;
+            }
             if (phoneVerdict.status === 'invalid') { failLocal('服务端校验失败', phoneVerdict.message); return; }
             if (phoneVerdict.status === 'ok') {
               serverAuthed = true;
