@@ -1,5 +1,5 @@
 name: diag
-# 临时诊断工作流：SSH 到 ECS 采集数据库/进程状态，写入前端静态目录后由浏览器读取，用完即删
+# 临时诊断工作流：SSH 到 ECS 采集数据库阻塞状态并清理卡死会话，结果推送到 diag-out 分支，用完即删
 on:
   push:
     branches: [main]
@@ -7,7 +7,7 @@ on:
       - '.github/workflows/diag.yml'
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   diag:
@@ -16,34 +16,62 @@ jobs:
       SERVER_HOST: ${{ secrets.SERVER_HOST }}
       SERVER_PASSWORD: ${{ secrets.SERVER_PASSWORD }}
     steps:
-      - name: 清理阻塞会话
+      - uses: actions/checkout@v4
+      - name: 采集并处理
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq sshpass
           cat > /tmp/diag.sh <<'SH'
           set +e
-          OUT=/var/www/factory-management/client/build/diag3.txt
           source /var/www/factory-management/server/.env 2>/dev/null
           export MYSQL_PWD="$DB_PASSWORD"
           M="mysql -h $DB_HOST -P ${DB_PORT:-3306} -u $DB_USER $DB_NAME -N"
-          {
-            echo "== grants =="; timeout 10 $M -e "SHOW GRANTS FOR CURRENT_USER()" 2>&1
-            echo "== before: non-waiting sessions =="
-            timeout 12 $M -e "SHOW FULL PROCESSLIST" 2>&1 | cut -c1-150 | grep -v 'etadata lock' | head -20
-            echo "== kill 651 (ALTER) =="; timeout 10 $M -e "KILL 651" 2>&1; echo "rc=$?"
-            sleep 4
-            echo "== kill 630 (4h stuck INSERT) =="; timeout 10 $M -e "KILL 630" 2>&1; echo "rc=$?"
-            sleep 8
-            echo "== after: processlist summary =="
-            timeout 12 $M -e "SHOW FULL PROCESSLIST" 2>&1 | cut -c1-150 > /tmp/pl.txt; wc -l /tmp/pl.txt
-            grep -c 'etadata lock' /tmp/pl.txt
-            head -25 /tmp/pl.txt
-            echo "== counters =="
-            timeout 10 $M -e "SHOW GLOBAL STATUS WHERE Variable_name IN ('Threads_connected','Threads_running','Aborted_clients')" 2>&1
-            echo "== quick read test =="
-            timeout 10 $M -e "SELECT COUNT(*) FROM dataset_store" 2>&1
-          } > $OUT 2>&1
-          chmod 644 $OUT
-          echo DIAG3_DONE
+          echo "===== date ====="; date
+          echo "===== 1. mysql roundtrip ====="
+          timeout 10 $M -e "SELECT NOW(), @@version" 2>&1
+          echo "===== 2. pure read latency (no app) ====="
+          s=$(date +%s%3N); timeout 30 $M -e "SELECT COUNT(*) FROM dataset_store" 2>&1; e=$(date +%s%3N); echo "dataset_count_ms=$((e-s))"
+          s=$(date +%s%3N); timeout 30 $M -e "SELECT COUNT(*) FROM registered_users" 2>&1; e=$(date +%s%3N); echo "users_count_ms=$((e-s))"
+          echo "===== 3. processlist (full, no truncation of state) ====="
+          timeout 20 $M -e "SELECT id,user,host,db,command,time,state,LEFT(info,180) FROM information_schema.PROCESSLIST WHERE command<>'Sleep' OR time>60 ORDER BY time DESC LIMIT 60" 2>&1
+          echo "===== 4. stuck counters ====="
+          timeout 20 $M -e "SELECT COUNT(*) AS handler_commit FROM information_schema.PROCESSLIST WHERE state LIKE '%handler commit%'" 2>&1
+          timeout 20 $M -e "SELECT COUNT(*) AS mdl_wait FROM information_schema.PROCESSLIST WHERE state LIKE '%metadata lock%'" 2>&1
+          echo "===== 5. innodb trx (may be denied) ====="
+          timeout 20 $M -e "SELECT trx_id,trx_state,trx_started,trx_mysql_thread_id,LEFT(trx_query,120) FROM information_schema.INNODB_TRX ORDER BY trx_started LIMIT 30" 2>&1
+          echo "===== 6. innodb status tail ====="
+          timeout 20 $M -e "SHOW ENGINE INNODB STATUS\G" 2>&1 | sed -n '/TRANSACTIONS/,/FILE I\/O/p' | head -40
+          echo "===== 7. vars/status ====="
+          timeout 15 $M -e "SHOW VARIABLES WHERE Variable_name IN ('tmpdir','datadir','innodb_temp_tablespaces_dir','max_connections','wait_timeout','innodb_flush_log_at_trx_commit','sync_binlog')" 2>&1
+          timeout 15 $M -e "SHOW GLOBAL STATUS WHERE Variable_name IN ('Threads_connected','Threads_running','Threads_waits','Innodb_row_lock_waits','Innodb_row_lock_current_waits','Uptime')" 2>&1
+          echo "===== 8. write test ====="
+          s=$(date +%s%3N); timeout 25 $M -e "CREATE TABLE IF NOT EXISTS __diag_probe (id INT PRIMARY KEY, v VARCHAR(8)) ENGINE=InnoDB" 2>&1; e=$(date +%s%3N); echo "create_rc=$? create_ms=$((e-s))"
+          s=$(date +%s%3N); timeout 25 $M -e "REPLACE INTO __diag_probe VALUES (1,'x')" 2>&1; e=$(date +%s%3N); echo "write_rc=$? write_ms=$((e-s))"
+          s=$(date +%s%3N); timeout 25 $M -e "SELECT * FROM __diag_probe" 2>&1; e=$(date +%s%3N); echo "read_after_write_ms=$((e-s))"
+          echo "===== 9. kill stuck sessions ====="
+          IDS=$(timeout 20 $M -e "SELECT id FROM information_schema.PROCESSLIST WHERE user='$DB_USER' AND time>600 AND (state LIKE '%handler commit%' OR state LIKE '%metadata lock%' OR state LIKE '%lock%' OR state LIKE '%flush%' OR state LIKE '%commit%')" 2>/dev/null)
+          echo "stuck_ids=[$(echo $IDS)]"
+          for i in $IDS; do
+            echo "KILL $i -> $(timeout 10 $M -e "KILL $i" 2>&1)"
+          done
+          echo "===== 10. after kill: read latency ====="
+          sleep 3
+          s=$(date +%s%3N); timeout 30 $M -e "SELECT COUNT(*) FROM dataset_store" 2>&1; e=$(date +%s%3N); echo "dataset_count_ms_after=$((e-s))"
+          timeout 20 $M -e "SELECT id,user,time,state,LEFT(info,100) FROM information_schema.PROCESSLIST WHERE state LIKE '%lock%' OR state LIKE '%commit%' ORDER BY time DESC LIMIT 20" 2>&1
+          echo "===== 11. app errors ====="
+          pm2 logs factory-management-server --lines 400 --nostream 2>&1 | grep -iE 'error|ENOSPC|no space|ER_|ETIMEDOUT|ECONN|timeout' | tail -40
+          echo "===== 12. app server disk ====="
+          df -h / /var/tmp 2>&1
+          echo "===== 13. pm2 ====="
+          pm2 list 2>&1 | sed -n '1,12p'
           SH
-          sshpass -p "$SERVER_PASSWORD" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@${SERVER_HOST} "bash -s" < /tmp/diag.sh
+          sshpass -p "$SERVER_PASSWORD" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@${SERVER_HOST} "bash -s" < /tmp/diag.sh > diag_out.txt 2>&1
+          wc -l diag_out.txt
+      - name: 推送结果到 diag-out 分支
+        run: |
+          git config user.name "diag-bot"
+          git config user.email "diag-bot@users.noreply.github.com"
+          git checkout -b diag-out
+          git add -f diag_out.txt
+          git commit -m "chore: diag output (temporary)" || true
+          git push -f origin HEAD:diag-out
