@@ -304,6 +304,50 @@ export function mergeRegisteredUsersJson(existingJson: string, incomingJson: str
 }
 
 /**
+ * 注册表新建行准入校验（服务端权威去重 + 用户名长度下限）：
+ * 1) 服务端无同 username 的新行：用户名少于 MIN_USERNAME_LEN 位一律拒绝（注册/子账号/导入同口径）；
+ * 2) 服务端已有同 username 且本次携带不同 _createTs 的创建标记：视为重复创建（含跨租户撞名），
+ *    拒绝该行参与合并——否则后创建一方会覆盖先创建一方的密码与资料，表现为「新子账号登不上」。
+ * 同一创建事件的重传（_createTs 相同）与改密/编辑（无新 _createTs）不受影响。
+ */
+export const MIN_USERNAME_LEN = 8;
+export function filterRegisteredUsersCreations(
+  incomingJson: string,
+  existingJson: string | null
+): { cleanJson: string; rejected: { username: string; reason: string }[] } {
+  try {
+    const incoming = JSON.parse(incomingJson);
+    if (!Array.isArray(incoming)) return { cleanJson: incomingJson, rejected: [] };
+    const oldByName = new Map<string, any>();
+    try {
+      const old = JSON.parse(existingJson || '[]');
+      if (Array.isArray(old)) old.forEach((u: any) => { if (u && u.username) oldByName.set(String(u.username), u); });
+    } catch { /* ignore */ }
+    const rejected: { username: string; reason: string }[] = [];
+    const clean = incoming.filter((u: any) => {
+      if (!u || typeof u !== 'object' || !u.username) return true;
+      const name = String(u.username);
+      const old = oldByName.get(name);
+      if (!old) {
+        if (name.length < MIN_USERNAME_LEN) {
+          rejected.push({ username: name, reason: `用户名不足 ${MIN_USERNAME_LEN} 位，服务端已拒绝创建` });
+          return false;
+        }
+        return true;
+      }
+      const inTs = Number(u._createTs) || 0;
+      const oldTs = Number(old._createTs) || 0;
+      if (inTs && inTs !== oldTs) {
+        rejected.push({ username: name, reason: '用户名已存在（可能已被其他租户创建），服务端已拒绝重复创建' });
+        return false;
+      }
+      return true;
+    });
+    return { cleanJson: JSON.stringify(clean), rejected };
+  } catch { return { cleanJson: incomingJson, rejected: [] }; }
+}
+
+/**
  * 写入前处理 registeredUsers：
  * - 明文 password → bcrypt passwordHash，并从记录中删除 password
  * - 明文缺省时沿用服务端已有哈希（客户端拉到的记录本就没有密码凭据）

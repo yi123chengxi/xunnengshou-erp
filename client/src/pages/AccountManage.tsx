@@ -4,7 +4,7 @@ import {
   Space, Tag, message, Modal, Form, Drawer, Descriptions, Dropdown,
   Popconfirm, DatePicker, Badge, Tooltip, Checkbox, Divider, Upload, Alert,
 } from 'antd';
-import { reloadAfterPull, fetchServerDataset, flushDatasetUpload } from '../utils/serverSync';
+import { reloadAfterPull, fetchServerDataset, flushDatasetUpload, flushDatasetUploadAsync, takeRegisteredUsersRejections } from '../utils/serverSync';
 import { validatePassword } from '../utils/passwordPolicy';
 import { saveDataset } from '../utils/dataStore';
 import { declareShrink } from '../utils/shrinkRegistry';
@@ -784,14 +784,18 @@ const AccountManage: React.FC = () => {
   }, [addForm]);
 
   const handleAddConfirm = useCallback(() => {
-    addForm.validateFields().then(values => {
+    addForm.validateFields().then(async values => {
       // 校验用户名是否已存在（子账号列表 + 已注册账号）
       const inputUsername = values.username.trim();
+      if (inputUsername.length < 8) {
+        message.error('用户名至少 8 位（字母开头，8-20 位字母数字下划线）');
+        return;
+      }
       const existsInList = dataSource.some(
         (a) => a.username.toLowerCase() === inputUsername.toLowerCase()
       );
       if (existsInList) {
-        message.error(`用户名「{inputUsername}」已存在，请换一个用户名`);
+        message.error(`用户名「${inputUsername}」已存在，请换一个用户名`);
         return;
       }
       let registeredUsers: any[] = [];
@@ -803,10 +807,22 @@ const AccountManage: React.FC = () => {
           (u: any) => u.username?.toLowerCase() === inputUsername.toLowerCase()
         );
         if (existsInRegistered) {
-          message.error(`用户名「{inputUsername}」已被注册，请换一个用户名`);
+          message.error(`用户名「${inputUsername}」已被注册，请换一个用户名`);
           return;
         }
       } catch { /* ignore */ }
+      // 服务端权威去重：本地副本可能缺其他租户的账号（拉取失败/新机器/数据库故障期），
+      // 必须以服务端注册表为准，否则两个租户能建出同名子账号且后建方覆盖先建方密码
+      try {
+        const rec = await fetchServerDataset('registeredUsers');
+        if (rec) {
+          const remote = JSON.parse(rec.json || '[]');
+          if (Array.isArray(remote) && remote.some((u: any) => String(u?.username || '').toLowerCase() === inputUsername.toLowerCase())) {
+            message.error(`用户名「${inputUsername}」已存在（含其他租户），请换一个用户名`);
+            return;
+          }
+        }
+      } catch { /* 服务端不可用时退化为本地校验，提交后仍有服务端准入兑底 */ }
 
       // 手机号码：必填 + 格式校验 + 同号多账号提示（同号并存时手机号登录将被禁用）
       const inputPhone = String(values.phone || '').trim();
@@ -869,6 +885,7 @@ const AccountManage: React.FC = () => {
         roles: values.roles || [],
         customPermissions: addPermsRef.current,
         _permTs: Date.now(),
+        _createTs: Date.now(), // 创建事件标记：服务端据此识别重复创建（含跨租户撞名）并拒绝后建方
         companyName: currentUser?.companyName || currentUsername,
         contactPerson: values.displayName,
         email: '',
@@ -878,14 +895,32 @@ const AccountManage: React.FC = () => {
         needsPasswordChange: true,
       });
       persistRegisteredUsers(registeredUsers);
-
+  
       // 复制建号：同步复制源账号的个人三态覆写
       if (copyFromRef.current) {
         saveUserPermOverrides(inputUsername, loadUserPermOverrides(copyFromRef.current));
         copyFromRef.current = '';
       }
-
-      message.success(`子账号「${values.displayName} 创建成功！初始密码为：${values.password}`);
+  
+      // 等待服务端确认：失败要明确告知「账号尚未上云、暂不能登录」，
+      // 被拒（重名/不足8位）则回滚本地行，避免留下「本地有号、服务端无号」的登不上账号
+      const jsonNow = localStorage.getItem('registeredUsers') || '[]';
+      const ok = await flushDatasetUploadAsync('registeredUsers', jsonNow);
+      const rejected = takeRegisteredUsersRejections().filter(r => r.username === inputUsername);
+      if (rejected.length) {
+        try {
+          const rest = (JSON.parse(localStorage.getItem('registeredUsers') || '[]') as any[]).filter(u => u.username !== inputUsername);
+          persistRegisteredUsers(rest);
+        } catch { /* ignore */ }
+        setDataSource(prev => prev.filter(a => a.username !== inputUsername));
+        message.error(rejected[0].reason);
+        return;
+      }
+      if (!ok) {
+        message.warning(`子账号「${values.displayName}」已在本机创建，但云端同步失败（服务器当前不可写）：同步成功前该账号无法登录，系统将自动重试`);
+      } else {
+        message.success(`子账号「${values.displayName}」创建成功！初始密码为：${values.password}`);
+      }
       setAddVisible(false);
       updateAddPerms([]);
       addForm.resetFields();
@@ -934,7 +969,7 @@ const AccountManage: React.FC = () => {
           else if (!groups.some(g => g.name === group)) row.error = `分组「{group}」不存在，请先在分组管理中创建`;
           if (!row.error) {
             if (!username) row.error = '缺少用户名（必填）';
-            else if (!/^[a-zA-Z][a-zA-Z0-9_]{3,19}$/.test(username)) row.error = '用户名须字母开头3-20位字母数字下划线';
+            else if (!/^[a-zA-Z][a-zA-Z0-9_]{7,19}$/.test(username)) row.error = '用户名须字母开头8-20位字母数字下划线';
             else if (seen.has(username.toLowerCase())) row.error = '文件内用户名重复';
             else if (dataSource.some(a => a.username.toLowerCase() === username.toLowerCase())) row.error = '用户名已存在于账号列表';
             else if (registered.some((u: any) => String(u.username || '').toLowerCase() === username.toLowerCase())) row.error = '用户名已被注册';
@@ -1005,6 +1040,7 @@ const AccountManage: React.FC = () => {
         phone: '',
         isSubAccount: true,
         parentAccount,
+        _createTs: Date.now(), // 创建事件标记：服务端据此拒绝重复创建（含跨租户撞名）
         needsPasswordChange: true, // 首次登录必须修改密码
       });
     });
@@ -1013,7 +1049,42 @@ const AccountManage: React.FC = () => {
     setImportVisible(false);
     setImportRows([]);
     message.success(`成功导入 ${newAccounts.length} 个账号：权限继承所属分组，首次登录须修改密码`);
+    // 云端确认：失败时明确告知导入的账号暂不能登录（服务器不可写期间）
+    void flushDatasetUploadAsync('registeredUsers', localStorage.getItem('registeredUsers') || '[]').then(ok => {
+      const rejected = takeRegisteredUsersRejections();
+      if (rejected.length) {
+        const names = new Set(rejected.map(r => r.username));
+        try {
+          const rest = (JSON.parse(localStorage.getItem('registeredUsers') || '[]') as any[]).filter(u => !names.has(String(u.username)));
+          persistRegisteredUsers(rest);
+        } catch { /* ignore */ }
+        setDataSource(prev => prev.filter(a => !names.has(a.username)));
+        message.error(`以下账号被服务端拒绝并已回滚：${rejected.map(r => `${r.username}（${r.reason}）`).join('；')}`);
+      } else if (!ok) {
+        message.warning('导入账号已写入本机，但云端同步失败（服务器当前不可写）：同步成功前这些账号无法登录，系统将自动重试');
+      }
+    });
   }, [importRows, groups, dataSource]);
+
+  // 服务端拒绝清单（后台队列补传被拒）→ 回滚本地行并提示，避免留下登不上的账号
+  useEffect(() => {
+    const onRejected = (e: Event) => {
+      const list = (e as CustomEvent)?.detail;
+      if (!Array.isArray(list) || !list.length) return;
+      const names = new Set(list.map((r: any) => String(r.username)));
+      try {
+        const reg = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+        const rest = reg.filter((u: any) => !names.has(String(u.username)));
+        if (rest.length !== reg.length) {
+          persistRegisteredUsers(rest);
+          setDataSource(prev => prev.filter(a => !names.has(a.username)));
+          message.error(`账号 ${Array.from(names).join('、')} 被服务端拒绝（重名或不足8位），已本地回滚`);
+        }
+      } catch { /* ignore */ }
+    };
+    window.addEventListener('registered-users-rejected', onRejected);
+    return () => window.removeEventListener('registered-users-rejected', onRejected);
+  }, []);
 
   // 搜索和重置（查询时自动刷新表单数据）
   const handleSearch = useCallback(() => {
@@ -1682,7 +1753,7 @@ const AccountManage: React.FC = () => {
                 label="用户名"
                 rules={[
                   { required: true, message: '请输入用户名' },
-                  { pattern: /^[a-zA-Z][a-zA-Z0-9_]{3,19}$/, message: '字母开头，4-20位字母数字下划线' },
+                  { pattern: /^[a-zA-Z][a-zA-Z0-9_]{7,19}$/, message: '字母开头，8-20位字母数字下划线' },
                 ]}
               >
                 <Input placeholder="请输入用户名" prefix={<UserOutlined />} />

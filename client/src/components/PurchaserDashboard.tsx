@@ -9,12 +9,14 @@ import {
   DatabaseOutlined, RiseOutlined, WarningOutlined, ShopOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import EChartsLite from './EChartsLite';
 import { useNavigate } from 'react-router-dom';
 import { getDataOwner } from '../utils/brandAuth';
 import { readProductListSync } from '../utils/dataStore';
 import NewstyleBoardCard from './NewstyleBoardCard';
 import FeedbackAnnouncementRow from './FeedbackAnnouncementRow';
+
+// 图表 chunk 懒加载：首屏先出指标卡与表格，echarts 按需 chunk 并行下载后再补图
+const EChartsLite = React.lazy(() => import('./EChartsLite'));
 
 const { Text, Title } = Typography;
 const PRIMARY = '#1e4a7e';
@@ -45,19 +47,27 @@ const PurchaserDashboard: React.FC = () => {
 
     const approved = suppliers.filter((s: any) => s.cooperationStatus === 'approved');
     const pendingSup = suppliers.filter((s: any) => s.cooperationStatus === 'pending');
-    const billTotal = bills.reduce((s: number, b: any) => s + (Number(b.totalAmount) || 0), 0);
-    const monthBills = bills.filter((b: any) => dayjs(b.date || b.createdAt || '').format('YYYY-MM') === nowM);
-    const monthAmount = monthBills.reduce((s: number, b: any) => s + (Number(b.totalAmount) || 0), 0);
-    const unrecon = bills.filter((b: any) => !RECON_DONE.includes(String(b.reconcileResult || '')));
+    // 单趟聚合：旧实现「6 个月 × 全量 filter」重复格式化账单日期，现每单一次入桶
+    const months: string[] = [];
+    for (let i = 5; i >= 0; i--) months.push(dayjs().subtract(i, 'month').format('YYYY-MM'));
+    const trendSum: Record<string, number> = {};
+    let billTotal = 0;
+    let monthAmount = 0;
+    let monthBillCount = 0;
+    let unreconCount = 0;
+    for (const b of bills) {
+      if (!b) continue;
+      const amt = Number(b.totalAmount) || 0;
+      billTotal += amt;
+      const m = dayjs(b.date || b.createdAt || '').format('YYYY-MM');
+      trendSum[m] = (trendSum[m] || 0) + amt;
+      if (m === nowM) { monthAmount += amt; monthBillCount += 1; }
+      if (!RECON_DONE.includes(String(b.reconcileResult || ''))) unreconCount += 1;
+    }
+    const trend = months.map(m => Math.round((trendSum[m] || 0) * 100) / 100);
     const waitPush = trades.filter((o: any) => o.status === '待推送');
     const pushed = trades.filter((o: any) => o.status === '已推送');
     const tradeTotal = trades.reduce((s: number, o: any) => s + (Number(o.totalAmount) || 0), 0);
-
-    const months: string[] = [];
-    for (let i = 5; i >= 0; i--) months.push(dayjs().subtract(i, 'month').format('YYYY-MM'));
-    const trend = months.map(m => Math.round(bills
-      .filter((b: any) => dayjs(b.date || b.createdAt || '').format('YYYY-MM') === m)
-      .reduce((s: number, b: any) => s + (Number(b.totalAmount) || 0), 0) * 100) / 100);
     const statusDist = [
       { name: '待推送', value: waitPush.length },
       { name: '已推送', value: pushed.length },
@@ -68,7 +78,7 @@ const PurchaserDashboard: React.FC = () => {
 
     return {
       approvedCount: approved.length, pendingSupCount: pendingSup.length,
-      billTotal, monthAmount, monthBillCount: monthBills.length, unreconCount: unrecon.length,
+      billTotal, monthAmount, monthBillCount, unreconCount,
       waitPushCount: waitPush.length, pushedCount: pushed.length, tradeTotal,
       productCount: products.length, months, trend, statusDist, recentBills,
     };
@@ -147,7 +157,8 @@ const PurchaserDashboard: React.FC = () => {
       <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
         <Col xs={24} lg={14}>
           <Card size="small" title={<span style={{ fontWeight: 600 }}>近6月采购额趋势（账单口径）</span>} style={{ borderRadius: 10 }}>
-            <EChartsLite style={{ height: 250 }} option={{
+            <React.Suspense fallback={<div style={{ height: 250 }} />}>
+              <EChartsLite style={{ height: 250 }} option={{
               tooltip: { trigger: 'axis' },
               grid: { left: 50, right: 20, top: 30, bottom: 30 },
               xAxis: { type: 'category', data: stats.months },
@@ -158,11 +169,13 @@ const PurchaserDashboard: React.FC = () => {
                 itemStyle: { color: PRIMARY },
               }],
             }} />
+            </React.Suspense>
           </Card>
         </Col>
         <Col xs={24} lg={10}>
           <Card size="small" title={<span style={{ fontWeight: 600 }}>订单推送状态</span>} style={{ borderRadius: 10 }}>
-            <EChartsLite style={{ height: 250 }} option={{
+            <React.Suspense fallback={<div style={{ height: 250 }} />}>
+              <EChartsLite style={{ height: 250 }} option={{
               tooltip: { trigger: 'item' },
               legend: { bottom: 0 },
               series: [{
@@ -171,6 +184,7 @@ const PurchaserDashboard: React.FC = () => {
                 itemStyle: { borderRadius: 5, borderColor: '#fff', borderWidth: 2 },
               }],
             }} />
+            </React.Suspense>
           </Card>
         </Col>
       </Row>

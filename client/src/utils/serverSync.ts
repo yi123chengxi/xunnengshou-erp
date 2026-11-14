@@ -131,11 +131,14 @@ export function isPermSyncKey(key: string): boolean {
  */
 export function localDatasetHasRows(rawJson: string | null): boolean {
   if (rawJson === null || rawJson === '') return false;
-  try {
-    const parsed = JSON.parse(rawJson);
-    if (Array.isArray(parsed)) return parsed.length > 0;
-    return parsed !== null && parsed !== '';
-  } catch { return rawJson.length > 0; }
+  // 快速路径：宽限期判定每次轮询会对每个未变更键调用本函数，
+  // 旧实现整段 JSON.parse（MB 级数据集 × 几十键）会把主线程卡秒级，
+  // 表现为首页指标卡/整页首帧被后台轮询阻塞；数组/对象形态用字符串首尾判定即可等价
+  const t = rawJson.trim();
+  if (t.startsWith('[')) return t !== '[]';
+  if (t === 'null' || t === '""') return false;
+  if (t.startsWith('{')) return true;
+  try { const parsed = JSON.parse(t); return parsed !== null && parsed !== ''; } catch { return t.length > 0; }
 }
 
 /** 当前登录账号的数据归属者（子账号归父账号），与页面 getDataOwner 保持一致 */
@@ -281,7 +284,30 @@ function handleSyncAuthRequired(): void {
   try { window.location.href = '/login'; } catch { /* ignore */ }
 }
 
+/** 空 owner 污染键：owner 后缀键的后缀为空（如 pageData_sales_order-manage_）说明
+ * 会话缺失时页面仍在读写存，上传它会把空 owner 副本污染到服务端并反过来
+ * 误导后续拉取；此类键一律不上传、不参与拉取 */
+const OWNER_FAMILIES = ['pageData_', 'customers_', 'customerReceipts_', 'purchaser_suppliers_', 'purchaser_bills_', 'newstyle_progress_', 'newstyle_photo_', 'newstyle_arrival_', 'newstyle_listing_', 'accounts_'];
+export function isEmptyOwnerKey(key: string): boolean {
+  return key.endsWith('_') && OWNER_FAMILIES.some(p => key.startsWith(p));
+}
+
+/** 服务端对 registeredUsers 新建行的拒绝清单（用户名不足 8 位/跨租户重名）：
+ * 建号方需据此回滚本地行并提示，否则会出现「本地有号、服务端无号」的登不上账号 */
+let registeredRejections: { username: string; reason: string }[] = [];
+function collectRegisteredRejections(key: string, data: any): void {
+  if (key !== 'registeredUsers' || !data || !Array.isArray(data.rejected) || !data.rejected.length) return;
+  registeredRejections.push(...data.rejected);
+  try { window.dispatchEvent(new CustomEvent('registered-users-rejected', { detail: data.rejected })); } catch { /* ignore */ }
+}
+export function takeRegisteredUsersRejections(): { username: string; reason: string }[] {
+  const out = registeredRejections;
+  registeredRejections = [];
+  return out;
+}
+
 async function doUpload(key: string, json: string, ts?: number, baseTs?: number, removedIdsOverride?: string[]): Promise<boolean> {
+  if (isEmptyOwnerKey(key)) return false;
   if (!(await serverAvailable())) return false;
   // 队列补传时使用入队那一刻的申报快照，避免与后续新写入的申报串味
   const removedIds = removedIdsOverride || takeRemovedIds(key);
@@ -295,6 +321,7 @@ async function doUpload(key: string, json: string, ts?: number, baseTs?: number,
     if (res.ok) {
       const data = await res.json().catch(() => null);
       if (data && typeof data.newTs === 'number') knownTs.set(key, data.newTs);
+      collectRegisteredRejections(key, data);
       return true;
     }
     // 未确认落库：把本次消费掉的删除申报放回登记表，下次重传仍能合法删除被删行
@@ -363,11 +390,56 @@ export function installUploadQueueRetry(): void {
   } catch { /* ignore */ }
   try { setInterval(kick, 30000); } catch { /* ignore */ }
   try { setTimeout(kick, 4000); } catch { /* ignore */ }
+  // 启动自愈：本地副本被异常覆盖/清空时，用上传队列中尚未成功提交的旧值回灌（见 salvageLocalFromUploadQueue）
+  try { setTimeout(() => { if (localStorage.getItem('username')) void salvageLocalFromUploadQueue(); }, 1500); } catch { /* ignore */ }
+}
+
+/** 从上传队列 salvage 本地数据：队列里保留着每次写入那一刻的完整 JSON（上传失败会一直留存），
+ * 当本地副本为空且比队列条目旧时（典型：被服务端陈旧/空副本回灌擦除后），用队列值恢复本地，
+ * 并在下次上传成功时回到服务端。幂等：恢复后 localTs === 条目 ts，后续启动自动跳过。 */
+export async function salvageLocalFromUploadQueue(): Promise<number> {
+  let n = 0;
+  // 清理空 owner 污染键：会话缺失期间页面读写存留下的尾下划线键（如 pageData_sales_order-manage_），
+  // 不删会在后续 owner 解析异常时被误读为「数据为空」
+  try {
+    const bad: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && isEmptyOwnerKey(k)) bad.push(k);
+    }
+    bad.forEach(k => {
+      try { localStorage.removeItem(k); } catch { /* ignore */ }
+      try { localStorage.removeItem(`${k}_ts`); } catch { /* ignore */ }
+    });
+  } catch { /* ignore */ }
+  try {
+    const items = await queueAll();
+    for (const it of items) {
+      if (!it || !it.key || typeof it.value !== 'string') continue;
+      if (isEmptyOwnerKey(it.key) || !isSyncKey(it.key)) continue;
+      if (!localDatasetHasRows(it.value)) continue;
+      let localHas = false;
+      try { localHas = localDatasetHasRows(localStorage.getItem(it.key)); } catch { localHas = false; }
+      if (localHas) continue; // 本地仍有行：不干预
+      const localTs = await localTimestamp(it.key);
+      if (localTs >= (Number(it.ts) || 0)) continue;
+      const raw = getOriginalSetItem();
+      raw(it.key, it.value);
+      raw(`${it.key}_ts`, String(it.ts));
+      try { saveDataset(it.key, it.value); } catch { /* ignore */ }
+      n++;
+      console.warn('[sync] salvage：已从上传队列恢复本地数据集', it.key);
+    }
+    if (n > 0) {
+      try { window.dispatchEvent(new Event('sync-data-updated')); } catch { /* ignore */ }
+    }
+  } catch { /* ignore */ }
+  return n;
 }
 
 /** 写入钩子回调：业务 key 变更后调度上传，并刷新本地 _ts 时间戳 */
 export function scheduleDatasetUpload(key: string, value: string): void {
-  if (!isSyncKey(key)) return;
+  if (!isSyncKey(key) || isEmptyOwnerKey(key)) return;
   // 记录本地写入时间戳，供启动拉取时新旧比对（原生写入，不触发钩子递归）
   const ts = Date.now();
   const baseTs = knownTs.get(key) ?? 0;
@@ -395,7 +467,7 @@ export function scheduleDatasetUpload(key: string, value: string): void {
 
 /** 立即上传（注册等关键操作后调用） */
 export function flushDatasetUpload(key: string, value: string): void {
-  if (!isSyncKey(key)) return;
+  if (!isSyncKey(key) || isEmptyOwnerKey(key)) return;
   const e = pending.get(key);
   if (e) { clearTimeout(e.timer); pending.delete(key); }
   const ts = Date.now();
@@ -405,7 +477,7 @@ export function flushDatasetUpload(key: string, value: string): void {
 
 /** 立即上传并等待完成（关键数据保存后确保服务端已落库） */
 export async function flushDatasetUploadAsync(key: string, value: string): Promise<boolean> {
-  if (!isSyncKey(key)) return false;
+  if (!isSyncKey(key) || isEmptyOwnerKey(key)) return false;
   const e = pending.get(key);
   if (e) { clearTimeout(e.timer); pending.delete(key); }
   // 先入队：离线/超时也保证这次保存在下次联网时自动补传，不再“返回 false 就等于丢数据”
@@ -423,6 +495,7 @@ export async function flushDatasetUploadAsync(key: string, value: string): Promi
     if (res.ok) {
       const data = await res.json().catch(() => null);
       if (data && typeof data.newTs === 'number') knownTs.set(key, data.newTs);
+      collectRegisteredRejections(key, data);
       queueDelete(key, uploadTs);
       return true;
     }
@@ -642,15 +715,27 @@ export const reloadAfterPull = (reload: () => void): void => {
     .catch(() => { /* ignore */ });
 };
 
+let syncMaintenanceScheduled = false;
+/** 存量迁移/自愈四段：均幂等，改为每会话仅跑一次且延后 3s（首帧之后）。
+ * 旧实现随每次 pull（含 60s 轮询与启动闸门）同步扫描本地存储，
+ * 与宽限期判定叠加会把主线程卡秒级，拖慢首页指标卡与整页首帧。 */
+function scheduleSyncMaintenance(): void {
+  if (syncMaintenanceScheduled) return;
+  syncMaintenanceScheduled = true;
+  setTimeout(() => {
+    // 对账记录旧全局键 → 分平台独立库的存量迁移（幂等，墓碑优先）
+    try { migrateLegacyReconRecords(); } catch { /* ignore */ }
+    // 合作存量数据修复：采购商侧供应商名称统一为已认证公司全称
+    try { repairPurchaserSupplierNames(); } catch { /* ignore */ }
+    // 合作方公司名称/信息同步：改名链改写 + 账号名快照修正 + 关联账号信息刷新
+    try { repairCounterpartyNames(); } catch { /* ignore */ }
+    // 对账完成联动自愈：终态账单断言回写供应商明细行 + pending 记录任一侧终态即打墓碑（对抗并集合并复活）
+    try { healReconTerminalLinks(); } catch { /* ignore */ }
+  }, 3000);
+}
+
 export async function pullAllDatasets(): Promise<number> {
-  // 对账记录旧全局键 → 分平台独立库的存量迁移（幂等，墓碑优先）
-  try { migrateLegacyReconRecords(); } catch { /* ignore */ }
-  // 合作存量数据修复：采购商侧供应商名称统一为已认证公司全称（轻量，随同步轮询执行）
-  try { repairPurchaserSupplierNames(); } catch { /* ignore */ }
-  // 合作方公司名称/信息同步：改名链改写 + 账号名快照修正 + 关联账号信息刷新（随同步轮询执行）
-  try { repairCounterpartyNames(); } catch { /* ignore */ }
-  // 对账完成联动自愈：终态账单断言回写供应商明细行 + pending 记录任一侧终态即打墓碑（对抗并集合并复活）
-  try { healReconTerminalLinks(); } catch { /* ignore */ }
+  scheduleSyncMaintenance();
   if (!(await serverAvailable())) return 0;
   let meta: Record<string, number> = {};
   try {
@@ -676,7 +761,7 @@ export async function pullAllDatasets(): Promise<number> {
     try { permSnapBefore.set(key, localStorage.getItem(key)); } catch { /* ignore */ }
   }
   for (const key of Object.keys(meta)) {
-    if (!isSyncKey(key) || !isKeyForCurrentAccount(key)) continue;
+    if (!isSyncKey(key) || !isKeyForCurrentAccount(key) || isEmptyOwnerKey(key)) continue;
     // 仅上传不拉取的键（如 credit_adjustments_）：跳过拉取，避免宽限期竞态覆盖本地新数据
     // 这类键有独立的 ensureDatasetFromServer 恢复机制
     if (isUploadOnlyKey(key)) continue;
@@ -846,6 +931,24 @@ export async function pullAllDatasets(): Promise<number> {
         const idbLocal = await loadDataset(key);
         if (idbLocal && typeof idbLocal.json === 'string' && idbLocal.updatedAt > serverTs) {
           void doUpload(key, idbLocal.json, idbLocal.updatedAt).catch(() => false);
+          continue;
+        }
+      }
+      // 异常兑底：服务端副本为空而本地（缓存或 IndexedDB）有行时拒绝覆盖，
+      // 防止一份空/异常副本经 pull 擦除各端好数据（历史事故：空 owner 副本、磁盘故障期陈旧副本）
+      let serverHasRows = true;
+      try { serverHasRows = localDatasetHasRows(rec.json); } catch { serverHasRows = true; }
+      if (!serverHasRows) {
+        let localJson: string | null = localDatasetHasRows(lsCached) ? lsCached : null;
+        if (!localJson) {
+          try {
+            const idb = await loadDataset(key);
+            if (idb && typeof idb.json === 'string' && localDatasetHasRows(idb.json)) localJson = idb.json;
+          } catch { /* ignore */ }
+        }
+        if (localJson) {
+          console.warn('[sync] 拒绝用服务端空副本覆盖本地数据', key);
+          void doUpload(key, localJson, Date.now()).catch(() => false);
           continue;
         }
       }

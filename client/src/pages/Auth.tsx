@@ -10,7 +10,7 @@ import { useNavigate } from 'react-router-dom';
 import Logo from '../components/Logo';
 import { safeSetItem } from '../utils/storageQuota';
 import { FREE_PERIOD } from '../utils/billingPolicy';
-import { fetchServerDataset, flushDatasetUpload, reloadAfterPull, pullAllDatasets } from '../utils/serverSync';
+import { fetchServerDataset, flushDatasetUpload, flushDatasetUploadAsync, takeRegisteredUsersRejections, reloadAfterPull, pullAllDatasets } from '../utils/serverSync';
 import { readOwnerFromToken, syncOwnerFromToken } from '../utils/dataOwner';
 import { initPushNotifications } from '../utils/pushNotification';
 import { getProvinceOptions, getCityOptions, getDistrictOptions } from '../utils/regions';
@@ -1266,8 +1266,8 @@ const Auth: React.FC = () => {
       await form.validateFields();
       setLoading(true);
       
-      // 模拟注册请求
-      setTimeout(() => {
+      // 注册请求（服务端注册表权威去重 + 云端确认）
+      setTimeout(async () => {
         const username = form.getFieldValue('username');
         const role = form.getFieldValue('role');
         const password = form.getFieldValue('password');
@@ -1332,10 +1332,33 @@ const Auth: React.FC = () => {
           setLoading(false);
           return;
         }
-        existingUsers.push(newUser);
+        // 服务端权威去重：本地副本可能缺其他租户账号（新机器/拉取失败/数据库故障期）
+        try {
+          const rec = await fetchServerDataset('registeredUsers');
+          if (rec) {
+            const remote = JSON.parse(rec.json || '[]');
+            if (Array.isArray(remote) && remote.some((u: any) => String(u?.username || '').toLowerCase() === String(username).toLowerCase())) {
+              message.error('该账号已存在（含其他租户），请使用其他账号');
+              setLoading(false);
+              return;
+            }
+          }
+        } catch { /* 服务端不可用时退化为本地校验，提交后仍有服务端准入兑底 */ }
+        existingUsers.push({ ...newUser, _createTs: Date.now() });
         safeSetItem('registeredUsers', JSON.stringify(existingUsers));
-        // 立即上传账号到服务器，保证其他浏览器可登录（后端不可用时静默忽略）
-        flushDatasetUpload('registeredUsers', JSON.stringify(existingUsers));
+        // 立即上传账号到服务器并等待确认：失败要明确告知「尚未上云、暂不能登录」
+        const upOk = await flushDatasetUploadAsync('registeredUsers', JSON.stringify(existingUsers));
+        const rejected = takeRegisteredUsersRejections().filter(r => r.username === username);
+        if (rejected.length) {
+          const rest = (JSON.parse(localStorage.getItem('registeredUsers') || '[]') as any[]).filter(u => u.username !== username);
+          safeSetItem('registeredUsers', JSON.stringify(rest));
+          message.error(rejected[0].reason);
+          setLoading(false);
+          return;
+        }
+        if (!upOk) {
+          message.warning('注册已在本机保存，但云端同步失败（服务器当前不可写）：同步成功前该账号无法在其他设备登录，系统将自动重试');
+        }
         
         // 同时添加到 mockUsers 以便登录（实际项目中不需要，这里只是演示）
         mockUsers.push({
@@ -1349,7 +1372,7 @@ const Auth: React.FC = () => {
         setRegisterSuccess(true);
         setLoading(false);
         message.success('注册成功！');
-      }, 1500);
+      }, 300);
     } catch (error) {
       message.error('请检查表单信息');
     }
@@ -1625,7 +1648,7 @@ const Auth: React.FC = () => {
                 label="登录账号"
                 rules={[
                   { required: true, message: '请输入登录账号' },
-                  { pattern: /^[a-zA-Z][a-zA-Z0-9_]{3,19}$/, message: '字母开头，4-20位字母数字下划线' },
+                  { pattern: /^[a-zA-Z][a-zA-Z0-9_]{7,19}$/, message: '字母开头，8-20位字母数字下划线' },
                 ]}
               >
                 <Input prefix={<UserAddOutlined />} placeholder="请输入登录账号" />

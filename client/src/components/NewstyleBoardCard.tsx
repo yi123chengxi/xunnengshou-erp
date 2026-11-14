@@ -2,8 +2,8 @@
  * 新款进度看板卡片（供应商首页/采购商首页共用）
  * 数据与统计口径完全复用 NewStyleProgressPage.computeNewstyleBoard（与新款进度页统计卡同值）
  */
-import React, { useMemo } from 'react';
-import { Card, Table, Tag, Button, Typography, Space, Empty } from 'antd';
+import React, { useMemo, useEffect, useState } from 'react';
+import { Card, Table, Tag, Button, Typography, Space, Empty, Skeleton } from 'antd';
 import { computeNewstyleBoard } from '../pages/NewStyleProgressPage';
 
 const { Text } = Typography;
@@ -11,8 +11,17 @@ const { Text } = Typography;
 interface Props { owner: string; nonce?: number; onMore: () => void; }
 
 const NewstyleBoardCard: React.FC<Props> = ({ owner, nonce, onMore }) => {
-  const board = useMemo(() => computeNewstyleBoard(owner), [owner, nonce]);
-  const s = board.stats;
+  // 延后计算：首帧先出骨架，避免四表聚合阻塞首页顶部指标卡的首次渲染；
+  // 计算完成后再一次性提交看板内容
+  const [tick, setTick] = useState(0);
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    setReady(false);
+    const t = setTimeout(() => { setTick(x => x + 1); setReady(true); }, 0);
+    return () => clearTimeout(t);
+  }, [owner, nonce]);
+  const board = useMemo(() => (ready ? computeNewstyleBoard(owner) : null), [owner, ready, tick]);
+  const s = board?.stats || { total: 0, emptyCode: 0, emptyCost: 0, arrivalOver: 0, incomplete: 0, photoOver: 0, listOver: 0 };
   const items = [
     { label: '新款总数', value: s.total, color: '#1a2b45' },
     { label: '货号为空', value: s.emptyCode, color: '#f5222d' },
@@ -45,6 +54,7 @@ const NewstyleBoardCard: React.FC<Props> = ({ owner, nonce, onMore }) => {
     <Card size="small" style={{ borderRadius: 10, marginBottom: 16 }}
       title={<span style={{ fontWeight: 600 }}>新款进度看板</span>}
       extra={<Button type="link" size="small" onClick={onMore}>查看全部</Button>}>
+      {!board ? <Skeleton active paragraph={{ rows: 3 }} title={false} /> : (<>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginBottom: 10 }}>
         {items.map(it => (
           <div key={it.label} style={{ flex: '1 1 110px', minWidth: 100, background: '#fafcfd', border: '1px solid #eef2f6', borderRadius: 8, padding: '8px 12px' }}>
@@ -57,6 +67,7 @@ const NewstyleBoardCard: React.FC<Props> = ({ owner, nonce, onMore }) => {
         <Table rowKey={(r: any) => r.key || r.styleCode || Math.random()} size="small" bordered pagination={false}
           dataSource={board.rows.slice(0, 6)} columns={columns} />
       )}
+      </>)}
     </Card>
   );
 };

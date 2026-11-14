@@ -11,7 +11,8 @@ import {
 } from '../services/storageUsage';
 import {
   attachSyncUser, currentSyncUser, requireSyncAuth, isKeyAllowed, filterMetaForUser,
-  sanitizeRegisteredUsersJson, hashRegisteredUsersJson, hashPassword, mergeRegisteredUsersJson, SyncUser,
+  sanitizeRegisteredUsersJson, hashRegisteredUsersJson, hashPassword, mergeRegisteredUsersJson,
+  filterRegisteredUsersCreations, SyncUser,
 } from '../middleware/syncGuard';
 import { notifyDatasetUpdated } from '../ws/chat-ws';
 
@@ -269,15 +270,21 @@ router.put('/dataset', async (req: Request, res: Response) => {
     if (!isKeyAllowed(key, user, 'write')) { denyKey(res, user, key, '写入'); return; }
     // 权限类数据集落库成功后通知该租户在线端立即拉取（响应正常结束才算保存成功）
     res.on('finish', () => { if (res.statusCode < 400) notifyPermDatasetChanged(key, user); });
-    // 账号数据集写入前处理：明文密码统一转 bcrypt 哈希，服务端不再落明文
+    // 账号数据集写入前处理：新建行准入（用户名≥8位 + 全局去重含跨租户）→ 明文密码统一转 bcrypt 哈希
+    let registeredRejected: { username: string; reason: string }[] = [];
     if (key === 'registeredUsers') {
       const existing = await store.getDataset(key).catch(() => null);
       const existingJson = existing ? existing.dataset_json : null;
+      // 服务端权威准入：被拒行不参与合并，避免后创建方覆盖先创建方的密码与资料
+      const filtered = filterRegisteredUsersCreations(json, existingJson);
+      registeredRejected = filtered.rejected;
       // 行级并集：新增账号采纳、权限字段按 _permTs 保护、缩水需显式申报 removedIds
       // （子账号会话也要能建号：旧逻辑把子账号写入直接拦在客户端，导致新账号只留在本机）
-      const guarded = existingJson ? mergeRegisteredUsersJson(existingJson, json, req.body.removedIds) : json;
+      const guarded = existingJson ? mergeRegisteredUsersJson(existingJson, filtered.cleanJson, req.body.removedIds) : filtered.cleanJson;
       json = await hashRegisteredUsersJson(guarded, existingJson);
     }
+    // 响应携带拒绝清单：建号方据此回滚本地行并提示，避免「本地有号、服务端无号」的登不上账号
+    const savedJson = (obj: Record<string, any>) => res.json(registeredRejected.length ? { ...obj, rejected: registeredRejected } : obj);
     const ts = Number(updatedAt) || Date.now();
     const owner = extractOwner(key);
     const row = await store.getDataset(key);
@@ -286,7 +293,7 @@ router.put('/dataset', async (req: Request, res: Response) => {
       await store.forceUpsertDataset(key, json, owner, ts);
       await applyUsageDeltaForWrite(key, null, json);
       touchMetaCache(key, ts);
-      res.json({ saved: true, newTs: ts });
+      savedJson({ saved: true, newTs: ts });
       return;
     }
     if (force) {
@@ -295,7 +302,7 @@ router.put('/dataset', async (req: Request, res: Response) => {
       await applyUsageDeltaForWrite(key, row.dataset_json, json);
       if (key.startsWith('payment_requests_')) void notifyNewPayRequests(key, row.dataset_json, json);
       touchMetaCache(key, finalTs);
-      res.json({ saved: true, newTs: finalTs });
+      savedJson({ saved: true, newTs: finalTs });
       return;
     }
     if (Number(baseTs) === row.updated_at) {
@@ -310,7 +317,7 @@ router.put('/dataset', async (req: Request, res: Response) => {
           await store.forceUpsertDataset(key, guarded, owner, gTs);
           await applyUsageDeltaForWrite(key, row.dataset_json, guarded);
           touchMetaCache(key, gTs);
-          res.json({ saved: true, merged: true, newTs: gTs });
+          savedJson({ saved: true, merged: true, newTs: gTs });
           return;
         }
       }
@@ -324,7 +331,7 @@ router.put('/dataset', async (req: Request, res: Response) => {
           await applyUsageDeltaForWrite(key, row.dataset_json, guarded);
           if (key.startsWith('payment_requests_')) void notifyNewPayRequests(key, row.dataset_json, guarded);
           touchMetaCache(key, gTs);
-          res.json({ saved: true, merged: true, newTs: gTs });
+          savedJson({ saved: true, merged: true, newTs: gTs });
           return;
         }
       }
@@ -334,7 +341,7 @@ router.put('/dataset', async (req: Request, res: Response) => {
       await applyUsageDeltaForWrite(key, row.dataset_json, json);
       if (key.startsWith('payment_requests_')) void notifyNewPayRequests(key, row.dataset_json, json);
       touchMetaCache(key, finalTs);
-      res.json({ saved: true, newTs: finalTs });
+      savedJson({ saved: true, newTs: finalTs });
       return;
     }
     // 客户端已过期 → 并集合并，防止旧数据删除新增记录
@@ -348,7 +355,7 @@ router.put('/dataset', async (req: Request, res: Response) => {
     await applyUsageDeltaForWrite(key, row.dataset_json, finalJson);
     if (key.startsWith('payment_requests_')) void notifyNewPayRequests(key, row.dataset_json, finalJson);
     touchMetaCache(key, finalTs);
-    res.json({ saved: true, merged: !!merged, newTs: finalTs });
+    savedJson({ saved: true, merged: !!merged, newTs: finalTs });
   } catch (err: any) {
     console.error('[sync] /dataset PUT error:', err.message);
     res.status(500).json({ error: err.message });

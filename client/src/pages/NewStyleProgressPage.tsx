@@ -1825,20 +1825,42 @@ export function computeNewstyleBoard(owner: string): NewstyleBoard {
   const arrivals: ArrivalRec[] = safeJson(`newstyle_arrival_${owner}`, []);
   const listings: any[] = safeJson(`newstyle_listing_${owner}`, []);
   const deadlines = readDeadlines(owner);
+  // 四表先建索引再判定：旧实现每个判定函数内部全表 filter/find，
+  // 单行成本 O(P+L+N)，整板 O(N·P+N·L+P·N)，首页首帧被它阻塞十多秒
+  const photosByCode = new Map<string, PhotoRec[]>();
+  photos.forEach(p => { const c = String(p.styleCode || ''); const a = photosByCode.get(c); if (a) a.push(p); else photosByCode.set(c, [p]); });
+  const arrivalsByCode = new Map<string, ArrivalRec[]>();
+  arrivals.forEach(a => { const c = String(a.styleCode || ''); const arr = arrivalsByCode.get(c); if (arr) arr.push(a); else arrivalsByCode.set(c, [a]); });
+  const listingsByCode = new Map<string, any>();
+  listings.forEach((l: any) => { const c = String(l?.styleCode || ''); if (c && !listingsByCode.has(c)) listingsByCode.set(c, l); });
+  const modeCache = new Map<string, string>();
+  const modeOf = (code: string): string => {
+    let m = modeCache.get(code);
+    if (m === undefined) { m = photoModeOf(progress, code); modeCache.set(code, m); }
+    return m;
+  };
+  const arrivalDateCache = new Map<string, string>();
+  const arrivalDateOf = (code: string): string => {
+    let d = arrivalDateCache.get(code);
+    if (d === undefined) { d = latestArrivalDateOf(arrivals, code); arrivalDateCache.set(code, d); }
+    return d;
+  };
   const photoStatusOf = (styleCode: string, fallback: string): string => {
-    const rs = photos.filter(p => p.styleCode === styleCode);
-    if (!rs.length) return fallback;
+    const rs = photosByCode.get(styleCode);
+    if (!rs || !rs.length) return fallback;
     const latest = [...rs].sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))[0];
     return latest.recvStatus || fallback;
   };
   const arrivalStatusOf = (styleCode: string, fallback: string): string => {
-    const rs = arrivals.filter(a => a.styleCode === styleCode);
-    if (!rs.length) return fallback;
+    const rs = arrivalsByCode.get(styleCode);
+    if (!rs || !rs.length) return fallback;
     const latest = [...rs].sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')))[0];
     return latest.arrivalStatus || fallback;
   };
+  const incompleteOf = (styleCode: string): boolean =>
+    (listingsByCode.get(String(styleCode || ''))?.dataComplete || '') !== '资料已完善';
   const arrivalDisplayOf = (r: ProgressRec): string => {
-    const st = arrivalStatusOf(r.styleCode, r.arrivalStatus);
+    const st = arrivalStatusOf(String(r.styleCode || ''), r.arrivalStatus);
     if (st === '已到货' || st === '已收到') return st;
     if (parseDate(r.createdAt) > 0 && todayTs() - parseDate(r.createdAt) > deadlines.overdue * 86400000) return '到货逾期';
     return st || '未到货';
@@ -1846,14 +1868,15 @@ export function computeNewstyleBoard(owner: string): NewstyleBoard {
   const isPhotoOverdue = (r: ProgressRec): boolean => {
     if (parseDate(r.createdAt) <= 0) return false;
     if (todayTs() - parseDate(r.createdAt) <= deadlines.photoOver * 86400000) return false;
-    return photoStatusOf(r.styleCode, r.photoRecvStatus) !== '已收到';
+    return photoStatusOf(String(r.styleCode || ''), r.photoRecvStatus) !== '已收到';
   };
   // 上架逾期（与本页统计卡同口径：外拍回传记录派生预计上架完成已过且未上架任何平台）
   const photoListOver = photos.filter(p => {
     if ((p.platforms || []).length || p.listedAt) return false;
-    const mode = photoModeOf(progress, p.styleCode);
+    const code = String(p.styleCode || '');
+    const mode = modeOf(code);
     if (mode === '只拍不上架') return false;
-    const plan = planDateOfPhoto(p, mode, latestArrivalDateOf(arrivals, p.styleCode), deadlines.photo, deadlines.arrival);
+    const plan = planDateOfPhoto(p, mode, arrivalDateOf(code), deadlines.photo, deadlines.arrival);
     return !!plan && todayTs() > parseDate(plan);
   });
   const listOverCodes = new Set(photoListOver.map(p => p.styleCode));
@@ -1862,7 +1885,7 @@ export function computeNewstyleBoard(owner: string): NewstyleBoard {
     emptyCode: progress.filter(r => !String(r.styleCode || '').trim()).length,
     emptyCost: progress.filter(r => !(Number(r.costPrice) > 0)).length,
     arrivalOver: progress.filter(r => arrivalDisplayOf(r) === '到货逾期').length,
-    incomplete: progress.filter(r => (listings.find((l: any) => l.styleCode === r.styleCode)?.dataComplete || '') !== '资料已完善').length,
+    incomplete: progress.filter(r => incompleteOf(r.styleCode)).length,
     photoOver: progress.filter(isPhotoOverdue).length,
     listOver: photoListOver.length,
   };
@@ -1871,7 +1894,7 @@ export function computeNewstyleBoard(owner: string): NewstyleBoard {
     boardArrival: arrivalDisplayOf(r),
     boardPhotoOver: isPhotoOverdue(r),
     boardListOver: listOverCodes.has(r.styleCode),
-    boardIncomplete: (listings.find((l: any) => l.styleCode === r.styleCode)?.dataComplete || '') !== '资料已完善',
+    boardIncomplete: incompleteOf(r.styleCode),
   }));
   return { stats, rows };
 }
