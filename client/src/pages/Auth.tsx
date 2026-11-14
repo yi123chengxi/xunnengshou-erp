@@ -54,6 +54,26 @@ const serverWebLogin = async (
       return { status: 'ok', token: String(data.data.token), user: data.data.user || {} };
     }
     if (res.status === 401 || res.status === 403) {
+      // 「账号未上云」精准报错：服务端数据库不可写（磁盘满/锁等待）时建号上传无法落库，
+      // 登录时服务端查无此号返回 401，会被显示成「密码错误」误导排查。
+      // 这里核对服务端注册表（公开键可匿名读）：本地有号而服务端无号 → 如实报同步失败
+      try {
+        let localHas = false;
+        try {
+          const local: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+          localHas = Array.isArray(local) && local.some((u: any) => u && u.username === username);
+        } catch { /* ignore */ }
+        if (localHas) {
+          const rec = await fetchServerDataset('registeredUsers');
+          if (rec && rec.json) {
+            const server: any[] = JSON.parse(rec.json);
+            const serverHas = Array.isArray(server) && server.some((u: any) => u && u.username === username);
+            if (!serverHas) {
+              return { status: 'invalid', message: '该账号尚未同步到云端（服务器数据库写入失败）：请在创建该账号的浏览器打开一次自动补传，并联系管理员检查服务器数据库' };
+            }
+          }
+        }
+      } catch { /* 诊断失败回退通用提示 */ }
       return { status: 'invalid', message: data?.message || '用户名或密码错误' };
     }
     // 5xx / 网关异常：服务端在线但暂时不可用，区别于真断网
