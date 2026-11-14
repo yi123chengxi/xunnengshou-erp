@@ -1,0 +1,2 @@
+src/App.tsx(4,36): error TS2307: Cannot find module './utils/dataOwner' or its corresponding type declarations.
+src/pages/Auth.tsx(14,56): error TS2307: Cannot find module '../utils/dataOwner' or its corresponding type declarations.
