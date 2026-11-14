@@ -76,7 +76,7 @@ const billCreatedMs = (b: any): number => {
 };
 
 // 默认5行空明细
-const emptyRows = (): BillItem[] => Array.from({ length: 5 }, () => ({ styleCode: '', productCode: '', color: '', spec: '', quantity: 0, unitPrice: 0, amount: 0, productType: '' }));
+const emptyRows = (): BillItem[] => Array.from({ length: 5 }, () => ({ styleCode: '', productCode: '', color: '', spec: '', quantity: 0, unitPrice: 0, amount: 0, productType: '', unit: '' }));
 
 /** 合并相同商品编码的明细行（数量求和，单价取第一条，金额重算） */
 const mergeDuplicateItems = (items: BillItem[]): BillItem[] => {
@@ -117,7 +117,7 @@ const mergeWithDuplicateInfo = (items: BillItem[]): { merged: BillItem[]; dupCod
   return { merged: mergeDuplicateItems(items), dupCodes };
 };
 
-interface BillItem { styleCode: string; productCode: string; color: string; spec: string; quantity: number; unitPrice: number; amount: number; productType?: string; }
+interface BillItem { styleCode: string; productCode: string; color: string; spec: string; quantity: number; unitPrice: number; amount: number; productType?: string; unit?: string; }
 interface BillRecord {
   key: string;
   outboundNo: string;
@@ -153,6 +153,49 @@ const SUP_STATUS_TAG: Record<string, { text: string; color: string }> = {
   terminating: { text: '解除中', color: 'gold' },
   terminated: { text: '已解除', color: 'default' },
   bill: { text: '历史账单', color: 'blue' },
+};
+
+/** 数量/金额区间判断：区间串格式「最小~最大」，留空一侧表示不限；退货负数按带符号比较 */
+const numInRange = (raw: any, range: string): boolean => {
+  const [minS = '', maxS = ''] = String(range || '').split('~');
+  const hasMin = String(minS).trim() !== '';
+  const hasMax = String(maxS).trim() !== '';
+  if (!hasMin && !hasMax) return true;
+  const n = Number(raw) || 0;
+  const min = hasMin ? Number(minS) : null;
+  const max = hasMax ? Number(maxS) : null;
+  if (min !== null && Number.isFinite(min) && n < min) return false;
+  if (max !== null && Number.isFinite(max) && n > max) return false;
+  return true;
+};
+
+/** 区间搜索控件：两个数值输入框（最小/最大），输入数值即可，无步进按钮 */
+const NumberRangeInput: React.FC<{
+  value: string;
+  label: string;
+  onChange: (v: string) => void;
+  onPressEnter?: () => void;
+}> = ({ value, label, onChange, onPressEnter }) => {
+  const [minS = '', maxS = ''] = String(value || '').split('~');
+  const toNum = (t: string): number | null => {
+    if (String(t).trim() === '') return null;
+    const n = Number(t);
+    return Number.isFinite(n) ? n : null;
+  };
+  const emit = (a: number | null, b: number | null) => {
+    const left = a === null || !Number.isFinite(a) ? '' : String(a);
+    const right = b === null || !Number.isFinite(b) ? '' : String(b);
+    onChange(!left && !right ? '' : `${left}~${right}`);
+  };
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 4 }} title={`${label}区间：最小 ~ 最大（留空一侧表示不限）`}>
+      <InputNumber size="small" controls={false} style={{ flex: 1, minWidth: 0 }} placeholder={`${label}最小`}
+        value={toNum(minS)} onChange={v => emit(v == null ? null : Number(v), toNum(maxS))} onPressEnter={onPressEnter} />
+      <span style={{ color: '#bfbfbf', flex: 'none' }}>~</span>
+      <InputNumber size="small" controls={false} style={{ flex: 1, minWidth: 0 }} placeholder={`${label}最大`}
+        value={toNum(maxS)} onChange={v => emit(toNum(minS), v == null ? null : Number(v))} onPressEnter={onPressEnter} />
+    </div>
+  );
 };
 
 const PurchaserBillPage: React.FC = () => {
@@ -310,9 +353,9 @@ const PurchaserBillPage: React.FC = () => {
   const [billDisplay, setBillDisplay] = useState(() => {
     try {
       const saved = localStorage.getItem(`billItemDisplay_${username}`);
-      if (saved) return JSON.parse(saved);
+      if (saved) return { showUnit: true, ...JSON.parse(saved) };
     } catch { /* ignore */ }
-    return { showStyleCode: true, showProductCode: true, showProductType: true, showColor: false, showSpec: false, showQty: true, showPrice: true, showAmount: true };
+    return { showStyleCode: true, showProductCode: true, showProductType: true, showUnit: true, showColor: false, showSpec: false, showQty: true, showPrice: true, showAmount: true };
   });
 
   // 添加商品弹窗（默认显示自己的成品，可切换供应商货品）
@@ -635,6 +678,32 @@ const PurchaserBillPage: React.FC = () => {
     } catch { return []; }
   }, [addProductVisible, addProductTab]);
 
+  // 商品基础信息单位索引：商品编码 → 单位（采购明细「单位」列按商品编码带出基础信息里的单位）
+  const productUnitMap = useMemo(() => {
+    const map = new Map<string, string>();
+    const put = (list: any[]) => {
+      (Array.isArray(list) ? list : []).forEach((p: any) => {
+        const code = String((p && p.productCode) || '').trim();
+        const unit = String((p && p.unit) || '').trim();
+        if (code && unit && !map.has(code)) map.set(code, unit);
+      });
+    };
+    try {
+      const owner = getDataOwner();
+      put(JSON.parse(localStorage.getItem(`pageData_basic-data_product-list_${owner}`) || '[]'));
+    } catch { /* ignore */ }
+    put(supplierProducts);
+    put(spDetailData);
+    return map;
+  }, [addProductVisible, addProductTab, supplierProducts, spDetailData]);
+
+  /** 明细行缺单位时，按商品编码从商品基础信息回填 */
+  const withUnitFromMaster = (it: BillItem): BillItem => {
+    if (it.unit) return it;
+    const unit = productUnitMap.get((it.productCode || '').trim()) || '';
+    return unit ? { ...it, unit } : it;
+  };
+
   const reload = useCallback(() => {
     try {
       let list: any[] = JSON.parse(localStorage.getItem(storageKey) || '[]');
@@ -755,6 +824,7 @@ const PurchaserBillPage: React.FC = () => {
     setItems(prev => prev.map((it, i) => {
       if (i !== idx) return it;
       const next = { ...it, ...patch };
+      if (patch.productCode !== undefined) next.unit = productUnitMap.get(String(patch.productCode || '').trim()) || '';
       next.amount = Math.round((Number(next.quantity) || 0) * (Number(next.unitPrice) || 0) * 100) / 100;
       return next;
     }));
@@ -787,7 +857,7 @@ const PurchaserBillPage: React.FC = () => {
         message.warning(`出库单号 ${noTrim} 在该供应商下已存在 ${dups.length} 张账单，继续新增将产生同号账单，对账时需手动关联`);
       }
     } catch { /* ignore */ }
-    const validItems = mergeDuplicateItems(items.filter(hasData));
+    const validItems = mergeDuplicateItems(items.filter(hasData).map(withUnitFromMaster));
     const rec: BillRecord = {
       key: `bill-${Date.now()}`,
       outboundNo: outboundNo.trim(),
@@ -952,14 +1022,20 @@ const PurchaserBillPage: React.FC = () => {
     if (matched) setESupplier(matched.name);
   };
   const updateEditItem = (idx: number, patch: Partial<BillItem>) => {
-    setEItems(prev => prev.map((it, i) => { if (i !== idx) return it; const next = { ...it, ...patch }; next.amount = Math.round((Number(next.quantity) || 0) * (Number(next.unitPrice) || 0) * 100) / 100; return next; }));
+    setEItems(prev => prev.map((it, i) => {
+      if (i !== idx) return it;
+      const next = { ...it, ...patch };
+      if (patch.productCode !== undefined) next.unit = productUnitMap.get(String(patch.productCode || '').trim()) || '';
+      next.amount = Math.round((Number(next.quantity) || 0) * (Number(next.unitPrice) || 0) * 100) / 100;
+      return next;
+    }));
   };
   const eTotalQty = useMemo(() => eItems.reduce((s, it) => s + (Number(it.quantity) || 0), 0), [eItems]);
   const eTotalAmount = useMemo(() => Math.round(eItems.reduce((s, it) => s + (Number(it.amount) || 0), 0) * 100) / 100, [eItems]);
   const handleEditSave = () => {
     if (!eOutboundNo.trim()) { message.warning('请填写出库单号'); return; }
     const all: BillRecord[] = JSON.parse(localStorage.getItem(storageKey) || '[]');
-    const validItems = mergeDuplicateItems(eItems.filter(hasData));
+    const validItems = mergeDuplicateItems(eItems.filter(hasData).map(withUnitFromMaster));
     const oldRec = all.find(b => b.key === editKey);
     const newFields: any = {
       outboundNo: eOutboundNo.trim(), prefix: ePrefix, supplier: eSupplier,
@@ -1034,8 +1110,9 @@ const PurchaserBillPage: React.FC = () => {
       const src = b.billSource || (auto ? '订单发货' : '手工新增');
       if (src !== s.source) return false;
     }
-    if (s.qty.trim() && !String(Number(b.totalQty) || 0).includes(s.qty.trim())) return false;
-    if (s.amount.trim() && !String(Number(b.totalAmount) || 0).includes(s.amount.trim()) && !(Number(b.totalAmount) || 0).toFixed(2).includes(s.amount.trim())) return false;
+    // 数量/金额：区间搜索（留空一侧不限制），替换原「文本包含」模糊匹配
+    if (!numInRange(b.totalQty, s.qty)) return false;
+    if (!numInRange(b.totalAmount, s.amount)) return false;
     return true;
   }).sort((a, b) => billCreatedMs(b) - billCreatedMs(a)), [bills, pSearchApplied]);
 
@@ -1304,17 +1381,17 @@ const PurchaserBillPage: React.FC = () => {
         {/* 搜索栏：按字段创建搜索框，点击查询后生效 */}
         <Row gutter={[8, 8]} style={{ padding: '16px 0 0' }} align="middle">
           <Col xs={12} sm={3}><Input size="small" allowClear placeholder="出库单号" value={pSearch.no} onChange={e => setPSearch(p => ({ ...p, no: e.target.value }))} /></Col>
-          <Col xs={12} sm={3}><DatePicker size="small" style={{ width: '100%' }} allowClear placeholder="日期" value={pSearch.date ? dayjs(pSearch.date) : null} onChange={d => setPSearch(p => ({ ...p, date: d ? d.format('YYYY-MM-DD') : '' }))} /></Col>
+          <Col xs={12} sm={2}><DatePicker size="small" style={{ width: '100%' }} allowClear placeholder="日期" value={pSearch.date ? dayjs(pSearch.date) : null} onChange={d => setPSearch(p => ({ ...p, date: d ? d.format('YYYY-MM-DD') : '' }))} /></Col>
           <Col xs={12} sm={2}><Input size="small" allowClear placeholder="款式编号" value={pSearch.style} onChange={e => setPSearch(p => ({ ...p, style: e.target.value }))} /></Col>
           <Col xs={12} sm={2}><Input size="small" allowClear placeholder="商品编码" value={pSearch.code} onChange={e => setPSearch(p => ({ ...p, code: e.target.value }))} /></Col>
-          <Col xs={12} sm={3}>
+          <Col xs={12} sm={2}>
             <Select size="small" style={{ width: '100%' }} allowClear showSearch placeholder="供应商"
               value={pSearch.supplier || undefined} options={supplierSearchOptions}
               onChange={v => setPSearch(p => ({ ...p, supplier: v || '' }))}
               filterOption={(input, opt) => String(opt?.label || '').includes(input)} />
           </Col>
-          <Col xs={8} sm={2}><Input size="small" allowClear placeholder="数量" value={pSearch.qty} onChange={e => setPSearch(p => ({ ...p, qty: e.target.value }))} /></Col>
-          <Col xs={8} sm={2}><Input size="small" allowClear placeholder="采购金额" value={pSearch.amount} onChange={e => setPSearch(p => ({ ...p, amount: e.target.value }))} /></Col>
+          <Col xs={12} sm={3}><NumberRangeInput label="数量" value={pSearch.qty} onChange={v => setPSearch(p => ({ ...p, qty: v }))} onPressEnter={() => { reloadAfterPull(reload); setPSearchApplied({ ...pSearch }); }} /></Col>
+          <Col xs={12} sm={3}><NumberRangeInput label="金额" value={pSearch.amount} onChange={v => setPSearch(p => ({ ...p, amount: v }))} onPressEnter={() => { reloadAfterPull(reload); setPSearchApplied({ ...pSearch }); }} /></Col>
           <Col xs={8} sm={2}>
             <Select size="small" style={{ width: '100%' }} allowClear placeholder="对账结果"
               value={pSearch.recon || undefined}
@@ -1441,6 +1518,7 @@ const PurchaserBillPage: React.FC = () => {
               billDisplay.showStyleCode && { title: '款式编号', key: 's', width: 110, render: (_: any, __: any, i: number) => <Input size="small" value={items[i].styleCode} onChange={e => updateItem(i, { styleCode: e.target.value })} /> },
               billDisplay.showProductCode && { title: '商品编码', key: 'p', width: 120, render: (_: any, __: any, i: number) => <Input size="small" value={items[i].productCode} onChange={e => updateItem(i, { productCode: e.target.value })} style={highlightCodes.has(items[i].productCode) ? { color: '#f5222d', fontWeight: 600 } : undefined} /> },
               billDisplay.showProductType && { title: '产品种类', key: 'pt', width: 80, render: (_: any, __: any, i: number) => <Input size="small" value={items[i].productType || ''} onChange={e => updateItem(i, { productType: e.target.value })} /> },
+              billDisplay.showUnit && { title: '单位', key: 'un', width: 70, render: (_: any, __: any, i: number) => <Input size="small" placeholder="单位" value={items[i].unit || productUnitMap.get((items[i].productCode || '').trim()) || ''} onChange={e => updateItem(i, { unit: e.target.value })} /> },
               billDisplay.showColor && { title: '颜色', key: 'c', width: 80, render: (_: any, __: any, i: number) => <Input size="small" value={items[i].color} onChange={e => updateItem(i, { color: e.target.value })} /> },
               billDisplay.showSpec && { title: '规格', key: 'sp', width: 90, render: (_: any, __: any, i: number) => <Input size="small" value={items[i].spec} onChange={e => updateItem(i, { spec: e.target.value })} /> },
               billDisplay.showQty && { title: '数量', key: 'q', width: 80, render: (_: any, __: any, i: number) => <InputNumber size="small" controls={false} min={0} value={items[i].quantity} onChange={v => updateItem(i, { quantity: Number(v) || 0 })} style={{ width: '100%' }} /> },
@@ -1604,6 +1682,7 @@ const PurchaserBillPage: React.FC = () => {
               billDisplay.showStyleCode && { title: '款式编号', key: 's', width: 110, render: (_: any, __: any, i: number) => <Input size="small" value={eItems[i].styleCode} onChange={e => updateEditItem(i, { styleCode: e.target.value })} /> },
               billDisplay.showProductCode && { title: '商品编码', key: 'p', width: 120, render: (_: any, __: any, i: number) => <Input size="small" value={eItems[i].productCode} onChange={e => updateEditItem(i, { productCode: e.target.value })} style={highlightCodes.has(eItems[i].productCode) ? { color: '#f5222d', fontWeight: 600 } : undefined} /> },
               billDisplay.showProductType && { title: '产品种类', key: 'pt', width: 80, render: (_: any, __: any, i: number) => <Input size="small" value={eItems[i].productType || ''} onChange={e => updateEditItem(i, { productType: e.target.value })} /> },
+              billDisplay.showUnit && { title: '单位', key: 'un', width: 70, render: (_: any, __: any, i: number) => <Input size="small" placeholder="单位" value={eItems[i].unit || productUnitMap.get((eItems[i].productCode || '').trim()) || ''} onChange={e => updateEditItem(i, { unit: e.target.value })} /> },
               billDisplay.showColor && { title: '颜色', key: 'c', width: 80, render: (_: any, __: any, i: number) => <Input size="small" value={eItems[i].color} onChange={e => updateEditItem(i, { color: e.target.value })} /> },
               billDisplay.showSpec && { title: '规格', key: 'sp', width: 90, render: (_: any, __: any, i: number) => <Input size="small" value={eItems[i].spec} onChange={e => updateEditItem(i, { spec: e.target.value })} /> },
               billDisplay.showQty && { title: '数量', key: 'q', width: 80, render: (_: any, __: any, i: number) => <InputNumber size="small" controls={false} min={0} value={eItems[i].quantity} onChange={v => updateEditItem(i, { quantity: Number(v) || 0 })} style={{ width: '100%' }} /> },
@@ -1804,6 +1883,7 @@ const PurchaserBillPage: React.FC = () => {
             { key: 'showStyleCode', label: '款式编号' },
             { key: 'showProductCode', label: '商品编码' },
             { key: 'showProductType', label: '产品种类' },
+            { key: 'showUnit', label: '单位' },
             { key: 'showColor', label: '颜色' },
             { key: 'showSpec', label: '规格' },
             { key: 'showQty', label: '数量' },
@@ -1860,7 +1940,7 @@ const PurchaserBillPage: React.FC = () => {
                   ? (Number(prod.costPrice) || Number(prod.basePrice) || 0)
                   : (Number(prod.suggestedPrice) || Number(prod.basePrice) || 0);
                 const pType = addProductTab === 'own' ? '成品' : addProductTab === 'raw' ? '原材料' : (prod.productType || '成品');
-                const item: BillItem = { styleCode: prod.styleCode || '', productCode: prod.productCode || '', color: prod.color || '', spec: prod.spec || '', quantity: qty, unitPrice: price, amount: 0, productType: pType };
+                const item: BillItem = { styleCode: prod.styleCode || '', productCode: prod.productCode || '', color: prod.color || '', spec: prod.spec || '', quantity: qty, unitPrice: price, amount: 0, productType: pType, unit: String((prod && prod.unit) || '') };
                 item.amount = Math.round(item.quantity * item.unitPrice * 100) / 100;
                 newItems.push(item);
               });
@@ -1920,7 +2000,7 @@ const PurchaserBillPage: React.FC = () => {
                 { title: '操作', key: 'op', width: 70, render: (_: any, r: any) => (
                   <Button type="primary" size="small" onClick={() => {
                     const qty = Number(addQtyMap[r.key]) || 1;
-                    const newItem: BillItem = { styleCode: r.styleCode || '', productCode: r.productCode || '', color: r.color || '', spec: r.spec || '', quantity: qty, unitPrice: Number(r.costPrice) || Number(r.basePrice) || 0, amount: 0, productType: '成品' };
+                    const newItem: BillItem = { styleCode: r.styleCode || '', productCode: r.productCode || '', color: r.color || '', spec: r.spec || '', quantity: qty, unitPrice: Number(r.costPrice) || Number(r.basePrice) || 0, amount: 0, productType: '成品', unit: String((r && r.unit) || '') };
                     newItem.amount = Math.round(newItem.quantity * newItem.unitPrice * 100) / 100;
                     const currentItems = (addProductTarget === 'create' ? items : eItems).filter(hasData);
                     const { merged, dupCodes } = mergeWithDuplicateInfo([...currentItems, newItem]);
@@ -1976,7 +2056,7 @@ const PurchaserBillPage: React.FC = () => {
                 { title: '操作', key: 'op', width: 70, render: (_: any, r: any) => (
                   <Button type="primary" size="small" onClick={() => {
                     const qty = Number(addQtyMap[r.key]) || 1;
-                    const newItem: BillItem = { styleCode: r.styleCode || '', productCode: r.productCode || '', color: r.color || '', spec: r.spec || '', quantity: qty, unitPrice: Number(r.costPrice) || Number(r.basePrice) || 0, amount: 0, productType: '原材料' };
+                    const newItem: BillItem = { styleCode: r.styleCode || '', productCode: r.productCode || '', color: r.color || '', spec: r.spec || '', quantity: qty, unitPrice: Number(r.costPrice) || Number(r.basePrice) || 0, amount: 0, productType: '原材料', unit: String((r && r.unit) || '') };
                     newItem.amount = Math.round(newItem.quantity * newItem.unitPrice * 100) / 100;
                     const currentItems = (addProductTarget === 'create' ? items : eItems).filter(hasData);
                     const { merged, dupCodes } = mergeWithDuplicateInfo([...currentItems, newItem]);
@@ -2088,7 +2168,7 @@ const PurchaserBillPage: React.FC = () => {
                     <Button type="primary" size="small" onClick={() => {
                       const qty = Number(addQtyMap[r.key]) || 1;
                       const price = Number(r.suggestedPrice) || 0;
-                      const newItem: BillItem = { styleCode: r.styleCode || '', productCode: r.productCode || '', color: r.color || '', spec: r.spec || '', quantity: qty, unitPrice: price, amount: 0 };
+                      const newItem: BillItem = { styleCode: r.styleCode || '', productCode: r.productCode || '', color: r.color || '', spec: r.spec || '', quantity: qty, unitPrice: price, amount: 0, unit: String((r && r.unit) || '') };
                       newItem.amount = Math.round(newItem.quantity * newItem.unitPrice * 100) / 100;
                       const currentItems = (addProductTarget === 'create' ? items : eItems).filter(hasData);
                       const { merged, dupCodes } = mergeWithDuplicateInfo([...currentItems, newItem]);

@@ -5924,6 +5924,19 @@ const ModuleChildPage: React.FC = () => {
               );
               if (!match) return false;
             }
+          } else if (f.type === 'numberRange') {
+            // 数量/金额区间：最小 ≤ 值 ≤ 最大，留空一侧即不限制；退货负数按带符号比较
+            const rangeFieldMap: Record<string, string> = { '商品总数': 'totalCount', '商品总额': 'totalAmount' };
+            const rangeField = rangeFieldMap[f.label];
+            if (rangeField) {
+              const [minS = '', maxS = ''] = val.split('~');
+              const minV = String(minS).trim() === '' ? null : Number(minS);
+              const maxV = String(maxS).trim() === '' ? null : Number(maxS);
+              const rawNum = Number(item[rangeField]);
+              const num = Number.isFinite(rawNum) ? rawNum : 0;
+              if (minV !== null && Number.isFinite(minV) && num < minV) return false;
+              if (maxV !== null && Number.isFinite(maxV) && num > maxV) return false;
+            }
           } else if (f.type === 'productCodePick') {
             // 商品编码/款式编码：已选列表组内 OR 匹配（明细行编码或货品明细文本）
             const isStylePick = f.label === '款式编码';
@@ -14143,6 +14156,31 @@ const handleBatchAttrsConfirm = () => {
                             <Tag closable onClose={(e: any) => { e.preventDefault(); e.stopPropagation(); removeCode(c); }} style={{ marginRight: 0 }}>{c}</Tag>
                           </span>
                         ))}
+                      </div>
+                    );
+                  })()
+                ) : f.type === 'numberRange' ? (
+                  // 数量/金额区间：两个数值输入框（无步进），留空一侧不限，回车触发查询
+                  (() => {
+                    const [minS = '', maxS = ''] = String(dynamicFilterValues[f.label] || '').split('~');
+                    const toNum = (t: string): number | null => {
+                      if (String(t).trim() === '') return null;
+                      const n = Number(t);
+                      return Number.isFinite(n) ? n : null;
+                    };
+                    const emitRange = (a: number | null, b: number | null) => {
+                      const left = a === null || !Number.isFinite(a) ? '' : String(a);
+                      const right = b === null || !Number.isFinite(b) ? '' : String(b);
+                      setDynamicFilterValues(prev => ({ ...prev, [f.label]: !left && !right ? '' : `${left}~${right}` }));
+                    };
+                    const shortLabel = f.label.replace(/^商品/, '');
+                    return (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }} title={`${f.label}区间：最小 ~ 最大（留空一侧表示不限）`}>
+                        <InputNumber size="small" controls={false} style={{ flex: 1, minWidth: 0 }} placeholder={`${shortLabel}最小`}
+                          value={toNum(minS)} onChange={v => emitRange(v == null ? null : Number(v), toNum(maxS))} onPressEnter={handleSearch} />
+                        <span style={{ color: '#bfbfbf', flex: 'none' }}>~</span>
+                        <InputNumber size="small" controls={false} style={{ flex: 1, minWidth: 0 }} placeholder={`${shortLabel}最大`}
+                          value={toNum(maxS)} onChange={v => emitRange(toNum(minS), v == null ? null : Number(v))} onPressEnter={handleSearch} />
                       </div>
                     );
                   })()

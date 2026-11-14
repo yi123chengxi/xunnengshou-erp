@@ -476,6 +476,8 @@ export const customerPages: Record<string, ChildPageConfig> = {
       { type: 'input', placeholder: '客户名称', label: '客户名称' },
       { type: 'productCodePick', placeholder: '商品编码', label: '商品编码' },
       { type: 'productCodePick', placeholder: '款式编码', label: '款式编码' },
+      { type: 'numberRange', label: '商品总数' },
+      { type: 'numberRange', label: '商品总额' },
       { type: 'select', options: [
         { label: '全部来源', value: '' },
         { label: '订单', value: '订单' },
