@@ -72,6 +72,8 @@ const META_TTL_MS = 60_000;
 let metaCacheAt = 0;
 let metaCacheData: Record<string, number> | null = null;
 let metaInflight: Promise<Record<string, number>> | null = null;
+/** 最近一次整表刷新耗时（毫秒）：经 /meta 响应头 X-Meta-Refresh-Ms 暴露，用于判断是否仍需索引 */
+let metaLastRefreshMs = 0;
 
 function refreshMetaCache(): Promise<Record<string, number>> {
   if (metaInflight) return metaInflight;
@@ -83,7 +85,9 @@ function refreshMetaCache(): Promise<Record<string, number>> {
     metaCacheData = meta;
     metaCacheAt = Date.now();
     const cost = metaCacheAt - startedAt;
-    // 慢查询自证：>3 秒说明仍在回表全扫，覆盖索引尚未建成或未生效
+    metaLastRefreshMs = cost;
+    // 慢查询自证：>3 秒说明仍在回表全扫；此时应评估加覆盖索引（必须先停服或低峰期做，
+    // 在线 ALTER 等 MDL 会把该表上的所有查询全部堵在元数据锁后面，拖垮整个连接池）
     if (cost > 3000) console.warn(`[sync] meta 版本表刷新耗时 ${cost}ms（${rows.length} 键），疑似缺少覆盖索引`);
     return meta;
   })();
@@ -109,26 +113,6 @@ function touchMetaCache(key: string, ts: number | null): void {
 /** 启动预热：后台先把版本表读进缓存，避免部署后第一个用户等整表扫描 */
 export function warmMetaCache(): void {
   void refreshMetaCache().catch(() => { /* 首次失败由后续请求重试 */ });
-}
-
-/** 一次性创建覆盖索引：让 meta 查询只扫索引不回表（MySQL 在线 DDL，不阻塞读写） */
-export async function ensureMetaCoverIndex(): Promise<void> {
-  if (STORE_DRIVER !== 'mysql') return;
-  try {
-    if ((await store.getSetting('dataset_store_meta_index_v1')) === 'done') return;
-    const pool = (await import('../database/init')).default;
-    // DDL 走 query（服务端预处理协议对 ALTER TABLE 支持不一致）
-    await pool.query('ALTER TABLE dataset_store ADD INDEX idx_ds_meta (dataset_key, updated_at), ALGORITHM=INPLACE, LOCK=NONE');
-    await store.setSetting('dataset_store_meta_index_v1', 'done').catch(() => { /* ignore */ });
-    console.log('[sync] dataset_store 版本表覆盖索引已就绪，meta 查询不再回表');
-  } catch (err: any) {
-    const msg = String(err?.message || err || '');
-    if (/Duplicate key name|already exists/i.test(msg)) {
-      await store.setSetting('dataset_store_meta_index_v1', 'done').catch(() => { /* ignore */ });
-      return;
-    }
-    console.warn('[sync] 覆盖索引创建跳过:', msg.slice(0, 160));
-  }
 }
 
 // ============ 权限类数据集变更实时通知 ============
@@ -237,6 +221,8 @@ async function notifyNewPayRequests(key: string, oldJson: string, newJson: strin
 router.get('/meta', async (req: Request, res: Response) => {
   try {
     const meta = await getMetaCached();
+    // 刷新耗时诊断：缓存命中时为 0～几十毫秒，仍在整表扫描时为数十秒
+    res.setHeader('X-Meta-Refresh-Ms', String(metaLastRefreshMs));
     // 匿名只返回公开键（避免被枚举他人账号下的数据集名称）
     res.json(filterMetaForUser(meta, currentSyncUser(req)));
   } catch (err: any) {
