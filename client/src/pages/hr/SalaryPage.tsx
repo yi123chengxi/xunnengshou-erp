@@ -7,6 +7,7 @@ import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
 import { getPfx } from '../../utils/devStore';
 import { loadResignations, paidDaysInMonth, isUnpaidDay } from './resignationStore';
+import { useDatasetSyncReload, applyIfChanged } from '../../utils/useDatasetSyncReload';
 
 const PRIMARY = '#1e4a7e';
 
@@ -217,6 +218,14 @@ const SalaryPage: React.FC = () => {
   const [sourcesVisible, setSourcesVisible] = useState(false);
   const [sourcesDraft, setSourcesDraft] = useState<SalarySourceCfg[]>([]);
   const groupOptions = useMemo(() => loadGroupNames(), [sourcesVisible]);
+
+  // 同步落地/窗口重新可见时重读：工资单在别端生成后本端不刷新，
+  // 下一次本端生成/改一条就会拿陈旧列表整表回写，把别端刚算好的人整份覆盖
+  useDatasetSyncReload(() => {
+    applyIfChanged(setSalaryRecords, loadSalaryRecords());
+    // 扣款规则弹窗正在编辑时不覆盖草稿，否则填到一半的规则会被别端版本冲掉
+    if (!rulesVisible) applyIfChanged(setRulesArray, loadRulesArray());
+  });
 
   const monthStr = currentMonth.format('YYYY-MM');
 

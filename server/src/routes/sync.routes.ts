@@ -53,7 +53,12 @@ const isMergeAlwaysKey = (key: string): boolean => MERGE_ALWAYS_KEYS.includes(ke
 // 而这类非本账号键不参与本端启动拉取（isKeyForCurrentAccount 过滤），代写端持有的可能是一份陈旧快照；
 // 又因共享键对任何登录用户都下发 meta，陈旧副本会拿到「与服务端一致的 baseTs」→ 走整键替换分支 →
 // 对方刚新增的供应商/采购商卡片被陈旧副本擦掉、刚建立的合作被改回旧状态。表现为列表数量与状态来回跳动。
-const NEVER_SHRINK_PREFIXES = ['purchaser_bills_', 'pageData_customer_bill-detail_', 'pageData_sales_order-manage_', 'purchaser_suppliers_', 'boundPurchasers_', 'accounts_'];
+const NEVER_SHRINK_PREFIXES = ['purchaser_bills_', 'pageData_customer_bill-detail_', 'pageData_sales_order-manage_', 'purchaser_suppliers_', 'boundPurchasers_', 'accounts_', 'reimbursement_'];
+// reimbursement_ 前缀同时覆盖报销单 / 报销付款批次 / 报销负责人三个键。
+// 报销页只在挂载时从本地快照读一次，而 knownTs 每 60 秒被 /meta 轮询对齐到服务端最新版本——
+// 于是「打开后一直挂着的旧标签/另一台电脑」再点一次删除/审核/新增，就会带着这份陈旧列表走
+// 「客户端基于最新版本修改」的整键替换分支，把别人刚新增的报销单整份擦掉（表现为新增后过一会自动消失）。
+// 纳入永不缩水后，未申报的缩水一律并集保留；报销页的删除操作改为随 body 申报 removedIds。
 // accounts_<主账号> 为账号列表：多个浏览器共同维护同一份名单，任何一端拿着陈旧名单整键上传
 // 都会把另一端刚建的账号擦掉（表现为「新增的子账号在别的浏览器没有」）。
 // 行内有 key/id，可按 removedIds 精确删除；未申报的缩水一律并集保留。

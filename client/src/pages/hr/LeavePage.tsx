@@ -5,6 +5,7 @@ import {
 import { PlusOutlined, CheckOutlined, CloseOutlined, CalendarOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
+import { useDatasetSyncReload, applyIfChanged } from '../../utils/useDatasetSyncReload';
 
 const { RangePicker } = DatePicker;
 const PRIMARY = '#1e4a7e';
@@ -97,7 +98,14 @@ const LeavePage: React.FC = () => {
   const [form] = Form.useForm();
   const [searchText, setSearchText] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
-  const employees = useMemo(() => loadEmployees(), []);
+  const [employees, setEmployees] = useState<{ username: string; displayName: string }[]>(loadEmployees);
+
+  // 同步落地/窗口重新可见时重读：本页有「leaves 一变就整表写盘」的副作用，
+  // 保活期间只要拿陈旧快照做一次审批，就会把其他端刚提交的请假整份擦掉
+  useDatasetSyncReload(() => {
+    applyIfChanged(setLeaves, loadLeaves());
+    applyIfChanged(setEmployees, loadEmployees());
+  });
 
   useEffect(() => {
     localStorage.setItem(getStorageKey(), JSON.stringify(leaves));

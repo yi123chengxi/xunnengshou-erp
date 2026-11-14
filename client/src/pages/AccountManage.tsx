@@ -8,6 +8,7 @@ import { reloadAfterPull, fetchServerDataset, flushDatasetUpload } from '../util
 import { validatePassword } from '../utils/passwordPolicy';
 import { saveDataset } from '../utils/dataStore';
 import { declareShrink } from '../utils/shrinkRegistry';
+import { applyIfChanged } from '../utils/useDatasetSyncReload';
 import {
   PlusOutlined,
   SearchOutlined,
@@ -398,8 +399,8 @@ const AccountManage: React.FC = () => {
         if (!raw) return;
         const parsed = JSON.parse(raw);
         if (!Array.isArray(parsed) || parsed.length === 0) return;
-        setDataSource(parsed as AccountRecord[]);
-        setGroups(loadGroups());
+        applyIfChanged(setDataSource, parsed as AccountRecord[]);
+        applyIfChanged(setGroups, loadGroups());
       } catch { /* ignore */ }
     };
     const onStorage = (e: StorageEvent) => {
@@ -408,9 +409,18 @@ const AccountManage: React.FC = () => {
     };
     window.addEventListener('perm-changed', reload);
     window.addEventListener('storage', onStorage);
+    // 服务端拉取落地 / 窗口重新可见时也要重读：storage 事件只在其他标签页写入时触发，
+    // 同步拉取写本地走的是原生 setItem，不会通知本页，保活页面就会一直拿陈旧账号表回写
+    window.addEventListener('sync-data-updated', reload);
+    window.addEventListener('focus', reload);
+    const onVisible = () => { if (document.visibilityState === 'visible') reload(); };
+    document.addEventListener('visibilitychange', onVisible);
     return () => {
       window.removeEventListener('perm-changed', reload);
       window.removeEventListener('storage', onStorage);
+      window.removeEventListener('sync-data-updated', reload);
+      window.removeEventListener('focus', reload);
+      document.removeEventListener('visibilitychange', onVisible);
     };
   }, []);
 

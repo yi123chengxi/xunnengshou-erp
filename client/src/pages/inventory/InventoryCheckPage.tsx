@@ -13,6 +13,7 @@ import { updateProductStock, generateDocNo } from '../../utils/stockUtils';
 import { getCurrentUserDisplayName } from '../../utils/billLog';
 import { QtyTemplateManagerModal, QtyFillConfirmModal, loadQtyTemplates, saveQtyTemplates } from '../../components/QtyTemplateModals';
 import type { QtyTemplate } from '../../components/QtyTemplateModals';
+import { useDatasetSyncReload, applyIfChanged } from '../../utils/useDatasetSyncReload';
 
 const { Text } = Typography;
 const PRIMARY = '#1e4a7e';
@@ -89,6 +90,16 @@ const InventoryCheckPage: React.FC = () => {
     mapping: Record<string, string>; stage: 'mapping' | 'importing' | 'done';
     progress: number; imported: number; skipped: number; total: number; skippedCodes: string[];
   }>(null);
+
+  // 同步落地/窗口重新可见时重读：盘点单在别端录入后本端不刷新，
+  // 下一次本端盘点/导出就会拿陈旧列表整表回写，把别端刚盘的单据整份覆盖
+  useDatasetSyncReload(() => {
+    try {
+      const next = JSON.parse(localStorage.getItem(STORAGE_KEY()) || '[]');
+      if (Array.isArray(next)) applyIfChanged(setDataSource, next);
+    } catch { /* ignore */ }
+    applyIfChanged(setQtyTemplates, loadQtyTemplates(getDataOwner()));
+  });
 
   const productList = useMemo(() => {
     try { return JSON.parse(localStorage.getItem(`pageData_basic-data_product-list_${getDataOwner()}`) || '[]'); } catch { return []; }

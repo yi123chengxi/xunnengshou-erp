@@ -6,6 +6,7 @@ import dayjs from 'dayjs';
 import ImageSlot from '../components/ImageSlot';
 import useStickTableHeight from '../hooks/useStickTableHeight';
 import { compressImageFile } from '../utils/imageCompress';
+import { readClipboardImage, imageFileFromPasteEvent, clipboardImageFailureText } from '../utils/clipboard';
 import { pushBankTransaction, isAccountingMode, writeAutoEntries } from '../utils/accountingBridge';
 import {
   getDataOwner, certMirrorKey, appMirrorKey, safeJson, BrandCertView, BrandAppView, printHtml,
@@ -258,21 +259,22 @@ const MyBrandCertsPage: React.FC = () => {
     setReqBank('');
     setReqBankNo('');
   };
+  // 元素级 onPaste 兜底（图片区按 Ctrl+V）：paste 的 clipboardData 不受安全上下文限制
+  const pasteImagesTo = (e: React.ClipboardEvent, apply: (url: string) => void) => {
+    const file = imageFileFromPasteEvent(e);
+    if (!file) return;
+    e.preventDefault();
+    void compressImageFile(file).then(apply).catch(() => message.error('图片处理失败'));
+  };
   const pasteToReq = async () => {
     if (reqImages.length >= 5) { message.warning('最多上传 5 张图片'); return; }
+    const res = await readClipboardImage();
+    if (!res.ok) { message.warning(clipboardImageFailureText(res.reason)); return; }
     try {
-      const items: any[] = await (navigator as any).clipboard.read();
-      for (const it of items) {
-        const type = (it.types || []).find((t: string) => t.startsWith('image/'));
-        if (type) {
-          const url = await compressImageFile(await it.getType(type));
-          setReqImages(ls => (ls.length >= 5 ? ls : [...ls, url]));
-          message.success('已粘贴剪切板图片');
-          return;
-        }
-      }
-      message.warning('剪切板中未找到图片');
-    } catch { message.warning('读取剪切板失败，可点选上传框后按 Ctrl+V 粘贴'); }
+      const url = await compressImageFile(res.blob);
+      setReqImages(ls => (ls.length >= 5 ? ls : [...ls, url]));
+      message.success('已粘贴剪切板图片');
+    } catch { message.error('图片处理失败，请重新截图后再试'); }
   };
   const submitReq = () => {
     if (!reqTarget || !reqTarget.brandOwner) return;
@@ -306,19 +308,13 @@ const MyBrandCertsPage: React.FC = () => {
   };
   const pasteToRenew = async () => {
     if (renewImages.length >= 5) { message.warning('最多上传 5 张图片'); return; }
+    const res = await readClipboardImage();
+    if (!res.ok) { message.warning(clipboardImageFailureText(res.reason)); return; }
     try {
-      const items: any[] = await (navigator as any).clipboard.read();
-      for (const it of items) {
-        const type = (it.types || []).find((t: string) => t.startsWith('image/'));
-        if (type) {
-          const url = await compressImageFile(await it.getType(type));
-          setRenewImages(ls => (ls.length >= 5 ? ls : [...ls, url]));
-          message.success('已粘贴剪切板图片');
-          return;
-        }
-      }
-      message.warning('剪切板中未找到图片');
-    } catch { message.warning('读取剪切板失败，可点选上传框后按 Ctrl+V 粘贴'); }
+      const url = await compressImageFile(res.blob);
+      setRenewImages(ls => (ls.length >= 5 ? ls : [...ls, url]));
+      message.success('已粘贴剪切板图片');
+    } catch { message.error('图片处理失败，请重新截图后再试'); }
   };
   const submitRenew = () => {
     if (!renewTarget || !renewTarget.brandOwner) return;
@@ -395,16 +391,13 @@ const MyBrandCertsPage: React.FC = () => {
   };
   const pasteToSales = async () => {
     if (salesImages.length >= 5) { message.warning('最多上传 5 张图片'); return; }
+    const res = await readClipboardImage();
+    if (!res.ok) { message.warning(clipboardImageFailureText(res.reason)); return; }
     try {
-      const items: any[] = await (navigator as any).clipboard.read();
-      for (const it of items) {
-        const type = (it.types || []).find((t: string) => t.startsWith('image/'));
-        if (type) {
-          const url = await compressImageFile(await it.getType(type));
-          setSalesImages(ls => (ls.length >= 5 ? ls : [...ls, url]));
-        }
-      }
-    } catch { message.warning('剪切板中没有图片，请先复制图片'); }
+      const url = await compressImageFile(res.blob);
+      setSalesImages(ls => (ls.length >= 5 ? ls : [...ls, url]));
+      message.success('已粘贴剪切板图片');
+    } catch { message.error('图片处理失败，请重新截图后再试'); }
   };
   const submitSales = () => {
     if (!salesTarget || !salesTarget.brandOwner) { message.warning('缺少品牌方归属信息，无法提交'); return; }
@@ -682,7 +675,8 @@ const MyBrandCertsPage: React.FC = () => {
           allowClear />
         <div style={{ marginTop: 4, color: '#f5222d', fontSize: 12, fontWeight: 600 }}>提醒：填写转账时使用的银行账户，否则可能会被驳回。</div>
         <div style={{ margin: '12px 0 4px', fontSize: 12, color: '#666' }}>附件图片（最多 5 张，支持 Ctrl+V 粘贴）：</div>
-        <Space wrap size={8} align="start">
+        <Space wrap size={8} align="start" style={{ outline: 'none' }} tabIndex={0}
+          onPaste={e => pasteImagesTo(e, url => setReqImages(ls => (ls.length >= 5 ? ls : [...ls, url])))}>
           {reqImages.map((img, i) => (
             <div key={i} style={{ position: 'relative', width: 84, height: 84 }}>
               <AntdImage src={img} width={84} height={84} style={{ objectFit: 'cover', borderRadius: 4 }} />
@@ -725,7 +719,8 @@ const MyBrandCertsPage: React.FC = () => {
         <Input.TextArea rows={3} value={renewReason} onChange={e => setRenewReason(e.target.value)} maxLength={300} showCount
           placeholder="请填写续签原因、新授权期说明等（品牌方审核时查看）" />
         <div style={{ margin: '12px 0 4px', fontSize: 12, color: '#666' }}>附件图片（最多 5 张，支持 Ctrl+V 粘贴）：</div>
-        <Space wrap size={8} align="start">
+        <Space wrap size={8} align="start" style={{ outline: 'none' }} tabIndex={0}
+          onPaste={e => pasteImagesTo(e, url => setRenewImages(ls => (ls.length >= 5 ? ls : [...ls, url])))}>
           {renewImages.map((img, i) => (
             <div key={i} style={{ position: 'relative', width: 84, height: 84 }}>
               <AntdImage src={img} width={84} height={84} style={{ objectFit: 'cover', borderRadius: 4 }} />
@@ -766,7 +761,8 @@ const MyBrandCertsPage: React.FC = () => {
           </div>
           <div>
             <div style={{ fontSize: 12, color: '#888', marginBottom: 4 }}>交易凭证图片（最多 5 张）</div>
-            <Space wrap size={8}>
+            <Space wrap size={8} style={{ outline: 'none' }} tabIndex={0}
+              onPaste={e => pasteImagesTo(e, url => setSalesImages(ls => (ls.length >= 5 ? ls : [...ls, url])))}>
               {salesImages.map((img, i) => (
                 <div key={i} style={{ position: 'relative' }}>
                   <AntdImage src={img} width={84} height={84} style={{ objectFit: 'cover', borderRadius: 4 }} />

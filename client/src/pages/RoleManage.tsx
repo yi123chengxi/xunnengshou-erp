@@ -16,6 +16,7 @@ import PermEditor from '../components/PermEditor';
 import { loadRolePermSettings, saveRolePermSettings, loadPermAudit } from '../utils/perm';
 import type { PermAuditEntry } from '../utils/perm';
 import type { PermTri } from '../config/permRegistry';
+import { useDatasetSyncReload, applyIfChanged } from '../utils/useDatasetSyncReload';
 
 const { Title, Text } = Typography;
 const PRIMARY = '#1e4a7e';
@@ -35,6 +36,13 @@ const RoleManage: React.FC = () => {
 
   // 所有角色 = 预设 + 自定义
   const allRoles = useMemo(() => [...presetRoles, ...customRoles], [customRoles]);
+
+  // 同步落地/窗口重新可见时重读：角色表在别端新建/改权限后本端不刷新，
+  // 本端再建一个角色就会拿陈旧自定义角色表整表回写，把别端刚建的角色抹掉
+  useDatasetSyncReload(() => {
+    // 角色编辑弹窗正在编辑时不覆盖，避免把填到一半的权限勾选冲掉
+    if (!editVisible) applyIfChanged(setCustomRoles, loadCustomRoles());
+  });
 
   // 持久化自定义角色
   const saveCustomRoles = useCallback((roles: RoleRecord[]) => {

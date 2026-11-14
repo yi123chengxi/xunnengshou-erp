@@ -13,7 +13,11 @@ import {
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
 import { safeSetItem } from '../utils/storageQuota';
+import { declareShrink } from '../utils/shrinkRegistry';
+import { flushDatasetUpload } from '../utils/serverSync';
 import { compressImageFile } from '../utils/imageCompress';
+import { readClipboardImage, imageFileFromPasteEvent, clipboardImageFailureText } from '../utils/clipboard';
+import { getSessionOwner, mergeStrandedTenantDataset } from '../utils/dataOwner';
 import { isAccountingMode, writeAutoEntries, loadSubjectOptions, subjectFilterOption } from '../utils/accountingBridge';
 
 const { Text, Title } = Typography;
@@ -48,12 +52,10 @@ const STATUS_MAP: Record<string, { color: string; text: string }> = {
   cancelled: { color: 'default', text: '已取消' },
 };
 
-// 数据所有者
-const getDataOwner = (): string => {
-  const isSub = localStorage.getItem('isSubAccount') === 'true';
-  if (isSub) return localStorage.getItem('parentAccount') || localStorage.getItem('username') || '';
-  return localStorage.getItem('username') || '';
-};
+// 数据所有者：子账号必须归到企业主账号（与 serverSync / 服务端 syncGuard 同口径）。
+// 不能退化成「自己的用户名」——那会让同一个企业的报销单分散在各账号独立键里，
+// 表现为「主账号/负责人/其他子账号都看不到别人申请的单」。
+const getDataOwner = (): string => getSessionOwner();
 
 // 本人垫付收款账户：每个子账号独立账户库（存储键按当前登录账号区分）
 const getRecvAccountKey = (): string => `receiving_accounts_${localStorage.getItem('username') || getDataOwner() || 'admin'}`;
@@ -253,6 +255,16 @@ const ReimbursementPage: React.FC = () => {
   const paymentKey = `reimbursement_payments_${getDataOwner()}`;
 
   const load = useCallback(() => {
+    // 历史错桶归并：早期子账号被当成主账号时，报销单会写进 reimbursement_<子账号>，
+    // 企业里其他人永远拉不到那个键。这里把本企业成员的错桶数据并回主桶（幂等，只跑一次），
+    // 否则负责人依旧看不到这些历史申请。
+    try {
+      const deps = { safeSetItem, declareShrink, flush: flushDatasetUpload };
+      if (mergeStrandedTenantDataset(`reimbursement_${getDataOwner()}`, 'reimbursement_', deps)) {
+        message.info('已把此前分散在子账号名下的报销单并入本企业，其他账号现在也能看到了');
+      }
+      mergeStrandedTenantDataset(`reimbursement_payments_${getDataOwner()}`, 'reimbursement_payments_', deps);
+    } catch { /* 归并失败不影响正常读取 */ }
     try { setRecords(JSON.parse(localStorage.getItem(`reimbursement_${getDataOwner()}`) || '[]')); } catch { setRecords([]); }
     try { setPayments(JSON.parse(localStorage.getItem(`reimbursement_payments_${getDataOwner()}`) || '[]')); } catch { setPayments([]); }
     // 加载负责人设置
@@ -262,6 +274,21 @@ const ReimbursementPage: React.FC = () => {
     } catch { /* ignore */ }
   }, []);
   useEffect(() => { load(); }, [load]);
+
+  // 跨端/跨标签同步落地、窗口重新可见时重载：页面长期挂载只用旧快照的话，
+  // 下一次操作会把其他标签/浏览器刚新增的报销单整表覆盖掉（表现为新增后过一会自动消失）
+  useEffect(() => {
+    const reload = () => load();
+    const onVisible = () => { if (document.visibilityState === 'visible') load(); };
+    window.addEventListener('sync-data-updated', reload);
+    window.addEventListener('focus', reload);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.removeEventListener('sync-data-updated', reload);
+      window.removeEventListener('focus', reload);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [load]);
 
   // 计算表格体滚动高度：使横向滚动条固定在窗口底部
   const calcTableScrollY = useCallback(() => {
@@ -282,14 +309,41 @@ const ReimbursementPage: React.FC = () => {
     return () => { clearTimeout(t1); clearTimeout(t2); window.removeEventListener('resize', onResize); };
   }, [calcTableScrollY]);
 
-  const saveRecords = useCallback((list: ReimbursementRecord[]) => {
-    setRecords(list);
-    safeSetItem(`reimbursement_${getDataOwner()}`, JSON.stringify(list));
+  const saveRecords = useCallback((list: ReimbursementRecord[], deletedKeys?: string[]) => {
+    // 内存列表可能落后于落盘值（其他标签/浏览器刚写入）：按 key 合并，避免整表回写抹掉别端新增的单据；
+    // 本次显式删除的 key 不再合并回来
+    let next = list;
+    try {
+      const disk = JSON.parse(localStorage.getItem(`reimbursement_${getDataOwner()}`) || '[]');
+      if (Array.isArray(disk)) {
+        const keep = new Set(list.map(r => r.key));
+        const deleted = new Set(deletedKeys || []);
+        const onlyDisk = disk.filter((r: any) => r && r.key && !keep.has(r.key) && !deleted.has(String(r.key)));
+        if (onlyDisk.length > 0) next = [...list, ...onlyDisk];
+      }
+    } catch { /* ignore */ }
+    setRecords(next);
+    const json = JSON.stringify(next);
+    safeSetItem(`reimbursement_${getDataOwner()}`, json);
+    // 立即上传：800ms 防抖窗口内切页/关标签会让这次新增没到服务端，
+    // 随后 60 秒轮询把服务端旧版本拉回并覆盖本地（失败进入待上传队列自动补传）
+    flushDatasetUpload(`reimbursement_${getDataOwner()}`, json);
   }, []);
 
   const savePayments = useCallback((list: PaymentBatch[]) => {
-    setPayments(list);
-    safeSetItem(`reimbursement_payments_${getDataOwner()}`, JSON.stringify(list));
+    let next = list;
+    try {
+      const disk = JSON.parse(localStorage.getItem(`reimbursement_payments_${getDataOwner()}`) || '[]');
+      if (Array.isArray(disk)) {
+        const keep = new Set(list.map(p => p.key));
+        const onlyDisk = disk.filter((p: any) => p && p.key && !keep.has(p.key));
+        if (onlyDisk.length > 0) next = [...list, ...onlyDisk];
+      }
+    } catch { /* ignore */ }
+    setPayments(next);
+    const json = JSON.stringify(next);
+    safeSetItem(`reimbursement_payments_${getDataOwner()}`, json);
+    flushDatasetUpload(`reimbursement_payments_${getDataOwner()}`, json);
   }, []);
 
   const loadBankAccounts = useCallback(() => {
@@ -325,23 +379,27 @@ const ReimbursementPage: React.FC = () => {
     setRecvModalVisible(false);
     message.success('已新增收款账户并自动选中');
   }, [recvFormName, recvFormType, recvFormAccount, recvFormBank, recvFormImage, receivingAccounts]);
+  // 收款码粘贴：按钮走 Clipboard API；http 部署下读取被浏览器禁用时，
+  // 提示改用下方区域的 Ctrl+V（paste 事件路径不受安全上下文限制）
   const handleRecvPasteImage = useCallback(async () => {
+    const res = await readClipboardImage();
+    if (!res.ok) { message.warning(clipboardImageFailureText(res.reason)); return; }
     try {
-      const items = await navigator.clipboard.read();
-      for (const item of items) {
-        const imageType = item.types.find(t => t.startsWith('image/'));
-        if (imageType) {
-          const blob = await item.getType(imageType);
-          const dataUrl = await compressImageFile(blob);
-          setRecvFormImage(dataUrl);
-          message.success('已从剪切板粘贴图片');
-          return;
-        }
-      }
-      message.warning('剪切板中没有图片内容');
+      setRecvFormImage(await compressImageFile(res.blob));
+      message.success('已从剪切板粘贴图片');
     } catch {
-      message.warning('无法读取剪切板，请点击上传按钮选择图片');
+      message.error('图片处理失败，请重新截图后再试');
     }
+  }, []);
+
+  // 元素级 onPaste 兜底：paste 事件里的 clipboardData 不受安全上下文限制，
+  // 是 http:// 部署下唯一能拿到截图的路径；只在剪贴板确实含图片时阻止默认行为，
+  // 避免影响同一区域里输入框粘贴文字
+  const pasteImageTo = useCallback((e: React.ClipboardEvent, onComplete: (url: string) => void) => {
+    const file = imageFileFromPasteEvent(e);
+    if (!file) return;
+    e.preventDefault();
+    void compressImageFile(file).then(onComplete).catch(() => message.error('图片处理失败'));
   }, []);
   useEffect(() => { loadBankAccounts(); loadReceivingAccounts(); }, [loadBankAccounts, loadReceivingAccounts]);
 
@@ -358,21 +416,6 @@ const ReimbursementPage: React.FC = () => {
 
   // 当前用户
   const currentUser = getCurrentUser();
-
-  // ========== 负责人权限（与收/付申请同口径）==========
-  const isTabManager = useCallback((tab: 'review' | 'payment'): boolean => {
-    if (isAdmin) return true; // 管理员始终可操作
-    const mgrs = tabManagers[tab] || [];
-    if (mgrs.length === 0) return true; // 未设置负责人时，所有人都可操作
-    return mgrs.includes(currentUser);
-  }, [tabManagers, currentUser, isAdmin]);
-
-  const saveManagers = useCallback((tab: string, users: string[]) => {
-    const updated = { ...tabManagers, [tab]: users };
-    setTabManagers(updated);
-    safeSetItem(managersKey, JSON.stringify(updated));
-    message.success('负责人已保存');
-  }, [tabManagers, managersKey]);
 
   // 获取本租户用户列表（主账号 + 子账号，过滤掉其他租户）
   const allUserOptions = useMemo(() => {
@@ -399,6 +442,25 @@ const ReimbursementPage: React.FC = () => {
         }));
     } catch { return []; }
   }, []);
+
+  // ========== 负责人权限（与收/付申请同口径）==========
+  const isTabManager = useCallback((tab: 'review' | 'payment'): boolean => {
+    if (isAdmin) return true; // 管理员始终可操作
+    // 负责人名单里可能残留已删除/不属于本企业的账号：这类条目不算「已设置负责人」，
+    // 否则名单非空却没人匹配，所有子账号都会被挡在空态提示上（看起来就是「看不到待审核记录」）
+    const raw = tabManagers[tab] || [];
+    const members = new Set(allUserOptions.map(o => String(o.value)));
+    const mgrs = members.size === 0 ? raw : raw.filter(un => members.has(String(un)));
+    if (mgrs.length === 0) return true; // 未设置负责人（或名单全失效）时，所有人都可操作
+    return mgrs.includes(currentUser);
+  }, [tabManagers, currentUser, isAdmin, allUserOptions]);
+
+  const saveManagers = useCallback((tab: string, users: string[]) => {
+    const updated = { ...tabManagers, [tab]: users };
+    setTabManagers(updated);
+    safeSetItem(managersKey, JSON.stringify(updated));
+    message.success('负责人已保存');
+  }, [tabManagers, managersKey]);
 
   // 获取负责人显示名称
   const getManagerDisplayNames = useCallback((tab: string): string => {
@@ -528,22 +590,15 @@ const ReimbursementPage: React.FC = () => {
     input.click();
   }, []);
 
+  // 粘贴剪切板：按钮走 Clipboard API，读不到时按具体原因提示（并引导用户按 Ctrl+V）
   const handlePasteImage = useCallback(async (onComplete: (url: string) => void) => {
+    const res = await readClipboardImage();
+    if (!res.ok) { message.warning(clipboardImageFailureText(res.reason)); return; }
     try {
-      const items = await navigator.clipboard.read();
-      for (const item of items) {
-        const imageType = item.types.find(t => t.startsWith('image/'));
-        if (imageType) {
-          const blob = await item.getType(imageType);
-          const dataUrl = await compressImageFile(blob);
-          onComplete(dataUrl);
-          message.success('已从剪切板粘贴图片');
-          return;
-        }
-      }
-      message.warning('剪切板中没有图片内容');
+      onComplete(await compressImageFile(res.blob));
+      message.success('已从剪切板粘贴图片');
     } catch {
-      message.warning('无法读取剪切板，请复制图片后重试');
+      message.error('图片处理失败，请重新截图后再试');
     }
   }, []);
 
@@ -618,7 +673,9 @@ const ReimbursementPage: React.FC = () => {
   };
 
   const handleDeleteApply = (r: ReimbursementRecord) => {
-    saveRecords(records.filter(x => x.key !== r.key));
+    // 报销键已纳入服务端「永不缩水」：必须显式申报被删行，否则服务端会并集保留、删完又回来
+    declareShrink(`reimbursement_${getDataOwner()}`, [String(r.key)]);
+    saveRecords(records.filter(x => x.key !== r.key), [String(r.key)]);
     message.success('已删除申请');
   };
 
@@ -1341,8 +1398,9 @@ const ReimbursementPage: React.FC = () => {
           />
           <div style={{ fontSize: 11, color: '#999', marginTop: 4 }}>报销支付时将转入此账户；账户库按子账号独立，与日常记账-本人垫付共用</div>
         </div>
-        {/* 发票/收据上传 */}
-        <div style={{ marginTop: 12 }}>
+        {/* 发票/收据上传：点按钮失败时可直接在本区域按 Ctrl+V */}
+        <div style={{ marginTop: 12, outline: 'none' }} tabIndex={0}
+          onPaste={e => pasteImageTo(e, url => setFormReceipts(prev => [...prev, url]))}>
           <div style={{ marginBottom: 4, fontSize: 12, color: '#5a6d85', display: 'flex', alignItems: 'center', gap: 8 }}>
             <span>发票/收据</span>
             <Button size="small" icon={<SnippetsOutlined />} onClick={() => handlePasteImage(url => setFormReceipts(prev => [...prev, url]))}>粘贴剪切板</Button>
@@ -1421,7 +1479,8 @@ const ReimbursementPage: React.FC = () => {
           </div>
         )}
         {recvFormType === '收款码' && (
-          <div style={{ marginBottom: 12 }}>
+          <div style={{ marginBottom: 12, outline: 'none' }} tabIndex={0}
+            onPaste={e => pasteImageTo(e, setRecvFormImage)}>
             <div style={{ marginBottom: 4, fontSize: 12, color: '#5a6d85', display: 'flex', alignItems: 'center', gap: 8 }}>
               <span>收款码图片 <span style={{ color: '#ff4d4f' }}>*</span></span>
               <Button size="small" icon={<SnippetsOutlined />} onClick={handleRecvPasteImage}>粘贴剪切板</Button>
@@ -1562,7 +1621,8 @@ const ReimbursementPage: React.FC = () => {
             onChange={v => setPayBankKey(v)} options={bankAccountOptions}
             showSearch filterOption={(input, option) => String(option?.label ?? '').toLowerCase().includes(input.toLowerCase())} />
         </div>
-        <div style={{ marginBottom: 12 }}>
+        <div style={{ marginBottom: 12, outline: 'none' }} tabIndex={0}
+          onPaste={e => pasteImageTo(e, url => setPayScreenshots(prev => [...prev, url]))}>
           <div style={{ marginBottom: 4, fontSize: 12, color: '#5a6d85', display: 'flex', alignItems: 'center', gap: 8 }}>
             <span>支付截图凭证 <span style={{ color: '#ff4d4f' }}>*</span></span>
             <Button size="small" icon={<SnippetsOutlined />} onClick={() => handlePasteImage(url => setPayScreenshots(prev => [...prev, url]))}>粘贴剪切板</Button>
@@ -1654,7 +1714,8 @@ const ReimbursementPage: React.FC = () => {
             onChange={v => setBatchBankKey(v)} options={bankAccountOptions}
             showSearch filterOption={(input, option) => String(option?.label ?? '').toLowerCase().includes(input.toLowerCase())} />
         </div>
-        <div style={{ marginBottom: 12 }}>
+        <div style={{ marginBottom: 12, outline: 'none' }} tabIndex={0}
+          onPaste={e => pasteImageTo(e, url => setBatchScreenshots(prev => [...prev, url]))}>
           <div style={{ marginBottom: 4, fontSize: 12, color: '#5a6d85', display: 'flex', alignItems: 'center', gap: 8 }}>
             <span>支付截图凭证 <span style={{ color: '#ff4d4f' }}>*</span></span>
             <Button size="small" icon={<SnippetsOutlined />} onClick={() => handlePasteImage(url => setBatchScreenshots(prev => [...prev, url]))}>粘贴剪切板</Button>

@@ -225,6 +225,19 @@ const MonthEndCheckPage: React.FC = () => {
     try { setReturnRecords(JSON.parse(localStorage.getItem(returnKey) || '[]')); } catch { setReturnRecords([]); }
   }, [shopKey, checkKey, shipKey, returnKey]);
   useEffect(() => { reload(); }, [reload]);
+  // 同步落地/窗口重新可见时重载：避免长期挂载页面拿陈旧统计整表回写，抹掉别端刚新增的数据
+  useEffect(() => {
+    const onSync = () => reload();
+    const onVisible = () => { if (document.visibilityState === 'visible') reload(); };
+    window.addEventListener('sync-data-updated', onSync);
+    window.addEventListener('focus', onSync);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.removeEventListener('sync-data-updated', onSync);
+      window.removeEventListener('focus', onSync);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [reload]);
 
   const saveShipRecords = (list: ShipRecord[]) => {
     const json = JSON.stringify(list);

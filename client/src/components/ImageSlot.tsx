@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Button, Upload, message, Image as AntdImage } from 'antd';
 import { PlusOutlined, DeleteOutlined, SnippetsOutlined } from '@ant-design/icons';
 import { compressImageFile } from '../utils/imageCompress';
+import { readClipboardImage, clipboardImageFailureText } from '../utils/clipboard';
 
 /**
  * 通用单图上传槽：点击/粘贴上传，自动压缩，点击缩略图放大预览，角标删除；
@@ -18,24 +19,14 @@ const ImageSlot: React.FC<{ value?: string; onChange?: (v: string) => void; size
     } catch { message.error('图片读取失败'); }
   };
 
-  // 槽内粘贴按键：读取剪切板图片
+  // 槽内粘贴按键：优先 Clipboard API；http 部署下浏览器禁止读取，提示改用 Ctrl+V（容器已带 onPaste）
   const pasteFromClipboard = async (e?: React.MouseEvent) => {
     e?.stopPropagation();
     e?.preventDefault();
-    try {
-      const items: any[] = await (navigator as any).clipboard.read();
-      for (const it of items) {
-        const type = (it.types || []).find((t: string) => t.startsWith('image/'));
-        if (type) {
-          await handleFile(await it.getType(type));
-          message.success('已粘贴剪切板图片');
-          return;
-        }
-      }
-      message.warning('剪切板中未找到图片');
-    } catch {
-      message.warning('读取剪切板失败，可点选槽位后按 Ctrl+V 粘贴');
-    }
+    const res = await readClipboardImage();
+    if (!res.ok) { message.warning(clipboardImageFailureText(res.reason)); return; }
+    await handleFile(res.blob);
+    message.success('已粘贴剪切板图片');
   };
 
   // 剪切板粘贴：容器可聚焦（tabIndex），Ctrl+V 读取剪贴板图片

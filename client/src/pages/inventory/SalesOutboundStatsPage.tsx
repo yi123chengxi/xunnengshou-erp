@@ -11,6 +11,7 @@ import {
 } from '@ant-design/icons';
 import dayjs, { Dayjs } from 'dayjs';
 import FieldConfigModal, { FieldConfigItem } from '../../components/FieldConfigModal';
+import { useDatasetSyncReload } from '../../utils/useDatasetSyncReload';
 
 const { Text, Title } = Typography;
 const { RangePicker } = DatePicker;
@@ -184,6 +185,10 @@ const SalesOutboundStatsPage: React.FC = () => {
     setAllData(loadOutboundData(owner));
     setAllOrders(loadOrderData(owner));
   }, [owner]);
+
+  // 同步落地/窗口重新可见时重读：出货统计是实时聚合快照，不重读就会
+  // 一直展示别端出库前的旧数字
+  useDatasetSyncReload(refresh);
 
   // 加载成品列表（仅成品），提取款式编码和商品编码
   const productList = useMemo(() => {

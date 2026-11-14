@@ -8,6 +8,7 @@ import dayjs from 'dayjs';
 import {
   ResignationRecord, loadResignations, saveResignations, applyDueResignations, setAccountStatus, resignStateOf, RESIGN_REASONS,
 } from './resignationStore';
+import { useDatasetSyncReload, applyIfChanged } from '../../utils/useDatasetSyncReload';
 
 const PRIMARY = '#1e4a7e';
 
@@ -197,6 +198,16 @@ const EmployeePage: React.FC = () => {
   const [resignVisible, setResignVisible] = useState(false);
   const [resignTarget, setResignTarget] = useState<EmployeeView | null>(null);
   const [resignForm] = Form.useForm();
+
+  // 同步落地/窗口重新可见时重读：员工列表由 accounts_ 实时映射，档案/离职/字段配置
+  // 都是从落盘读一次就固定；不刷新的话另一端刚建的账号/补充的档案看不到，
+  // 而本端保存一次档案又会拿陈旧档案表整表回写
+  useDatasetSyncReload(() => {
+    applyIfChanged(setProfiles, loadProfiles());
+    applyIfChanged(setVisibleFields, loadFieldConfig());
+    applyIfChanged(setResignations, loadResignations());
+    setRefreshKey(k => k + 1);
+  });
 
   // 到达离职日期自动停用账号：挂载时 + 每 60s 巡检一次，生效时记变更日志并刷新列表
   useEffect(() => {

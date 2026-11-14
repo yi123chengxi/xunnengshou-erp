@@ -9,6 +9,7 @@ import {
   SettingOutlined, UndoOutlined, EyeOutlined,
 } from '@ant-design/icons';
 import { compressImageFile } from '../utils/imageCompress';
+import { readClipboardImage, imageFileFromPasteEvent, clipboardImageFailureText } from '../utils/clipboard';
 import { safeSetItem } from '../utils/storageQuota';
 import useResizableColumns from '../hooks/useResizableColumns';
 import FieldConfigModal from '../components/FieldConfigModal';
@@ -159,22 +160,23 @@ const MoldPage: React.FC = () => {
   };
 
   const pasteImage = async () => {
+    const res = await readClipboardImage();
+    if (!res.ok) { message.warning(clipboardImageFailureText(res.reason)); return; }
     try {
-      const items: any[] = await (navigator as any).clipboard.read();
-      for (const it of items) {
-        const type = (it.types || []).find((t: string) => t.startsWith('image/'));
-        if (type) {
-          const blob = await it.getType(type);
-          const url = await compressImageFile(blob);
-          setMoldImages(prev => [...prev, url]);
-          message.success('已粘贴剪切板图片');
-          return;
-        }
-      }
-      message.warning('剪切板中未找到图片');
+      const url = await compressImageFile(res.blob);
+      setMoldImages(prev => [...prev, url]);
+      message.success('已粘贴剪切板图片');
     } catch {
-      message.warning('读取剪切板失败');
+      message.error('图片处理失败，请重新截图后再试');
     }
+  };
+
+  // 元素级 onPaste 兜底：paste 事件的 clipboardData 不受安全上下文限制
+  const handleImagePaste = (e: React.ClipboardEvent) => {
+    const file = imageFileFromPasteEvent(e);
+    if (!file) return;
+    e.preventDefault();
+    void compressImageFile(file).then(url => setMoldImages(prev => [...prev, url])).catch(() => message.error('图片处理失败'));
   };
 
   const save = (list: MoldRecord[]) => {
@@ -416,7 +418,8 @@ const MoldPage: React.FC = () => {
             </Col>
             <Col span={24}>
               <div style={{ marginBottom: 8, fontSize: 14 }}>图片</div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, padding: 12, border: '1px dashed #d9d9d9', borderRadius: 8, background: '#fafafa', minHeight: 90, alignItems: 'flex-start' }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, padding: 12, border: '1px dashed #d9d9d9', borderRadius: 8, background: '#fafafa', minHeight: 90, alignItems: 'flex-start', outline: 'none' }}
+                tabIndex={0} onPaste={handleImagePaste}>
                 {moldImages.map((img, idx) => (
                   <div key={idx} style={{ position: 'relative', width: 72, height: 72 }}>
                     <AntdImage src={img} width={72} height={72} style={{ objectFit: 'cover', borderRadius: 6, border: '1px solid #eee' }} />

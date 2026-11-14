@@ -340,6 +340,19 @@ const WithdrawalRecordPage: React.FC = () => {
     try { const m = JSON.parse(localStorage.getItem(managersKey) || '[]'); setWdManagers(Array.isArray(m) ? m : []); } catch { setWdManagers([]); }
   }, [storageKey, shopKey, bankKey, rechargeKey, managersKey]);
   useEffect(() => { reload(); }, [reload]);
+  // 同步落地/窗口重新可见时重载：避免长期挂载页面拿陈旧提现记录整表回写，抹掉别端刚新增的记录
+  useEffect(() => {
+    const onSync = () => reload();
+    const onVisible = () => { if (document.visibilityState === 'visible') reload(); };
+    window.addEventListener('sync-data-updated', onSync);
+    window.addEventListener('focus', onSync);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.removeEventListener('sync-data-updated', onSync);
+      window.removeEventListener('focus', onSync);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [reload]);
 
   // 监听全局支付弹窗确认后的刷新事件
   useEffect(() => {

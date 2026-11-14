@@ -8,6 +8,7 @@ import {
 import type { ColumnsType } from 'antd/es/table';
 import type { Dayjs } from 'dayjs';
 import dayjs from 'dayjs';
+import { useDatasetSyncReload, applyIfChanged } from '../../utils/useDatasetSyncReload';
 
 const PRIMARY = '#1e4a7e';
 
@@ -153,8 +154,15 @@ const AttendancePage: React.FC = () => {
   const [makeupForm] = Form.useForm();
   const [statsMode, setStatsMode] = useState<'day' | 'month'>('month');
   const [statsDate, setStatsDate] = useState(dayjs());
-  const shifts = useMemo(() => loadShifts(), []);
-  const employees = useMemo(() => loadEmployees(), []);
+  const [shifts, setShifts] = useState<Shift[]>(loadShifts);
+  const [employees, setEmployees] = useState<{ username: string; displayName: string }[]>(loadEmployees);
+  // 同步落地/窗口重新可见时重读：保活页面只在挂载时读过一次快照，不刷新的话
+  // 下一次整表回写会把其他端刚新增的打卡记录整份覆盖（跨端打卡/补卡丢失）
+  useDatasetSyncReload(() => {
+    applyIfChanged(setRecords, loadRecords());
+    applyIfChanged(setShifts, loadShifts());
+    applyIfChanged(setEmployees, loadEmployees());
+  });
   const currentUsername = localStorage.getItem('username') || '';
 
   // 实时时钟

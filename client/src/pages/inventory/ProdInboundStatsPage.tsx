@@ -13,6 +13,7 @@ import { updateProductStock, generateDocNo, getStockLogs } from '../../utils/sto
 import type { StockLogEntry } from '../../utils/stockUtils';
 import { getCurrentUserDisplayName } from '../../utils/billLog';
 import { reloadAfterPull } from '../../utils/serverSync';
+import { useDatasetSyncReload, applyIfChanged } from '../../utils/useDatasetSyncReload';
 
 const { Text, Paragraph } = Typography;
 const { RangePicker } = DatePicker;
@@ -81,6 +82,12 @@ const ProdInboundStatsPage: React.FC = () => {
     setDataSource(list);
     try { localStorage.setItem(STORAGE_KEY(), JSON.stringify(list)); } catch { /* ignore */ }
   }, []);
+
+  // 同步落地/窗口重新可见时重读：入库单在别端补录后本端不刷新，
+  // 下一次本端补录就会拿陈旧列表整表回写，把别端刚补的记录整份覆盖
+  useDatasetSyncReload(() => {
+    applyIfChanged(setDataSource, safeJson<PisRecord[]>(localStorage.getItem(STORAGE_KEY()), []));
+  });
 
   // ============ 统计 ============
   const stats = useMemo(() => {

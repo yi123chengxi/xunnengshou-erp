@@ -4,7 +4,7 @@ import {
   Card, Table, Button, Space, message, Typography, Modal, Input, InputNumber, DatePicker,
   Row, Col, Select, Tag, Empty, Image, Popconfirm,
 } from 'antd';
-import { reloadAfterPull } from '../utils/serverSync';
+import { reloadAfterPull, declareShrink } from '../utils/serverSync';
 import {
   PlusOutlined, DeleteOutlined, EditOutlined, DownloadOutlined, SearchOutlined,
   AccountBookOutlined, ArrowUpOutlined, ArrowDownOutlined, WalletOutlined,
@@ -16,6 +16,7 @@ import dayjs from 'dayjs';
 import useResizableColumns from '../hooks/useResizableColumns';
 import { safeSetItem } from '../utils/storageQuota';
 import { compressImageFile } from '../utils/imageCompress';
+import { readClipboardImage, imageFileFromPasteEvent, clipboardImageFailureText } from '../utils/clipboard';
 import { removeBankTransaction } from '../utils/accountingBridge';
 
 const { Text } = Typography;
@@ -223,23 +224,24 @@ const DailyBookkeepingPage: React.FC<{ flush?: boolean }> = ({ flush = false }) 
   const [recvFormRemark, setRecvFormRemark] = useState('');
   const [recvFormImage, setRecvFormImage] = useState('');  // 收款码图片
 
-  // 从剪切板读取图片
+  // 元素级 onPaste 兜底：paste 事件里的 clipboardData 不受安全上下文限制，
+  // 是 http:// 部署下唯一能拿到截图的路径（界面上已提示"或Ctrl+V粘贴"）
+  const pasteImageTo = useCallback((e: React.ClipboardEvent, onComplete: (url: string) => void) => {
+    const file = imageFileFromPasteEvent(e);
+    if (!file) return;
+    e.preventDefault();
+    void compressImageFile(file).then(onComplete).catch(() => message.error('图片处理失败'));
+  }, []);
+
+  // 从剪切板读取图片（按钮）：http 部署下读取被浏览器禁用时引导用户区域 Ctrl+V
   const handlePasteImage = useCallback(async () => {
+    const res = await readClipboardImage();
+    if (!res.ok) { message.warning(clipboardImageFailureText(res.reason)); return; }
     try {
-      const items = await navigator.clipboard.read();
-      for (const item of items) {
-        const imageType = item.types.find(t => t.startsWith('image/'));
-        if (imageType) {
-          const blob = await item.getType(imageType);
-          const dataUrl = await compressImageFile(blob);
-          setFormImage(dataUrl);
-          message.success('已从剪切板粘贴图片');
-          return;
-        }
-      }
-      message.warning('剪切板中没有图片内容');
+      setFormImage(await compressImageFile(res.blob));
+      message.success('已从剪切板粘贴图片');
     } catch {
-      message.warning('无法读取剪切板，请复制图片后重试');
+      message.error('图片处理失败，请重新截图后再试');
     }
   }, []);
 
@@ -281,6 +283,19 @@ const DailyBookkeepingPage: React.FC<{ flush?: boolean }> = ({ flush = false }) 
     } catch { setDepartmentOptions([]); }
   }, []);
   useEffect(() => { load(); }, [load]);
+  // 同步落地/窗口重新可见时重载：避免长期挂载页面拿陈旧流水整表回写，抹掉别端刚新增的记账
+  useEffect(() => {
+    const onSync = () => load();
+    const onVisible = () => { if (document.visibilityState === 'visible') load(); };
+    window.addEventListener('sync-data-updated', onSync);
+    window.addEventListener('focus', onSync);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.removeEventListener('sync-data-updated', onSync);
+      window.removeEventListener('focus', onSync);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [load]);
 
   const save = useCallback((list: BookRecord[]) => {
     setRecords(list);
@@ -487,21 +502,13 @@ const DailyBookkeepingPage: React.FC<{ flush?: boolean }> = ({ flush = false }) 
     input.click();
   }, []);
   const handleRecvPasteImage = useCallback(async () => {
+    const res = await readClipboardImage();
+    if (!res.ok) { message.warning(clipboardImageFailureText(res.reason)); return; }
     try {
-      const items = await navigator.clipboard.read();
-      for (const item of items) {
-        const imageType = item.types.find(t => t.startsWith('image/'));
-        if (imageType) {
-          const blob = await item.getType(imageType);
-          const dataUrl = await compressImageFile(blob);
-          setRecvFormImage(dataUrl);
-          message.success('已从剪切板粘贴图片');
-          return;
-        }
-      }
-      message.warning('剪切板中没有图片内容');
+      setRecvFormImage(await compressImageFile(res.blob));
+      message.success('已从剪切板粘贴图片');
     } catch {
-      message.warning('无法读取剪切板，请使用Ctrl+V或点击粘贴按钮');
+      message.error('图片处理失败，请重新截图后再试');
     }
   }, []);
   const handleSaveRecvAccount = () => {
@@ -735,6 +742,8 @@ const DailyBookkeepingPage: React.FC<{ flush?: boolean }> = ({ flush = false }) 
     try {
       const reims: any[] = JSON.parse(localStorage.getItem(bkKey) || '[]');
       const updated = reims.filter((r: any) => r.key !== reimKey);
+      // 报销键已纳入服务端「永不缩水」：删除必须显式申报，否则服务端并集保留导致删完又回来
+      declareShrink(bkKey, [String(reimKey)]);
       safeSetItem(bkKey, JSON.stringify(updated));
     } catch { /* ignore */ }
   };
@@ -1331,8 +1340,9 @@ const DailyBookkeepingPage: React.FC<{ flush?: boolean }> = ({ flush = false }) 
           <div style={{ marginBottom: 4, fontSize: 12, color: '#5a6d85' }}>记账说明</div>
           <Input.TextArea rows={2} placeholder="备注说明" value={formRemark} onChange={e => setFormRemark(e.target.value)} />
         </div>
-        {/* 图片上传 + 粘贴剪切板 */}
-        <div style={{ marginTop: 12 }}>
+        {/* 图片上传 + 粘贴剪切板：按钮读不到时可直接在本区域按 Ctrl+V */}
+        <div style={{ marginTop: 12, outline: 'none' }} tabIndex={0}
+          onPaste={e => pasteImageTo(e, setFormImage)}>
           <div style={{ marginBottom: 4, fontSize: 12, color: '#5a6d85', display: 'flex', alignItems: 'center', gap: 8 }}>
             <span>图片</span>
             <Button size="small" icon={<SnippetsOutlined />} onClick={handlePasteImage}>粘贴剪切板</Button>
@@ -1414,7 +1424,8 @@ const DailyBookkeepingPage: React.FC<{ flush?: boolean }> = ({ flush = false }) 
         )}
         {/* 收款码：图片上传区域 */}
         {recvFormType === '收款码' && (
-          <div style={{ marginBottom: 12 }}>
+          <div style={{ marginBottom: 12, outline: 'none' }} tabIndex={0}
+            onPaste={e => pasteImageTo(e, setRecvFormImage)}>
             <div style={{ marginBottom: 4, fontSize: 12, color: '#5a6d85', display: 'flex', alignItems: 'center', gap: 8 }}>
               <span>收款码图片 <span style={{ color: '#ff4d4f' }}>*</span></span>
               <Button size="small" icon={<SnippetsOutlined />} onClick={handleRecvPasteImage}>粘贴剪切板</Button>

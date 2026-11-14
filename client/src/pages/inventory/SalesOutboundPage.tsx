@@ -5,6 +5,7 @@ import {
 } from 'antd';
 import { ExportOutlined, EyeOutlined, SettingOutlined, ReloadOutlined, DownOutlined } from '@ant-design/icons';
 import useResizableColumns from '../../hooks/useResizableColumns';
+import { useDatasetSyncReload } from '../../utils/useDatasetSyncReload';
 
 const { Text } = Typography;
 const PRIMARY = '#1e4a7e';
@@ -120,6 +121,10 @@ const SalesOutboundPage: React.FC = () => {
   const refresh = useCallback(() => {
     try { setDataSource(JSON.parse(localStorage.getItem(STORAGE_KEY(owner)) || '[]')); } catch { /* ignore */ }
   }, [owner]);
+
+  // 同步落地/窗口重新可见时重读：出库单在别端录入后本端不刷新，
+  // 下一次本端出库就会拿陈旧列表整表回写，把别端刚出的单据整份覆盖
+  useDatasetSyncReload(refresh);
 
   // 历史重复出库单号一次性修复：保留首次出现，后续重复项按同日前缀重编序号并回写存储
   useEffect(() => {

@@ -23,7 +23,7 @@ export { declareShrink } from './shrinkRegistry';
 // 否则任一端在源数据未拉全时算出 0 快照上传，会经 pull 宽限期覆盖其他端的正确快照，表现为采购总额跳动/归 0
 const SYNC_PREFIXES = [
   // ==== 原有业务数据 ====
-  'pageData_', 'custom_', 'warehouses_', 'purchaser_suppliers_', 'boundPurchasers_', 'accounts_', 'shop_info_', 'shop_profit_', 'month_end_check_', 'withdrawal_record_', 'dev_', 'hr_', 'newstyle_', 'brandauth_', 'molds_', 'credit_adjustments_', 'published_credit_', 'payment_requests_', 'payment_request_managers_', 'notification_settings_', 'print_template_', 'price_strategy_', 'user_notice_', 'invoice_record_', 'invoice_apply_requests_', 'purchaser_bills_', 'recon_db_', 'roles_', 'preset_role_overrides_', 'role_permsettings_', 'customers_', 'supplier_payments_', 'customerReceipts_', 'inventory_check_', 'stock_change_log_', 'sales_outbound_',
+  'pageData_', 'custom_', 'warehouses_', 'purchaser_suppliers_', 'boundPurchasers_', 'accounts_', 'shop_info_', 'shop_profit_', 'month_end_check_', 'withdrawal_record_', 'dev_', 'hr_', 'newstyle_', 'brandauth_', 'molds_', 'credit_adjustments_', 'published_credit_', 'payment_requests_', 'payment_request_managers_', 'notification_settings_', 'print_template_', 'price_strategy_', 'user_notice_', 'invoice_record_', 'invoice_apply_requests_', 'purchaser_bills_', 'recon_db_', 'roles_', 'preset_role_overrides_', 'role_permsettings_', 'customers_', 'supplier_payments_', 'customerReceipts_', 'inventory_check_', 'inventory_outbound_', 'purchase_receiving_', 'stock_change_log_', 'sales_outbound_',
   // ==== 财务/账务（此前仅存本机，换电脑即丢）====
   'reimbursement_',            // 报销单 + 报销付款 + 报销负责人（三者同前缀）
   'receiving_accounts_',       // 报销/日常记账-本人垫付收款账户库（键后缀为登录账号，子账号各自独立）
@@ -95,6 +95,11 @@ const REPLACE_PULL_GLOBAL_KEYS = ['market_publish_orders'];
 // 一次性 salvage 回灌的账单类私有键前缀：这些键曾被跨端镜像整键覆盖擦除，
 // 升级后首轮拉取把「本地有、服务端缺失」的行并集回灌服务端（仅一次，避免长期破坏删除语义）
 const SALVAGE_UNION_PREFIXES = ['purchaser_bills_', 'pageData_customer_bill-detail_'];
+// 服务端「永不缩水」键（与 server/src/routes/sync.routes.ts 的 NEVER_SHRINK_PREFIXES 同构）：
+// 这些键的权威副本只增不减，拉取时不得整键覆盖本地——否则「本地新增但尚未上传成功」的行
+// 会被服务端旧版本抹掉（报销新增后过一会自动消失的另一半原因）。
+const NEVER_SHRINK_PREFIXES = ['purchaser_bills_', 'pageData_customer_bill-detail_', 'pageData_sales_order-manage_', 'purchaser_suppliers_', 'boundPurchasers_', 'accounts_', 'reimbursement_'];
+const isNeverShrinkKey = (key: string): boolean => NEVER_SHRINK_PREFIXES.some(p => key.startsWith(p));
 
 export function isSyncKey(key: string): boolean {
   if (!key || key.endsWith('_ts')) return false;
@@ -782,6 +787,29 @@ export async function pullAllDatasets(): Promise<number> {
       if (sameContent) {
         raw(`${key}_ts`, String(rec.updatedAt));
         continue;
+      }
+      // 永不缩水键：服务端权威副本只增不减，这里改为行级并集——服务端行优先，本地独有的行
+      // （尚未上传成功的新增）原样保留并立即回传服务端愈合。已申报删除的行服务端已移除、
+      // 本地也不再持有，因此不会被复活。
+      if (isNeverShrinkKey(key)) {
+        let localRows: any[] = [];
+        let serverRows: any[] = [];
+        try { localRows = JSON.parse(localStorage.getItem(key) || '[]'); } catch { localRows = []; }
+        try { serverRows = JSON.parse(rec.json); } catch { serverRows = []; }
+        if (Array.isArray(localRows) && Array.isArray(serverRows)) {
+          const idOfR = (r: any) => (r && (r.key || r.id)) ? String(r.key || r.id) : null;
+          const sIds = new Set(serverRows.map(idOfR));
+          const onlyLocal = localRows.filter((r: any) => { const id = idOfR(r); return !!id && !sIds.has(id); });
+          if (onlyLocal.length > 0) {
+            const merged = JSON.stringify([...serverRows, ...onlyLocal]);
+            raw(key, merged);
+            raw(`${key}_ts`, String(rec.updatedAt));
+            saveDataset(key, merged);
+            void doUpload(key, merged, Date.now()).catch(() => false);
+            applied++;
+            continue;
+          }
+        }
       }
       // 一次性 salvage 回灌：账单类私有键曾被跨端镜像整键覆盖擦除；升级后首轮拉取把
       // 「本地有、服务端缺失」的行并集回灌服务端（仅一次，避免长期破坏删除语义），尽可能找回历史账单

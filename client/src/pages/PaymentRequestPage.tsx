@@ -15,7 +15,9 @@ import { flushDatasetUploadAsync } from '../utils/serverSync';
 import { recordSupplierPayment, incrementCustomerReceived } from '../utils/paySummary';
 import { resolveCompanyCred } from '../utils/nameSync';
 import { pushPaidToSupplier } from '../utils/supplierReceiptInbox';
-import { recompressDataUrl } from '../utils/imageCompress';
+import { recompressDataUrl, compressImageFile } from '../utils/imageCompress';
+import { readClipboardImage, imageFileFromPasteEvent, clipboardImageFailureText } from '../utils/clipboard';
+import { accountRootOf } from '../utils/dataOwner';
 import { sumPayRecords, installmentStatusOf } from '../utils/receiptWrite';
 import { isNotificationTypeEnabled } from '../utils/pushNotification';
 import { isAccountingMode, writeAutoEntries, loadSubjectOptions, subjectFilterOption } from '../utils/accountingBridge';
@@ -162,6 +164,35 @@ const PaymentRequestPage: React.FC = () => {
   const [managerModalTab, setManagerModalTab] = useState<string | null>(null);
   const [managerSelectedUsers, setManagerSelectedUsers] = useState<string[]>([]);
   const managersKey = `payment_request_managers_${getDataOwner()}`;
+
+  // 图片粘贴：按钮走 Clipboard API（仅 https/localhost 可用），读不到时提示用户在图片区按 Ctrl+V
+  const handleRecvQrcodePaste = useCallback(async () => {
+    const res = await readClipboardImage();
+    if (!res.ok) { message.warning(clipboardImageFailureText(res.reason)); return; }
+    try {
+      setFormRecvQrcode(await compressImageFile(res.blob));
+      message.success('已从剪切板粘贴图片');
+    } catch {
+      message.error('图片处理失败，请重新截图后再试');
+    }
+  }, []);
+  const handlePayShotPaste = useCallback(async () => {
+    const res = await readClipboardImage();
+    if (!res.ok) { message.warning(clipboardImageFailureText(res.reason)); return; }
+    try {
+      setPayShot(await compressImageFile(res.blob));
+      message.success('已从剪切板粘贴图片');
+    } catch {
+      message.error('图片处理失败，请重新截图后再试');
+    }
+  }, []);
+  // 元素级 onPaste 兜底：paste 事件的 clipboardData 不受安全上下文限制
+  const pasteImageTo = useCallback((e: React.ClipboardEvent, onComplete: (url: string) => void) => {
+    const file = imageFileFromPasteEvent(e);
+    if (!file) return;
+    e.preventDefault();
+    void compressImageFile(file).then(onComplete).catch(() => message.error('图片处理失败'));
+  }, []);
 
   const load = useCallback(() => {
     try { setRecords(JSON.parse(localStorage.getItem(storageKey) || '[]')); } catch { setRecords([]); }
@@ -390,8 +421,23 @@ const PaymentRequestPage: React.FC = () => {
   // ========== 负责人权限 ==========
   const isTabManager = useCallback((tab: 'receipt' | 'review' | 'pay'): boolean => {
     if (isAdmin) return true; // 管理员始终可操作
-    const mgrs = tabManagers[tab] || [];
-    if (mgrs.length === 0) return true; // 未设置负责人时，所有人都可操作
+    const raw = tabManagers[tab] || [];
+    if (raw.length === 0) return true; // 未设置负责人时，所有人都可操作
+    // 名单里可能残留已删除/不属于本企业的账号：这类条目不算「已设置负责人」，
+    // 否则名单非空却没人匹配，所有子账号都会被挡在空态提示上（看不到待处理记录）
+    let mgrs = raw;
+    try {
+      const users: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+      if (users.length > 0) {
+        const owner = getDataOwner();
+        const members = new Set<string>([owner]);
+        users.forEach((u: any) => {
+          if (u && u.username && accountRootOf(users, String(u.username)) === owner) members.add(String(u.username));
+        });
+        mgrs = raw.filter(un => members.has(String(un)));
+      }
+    } catch { /* 读不到账号表时按原名单判定 */ }
+    if (mgrs.length === 0) return true;
     return mgrs.includes(username);
   }, [tabManagers, username, isAdmin]);
 
@@ -1346,28 +1392,13 @@ const PaymentRequestPage: React.FC = () => {
             </Col>
           </Row>
         ) : (
-          <div>
+          <div style={{ outline: 'none' }} tabIndex={0}
+            onPaste={e => pasteImageTo(e, setFormRecvQrcode)}>
             <div style={{ marginBottom: 4, fontSize: 12, color: '#5a6d85' }}>收款账户名称 <span style={{ color: '#ff4d4f' }}>*</span></div>
             <Input placeholder="如：我的支付宝" value={formRecvName} onChange={e => setFormRecvName(e.target.value)} style={{ marginBottom: 8 }} />
             <div style={{ marginBottom: 4, fontSize: 12, color: '#5a6d85', display: 'flex', alignItems: 'center', gap: 8 }}>
               <span>收款码图片 <span style={{ color: '#ff4d4f' }}>*</span></span>
-              <Button size="small" icon={<SnippetsOutlined />} onClick={async () => {
-                try {
-                  const items = await navigator.clipboard.read();
-                  for (const item of items) {
-                    const imageType = item.types.find(t => t.startsWith('image/'));
-                    if (imageType) {
-                      const blob = await item.getType(imageType);
-                      const reader = new FileReader();
-                      reader.onload = (e) => setFormRecvQrcode(e.target?.result as string);
-                      reader.readAsDataURL(blob);
-                      message.success('已从剪切板粘贴图片');
-                      return;
-                    }
-                  }
-                  message.warning('剪切板中没有图片内容');
-                } catch { message.warning('无法读取剪切板，请点击上传'); }
-              }}>粘贴剪切板</Button>
+              <Button size="small" icon={<SnippetsOutlined />} onClick={handleRecvQrcodePaste}>粘贴剪切板</Button>
             </div>
             {formRecvQrcode ? (
               <div style={{ position: 'relative', display: 'inline-block' }}>
@@ -1505,26 +1536,11 @@ const PaymentRequestPage: React.FC = () => {
                 onChange={v => setPayBankKey(v)}
                 options={bankAccounts.map((b: any) => ({ label: `${b.name} - ${b.bankName || ''} ${b.balance !== undefined ? `(余额 ¥${Number(b.balance).toFixed(2)})` : ''}`, value: b.key }))} />
             </div>
-            <div>
+            <div style={{ outline: 'none' }} tabIndex={0}
+              onPaste={e => pasteImageTo(e, setPayShot)}>
               <div style={{ marginBottom: 4, fontSize: 12, color: '#5a6d85', display: 'flex', alignItems: 'center', gap: 8 }}>
                 <span>支付截图（可选）</span>
-                <Button size="small" icon={<SnippetsOutlined />} onClick={async () => {
-                  try {
-                    const items = await navigator.clipboard.read();
-                    for (const item of items) {
-                      const imageType = item.types.find(t => t.startsWith('image/'));
-                      if (imageType) {
-                        const blob = await item.getType(imageType);
-                        const reader = new FileReader();
-                        reader.onload = (e) => setPayShot(e.target?.result as string);
-                        reader.readAsDataURL(blob);
-                        message.success('已从剪切板粘贴图片');
-                        return;
-                      }
-                    }
-                    message.warning('剪切板中没有图片内容');
-                  } catch { message.warning('无法读取剪切板，请点击上传'); }
-                }}>粘贴剪切板</Button>
+                <Button size="small" icon={<SnippetsOutlined />} onClick={handlePayShotPaste}>粘贴剪切板</Button>
               </div>
               {payShot ? (
                 <div style={{ position: 'relative', display: 'inline-block' }}>

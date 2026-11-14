@@ -256,6 +256,19 @@ const GeneralLedgerPage: React.FC<{ simple?: boolean }> = ({ simple = false }) =
   }, [subjectKey, entryKey, closedPeriodKey]);
 
   useEffect(() => { loadData(); }, [loadData]);
+  // 同步落地/窗口重新可见时重载：避免长期挂载页面拿陈旧科目/分录整表回写，抹掉别端刚新增的数据
+  useEffect(() => {
+    const onSync = () => loadData();
+    const onVisible = () => { if (document.visibilityState === 'visible') loadData(); };
+    window.addEventListener('sync-data-updated', onSync);
+    window.addEventListener('focus', onSync);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.removeEventListener('sync-data-updated', onSync);
+      window.removeEventListener('focus', onSync);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [loadData]);
 
   const saveSubjects = (list: LedgerSubject[]) => {
     setSubjects(list);

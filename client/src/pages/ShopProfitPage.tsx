@@ -270,6 +270,19 @@ const ShopProfitPage: React.FC = () => {
     try { setReturnRecords(JSON.parse(localStorage.getItem(returnKey) || '[]')); } catch { setReturnRecords([]); }
   }, [shopKey, profitKey, checkKey, shipKey, withdrawKey, rechargeRecordKey, returnKey]);
   useEffect(() => { reload(); }, [reload]);
+  // 同步落地/窗口重新可见时重载：避免长期挂载页面拿陈旧店铺/利润快照整表回写，抹掉别端刚新增的记录
+  useEffect(() => {
+    const onSync = () => reload();
+    const onVisible = () => { if (document.visibilityState === 'visible') reload(); };
+    window.addEventListener('sync-data-updated', onSync);
+    window.addEventListener('focus', onSync);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.removeEventListener('sync-data-updated', onSync);
+      window.removeEventListener('focus', onSync);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [reload]);
 
   const saveShops = (list: ShopInfo[]) => {
     const json = JSON.stringify(list);

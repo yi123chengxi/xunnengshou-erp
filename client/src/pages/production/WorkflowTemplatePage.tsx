@@ -222,11 +222,15 @@ const WorkflowTemplatePage: React.FC = () => {
     loadData();
     const onFocus = () => loadData();
     const onVisibility = () => { if (!document.hidden) loadData(); };
+    // 同步落地（服务端拉取完成）时也要重读：保活页面不会重新挂载
+    const onSync = () => loadData();
     window.addEventListener('focus', onFocus);
     document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('sync-data-updated', onSync);
     return () => {
       window.removeEventListener('focus', onFocus);
       document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('sync-data-updated', onSync);
     };
   }, [tplKey]);
 

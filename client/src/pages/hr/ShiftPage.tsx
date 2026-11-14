@@ -5,6 +5,7 @@ import {
 import { PlusOutlined, EditOutlined, DeleteOutlined, ClockCircleOutlined, TeamOutlined, EnvironmentOutlined, CalendarOutlined, DollarOutlined, ScheduleOutlined, CopyOutlined, LeftOutlined, RightOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
+import { useDatasetSyncReload, applyIfChanged } from '../../utils/useDatasetSyncReload';
 
 const PRIMARY = '#1e4a7e';
 
@@ -268,8 +269,8 @@ const ShiftPage: React.FC = () => {
   const [editingKey, setEditingKey] = useState('');
   const [form] = Form.useForm();
   const watchShiftType = Form.useWatch('shiftType', form);
-  const groups = useMemo(() => loadGroups(), []);
-  const employees = useMemo(() => loadEmployees(), []);
+  const [groups, setGroups] = useState<{ name: string }[]>(loadGroups);
+  const [employees, setEmployees] = useState<{ username: string; displayName: string; group: string }[]>(loadEmployees);
 
   // ========== 排班设置状态 ==========
   const [schedule, setSchedule] = useState<ScheduleData>(loadSchedule);
@@ -296,6 +297,15 @@ const ShiftPage: React.FC = () => {
   useEffect(() => {
     localStorage.setItem(getStorageKey(), JSON.stringify(shifts));
   }, [shifts]);
+
+  // 同步落地/窗口重新可见时重读：本页两处「state 一变就整表写盘」的副作用，
+  // 保活期间拿陈旧快照改一条班次，就会把其他端刚建的班次/排班整份覆盖
+  useDatasetSyncReload(() => {
+    applyIfChanged(setShifts, loadShifts());
+    applyIfChanged(setSchedule, loadSchedule());
+    applyIfChanged(setGroups, loadGroups());
+    applyIfChanged(setEmployees, loadEmployees());
+  });
 
   const handleAdd = useCallback(() => {
     setEditingKey('');

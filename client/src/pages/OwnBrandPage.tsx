@@ -14,6 +14,7 @@ import {
 import dayjs from 'dayjs';
 import ImageSlot from '../components/ImageSlot';
 import { compressImageFile, recompressDataUrl, OVERSIZE_DATAURL_CHARS } from '../utils/imageCompress';
+import { readClipboardImage, imageFileFromPasteEvent, clipboardImageFailureText } from '../utils/clipboard';
 import { getProvinceOptions, getCityOptions, getDistrictOptions } from '../utils/regions';
 import {
   getDataOwner, baKeys, safeJson, writeJson, genKey, todayCn, todayIso, genAuthNo, genShareCode, genAppNo,
@@ -868,18 +869,20 @@ const OwnBrandPage: React.FC<{ embedded?: boolean }> = ({ embedded }) => {
     try { insertImageHtml(await compressImageFile(f)); } catch { message.error('图片读取失败'); }
   };
   const pasteImageToEditor = async () => {
+    const res = await readClipboardImage();
+    if (!res.ok) { message.warning(clipboardImageFailureText(res.reason)); return; }
     try {
-      const items: any[] = await (navigator as any).clipboard.read();
-      for (const it of items) {
-        const type = (it.types || []).find((t: string) => t.startsWith('image/'));
-        if (type) {
-          insertImageHtml(await compressImageFile(await it.getType(type)));
-          message.success('已插入剪切板图片');
-          return;
-        }
-      }
-      message.warning('剪切板中未找到图片');
-    } catch { message.warning('读取剪切板失败，可用"插图"按钮选择图片文件'); }
+      insertImageHtml(await compressImageFile(res.blob));
+      message.success('已插入剪切板图片');
+    } catch { message.error('图片读取失败'); }
+  };
+  // 编辑器内直接 Ctrl+V 粘贴图片：paste 的 clipboardData 不受安全上下文限制；
+  // 只在含图片时接管，文字粘贴仍走浏览器默认
+  const onEditorPaste = async (e: React.ClipboardEvent) => {
+    const file = imageFileFromPasteEvent(e);
+    if (!file) return;
+    e.preventDefault();
+    try { insertImageHtml(await compressImageFile(file)); } catch { message.error('图片读取失败'); }
   };
   // 选中图片并调整大小（宽度按容器百分比存储，预览/生成等比渲染）
   const [selImg, setSelImg] = useState<HTMLImageElement | null>(null);
@@ -1708,7 +1711,7 @@ const OwnBrandPage: React.FC<{ embedded?: boolean }> = ({ embedded }) => {
                 onChange={v => setTplDraft(d => ({ ...d, style: { ...DEFAULT_CERT_STYLE, ...(d.style || {}), padRight: Number(v) || 0 } as CertStyle }))} />
               <span style={{ fontSize: 12, color: '#aaa' }}>正文与纸张四边留白（px），预览与生成同步生效，可避开背景图边框</span>
             </div>
-            <div ref={editorRef} contentEditable suppressContentEditableWarning onInput={syncHtml} onClick={onEditorClick}
+            <div ref={editorRef} contentEditable suppressContentEditableWarning onInput={syncHtml} onClick={onEditorClick} onPaste={onEditorPaste}
               dangerouslySetInnerHTML={{ __html: editorInitHtml }}
               style={{
                 border: '1px solid #d9d9d9', borderRadius: '0 0 6px 6px', minHeight: 280, maxHeight: 320, overflow: 'auto',

@@ -158,11 +158,15 @@ const CustomOrderPage: React.FC = () => {
     loadData();
     const onVisibility = () => { if (!document.hidden) loadData(); };
     const onFocus = () => loadData();
+    // 同步落地（服务端拉取完成）时也要重读：保活页面不会重新挂载
+    const onSync = () => loadData();
     document.addEventListener('visibilitychange', onVisibility);
     window.addEventListener('focus', onFocus);
+    window.addEventListener('sync-data-updated', onSync);
     return () => {
       document.removeEventListener('visibilitychange', onVisibility);
       window.removeEventListener('focus', onFocus);
+      window.removeEventListener('sync-data-updated', onSync);
     };
   }, [loadData]);
 
