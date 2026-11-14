@@ -16,41 +16,34 @@ jobs:
       SERVER_HOST: ${{ secrets.SERVER_HOST }}
       SERVER_PASSWORD: ${{ secrets.SERVER_PASSWORD }}
     steps:
-      - name: 采集服务器状态
+      - name: 清理阻塞会话
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq sshpass
           cat > /tmp/diag.sh <<'SH'
           set +e
-          OUT=/var/www/factory-management/client/build/diag2.txt
+          OUT=/var/www/factory-management/client/build/diag3.txt
+          source /var/www/factory-management/server/.env 2>/dev/null
+          export MYSQL_PWD="$DB_PASSWORD"
+          M="mysql -h $DB_HOST -P ${DB_PORT:-3306} -u $DB_USER $DB_NAME -N"
           {
-            echo "== ip =="; ip -4 addr show | grep 'inet '
-            echo "== mysqld local? =="; systemctl is-active mysql 2>&1; systemctl is-active mariadb 2>&1; ps aux | grep -E '[m]ysqld|[m]ariadbd' | head -3
-            echo "== 3306 conns =="; ss -tn 2>/dev/null | grep ':3306' | awk '{print $1}' | sort | uniq -c
-            echo "== disk tmp =="; df -h /tmp /var/tmp /var/lib/mysql 2>&1
-            echo "== var tmp files =="; ls -la /var/tmp 2>&1 | head -15; du -sh /var/tmp 2>&1
-            echo "== mysql client =="; command -v mysql; mysql --version 2>&1
-            source /var/www/factory-management/server/.env 2>/dev/null
-            export MYSQL_PWD="$DB_PASSWORD"
-            MC=$(command -v mysql)
-            if [ -n "$MC" ]; then
-              echo "== full processlist =="
-              timeout 15 mysql -h "$DB_HOST" -P "${DB_PORT:-3306}" -u "$DB_USER" "$DB_NAME" -e "SHOW FULL PROCESSLIST" 2>&1 | head -50
-              echo "== vars =="
-              timeout 15 mysql -h "$DB_HOST" -P "${DB_PORT:-3306}" -u "$DB_USER" "$DB_NAME" -N -e "SELECT @@version, @@tmpdir, @@max_connections, @@innodb_temp_data_file_path, @@temptable_max_mmap" 2>&1
-              echo "== status =="
-              timeout 15 mysql -h "$DB_HOST" -P "${DB_PORT:-3306}" -u "$DB_USER" "$DB_NAME" -N -e "SHOW GLOBAL STATUS WHERE Variable_name IN ('Threads_connected','Threads_running','Created_tmp_disk_tables','Innodb_buffer_pool_reads','Uptime','Aborted_clients','Max_used_connections')" 2>&1
-              echo "== binlog =="
-              timeout 15 mysql -h "$DB_HOST" -P "${DB_PORT:-3306}" -u "$DB_USER" "$DB_NAME" -N -e "SHOW BINARY LOGS" 2>&1 | tail -5
-              echo "== innodb status (trx) =="
-              timeout 15 mysql -h "$DB_HOST" -P "${DB_PORT:-3306}" -u "$DB_USER" "$DB_NAME" -e "SHOW ENGINE INNODB STATUS\G" 2>&1 | sed -n '/TRANSACTIONS/,/FILE I\/O/p' | head -50
-            else
-              echo "no mysql client on host"
-            fi
-            echo "== mysql error log =="; tail -30 /var/log/mysql/error.log 2>&1; tail -20 /var/log/mysqld.log 2>&1
-            echo "== dmesg tail =="; dmesg 2>/dev/null | tail -15
+            echo "== grants =="; timeout 10 $M -e "SHOW GRANTS FOR CURRENT_USER()" 2>&1
+            echo "== before: non-waiting sessions =="
+            timeout 12 $M -e "SHOW FULL PROCESSLIST" 2>&1 | cut -c1-150 | grep -v 'etadata lock' | head -20
+            echo "== kill 651 (ALTER) =="; timeout 10 $M -e "KILL 651" 2>&1; echo "rc=$?"
+            sleep 4
+            echo "== kill 630 (4h stuck INSERT) =="; timeout 10 $M -e "KILL 630" 2>&1; echo "rc=$?"
+            sleep 8
+            echo "== after: processlist summary =="
+            timeout 12 $M -e "SHOW FULL PROCESSLIST" 2>&1 | cut -c1-150 > /tmp/pl.txt; wc -l /tmp/pl.txt
+            grep -c 'etadata lock' /tmp/pl.txt
+            head -25 /tmp/pl.txt
+            echo "== counters =="
+            timeout 10 $M -e "SHOW GLOBAL STATUS WHERE Variable_name IN ('Threads_connected','Threads_running','Aborted_clients')" 2>&1
+            echo "== quick read test =="
+            timeout 10 $M -e "SELECT COUNT(*) FROM dataset_store" 2>&1
           } > $OUT 2>&1
           chmod 644 $OUT
-          echo DIAG2_DONE
+          echo DIAG3_DONE
           SH
           sshpass -p "$SERVER_PASSWORD" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@${SERVER_HOST} "bash -s" < /tmp/diag.sh
