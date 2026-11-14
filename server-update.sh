@@ -37,7 +37,22 @@ mkdir -p "$APP/server/uploads" "$APP/server/downloads" "$APP/server/data" "$APP/
 
 echo "[4/5] 更新后端运行时依赖..."
 cd "$APP/server"
-npm ci --omit=dev || npm install --omit=dev
+# npm ci 会先删 node_modules 再装；一旦安装失败（原生模块取不到预编译包回退源码编译、
+# 或与其它部署进程互踩），线上就会停在半安装状态——而 app.ts 无条件 import better-sqlite3，
+# 进程下次重启（pm2 restart / 宕机自愈 / 服务器重启）就会起不来。
+# 因此先把旧依赖整体挪到备份：装成功才删备份，装失败则原样回滚并中止本次部署。
+if [ -d node_modules ]; then
+  rm -rf .node_modules.bak
+  mv node_modules .node_modules.bak
+fi
+if npm ci --omit=dev || npm install --omit=dev; then
+  rm -rf .node_modules.bak
+else
+  rm -rf node_modules
+  if [ -d .node_modules.bak ]; then mv .node_modules.bak node_modules; fi
+  echo "FATAL: 后端依赖安装失败，已回滚上一份 node_modules，本次部署中止（服务继续跑旧进程）" >&2
+  exit 1
+fi
 
 echo "[5/5] 重载服务..."
 nginx -t && systemctl reload nginx

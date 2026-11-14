@@ -14,6 +14,14 @@ on:
         required: false
         default: ''
 
+# 部署必须串行：两个 run 同时跑 server-update.sh 会互踩同一份 node_modules
+# （npm ci 先删后装 + pm2 reload），已实测导致 gyp "deps/common.gypi not found" 与
+# ENOTEMPTY rename，部署步骤失败且线上依赖树停在半安装状态（进程一重启即起不来）。
+# cancel-in-progress: false 让后到的 run 排队而不是被取消，保证最后一次提交一定被部署。
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
