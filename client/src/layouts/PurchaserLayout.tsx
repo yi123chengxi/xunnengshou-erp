@@ -1070,6 +1070,7 @@ const PurchaserLayout: React.FC = () => {
               size="small"
               icon={<BankOutlined />}
               onClick={() => navigate('/dashboard')}
+              onMouseEnter={() => { void import('../pages/Dashboard'); }}
               style={{
                 fontWeight: 700,
                 fontSize: 13,

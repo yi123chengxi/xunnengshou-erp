@@ -1,6 +1,7 @@
 import React from 'react';
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { pullAllDatasets, pullPermDatasets, isPermSyncKey } from './utils/serverSync';
+import { syncOwnerFromToken } from './utils/dataOwner';
 import { PRESET_PRINT_TEMPLATES, seedPresetPrintTemplates } from './config/presetPrintTemplates';
 import { connectChatWS, disconnectChatWS, REMOTE_UPDATE_EVENT } from './utils/chatSocket';
 import MainLayout from './layouts/MainLayout';
@@ -109,8 +110,15 @@ const SyncGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
 
   const gatedPull = React.useCallback(() => {
     setReady(false);
-    const timer = setTimeout(() => { setReady(true); seedAllPresets(); }, 15000); // 给 pullAllDatasets 充足时间
-    pullAllDatasets().finally(() => { clearTimeout(timer); setReady(true); seedAllPresets(); });
+    // 上限 2.5s：拉取未完结也先放行渲染（后续落地会广播 sync-data-updated 自动刷新），
+    // 避免弱网/大数据量时登录与刷新长时间停在“加载中”
+    const timer = setTimeout(() => { setReady(true); seedAllPresets(); }, 2500);
+    // 先用令牌校正数据归属账号（子账号归主账号）再拉取：刷新页面时 localStorage 里的
+    // parentAccount 可能是陈旧值/为空，拉错桶会让主账号与负责人看不到子账号提交的单据
+    syncOwnerFromToken()
+      .catch(() => '')
+      .then(() => pullAllDatasets())
+      .finally(() => { clearTimeout(timer); setReady(true); seedAllPresets(); });
   }, []);
 
   React.useEffect(() => {
@@ -152,6 +160,15 @@ const SyncGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   }, []);
 
   React.useEffect(() => () => { if (intervalRef.current) clearInterval(intervalRef.current); }, []);
+
+  // 空闲预取供应商首页 chunk（登录默认落地页与跨平台切换目标）：
+  // 登录后/刷新后图表与页面 chunk 已在缓存，点击“切换到供应商视图”或落地时不再等懒加载下载
+  React.useEffect(() => {
+    if (!ready) return;
+    const w = window as any;
+    const idle = w.requestIdleCallback || ((cb: () => void) => setTimeout(cb, 2000));
+    idle(() => { void import('./pages/Dashboard'); });
+  }, [ready]);
 
   // 权限变更实时生效：其他浏览器/其他电脑改了角色或子账号权限 →
   // 服务端经 WebSocket 广播 dataset_updated → 这里立即增量拉取并重算菜单（无需刷新，也不等 60 秒轮询）

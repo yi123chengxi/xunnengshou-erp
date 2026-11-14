@@ -12,7 +12,7 @@ import {
   CalendarOutlined, FundOutlined, PieChartOutlined, RiseOutlined,
 } from '@ant-design/icons';
 import * as XLSX from 'xlsx';
-import ReactECharts from 'echarts-for-react';
+import EChartsLite from '../components/EChartsLite';
 import dayjs from 'dayjs';
 import ImageSlot from '../components/ImageSlot';
 import FieldConfigModal from '../components/FieldConfigModal';
@@ -2385,13 +2385,13 @@ const DataAnalysisTab: React.FC = () => {
           <Col xs={24} md={12}>
             <Card size="small" style={DA_CARD}>
               <div style={{ fontSize: 13, color: '#666', marginBottom: 8 }}>备货 vs 急采 月度数量</div>
-              <ReactECharts option={monthlyQtyOpt} style={{ height: 300 }} />
+              <EChartsLite option={monthlyQtyOpt} style={{ height: 300 }} />
             </Card>
           </Col>
           <Col xs={24} md={12}>
             <Card size="small" style={DA_CARD}>
               <div style={{ fontSize: 13, color: '#666', marginBottom: 8 }}>月度工资走势</div>
-              <ReactECharts option={monthlyWageOpt} style={{ height: 300 }} />
+              <EChartsLite option={monthlyWageOpt} style={{ height: 300 }} />
             </Card>
           </Col>
         </Row>
@@ -2403,13 +2403,13 @@ const DataAnalysisTab: React.FC = () => {
         <Col xs={24} md={12}>
           <Card size="small" style={DA_CARD}>
             <div style={{ fontSize: 13, color: '#666', marginBottom: 8 }}>备货单材质分布</div>
-            {materialDist.length > 0 ? <ReactECharts option={materialPieOpt} style={{ height: 280 }} /> : <Empty description="无材质数据" />}
+            {materialDist.length > 0 ? <EChartsLite option={materialPieOpt} style={{ height: 280 }} /> : <Empty description="无材质数据" />}
           </Card>
         </Col>
         <Col xs={24} md={12}>
           <Card size="small" style={DA_CARD}>
             <div style={{ fontSize: 13, color: '#666', marginBottom: 8 }}>急采单材质分布</div>
-            {urgentMaterialDist.length > 0 ? <ReactECharts option={urgentMaterialPieOpt} style={{ height: 280 }} /> : <Empty description="无材质数据" />}
+            {urgentMaterialDist.length > 0 ? <EChartsLite option={urgentMaterialPieOpt} style={{ height: 280 }} /> : <Empty description="无材质数据" />}
           </Card>
         </Col>
       </Row>
@@ -2421,7 +2421,7 @@ const DataAnalysisTab: React.FC = () => {
           <Col xs={24} md={12}>
             <Card size="small" style={DA_CARD}>
               <div style={{ fontSize: 13, color: '#666', marginBottom: 8 }}>TOP15 货号按备货数量排名</div>
-              <ReactECharts option={productRankBarOpt} style={{ height: Math.max(460, productRank.slice(0, 15).length * 32) }} />
+              <EChartsLite option={productRankBarOpt} style={{ height: Math.max(460, productRank.slice(0, 15).length * 32) }} />
             </Card>
           </Col>
           <Col xs={24} md={12}>
@@ -2451,7 +2451,7 @@ const DataAnalysisTab: React.FC = () => {
           <Card size="small" style={DA_CARD}>
             {sectionTitle(<CheckCircleOutlined />, '比对结果分布')}
             {(compareResult.overCount + compareResult.matchCount + compareResult.underCount + compareResult.noSource) > 0
-              ? <ReactECharts option={comparePieOpt} style={{ height: 260 }} />
+              ? <EChartsLite option={comparePieOpt} style={{ height: 260 }} />
               : <Empty description="无比对数据" />}
           </Card>
         </Col>
@@ -2461,15 +2461,15 @@ const DataAnalysisTab: React.FC = () => {
             <Row gutter={8}>
               <Col span={8}>
                 <div style={{ fontSize: 12, color: '#666', textAlign: 'center', marginBottom: 4 }}>质检员</div>
-                {personnelRank.inspectors.length > 0 ? <ReactECharts option={inspectorBarOpt} style={{ height: Math.max(150, personnelRank.inspectors.slice(0, 10).length * 30) }} /> : <Empty description="无数据" />}
+                {personnelRank.inspectors.length > 0 ? <EChartsLite option={inspectorBarOpt} style={{ height: Math.max(150, personnelRank.inspectors.slice(0, 10).length * 30) }} /> : <Empty description="无数据" />}
               </Col>
               <Col span={8}>
                 <div style={{ fontSize: 12, color: '#666', textAlign: 'center', marginBottom: 4 }}>打包员</div>
-                {personnelRank.packers.length > 0 ? <ReactECharts option={packerBarOpt} style={{ height: Math.max(150, personnelRank.packers.slice(0, 10).length * 30) }} /> : <Empty description="无数据" />}
+                {personnelRank.packers.length > 0 ? <EChartsLite option={packerBarOpt} style={{ height: Math.max(150, personnelRank.packers.slice(0, 10).length * 30) }} /> : <Empty description="无数据" />}
               </Col>
               <Col span={8}>
                 <div style={{ fontSize: 12, color: '#666', textAlign: 'center', marginBottom: 4 }}>外贸组长</div>
-                {personnelRank.teams.length > 0 ? <ReactECharts option={teamBarOpt} style={{ height: Math.max(150, personnelRank.teams.slice(0, 10).length * 30) }} /> : <Empty description="无数据" />}
+                {personnelRank.teams.length > 0 ? <EChartsLite option={teamBarOpt} style={{ height: Math.max(150, personnelRank.teams.slice(0, 10).length * 30) }} /> : <Empty description="无数据" />}
               </Col>
             </Row>
           </Card>
@@ -2480,7 +2480,7 @@ const DataAnalysisTab: React.FC = () => {
       {inspectorDailyChart.inspectors.length > 0 && <>
         {sectionTitle(<TeamOutlined />, '质检员每日数据统计（最近30天）')}
         <Card size="small" style={{ ...DA_CARD, marginBottom: 20 }}>
-          <ReactECharts option={inspectorDailyChartOpt} style={{ height: 420 }} />
+          <EChartsLite option={inspectorDailyChartOpt} style={{ height: 420 }} />
         </Card>
       </>}
 

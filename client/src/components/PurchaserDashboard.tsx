@@ -9,7 +9,7 @@ import {
   DatabaseOutlined, RiseOutlined, WarningOutlined, ShopOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import ReactECharts from 'echarts-for-react';
+import EChartsLite from './EChartsLite';
 import { useNavigate } from 'react-router-dom';
 import { getDataOwner } from '../utils/brandAuth';
 import { readProductListSync } from '../utils/dataStore';
@@ -147,7 +147,7 @@ const PurchaserDashboard: React.FC = () => {
       <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
         <Col xs={24} lg={14}>
           <Card size="small" title={<span style={{ fontWeight: 600 }}>近6月采购额趋势（账单口径）</span>} style={{ borderRadius: 10 }}>
-            <ReactECharts style={{ height: 250 }} option={{
+            <EChartsLite style={{ height: 250 }} option={{
               tooltip: { trigger: 'axis' },
               grid: { left: 50, right: 20, top: 30, bottom: 30 },
               xAxis: { type: 'category', data: stats.months },
@@ -162,7 +162,7 @@ const PurchaserDashboard: React.FC = () => {
         </Col>
         <Col xs={24} lg={10}>
           <Card size="small" title={<span style={{ fontWeight: 600 }}>订单推送状态</span>} style={{ borderRadius: 10 }}>
-            <ReactECharts style={{ height: 250 }} option={{
+            <EChartsLite style={{ height: 250 }} option={{
               tooltip: { trigger: 'item' },
               legend: { bottom: 0 },
               series: [{

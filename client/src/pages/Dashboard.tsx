@@ -10,13 +10,15 @@ import {
   RiseOutlined, WarningOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import ReactECharts from 'echarts-for-react';
 import { useNavigate } from 'react-router-dom';
 import { getDataOwner } from '../utils/brandAuth';
 import { readProductListSync } from '../utils/dataStore';
 import { loadAllCustomersFromStorage } from './CustomerInfo';
 import { loadPoTemplates, poToWfOrder, poPlanQty, poNodesOf, poCurrentNodeOverdue } from '../utils/poWorkflow';
 import FeedbackAnnouncementRow from '../components/FeedbackAnnouncementRow';
+
+// 按需打包图表组件（echarts/core + 柱/环）懒加载：chunk 在首屏之后并行下载，不阻塞 KPI 卡与表格首帧
+const EChartsLite = React.lazy(() => import('../components/EChartsLite'));
 
 const { Text, Title } = Typography;
 const PRIMARY = '#1e4a7e';
@@ -47,15 +49,46 @@ const Dashboard: React.FC = () => {
     const production = loadJson(`pageData_production_production-order_${owner}`);
     const bills = loadJson(`pageData_customer_bill-detail_${owner}`);
     const nowM = dayjs().format('YYYY-MM');
+    const today = dayjs().format('YYYY-MM-DD');
+    const isToday = (s: any) => !!s && dayjs(s).isValid() && dayjs(s).format('YYYY-MM-DD') === today;
 
-    // 销售额口径：订单管理中已付款订单（排除已取消/待付款；无付款时间的旧数据按状态推断），按付款月份归属
-    const paidOrders = orders.filter((o: any) => o && o.orderStatus !== '已取消' && o.orderStatus !== '待付款'
-      && (o.payTime || ['已付款', '已发货', '已完成'].includes(o.orderStatus)));
-    const monthSales = paidOrders
-      .filter((o: any) => dayjs(o.payTime || o.createTime || o.date || '').format('YYYY-MM') === nowM)
-      .reduce((s: number, o: any) => s + (Number(o.productAmount) || 0), 0);
-    const pendingPay = orders.filter((o: any) => o.orderStatus === '待付款');
-    const pendingShip = orders.filter((o: any) => o.orderStatus === '已付款');
+    // 单趟聚合：旧实现「6 个月 × 全量 filter」+「5 状态 × 全量 filter」+ 多趟 isToday 遍历，
+    // 同一订单日期被 dayjs 反复格式化（O(k·N) 次）；现每单最多格式化两次并直接入桶
+    const months: string[] = [];
+    for (let i = 5; i >= 0; i--) months.push(dayjs().subtract(i, 'month').format('YYYY-MM'));
+    const trendSum: Record<string, number> = {};
+    const statusCount: Record<string, number> = {};
+    const paidOrders: any[] = [];
+    const pendingPay: any[] = [];
+    const pendingShip: any[] = [];
+    const todayNewOrders: any[] = [];
+    const todaySoldOrders: any[] = [];
+    const todayShippedOrders: any[] = [];
+    let monthSales = 0;
+    let todaySoldAmount = 0;
+    for (const o of orders) {
+      if (!o) continue;
+      const st = o.orderStatus;
+      statusCount[st] = (statusCount[st] || 0) + 1;
+      if (st === '待付款') pendingPay.push(o);
+      else if (st === '已付款') pendingShip.push(o);
+      if (isToday(o.createTime)) todayNewOrders.push(o);
+      if (isToday(o.shipTime)) todayShippedOrders.push(o);
+      // 销售额口径：已付款订单（排除已取消/待付款；无付款时间的旧数据按状态推断），按付款月份归属
+      if (st !== '已取消' && st !== '待付款' && (o.payTime || ['已付款', '已发货', '已完成'].includes(st))) {
+        paidOrders.push(o);
+        const m = dayjs(o.payTime || o.createTime || o.date || '').format('YYYY-MM');
+        const amt = Number(o.productAmount) || 0;
+        trendSum[m] = (trendSum[m] || 0) + amt;
+        if (m === nowM) monthSales += amt;
+        if (isToday(o.payTime || o.createTime)) { todaySoldOrders.push(o); todaySoldAmount += amt; }
+      }
+    }
+    const trend = months.map(m => Math.round((trendSum[m] || 0) * 100) / 100);
+    // 订单状态分布
+    const statusList = ['待付款', '已付款', '已发货', '已完成', '已取消'];
+    const statusDist = statusList.map(st => ({ name: st, value: statusCount[st] || 0 }));
+
     const debt = customers.reduce((s: number, c: any) => s + Math.max(0, (Number(c.totalPurchase) || 0) - (Number(c.receivedPayment) || 0)), 0);
     const finished = products.filter((p: any) => p.productType === '成品' && !(p.productCode || '').startsWith('SEMI-'));
     const stockout = finished.filter((p: any) => (Number(p.actualStock) || 0) <= 0);
@@ -64,26 +97,10 @@ const Dashboard: React.FC = () => {
     const prodActive = production.filter((p: any) => p.status !== '已完成' && p.status !== '已取消');
     const monthBills = bills.filter((b: any) => dayjs(b.date || b.createdAt || '').format('YYYY-MM') === nowM);
 
-    // 近6月销售额趋势（已付款订单口径，按付款月份归属）
-    const months: string[] = [];
-    for (let i = 5; i >= 0; i--) months.push(dayjs().subtract(i, 'month').format('YYYY-MM'));
-    const trend = months.map(m => Math.round(paidOrders
-      .filter((o: any) => dayjs(o.payTime || o.createTime || o.date || '').format('YYYY-MM') === m)
-      .reduce((s: number, o: any) => s + (Number(o.productAmount) || 0), 0) * 100) / 100);
-    // 订单状态分布
-    const statusList = ['待付款', '已付款', '已发货', '已完成', '已取消'];
-    const statusDist = statusList.map(st => ({ name: st, value: orders.filter((o: any) => o.orderStatus === st).length }));
-
     const recentOrders = [...orders].sort((a: any, b: any) =>
       String(b.createTime || b.date || '').localeCompare(String(a.createTime || a.date || ''))).slice(0, 8);
 
     // 今日经营统计（按自然日归属）
-    const today = dayjs().format('YYYY-MM-DD');
-    const isToday = (s: any) => !!s && dayjs(s).isValid() && dayjs(s).format('YYYY-MM-DD') === today;
-    const todayNewOrders = orders.filter((o: any) => isToday(o.createTime));
-    const todaySoldOrders = paidOrders.filter((o: any) => isToday(o.payTime || o.createTime));
-    const todaySoldAmount = todaySoldOrders.reduce((s: number, o: any) => s + (Number(o.productAmount) || 0), 0);
-    const todayShippedOrders = orders.filter((o: any) => isToday(o.shipTime));
     const receipts = loadJson(`customerReceipts_${owner}`);
     const todayReceipts = receipts.filter((r: any) => isToday(r.receiptDate || r.createdAt));
     const todayReceiptAmount = todayReceipts.reduce((s: number, r: any) => s + (Number(r.amount) || 0), 0);
@@ -326,30 +343,34 @@ const Dashboard: React.FC = () => {
             <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>
               统计口径：按订单管理中<Text strong style={{ fontSize: 12, color: '#2d7a5f' }}>已付款订单</Text>统计（排除已取消与待付款订单），按付款月份归属、金额为订单货品总额；非按发货订单统计。
             </Text>
-            <ReactECharts style={{ height: 260 }} option={{
-              tooltip: { trigger: 'axis' },
-              grid: { left: 50, right: 20, top: 30, bottom: 30 },
-              xAxis: { type: 'category', data: stats.months },
-              yAxis: { type: 'value', axisLabel: { formatter: (v: number) => (v >= 10000 ? `${(v / 10000).toFixed(1)}万` : String(v)) } },
-              series: [{
-                type: 'bar', data: stats.trend, barWidth: 26,
-                itemStyle: { color: PRIMARY, borderRadius: [4, 4, 0, 0] },
-                label: { show: true, position: 'top', fontSize: 10, formatter: (p: any) => (p.value ? (p.value >= 10000 ? `${(p.value / 10000).toFixed(1)}万` : p.value) : '') },
-              }],
-            }} />
+            <React.Suspense fallback={<div style={{ height: 260 }} />}>
+              <EChartsLite style={{ height: 260 }} option={{
+                tooltip: { trigger: 'axis' },
+                grid: { left: 50, right: 20, top: 30, bottom: 30 },
+                xAxis: { type: 'category', data: stats.months },
+                yAxis: { type: 'value', axisLabel: { formatter: (v: number) => (v >= 10000 ? `${(v / 10000).toFixed(1)}万` : String(v)) } },
+                series: [{
+                  type: 'bar', data: stats.trend, barWidth: 26,
+                  itemStyle: { color: PRIMARY, borderRadius: [4, 4, 0, 0] },
+                  label: { show: true, position: 'top', fontSize: 10, formatter: (p: any) => (p.value ? (p.value >= 10000 ? `${(p.value / 10000).toFixed(1)}万` : p.value) : '') },
+                }],
+              }} />
+            </React.Suspense>
           </Card>
         </Col>
         <Col xs={24} lg={10}>
           <Card size="small" title={<span style={{ fontWeight: 600 }}>订单状态分布</span>} style={{ borderRadius: 10 }}>
-            <ReactECharts style={{ height: 260 }} option={{
-              tooltip: { trigger: 'item' },
-              legend: { bottom: 0 },
-              series: [{
-                type: 'pie', radius: ['42%', '68%'], center: ['50%', '44%'],
-                data: stats.statusDist, label: { formatter: '{b} {c}' },
-                itemStyle: { borderRadius: 5, borderColor: '#fff', borderWidth: 2 },
-              }],
-            }} />
+            <React.Suspense fallback={<div style={{ height: 260 }} />}>
+              <EChartsLite style={{ height: 260 }} option={{
+                tooltip: { trigger: 'item' },
+                legend: { bottom: 0 },
+                series: [{
+                  type: 'pie', radius: ['42%', '68%'], center: ['50%', '44%'],
+                  data: stats.statusDist, label: { formatter: '{b} {c}' },
+                  itemStyle: { borderRadius: 5, borderColor: '#fff', borderWidth: 2 },
+                }],
+              }} />
+            </React.Suspense>
           </Card>
         </Col>
       </Row>

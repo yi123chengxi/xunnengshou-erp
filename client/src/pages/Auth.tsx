@@ -11,6 +11,7 @@ import Logo from '../components/Logo';
 import { safeSetItem } from '../utils/storageQuota';
 import { FREE_PERIOD } from '../utils/billingPolicy';
 import { fetchServerDataset, flushDatasetUpload, reloadAfterPull, pullAllDatasets } from '../utils/serverSync';
+import { readOwnerFromToken, syncOwnerFromToken } from '../utils/dataOwner';
 import { initPushNotifications } from '../utils/pushNotification';
 import { getProvinceOptions, getCityOptions, getDistrictOptions } from '../utils/regions';
 import { PROCESS_TYPE_OPTIONS } from './ContractFactoryPage';
@@ -316,10 +317,17 @@ const Auth: React.FC = () => {
     safeSetItem('userRoles', JSON.stringify(foundUser.roles || []));
     safeSetItem('userCustomPermissions', JSON.stringify(foundUser.customPermissions || []));
     safeSetItem('lastActiveTime', Date.now().toString());
-    // 登录后立即拉取一次服务端数据（私有键需要 JWT，避免等 60s 轮询才看到自己的数据）
-    void pullAllDatasets().then(() => {
-      try { window.dispatchEvent(new Event('sync-data-updated')); } catch { /* ignore */ }
-    }).catch(() => { /* ignore */ });
+    // 归属账号以服务端签发的 JWT owner 声明为准：本地 registeredUsers 可能是陈旧副本，
+    // 一旦子账号被当成主账号（isSubAccount=false / parentAccount 为空），报销、记账等
+    // 严格私有键的数据就会写进它自己名下的独立桶，同企业其他人（含负责人）永远看不到。
+    // 必须先校正再拉取，保证拉的是企业主桶。
+    void syncOwnerFromToken()
+      .catch(() => '')
+      .then(() => pullAllDatasets())
+      .then(() => {
+        try { window.dispatchEvent(new Event('sync-data-updated')); } catch { /* ignore */ }
+      })
+      .catch(() => { /* ignore */ });
 
     if (isViewOnly) {
       message.info('您的账号已进入数据保留期，仅可查看历史数据，无法进行操作');
@@ -692,10 +700,17 @@ const Auth: React.FC = () => {
     safeSetItem('userRoles', JSON.stringify(foundUser.roles || []));
     safeSetItem('userCustomPermissions', JSON.stringify(foundUser.customPermissions || []));
     safeSetItem('lastActiveTime', Date.now().toString());
-    // 登录后立即拉取一次服务端数据（私有键需要 JWT，避免等 60s 轮询才看到自己的数据）
-    void pullAllDatasets().then(() => {
-      try { window.dispatchEvent(new Event('sync-data-updated')); } catch { /* ignore */ }
-    }).catch(() => { /* ignore */ });
+    // 归属账号以服务端签发的 JWT owner 声明为准：本地 registeredUsers 可能是陈旧副本，
+    // 一旦子账号被当成主账号（isSubAccount=false / parentAccount 为空），报销、记账等
+    // 严格私有键的数据就会写进它自己名下的独立桶，同企业其他人（含负责人）永远看不到。
+    // 必须先校正再拉取，保证拉的是企业主桶。
+    void syncOwnerFromToken()
+      .catch(() => '')
+      .then(() => pullAllDatasets())
+      .then(() => {
+        try { window.dispatchEvent(new Event('sync-data-updated')); } catch { /* ignore */ }
+      })
+      .catch(() => { /* ignore */ });
 
     if (isViewOnly) {
       message.info('您的账号已进入数据保留期，仅可查看历史数据，无法进行操作');
@@ -939,12 +954,18 @@ const Auth: React.FC = () => {
           }
         }
 
-        // 服务端已通过但本地还没有该账号资料（新浏览器首次登录）：先用服务端返回的基础信息登录
+        // 服务端已通过但本地还没有该账号资料（新浏览器首次登录）：先用服务端返回的基础信息登录。
+        // 归属账号只能从已签发令牌的 owner 声明推断，不能直接当成主账号——
+        // 否则子账号的报销/付款/记账数据会写进它自己名下的独立键，同企业其他人看不到。
         if (!foundUser && serverAuthed && serverUser) {
           let role = String(serverUser.role || 'supplier');
           if (role === 'supplier,purchaser' || role === 'purchaser,supplier') role = 'both';
+          const tokenUser = String(serverUser.username || loginName);
+          let tokenOwner = '';
+          try { tokenOwner = readOwnerFromToken(localStorage.getItem('token') || '', tokenUser); } catch { /* ignore */ }
+          const tokenIsSub = !!tokenOwner && tokenOwner !== tokenUser;
           foundUser = {
-            username: serverUser.username || loginName,
+            username: tokenUser,
             password,
             role,
             name: serverUser.name || serverUser.company_name || serverUser.username || loginName,
@@ -952,8 +973,8 @@ const Auth: React.FC = () => {
             phone: '',
             trialEndDate: '',
             authorizedUntil: '',
-            isSubAccount: false,
-            parentAccount: '',
+            isSubAccount: tokenIsSub,
+            parentAccount: tokenIsSub ? tokenOwner : '',
             roles: [],
             needsPasswordChange: false,
           };
@@ -968,7 +989,7 @@ const Auth: React.FC = () => {
         }
 
         setLoading(false);
-      }, 1500);
+      }, 300); // 原 1500ms 人为延迟：登录链路已含服务端裁决，无需再空等
     } catch (error) {
       message.error('请检查登录信息');
     }

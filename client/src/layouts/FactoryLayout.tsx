@@ -175,6 +175,7 @@ const FactoryLayout: React.FC = () => {
               size="small"
               icon={<BankOutlined />}
               onClick={() => navigate('/')}
+              onMouseEnter={() => { void import('../pages/Dashboard'); }}
               style={{
                 fontWeight: 700,
                 fontSize: 13,

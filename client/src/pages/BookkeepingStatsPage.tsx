@@ -2,7 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { Card, Row, Col, Statistic, DatePicker, Button, Space, Table, Tag, Typography, Empty, Divider } from 'antd';
 import { ArrowLeftOutlined, ArrowUpOutlined, ArrowDownOutlined, FundOutlined, AccountBookOutlined, BarChartOutlined } from '@ant-design/icons';
 import { useNavigate, useLocation } from 'react-router-dom';
-import ReactECharts from 'echarts-for-react';
+import EChartsLite from '../components/EChartsLite';
 import dayjs from 'dayjs';
 
 const { Title, Text } = Typography;
@@ -366,17 +366,17 @@ const BookkeepingStatsPage: React.FC = () => {
         <Col xs={24} lg={14}>
           <Card size="small" style={cardStyle}>
             {sectionTitle(<BarChartOutlined />, '月度收支趋势')}
-            <ReactECharts option={monthlyOpt} style={{ height: 320 }} />
+            <EChartsLite option={monthlyOpt} style={{ height: 320 }} />
           </Card>
         </Col>
         <Col xs={12} lg={5}>
           <Card size="small" style={cardStyle}>
-            <ReactECharts option={pieOpt(categoryData.inc, '收入分类占比')} style={{ height: 320 }} />
+            <EChartsLite option={pieOpt(categoryData.inc, '收入分类占比')} style={{ height: 320 }} />
           </Card>
         </Col>
         <Col xs={12} lg={5}>
           <Card size="small" style={cardStyle}>
-            <ReactECharts option={pieOpt(categoryData.out, '支出分类占比')} style={{ height: 320 }} />
+            <EChartsLite option={pieOpt(categoryData.out, '支出分类占比')} style={{ height: 320 }} />
           </Card>
         </Col>
       </Row>
@@ -386,13 +386,13 @@ const BookkeepingStatsPage: React.FC = () => {
         <Col xs={24} md={12}>
           <Card size="small" style={cardStyle}>
             {sectionTitle(<AccountBookOutlined />, '账户收支分析')}
-            {accountData.length ? <ReactECharts option={accountOpt} style={{ height: Math.max(200, accountData.length * 45) }} /> : <Empty description="无账户数据" />}
+            {accountData.length ? <EChartsLite option={accountOpt} style={{ height: Math.max(200, accountData.length * 45) }} /> : <Empty description="无账户数据" />}
           </Card>
         </Col>
         <Col xs={24} md={12}>
           <Card size="small" style={cardStyle}>
             {sectionTitle(<FundOutlined />, '收支对方 TOP10')}
-            {counterpartyData.length ? <ReactECharts option={counterpartyOpt} style={{ height: Math.max(200, counterpartyData.length * 40) }} /> : <Empty description="无对方数据" />}
+            {counterpartyData.length ? <EChartsLite option={counterpartyOpt} style={{ height: Math.max(200, counterpartyData.length * 40) }} /> : <Empty description="无对方数据" />}
           </Card>
         </Col>
       </Row>
@@ -402,19 +402,19 @@ const BookkeepingStatsPage: React.FC = () => {
         <Col xs={24} md={8}>
           <Card size="small" style={cardStyle}>
             {sectionTitle(<BarChartOutlined />, '星期记账分布')}
-            <ReactECharts option={weekdayOpt} style={{ height: 250 }} />
+            <EChartsLite option={weekdayOpt} style={{ height: 250 }} />
           </Card>
         </Col>
         <Col xs={24} md={8}>
           <Card size="small" style={cardStyle}>
             {sectionTitle(<BarChartOutlined />, '金额区间分布')}
-            <ReactECharts option={amountDistOpt} style={{ height: 250 }} />
+            <EChartsLite option={amountDistOpt} style={{ height: 250 }} />
           </Card>
         </Col>
         <Col xs={24} md={8}>
           <Card size="small" style={cardStyle}>
             {sectionTitle(<FundOutlined />, '记账人分析')}
-            <ReactECharts option={personOpt} style={{ height: 250 }} />
+            <EChartsLite option={personOpt} style={{ height: 250 }} />
           </Card>
         </Col>
       </Row>
