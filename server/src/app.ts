@@ -9,6 +9,7 @@ import { ensureUsageBackfill } from './services/storageUsage';
 import { STORE_DRIVER, store } from './database/store';
 import { securityHeaders, corsGuard, rateLimit } from './middleware/security';
 import { upgradePlaintextUserTable, hashRegisteredUsersJson } from './middleware/syncGuard';
+import { migrateStrandedOwnerDatasets } from './services/strandedRebucket';
 
 // 路由导入
 import customerRoutes from './routes/customer.routes';
@@ -141,6 +142,8 @@ server.listen(PORT, async () => {
       console.error('[security] 密码哈希迁移失败:', err?.message || err);
     }
   })();
+  // 错桶迁移：子账号被当成主账号时写进个人桶的订单/账单等，启动时并入主账号桶（幂等，DB 不可写则下次重试）
+  void migrateStrandedOwnerDatasets().then((n) => { if (n > 0) console.log(`[rebucket] 启动错桶迁移完成：${n} 个数据集已归并`); }).catch(() => { /* ignore */ });
   // 企业认证 30 天巡检日任务（当日已跑自动跳过）
   try { startEnterprisePatrol(); } catch { /* ignore */ }
   console.log('🖨️  打印 WebSocket 服务已就绪: ws://localhost:' + PORT + '/ws/print');

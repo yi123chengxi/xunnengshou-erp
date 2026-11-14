@@ -2,6 +2,7 @@ import {
   accountRootOf,
   readOwnerFromToken,
   getSessionOwner,
+  tenantMembersOf,
   mergeStrandedTenantDataset,
 } from '../dataOwner';
 
@@ -59,6 +60,14 @@ describe('dataOwner', () => {
   it('令牌属于其他账号（切换账号后残留）时不采信', () => {
     setSession('other', { token: fakeToken({ username: 'sub1', owner: 'boss' }) });
     expect(getSessionOwner()).toBe('other');
+  });
+
+  it('tenantMembersOf 返回主账号名下全部成员（错桶修复遍历来源键用）', () => {
+    setSession('boss', { token: fakeToken({ username: 'boss', owner: 'boss' }) });
+    const members = tenantMembersOf('boss').sort();
+    expect(members).toEqual(['boss', 'sub1', 'sub2']);
+    expect(tenantMembersOf('other')).toEqual(['other']);
+    expect(tenantMembersOf('')).toEqual([]);
   });
 
   it('mergeStrandedTenantDataset 把子账号独立键并回主桶并清空来源', () => {

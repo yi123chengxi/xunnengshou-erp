@@ -208,10 +208,14 @@ router.post('/login', async (req: Request, res: Response) => {
 /**
  * GET /api/auth/me
  * 返回当前用户信息（需 JWT）
+ * owner 一律由服务端沿 registeredUsers 的 parentAccount 链重算（不回显令牌声明）：
+ * 历史令牌可能在子账号绑定父账号之前签发（owner=自己），若回显会把子账号
+ * 钉死成主账号整整一个有效期，订单/报销写进个人桶而主账号看不到。
  */
-router.get('/me', verifyJWT, (req: Request, res: Response) => {
+router.get('/me', verifyJWT, async (req: Request, res: Response) => {
   const user = (req as any).user as JWTPayload;
-  res.json({ code: 0, data: { username: user.username, role: user.role, owner: user.owner || user.username } });
+  const owner = await resolveOwner(user.username);
+  res.json({ code: 0, data: { username: user.username, role: user.role, owner } });
 });
 
 export default router;

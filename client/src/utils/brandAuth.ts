@@ -2,15 +2,13 @@
  * 品牌授权模块共享工具（授权品牌 / 自有品牌 / 外部申请 三处共用）
  * 数据均按租户隔离：键名后缀为 getDataOwner()（子账号归父账号）
  */
+import { getSessionOwner } from './dataOwner';
 
 // ============ 租户归属 ============
-export const getDataOwner = (): string => {
-  try {
-    const isSub = localStorage.getItem('isSubAccount') === 'true';
-    if (isSub) return localStorage.getItem('parentAccount') || localStorage.getItem('username') || '';
-    return localStorage.getItem('username') || '';
-  } catch { return ''; }
-};
+/** 数据归属账号统一走 dataOwner 口径（本会话服务端确认 → JWT 声明 → parentAccount 链）：
+ *  旧实现只读 localStorage 的 isSubAccount/parentAccount，会话字段陈旧/缺失时
+ *  子账号会退化成自己名下的独立桶，同企业其他人永远看不到这些数据 */
+export const getDataOwner = (): string => getSessionOwner();
 
 // ============ 存储键 ============
 export const baKeys = (owner: string) => ({

@@ -389,6 +389,51 @@ export async function hashRegisteredUsersJson(json: string, existingJson?: strin
   return JSON.stringify(out);
 }
 
+// ============ 错桶防线：owner 后缀键的服务端准入 ============
+
+/**
+ * 租户规范键家族（后缀 = 数据归属账号）：后缀必须是已注册用户名，且数据真正归属其主账号。
+ * 子账号被误判为主账号时（陈旧令牌/会话字段缺失）会把订单等写进「自己用户名」的独立桶，
+ * 主账号永远拉不到那些键 —— 表现为「子账号有订单、主账号没有」。
+ * 服务端在此做最后防线：子账号后缀键的写入一律重定向并入主账号桶并排空来源键，
+ * 空后缀键（会话缺失期的污染键）一律拒写。
+ */
+const TENANT_OWNER_FAMILIES = [
+  'pageData_', 'customers_', 'customerReceipts_', 'purchaser_suppliers_', 'purchaser_bills_',
+  'sales_outbound_', 'reimbursement_', 'reimbursement_payments_', 'newstyle_progress_', 'newstyle_photo_',
+  'newstyle_arrival_', 'newstyle_listing_', 'accounts_', 'account_groups_',
+];
+
+/** 键属于租户规范家族时返回其 owner 后缀（可能为空串=污染键），否则返回 null */
+export function tenantFamilySuffix(key: string): string | null {
+  for (const p of TENANT_OWNER_FAMILIES) if (key.startsWith(p)) return key.slice(p.length);
+  return null;
+}
+
+/** 空 owner 污染键：家族键的后缀为空（如 pageData_sales_order-manage_），一律拒写 */
+export function isEmptyOwnerFamilyKey(key: string): boolean {
+  return tenantFamilySuffix(key) === '';
+}
+
+/**
+ * 行级并集合并（按 key||id 去重，incoming 覆盖同 id 行），并剔除 removedIds 申报删除的行。
+ * 供「子账号错桶写入重定向到主账号桶」与「启动期错桶迁移」共用：
+ * 调用方通过交换 existing/incoming 参数决定同 id 行谁优先。
+ */
+export function mergeRowsUnionJson(existingJson: string | null, incomingJson: string, removedIds?: string[]): string {
+  const idOf = (r: any): string => (r && (r.key || r.id)) ? String(r.key || r.id) : '';
+  const rm = new Set((Array.isArray(removedIds) ? removedIds : []).map((x: any) => String(x)));
+  let existing: any[] = [];
+  try { const p = existingJson ? JSON.parse(existingJson) : []; if (Array.isArray(p)) existing = p; } catch { existing = []; }
+  let incoming: any[] = [];
+  try { const p = JSON.parse(incomingJson); if (Array.isArray(p)) incoming = p; else return incomingJson; } catch { return incomingJson; }
+  const byId = new Map<string, any>();
+  const plain: any[] = [];
+  existing.forEach((r) => { const id = idOf(r); if (!id) { plain.push(r); return; } if (!rm.has(id)) byId.set(id, r); });
+  incoming.forEach((r) => { const id = idOf(r); if (!id) { plain.push(r); return; } if (!rm.has(id)) byId.set(id, r); });
+  return JSON.stringify([...byId.values(), ...plain]);
+}
+
 /** registered_users 表：把存量明文密码升级为 bcrypt */
 export async function upgradePlaintextUserTable(store: {
   getAllUsers: () => Promise<any[]>;

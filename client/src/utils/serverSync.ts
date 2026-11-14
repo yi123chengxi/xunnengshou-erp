@@ -14,6 +14,7 @@ import { reconcileCooperationPairs } from './cooperationReconcile';
 import { migrateLegacyReconRecords } from './reconStore';
 import { repairCounterpartyNames } from './nameSync';
 import { healReconTerminalLinks } from './reconHeal';
+import { getSessionOwner, tenantMembersOf, mergeStrandedTenantDataset } from './dataOwner';
 import { queuePut, queueDelete, queueAll } from './uploadQueue';
 import { takeRemovedIds, peekRemovedIds, declareShrink } from './shrinkRegistry';
 export { declareShrink } from './shrinkRegistry';
@@ -716,6 +717,78 @@ export const reloadAfterPull = (reload: () => void): void => {
 };
 
 let syncMaintenanceScheduled = false;
+/** 错桶修复键家族：子账号被当成主账号时写进个人桶的数据，主账号端不拉取这些键，
+ * 必须显式回源服务端错桶键归并（本地错桶由 mergeStrandedTenantDataset 处理） */
+const STRANDED_REPAIR_FAMILIES = ['pageData_sales_order-manage_', 'pageData_customer_bill-detail_', 'sales_outbound_', 'reimbursement_', 'reimbursement_payments_'];
+let strandedRepairRunning = false;
+
+/**
+ * 错桶归并（每会话一次，延后于首帧）：把本企业成员名下的错桶数据并回主桶。
+ * - 本地错桶：本浏览器曾把子账号当主账号写下的键，mergeStrandedTenantDataset 处理；
+ * - 服务端错桶：其他设备浏览器写下的键（主账号端从不拉取），显式 fetch 后把主桶缺失的行补入，
+ *   再申报删除+上传空数组排空来源键（不排空会被永不缩水并集复活）。
+ * 幂等：来源键排空后后续会话 fetch 到空数组自动跳过。
+ */
+export async function repairStrandedOwnerBuckets(): Promise<number> {
+  if (strandedRepairRunning) return 0;
+  strandedRepairRunning = true;
+  try {
+    const owner = getSessionOwner();
+    if (!owner) return 0;
+    const members = tenantMembersOf(owner).filter(m => m !== owner);
+    if (members.length === 0) return 0;
+    const deps = {
+      safeSetItem: (k: string, v: string) => { try { getOriginalSetItem()(k, v); } catch { /* ignore */ } },
+      declareShrink,
+      flush: flushDatasetUpload,
+    };
+    const idOf = (r: any): string => (r && (r.key || r.id)) ? String(r.key || r.id) : '';
+    let moved = 0;
+    for (const family of STRANDED_REPAIR_FAMILIES) {
+      const canonical = `${family}${owner}`;
+      // 本地错桶（本浏览器历史会话写下）
+      try { if (mergeStrandedTenantDataset(canonical, family, deps)) moved++; } catch { /* ignore */ }
+      // 服务端错桶（其他设备写下）：主账号端不拉取这些键，必须显式回源
+      for (const m of members) {
+        const srcKey = `${family}${m}`;
+        try {
+          const rec = await fetchServerDataset(srcKey);
+          if (!rec || !rec.json) continue;
+          let stranded: any[] = [];
+          try { stranded = JSON.parse(rec.json); } catch { stranded = []; }
+          if (!Array.isArray(stranded) || stranded.length === 0) continue;
+          let local: any[] = [];
+          try { local = JSON.parse(localStorage.getItem(canonical) || '[]'); } catch { local = []; }
+          if (!Array.isArray(local)) local = [];
+          const localIds = new Set(local.map(idOf).filter(Boolean));
+          const added = stranded.filter(r => { const id = idOf(r); return !!id && !localIds.has(id); });
+          const srcIds = stranded.map(idOf).filter(Boolean);
+          if (added.length > 0) {
+            const merged = JSON.stringify([...local, ...added]);
+            deps.safeSetItem(canonical, merged);
+            try { getOriginalSetItem()(`${canonical}_ts`, String(Date.now())); } catch { /* ignore */ }
+            try { saveDataset(canonical, merged); } catch { /* ignore */ }
+            flushDatasetUpload(canonical, merged);
+            moved++;
+            console.warn('[sync] 错桶归并：服务端子账号桶已并入主桶', srcKey, '→', canonical, `补入 ${added.length} 行`);
+          }
+          if (srcIds.length > 0) {
+            // 排空来源键：先申报删除再上传空数组，否则永不缩水并集会把行复活回错桶
+            declareShrink(srcKey, srcIds);
+            deps.safeSetItem(srcKey, '[]');
+            flushDatasetUpload(srcKey, '[]');
+          }
+        } catch { /* 单键失败不影响其余 */ }
+      }
+    }
+    if (moved > 0) {
+      try { window.dispatchEvent(new Event('sync-data-updated')); } catch { /* ignore */ }
+    }
+    return moved;
+  } finally {
+    strandedRepairRunning = false;
+  }
+}
 /** 存量迁移/自愈四段：均幂等，改为每会话仅跑一次且延后 3s（首帧之后）。
  * 旧实现随每次 pull（含 60s 轮询与启动闸门）同步扫描本地存储，
  * 与宽限期判定叠加会把主线程卡秒级，拖慢首页指标卡与整页首帧。 */
@@ -731,6 +804,8 @@ function scheduleSyncMaintenance(): void {
     try { repairCounterpartyNames(); } catch { /* ignore */ }
     // 对账完成联动自愈：终态账单断言回写供应商明细行 + pending 记录任一侧终态即打墓碑（对抗并集合并复活）
     try { healReconTerminalLinks(); } catch { /* ignore */ }
+    // 错桶归并：子账号被当成主账号时写进个人桶的订单/账单等，并回企业主桶（幂等）
+    void repairStrandedOwnerBuckets().catch(() => { /* ignore */ });
   }, 3000);
 }
 

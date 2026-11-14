@@ -106,6 +106,7 @@ import MoldPickerModal from '../components/MoldPickerModal';
 import SalesOutboundStatsPage from './inventory/SalesOutboundStatsPage';
 import { safeSetItem, canCacheDataset, tryCacheDataset } from '../utils/storageQuota';
 import { getDataOwner } from '../utils/brandAuth';
+import { getSessionOwner } from '../utils/dataOwner';
 import { saveDataset, loadDataset } from '../utils/dataStore';
 import ReturnRegisterModal from '../components/ReturnRegisterModal';
 import type { ReturnRegisterPayload } from '../components/ReturnRegisterModal';
@@ -864,11 +865,9 @@ const ModuleChildPage: React.FC = () => {
 
   // 数据归属账号：子账号使用主账号的 username，确保数据共享
   const getDataOwner = useCallback(() => {
-    const isSub = localStorage.getItem('isSubAccount') === 'true';
-    if (isSub) {
-      return localStorage.getItem('parentAccount') || localStorage.getItem('username') || '';
-    }
-    return localStorage.getItem('username') || '';
+    // 统一走 dataOwner 口径（本会话服务端确认 → JWT → parentAccount 链）：
+    // 旧实现只读 localStorage 会话字段，陈旧/缺失时子账号订单会写进个人桶
+    return getSessionOwner();
   }, []);
   const [searchText, setSearchText] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('');
@@ -24689,9 +24688,7 @@ const bindLocationProduct = (owner: string, locationCode: string, productCode: s
 // ============ 仓位管理页面 ============
 function WarehouseManagePage() {
   const getDataOwner = useCallback(() => {
-    const isSub = localStorage.getItem('isSubAccount') === 'true';
-    if (isSub) return localStorage.getItem('parentAccount') || localStorage.getItem('username') || '';
-    return localStorage.getItem('username') || '';
+    return getSessionOwner();
   }, []);
   const [warehouses, setWarehouses] = useState<any[]>(() => {
     try {

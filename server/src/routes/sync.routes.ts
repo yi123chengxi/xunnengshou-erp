@@ -8,11 +8,12 @@ import { store, STORE_DRIVER } from '../database/store';
 import { sendPushToUser } from './push.routes';
 import {
   applyUsageDeltaForWrite, getCompanyUsageBytes, getAllUsageBytesByCompany, recomputeUsage, getDatasetJson,
+  resolveCompanyRoot,
 } from '../services/storageUsage';
 import {
   attachSyncUser, currentSyncUser, requireSyncAuth, isKeyAllowed, filterMetaForUser,
   sanitizeRegisteredUsersJson, hashRegisteredUsersJson, hashPassword, mergeRegisteredUsersJson,
-  filterRegisteredUsersCreations, SyncUser,
+  filterRegisteredUsersCreations, tenantFamilySuffix, isEmptyOwnerFamilyKey, mergeRowsUnionJson, SyncUser,
 } from '../middleware/syncGuard';
 import { notifyDatasetUpdated } from '../ws/chat-ws';
 
@@ -268,6 +269,38 @@ router.put('/dataset', async (req: Request, res: Response) => {
     if (!key || typeof json !== 'string') { res.status(400).json({ error: 'missing key or json' }); return; }
     const user = currentSyncUser(req);
     if (!isKeyAllowed(key, user, 'write')) { denyKey(res, user, key, '写入'); return; }
+    // 错桶防线（服务端最后防线，覆盖旧版本客户端）：
+    // 1) 空 owner 后缀键（会话缺失期污染键）拒写，返回 saved 使旧客户端不进入重试死循环；
+    // 2) 子账号后缀键（后缀是子账号用户名）的写入重定向并入主账号桶并排空来源键，
+    //    杜绝「子账号被当成主账号时订单写进个人桶、主账号永远看不到」。
+    const familySuffix = tenantFamilySuffix(key);
+    if (isEmptyOwnerFamilyKey(key)) {
+      res.json({ saved: true, ignored: 'empty-owner', newTs: Number(req.body.updatedAt) || Date.now() });
+      return;
+    }
+    if (familySuffix && user) {
+      const root = await resolveCompanyRoot(familySuffix).catch(() => familySuffix);
+      if (root && root !== familySuffix) {
+        const targetKey = key.slice(0, key.length - familySuffix.length) + root;
+        if (isKeyAllowed(targetKey, user, 'write')) {
+          const targetRow = await store.getDataset(targetKey).catch(() => undefined);
+          // 主账号桶为底、本次写入覆盖同 id 行；removedIds 申报同样作用于主桶
+          const merged = mergeRowsUnionJson(targetRow ? targetRow.dataset_json : null, json, req.body.removedIds);
+          const rTs = Math.max(Number(req.body.updatedAt) || Date.now(), targetRow ? targetRow.updated_at : 0);
+          await store.forceUpsertDataset(targetKey, merged, root, rTs);
+          await applyUsageDeltaForWrite(targetKey, targetRow ? targetRow.dataset_json : null, merged);
+          touchMetaCache(targetKey, rTs);
+          // 排空来源错桶键：不排空则子账号端陈旧副本下次上传又会在错桶复活行
+          const srcRow = await store.getDataset(key).catch(() => undefined);
+          await store.forceUpsertDataset(key, '[]', root, Math.max(rTs, srcRow ? srcRow.updated_at : 0));
+          await applyUsageDeltaForWrite(key, srcRow ? srcRow.dataset_json : null, '[]');
+          touchMetaCache(key, rTs);
+          console.warn(`[sync] 错桶写入重定向：${key} → ${targetKey}（user=${user.username}）`);
+          res.json({ saved: true, redirected: targetKey, newTs: rTs });
+          return;
+        }
+      }
+    }
     // 权限类数据集落库成功后通知该租户在线端立即拉取（响应正常结束才算保存成功）
     res.on('finish', () => { if (res.statusCode < 400) notifyPermDatasetChanged(key, user); });
     // 账号数据集写入前处理：新建行准入（用户名≥8位 + 全局去重含跨租户）→ 明文密码统一转 bcrypt 哈希

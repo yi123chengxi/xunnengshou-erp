@@ -88,14 +88,39 @@ export const readOwnerFromToken = (token: string, username: string): string => {
   return claims.owner;
 };
 
-/** 仅本地可判定的归属账号（不回源服务端）：JWT 声明 → parentAccount 链 → 当前用户名 */
+/** 仅本地可判定的归属账号（不回源服务端）：本会话服务端确认值 → JWT 声明 → parentAccount 链 → 当前用户名。
+ *  记忆化：页面渲染期会高频调用（含 brandAuth 委托），令牌/账号/服务端确认不变时直接复用上次结果 */
+let ownerCache: { sig: string; owner: string } | null = null;
+/** 本会话经 /auth/me 服务端重算确认的归属（优先级高于本地令牌：
+ *  令牌可能是子账号绑定父账号之前签发的陈旧令牌，owner=自己） */
+let serverConfirmedOwner: { username: string; owner: string } | null = null;
 export const getSessionOwner = (): string => {
   const me = getSessionUsername();
   if (!me) return '';
-  const fromToken = readOwnerFromToken(safeGet(TOKEN_KEY), me);
-  if (fromToken) return fromToken;
-  const root = accountRootOf(readRegisteredUsers(), me);
-  return root || me;
+  const token = safeGet(TOKEN_KEY);
+  const confirmed = serverConfirmedOwner && serverConfirmedOwner.username === me ? serverConfirmedOwner.owner : '';
+  const sig = `${me}|${token}|${confirmed}`;
+  if (ownerCache && ownerCache.sig === sig) return ownerCache.owner;
+  let owner = confirmed;
+  if (!owner) owner = readOwnerFromToken(token, me);
+  if (!owner) {
+    const root = accountRootOf(readRegisteredUsers(), me);
+    owner = root || me;
+  }
+  ownerCache = { sig, owner };
+  return owner;
+};
+
+/** 本企业成员清单：owner 自身 + 名下全部子账号（错桶修复遍历来源键用） */
+export const tenantMembersOf = (owner: string): string[] => {
+  if (!owner) return [];
+  const users = readRegisteredUsers();
+  const out = new Set<string>([owner]);
+  users.forEach((u: any) => {
+    if (!u || !u.username) return;
+    if (accountRootOf(users, String(u.username)) === owner) out.add(String(u.username));
+  });
+  return Array.from(out);
 };
 
 /** 向服务端确认归属账号（历史令牌没有 owner 声明时兜底，4 秒超时） */
@@ -125,15 +150,23 @@ const fetchOwnerFromServer = async (): Promise<string> => {
  * 用服务端口径校正本地会话的 isSubAccount / parentAccount（幂等）。
  * 登录后、应用启动时各调用一次，确保后续所有页面的 getDataOwner() 命中企业主桶。
  * 返回校正后的归属账号。
+ *
+ * 服务端重算优先于本地令牌：/auth/me 的 owner 由服务端沿 registeredUsers 重算，
+ * 而本地令牌可能是「子账号绑定父账号之前」签发的陈旧令牌（owner=自己）——
+ * 若信任令牌会把子账号钉死成主账号整整一个有效期（7 天），期间订单/报销
+ * 全部写进个人桶，主账号永远看不到（本次「子账号有订单主账号没有」的根因）。
  */
 export const syncOwnerFromToken = async (): Promise<string> => {
   const me = getSessionUsername();
   if (!me) return '';
+  const fromServer = await fetchOwnerFromServer();
   const fromToken = readOwnerFromToken(safeGet(TOKEN_KEY), me);
-  const owner = fromToken || await fetchOwnerFromServer();
+  const owner = fromServer || fromToken;
+  if (fromServer) serverConfirmedOwner = { username: me, owner: fromServer };
   if (owner) {
     safeSet('isSubAccount', owner === me ? 'false' : 'true');
     safeSet('parentAccount', owner === me ? '' : owner);
+    ownerCache = null; // 会话字段已校正：作废记忆化结果
     return owner;
   }
   return getSessionOwner();
