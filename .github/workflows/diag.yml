@@ -22,63 +22,35 @@ jobs:
           sudo apt-get install -y -qq sshpass
           cat > /tmp/diag.sh <<'SH'
           set +e
-          OUT=/var/www/factory-management/client/build/diag.txt
+          OUT=/var/www/factory-management/client/build/diag2.txt
           {
-            echo "== date =="; date
-            echo "== uptime =="; uptime
-            echo "== mem =="; free -m
-            echo "== disk =="; df -h
-            echo "== pm2 =="; pm2 list 2>&1
-            echo "== pm2 log tail =="; pm2 logs factory-management-server --lines 60 --nostream 2>&1 | tail -80
-            echo "== mysql probe =="
-            cat > /tmp/diagdb.js <<'JS'
-          const fs = require('fs');
-          const env = {};
-          try {
-            fs.readFileSync('/var/www/factory-management/server/.env', 'utf8').split(/\r?\n/).forEach((l) => {
-              const m = l.match(/^\s*([A-Za-z0-9_]+)\s*=\s*(.*)\s*$/);
-              if (m) env[m[1]] = m[2].replace(/^["']|["']$/g, '');
-            });
-          } catch (e) { console.log('env read fail', e.message); }
-          const base = '/var/www/factory-management/server/node_modules/';
-          const mysql = require(base + 'mysql2/promise');
-          const hardTimer = setTimeout(() => { console.log('HARD_TIMEOUT 25s'); process.exit(0); }, 25000);
-          (async () => {
-            let c;
-            try {
-              c = await mysql.createConnection({
-                host: env.DB_HOST, port: Number(env.DB_PORT) || 3306,
-                user: env.DB_USER, password: env.DB_PASSWORD, database: env.DB_NAME,
-                connectTimeout: 8000,
-              });
-              console.log('connected ok');
-              const run = async (label, sql) => {
-                try {
-                  const [rows] = await Promise.race([
-                    c.query(sql),
-                    new Promise((_, rej) => setTimeout(() => rej(new Error('query timeout 10s')), 10000)),
-                  ]);
-                  console.log('--- ' + label + ' ---');
-                  console.log(JSON.stringify(rows, null, 1).slice(0, 4000));
-                } catch (e) { console.log('--- ' + label + ' FAILED: ' + e.message + ' ---'); }
-              };
-              await run('processlist', "SELECT ID,USER,HOST,DB,COMMAND,TIME,STATE,LEFT(INFO,100) AS INFO FROM information_schema.PROCESSLIST ORDER BY TIME DESC LIMIT 30");
-              await run('table_status', "SELECT TABLE_NAME,ENGINE,TABLE_ROWS,ROUND(DATA_LENGTH/1048576) AS data_mb,ROUND(INDEX_LENGTH/1048576) AS idx_mb FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN ('dataset_store','registered_users','owner_usage','system_settings')");
-              await run('meta_timing', "SELECT COUNT(*) AS keys_cnt FROM dataset_store");
-              await run('meta_indexes', "SELECT INDEX_NAME,COLUMN_NAME,SEQ_IN_INDEX FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='dataset_store' ORDER BY INDEX_NAME,SEQ_IN_INDEX");
-              await run('innodb_trx', "SELECT trx_id,trx_state,trx_started,trx_rows_locked,TIMESTAMPDIFF(SECOND,trx_started,NOW()) AS age_s,LEFT(trx_query,80) AS q FROM information_schema.INNODB_TRX LIMIT 10");
-            } catch (e) {
-              console.log('connect/probe fail: ' + e.message);
-            } finally {
-              clearTimeout(hardTimer);
-              try { await c.end(); } catch (e) { /* ignore */ }
-              process.exit(0);
-            }
-          })();
-          JS
-            timeout 40 node /tmp/diagdb.js 2>&1
+            echo "== ip =="; ip -4 addr show | grep 'inet '
+            echo "== mysqld local? =="; systemctl is-active mysql 2>&1; systemctl is-active mariadb 2>&1; ps aux | grep -E '[m]ysqld|[m]ariadbd' | head -3
+            echo "== 3306 conns =="; ss -tn 2>/dev/null | grep ':3306' | awk '{print $1}' | sort | uniq -c
+            echo "== disk tmp =="; df -h /tmp /var/tmp /var/lib/mysql 2>&1
+            echo "== var tmp files =="; ls -la /var/tmp 2>&1 | head -15; du -sh /var/tmp 2>&1
+            echo "== mysql client =="; command -v mysql; mysql --version 2>&1
+            source /var/www/factory-management/server/.env 2>/dev/null
+            export MYSQL_PWD="$DB_PASSWORD"
+            MC=$(command -v mysql)
+            if [ -n "$MC" ]; then
+              echo "== full processlist =="
+              timeout 15 mysql -h "$DB_HOST" -P "${DB_PORT:-3306}" -u "$DB_USER" "$DB_NAME" -e "SHOW FULL PROCESSLIST" 2>&1 | head -50
+              echo "== vars =="
+              timeout 15 mysql -h "$DB_HOST" -P "${DB_PORT:-3306}" -u "$DB_USER" "$DB_NAME" -N -e "SELECT @@version, @@tmpdir, @@max_connections, @@innodb_temp_data_file_path, @@temptable_max_mmap" 2>&1
+              echo "== status =="
+              timeout 15 mysql -h "$DB_HOST" -P "${DB_PORT:-3306}" -u "$DB_USER" "$DB_NAME" -N -e "SHOW GLOBAL STATUS WHERE Variable_name IN ('Threads_connected','Threads_running','Created_tmp_disk_tables','Innodb_buffer_pool_reads','Uptime','Aborted_clients','Max_used_connections')" 2>&1
+              echo "== binlog =="
+              timeout 15 mysql -h "$DB_HOST" -P "${DB_PORT:-3306}" -u "$DB_USER" "$DB_NAME" -N -e "SHOW BINARY LOGS" 2>&1 | tail -5
+              echo "== innodb status (trx) =="
+              timeout 15 mysql -h "$DB_HOST" -P "${DB_PORT:-3306}" -u "$DB_USER" "$DB_NAME" -e "SHOW ENGINE INNODB STATUS\G" 2>&1 | sed -n '/TRANSACTIONS/,/FILE I\/O/p' | head -50
+            else
+              echo "no mysql client on host"
+            fi
+            echo "== mysql error log =="; tail -30 /var/log/mysql/error.log 2>&1; tail -20 /var/log/mysqld.log 2>&1
+            echo "== dmesg tail =="; dmesg 2>/dev/null | tail -15
           } > $OUT 2>&1
           chmod 644 $OUT
-          echo DIAG_DONE
+          echo DIAG2_DONE
           SH
           sshpass -p "$SERVER_PASSWORD" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@${SERVER_HOST} "bash -s" < /tmp/diag.sh
