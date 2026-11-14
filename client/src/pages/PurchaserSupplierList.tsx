@@ -44,6 +44,9 @@ import { reloadAfterPull, declareShrink } from '../utils/serverSync';
 import {
   takePendingInvite, acceptCooperationInvite, rejectCooperationInvite, resolveUserByCompanyNo,
 } from '../utils/cooperationInvite';
+import {
+  withCooperationCreds, appMatchesSupplierEntry, myCompanyNo, ensureCredsMigrated,
+} from '../utils/cooperationCred';
 import type { CooperationInvitePayload } from '../utils/cooperationInvite';
 import { dedupePurchaserSuppliers } from '../utils/cooperationDedupe';
 import { loadSupplierFinishedProducts } from '../utils/supplierProducts';
@@ -356,13 +359,18 @@ const PurchaserSupplierList: React.FC = () => {
       (c.type || 'cooperation') === 'cooperation' && !c.superseded &&
       (c.status === 'approved' || c.status === 'pending') &&
       c.purchaserUsername === username &&
-      (c.purchaserSupplierEntryId === s.id || c.targetSupplierName === s.supplierName || c.targetSupplierId === s.id) &&
+      (appMatchesSupplier(c, s)) &&
       ((Date.parse(String(c.approveDate || c.applyDate || '').replace(/-/g, '/')) || 0) > tTs));
   };
+
+  // 申请记录 ↔ 本方供应商条目 的同一性判定：公司编号优先，条目 id 次之，名称全等仅作无凭证历史数据兜底
+  // （同一公司名下多个供应商条目、或对方同名公司多账号时，只按名称匹配会认错申请）
+  const appMatchesSupplier = (app: any, s: SupplierEntry): boolean => appMatchesSupplierEntry(app, s);
 
   // 加载并同步数据
   const reloadData = useCallback(() => {
     try {
+      ensureCredsMigrated();
       // 同源去重兜底：历史多写点+同步并集合并可能留下同供应商多 id 条目，加载时先合并
       dedupePurchaserSuppliers(username);
       const data: SupplierEntry[] = JSON.parse(localStorage.getItem(storageKey) || '[]');
@@ -375,7 +383,7 @@ const PurchaserSupplierList: React.FC = () => {
             (app) => {
               if (app.purchaserUsername !== username || app.type !== 'cooperation' || app.status !== 'approved' || app.superseded) return false;
               if (app.purchaserSupplierEntryId && app.purchaserSupplierEntryId === s.id) return true;
-              return app.targetSupplierName === s.supplierName || app.targetSupplierId === s.id;
+              return appMatchesSupplier(app, s);
             }
           );
           if (approvedApp) {
@@ -397,11 +405,11 @@ const PurchaserSupplierList: React.FC = () => {
         if (s.cooperationStatus === 'terminated') {
           const termApp2 = apps.find((app: any) =>
             app.purchaserUsername === username &&
-            (app.targetSupplierName === s.supplierName || app.targetSupplierId === s.id || app.purchaserSupplierEntryId === s.id) &&
+            (appMatchesSupplier(app, s)) &&
             app.type === 'terminate' && app.status === 'approved' && !app.superseded);
           const coopApp2 = apps.find((app: any) =>
             app.purchaserUsername === username &&
-            (app.purchaserSupplierEntryId === s.id || app.targetSupplierName === s.supplierName || app.targetSupplierId === s.id) &&
+            (appMatchesSupplier(app, s)) &&
             (app.type || 'cooperation') === 'cooperation' && app.status === 'approved' && !app.superseded);
           const tTs2 = termApp2 ? (Date.parse(String(termApp2.approveDate || termApp2.applyDate || '').replace(/-/g, '/')) || 0) : 0;
           const cTs2 = coopApp2 ? (Date.parse(String(coopApp2.approveDate || coopApp2.applyDate || '').replace(/-/g, '/')) || 0) : 0;
@@ -415,7 +423,7 @@ const PurchaserSupplierList: React.FC = () => {
           const terminateApp = apps.find(
             (app) =>
               app.purchaserUsername === username &&
-              (app.targetSupplierName === s.supplierName || app.targetSupplierId === s.id || app.purchaserSupplierEntryId === s.id) &&
+              (appMatchesSupplier(app, s)) &&
               app.type === 'terminate' &&
               app.status === 'approved' &&
               !app.superseded
@@ -429,7 +437,7 @@ const PurchaserSupplierList: React.FC = () => {
         if (s.cooperationStatus === 'approved') {
           const supPendingTerm = apps.find((app: any) =>
             app.purchaserUsername === username &&
-            (app.targetSupplierName === s.supplierName || app.targetSupplierId === s.id || app.purchaserSupplierEntryId === s.id) &&
+            (appMatchesSupplier(app, s)) &&
             app.type === 'terminate' && app.supplierInitiated === true && app.status === 'pending' && !app.superseded);
           if (supPendingTerm) {
             hasChange = true;
@@ -462,7 +470,7 @@ const PurchaserSupplierList: React.FC = () => {
           const supplierTerminateApp = apps.find(
             (app) =>
               app.purchaserUsername === username &&
-              (app.targetSupplierName === s.supplierName || app.targetSupplierId === s.id || app.purchaserSupplierEntryId === s.id) &&
+              (appMatchesSupplier(app, s)) &&
               app.type === 'terminate' &&
               app.supplierInitiated === true &&
               app.status === 'approved' &&
@@ -1108,6 +1116,8 @@ const PurchaserSupplierList: React.FC = () => {
   }, [dataSource]);
 
   // 填写供应商编号 → 向对应供应商账号发起合作申请（新增/编辑窗口共用）
+  // 合作申请存在全局共享键里，因此必须同时把双方公司编号写入记录（targetSupplierNo/purchaserNo），
+  // 读取侧才能按编号等值判定归属；只凭公司名称会让同名公司的多个账号互相看到并可批准同一份申请。
   const sendCooperationByNo = (entryId: string, noRaw: string): 'none' | 'notfound' | 'exists' | 'sent' => {
     const no = String(noRaw || '').trim();
     if (!no) return 'none';
@@ -1116,17 +1126,19 @@ const PurchaserSupplierList: React.FC = () => {
     if (!supplierUser) return 'notfound';
     const currentUser = users.find((u: any) => u.username === username);
     const apps: any[] = JSON.parse(localStorage.getItem(COOPERATION_APPLICATIONS_KEY) || '[]');
+    // 同一对方判定：条目 id / 供应商编号 / 历史名称全等
+    const samePeer = (a: any) => a.purchaserUsername === username
+      && (a.purchaserSupplierEntryId === entryId || a.targetSupplierId === entryId
+        || (String(a.targetSupplierNo || '').trim() ? String(a.targetSupplierNo).trim() === no : a.targetSupplierName === supplierUser.companyName));
     // 在途申请仅指 pending；历史 approved（含已解除合作后遗留）不算在途，下方统一作废后重新发起
-    const exists = apps.some((a: any) => (a.type || 'cooperation') === 'cooperation' && !a.superseded && a.purchaserUsername === username && (a.purchaserSupplierEntryId === entryId || a.targetSupplierName === supplierUser.companyName) && a.status === 'pending');
+    const exists = apps.some((a: any) => (a.type || 'cooperation') === 'cooperation' && !a.superseded && a.status === 'pending' && samePeer(a));
     if (exists) return 'exists';
     // 作废旧的已批准合作申请（曾解除合作后重新申请）
     apps.forEach((a: any) => {
-      if (a.purchaserUsername === username && (a.purchaserSupplierEntryId === entryId || a.targetSupplierName === supplierUser.companyName) && (a.type || 'cooperation') === 'cooperation' && a.status === 'approved') {
-        a.superseded = true;
-      }
+      if ((a.type || 'cooperation') === 'cooperation' && a.status === 'approved' && samePeer(a)) a.superseded = true;
     });
     const now = dayjs().format('YYYY-MM-DD HH:mm:ss');
-    apps.push({
+    apps.push(withCooperationCreds({
       applicationId: `COOP-NO-${Date.now()}`,
       purchaserUsername: username,
       purchaserCompanyName: currentUser?.companyName || username,
@@ -1134,6 +1146,7 @@ const PurchaserSupplierList: React.FC = () => {
       purchaserContact: currentUser?.contactPerson || '',
       purchaserPhone: currentUser?.phone || '',
       targetSupplierName: supplierUser.companyName || '',
+      targetSupplierNo: no,
       targetSupplierId: supplierUser.companyId || supplierUser.username,
       purchaserSupplierEntryId: entryId,
       canDirectApprove: false,
@@ -1142,7 +1155,7 @@ const PurchaserSupplierList: React.FC = () => {
       remark: `采购商「${currentUser?.companyName || username}」通过供应商编号 ${no} 申请合作`,
       type: 'cooperation',
       supplierInitiated: false,
-    });
+    }, { supplierNo: no, purchaserNo: myCompanyNo() }));
     localStorage.setItem(COOPERATION_APPLICATIONS_KEY, JSON.stringify(apps));
     window.dispatchEvent(new Event('cooperation-applications-changed'));
     return 'sent';
@@ -1280,7 +1293,7 @@ const PurchaserSupplierList: React.FC = () => {
       return apps.find((app: any) =>
         app.type === 'terminate' && app.status === 'pending' && !app.superseded &&
         app.purchaserUsername === username &&
-        (app.targetSupplierName === s.supplierName || app.targetSupplierId === s.id || app.purchaserSupplierEntryId === s.id)) || null;
+        (appMatchesSupplier(app, s))) || null;
     } catch { return null; }
   }, [username]);
 
@@ -1296,7 +1309,7 @@ const PurchaserSupplierList: React.FC = () => {
         const updated = apps.map((a: any) => (
           a.type === 'terminate' && a.status === 'pending' && !a.superseded && a.supplierInitiated !== true &&
           a.purchaserUsername === username &&
-          (a.targetSupplierName === record.supplierName || a.targetSupplierId === record.id || a.purchaserSupplierEntryId === record.id)
+          (appMatchesSupplier(a, record))
             ? { ...a, status: 'rejected', remark: `发起方撤回：${a.remark || ''}` }
             : a
         ));
@@ -1342,7 +1355,7 @@ const PurchaserSupplierList: React.FC = () => {
       apps.forEach((app) => {
         if (
           app.purchaserUsername === username &&
-          (app.targetSupplierName === terminatingSupplier.supplierName || app.targetSupplierId === terminatingSupplier.id || app.purchaserSupplierEntryId === terminatingSupplier.id) &&
+          (appMatchesSupplier(app, terminatingSupplier)) &&
           app.type === 'terminate' &&
           app.status === 'approved'
         ) {
@@ -1361,6 +1374,8 @@ const PurchaserSupplierList: React.FC = () => {
         purchaserContact: '',
         purchaserPhone: '',
         targetSupplierName: terminatingSupplier.supplierName,
+        targetSupplierNo: String((terminatingSupplier as any).supplierNo || '').trim(),
+        purchaserNo: myCompanyNo(),
         targetSupplierId: terminatingSupplier.id,
         purchaserSupplierEntryId: terminatingSupplier.id,
         canDirectApprove: false,
@@ -1453,7 +1468,7 @@ const PurchaserSupplierList: React.FC = () => {
     existingApps.forEach((app) => {
       if (
         app.purchaserUsername === username &&
-        (app.targetSupplierName === record.supplierName || app.targetSupplierId === record.id || app.purchaserSupplierEntryId === record.id) &&
+        (appMatchesSupplier(app, record)) &&
         app.type === 'cooperation' &&
         app.status === 'approved'
       ) {
@@ -1497,6 +1512,8 @@ const PurchaserSupplierList: React.FC = () => {
       purchaserContact: currentUser?.contactPerson || '',
       purchaserPhone: currentUser?.phone || '',
       targetSupplierName: record.supplierName,
+      targetSupplierNo: String((record as any).supplierNo || '').trim(),
+      purchaserNo: myCompanyNo(),
       targetSupplierId: record.id,
       purchaserSupplierEntryId: record.id,
       canDirectApprove: false,

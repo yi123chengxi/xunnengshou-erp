@@ -3,6 +3,7 @@ import { Card, Button, message, Space, Typography, Descriptions, Tag, Spin } fro
 import { CheckCircleOutlined, CloseCircleOutlined, LinkOutlined } from '@ant-design/icons';
 import { useParams, useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
+import { noOfUser, noFromAny, supplierUsernameOf, ensureCredsMigrated } from '../utils/cooperationCred';
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -157,13 +158,16 @@ const PurchaserCooperationConfirmPage: React.FC = () => {
     localStorage.setItem('cooperation_tokens', JSON.stringify(updatedTokens));
 
     // 2. 作废旧的终止申请，避免 reloadData 误匹配
+    ensureCredsMigrated();
     const applications = JSON.parse(
       localStorage.getItem('cooperation_applications') || '[]'
     );
     applications.forEach((app: any) => {
       if (
         app.purchaserUsername === purchaserUsername &&
-        (app.targetSupplierName === tokenData.supplierName || app.targetSupplierId === tokenData.supplierId || (purchaserSupplierEntryId && app.purchaserSupplierEntryId === purchaserSupplierEntryId)) &&
+        (String(app.targetSupplierNo || '').trim()
+          ? String(app.targetSupplierNo).trim() === noFromAny(tokenData.supplierId) || String(app.targetSupplierNo).trim() === noFromAny(tokenData.supplierName)
+          : (app.targetSupplierName === tokenData.supplierName || app.targetSupplierId === tokenData.supplierId || (purchaserSupplierEntryId && app.purchaserSupplierEntryId === purchaserSupplierEntryId))) &&
         app.type === 'terminate' &&
         app.status === 'approved'
       ) {
@@ -181,6 +185,8 @@ const PurchaserCooperationConfirmPage: React.FC = () => {
       purchaserContact: currentUser.contactPerson || '',
       purchaserPhone: currentUser.phone || '',
       targetSupplierName: tokenData.supplierName,
+      targetSupplierNo: noFromAny(tokenData.supplierId) || noFromAny(tokenData.supplierName),
+      purchaserNo: noOfUser(currentUser),
       targetSupplierId: tokenData.supplierId,
       canDirectApprove: true,
       applyDate: now,
@@ -232,7 +238,14 @@ const PurchaserCooperationConfirmPage: React.FC = () => {
 
     // 5. 将采购商企业信息添加到供应商的客户基础信息列表
     try {
-      const boundStorageKey = 'boundPurchasers_' + tokenData.supplierId;
+      // token.supplierId 历史上是本地条目 id，直接拼键会写成 boundPurchasers_SP-xxx 的空键；
+      // 先按供应商公司编号/名称解析出真实账号，解析不到才沿用原值保持旧行为
+      const supOwner = supplierUsernameOf({
+        supplierUsername: tokenData.supplierId,
+        targetSupplierId: tokenData.supplierId,
+        targetSupplierName: tokenData.supplierName,
+      });
+      const boundStorageKey = 'boundPurchasers_' + (supOwner || tokenData.supplierId);
       const boundPurchasers: any[] = JSON.parse(localStorage.getItem(boundStorageKey) || '[]');
       const purchaserCompany = currentUser.companyName || purchaserUsername;
       const purchaserInfo = {

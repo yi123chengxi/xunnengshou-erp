@@ -17,6 +17,10 @@ import {
   StopOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
+import {
+  amTargetSupplier, ensureCredsMigrated, withCooperationCreds, supplierNoOf,
+  myCompanyNo, purchaserUsernameOf, noOfUser,
+} from '../utils/cooperationCred';
 
 const { Text, Title } = Typography;
 
@@ -32,6 +36,10 @@ interface CooperationApplication {
   purchaserPhone: string;
   targetSupplierName: string;
   targetSupplierId: string;
+  /** 目标供应商公司编号（本链路唯一身份凭证，历史数据由迁移补写） */
+  targetSupplierNo?: string;
+  /** 发起采购商公司编号 */
+  purchaserNo?: string;
   purchaserSupplierEntryId?: string;
   canDirectApprove: boolean;
   applyDate: string;
@@ -61,6 +69,8 @@ interface CooperationRecord {
   inviteToken?: string;
   type?: 'cooperation' | 'terminate';
   customerId?: string;
+  /** 本公司是否该申请的目标供应商（按公司编号判定），决定能否批准/拒绝 */
+  canHandle: boolean;
 }
 
 const toRecord = (app: CooperationApplication): CooperationRecord => ({
@@ -80,28 +90,20 @@ const toRecord = (app: CooperationApplication): CooperationRecord => ({
   applyDate: app.applyDate,
   remark: app.remark,
   customerId: app.customerId,
+  canHandle: amTargetSupplier(app),
 });
 
+/**
+ * 供应商侧可见性：以公司编号等值判定“这条申请是不是发给本公司的”。
+ * 旧实现用名称双向 includes 匹配，同名公司的多个账号、以及名称互为子串的两家公司会互串申请。
+ */
 const loadApplications = (): CooperationRecord[] => {
   try {
-    const username = localStorage.getItem('username') || '';
-    const registeredUsers = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
-    const currentUser = registeredUsers.find((u: any) => u.username === username);
-    const myCompanyName = currentUser?.companyName || '';
+    ensureCredsMigrated();
     const allApps: CooperationApplication[] = JSON.parse(
       localStorage.getItem(COOPERATION_APPLICATIONS_KEY) || '[]'
     );
-    return allApps
-      .filter((app) => {
-        if (!myCompanyName) return true;
-        return (
-          app.targetSupplierName.includes(myCompanyName) ||
-          myCompanyName.includes(app.targetSupplierName) ||
-          app.targetSupplierName === '待供应商确认'
-        );
-      })
-      .map(toRecord)
-      .reverse();
+    return allApps.filter((app) => amTargetSupplier(app)).map(toRecord).reverse();
   } catch {
     return [];
   }
@@ -167,8 +169,19 @@ const CooperationManage: React.FC = () => {
     });
   }, [dataSource, searchText, statusFilter]);
 
+  // ========== 身份守卫 ==========
+  // 申请记录存在全局共享键里，会送达所有浏览器；只有公司编号与本方一致的目标供应商才能处理，
+  // 否则同名账号会互相把对方的申请批准/拒绝/删除掉。
+  const guardHandle = (record: CooperationRecord): boolean => {
+    if (record.canHandle) return true;
+    message.error(`该申请指向的供应商编号与本账号公司编号不一致，无法由本公司处理`);
+    reloadData();
+    return false;
+  };
+
   // ========== 删除合作记录 ==========
   const handleDelete = (record: CooperationRecord) => {
+    if (!guardHandle(record)) return;
     Modal.confirm({
       title: '确认删除',
       content: `确定要删除与 ${record.purchaserName} 的合作记录吗？`,
@@ -189,6 +202,7 @@ const CooperationManage: React.FC = () => {
 
   // ========== 确认合作申请 ==========
   const handleApprove = (record: CooperationRecord) => {
+    if (!guardHandle(record)) return;
     Modal.confirm({
       title: '确认通过',
       content: `确定通过 ${record.purchaserName} 的合作申请吗？通过后将自动添加到客户基础信息列表。`,
@@ -348,6 +362,7 @@ const CooperationManage: React.FC = () => {
 
   // ========== 拒绝合作申请 ==========
   const handleReject = (record: CooperationRecord) => {
+    if (!guardHandle(record)) return;
     Modal.confirm({
       title: '确认拒绝',
       content: `确定拒绝 ${record.purchaserName} 的合作申请吗？`,
@@ -377,6 +392,7 @@ const CooperationManage: React.FC = () => {
 
   // ========== 确认终止合作申请（供应商侧）==========
   const handleApproveTerminate = (record: CooperationRecord) => {
+    if (!guardHandle(record)) return;
     Modal.confirm({
       title: '确认终止合作',
       content: `确定终止与「${record.purchaserName}」的合作关系吗？终止后双方状态将改为"待合作"。`,
@@ -427,10 +443,12 @@ const CooperationManage: React.FC = () => {
             if (purchaserData) {
               const suppliers: any[] = JSON.parse(purchaserData);
               const updatedSuppliers = suppliers.map((s) => {
-                // 优先用 purchaserSupplierEntryId 匹配，回退到名称匹配
+                // 凭证优先：编号/条目 id 等值；只在两者都不可用时才回退名称匹配
                 const isMatch = terminateApp.purchaserSupplierEntryId
                   ? s.id === terminateApp.purchaserSupplierEntryId
-                  : s.supplierName === record.supplierName || s.id === terminateApp.targetSupplierId;
+                  : (supplierNoOf(terminateApp) && String(s.supplierNo || '') === supplierNoOf(terminateApp))
+                    || s.id === terminateApp.targetSupplierId
+                    || (!supplierNoOf(terminateApp) && s.supplierName === record.supplierName);
                 if (isMatch && (s.cooperationStatus === 'terminating' || s.cooperationStatus === 'approved')) {
                   return { ...s, cooperationStatus: 'terminated', terminateApplyDate: undefined };
                 }
@@ -459,6 +477,7 @@ const CooperationManage: React.FC = () => {
 
   // ========== 拒绝终止合作申请 ==========
   const handleRejectTerminate = (record: CooperationRecord) => {
+    if (!guardHandle(record)) return;
     Modal.confirm({
       title: '拒绝终止合作',
       content: `确定拒绝「${record.purchaserName}」的终止合作申请吗？`,
@@ -495,7 +514,11 @@ const CooperationManage: React.FC = () => {
             if (purchaserData) {
               const suppliers: any[] = JSON.parse(purchaserData);
               const updatedSuppliers = suppliers.map((s) => {
-                if (s.supplierName === record.supplierName && s.cooperationStatus === 'terminating') {
+                const noMatch = rejectApp ? supplierNoOf(rejectApp) : '';
+                const isMatch = (noMatch && String(s.supplierNo || '') === noMatch)
+                  || s.id === String(rejectApp?.targetSupplierId || '')
+                  || (!noMatch && s.supplierName === record.supplierName);
+                if (isMatch && s.cooperationStatus === 'terminating') {
                   return { ...s, cooperationStatus: 'approved', terminateApplyDate: undefined };
                 }
                 return s;
@@ -522,46 +545,54 @@ const CooperationManage: React.FC = () => {
   }, []);
 
   const handleReInitiateCooperation = (record: CooperationRecord) => {
+    if (!guardHandle(record)) return;
     const username = localStorage.getItem('username') || '';
     const registeredUsers = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
     const currentUser = registeredUsers.find((u: any) => u.username === username);
     const myCompany = currentUser?.companyName || username;
+    const myNo = myCompanyNo() || noOfUser(currentUser);
     const now = dayjs().format('YYYY-MM-DD HH:mm:ss');
-    // 定位采购商账号：优先绑定记录账号，回退公司名匹配注册账号
+    // 定位采购商账号：优先绑定记录账号，回退按采购商编号解析，最后才按公司名唯一命中
     let purchaserUsername = '';
     try {
       const bound: any[] = JSON.parse(localStorage.getItem(`boundPurchasers_${username}`) || '[]');
       const bp = bound.find((b: any) => b.purchaserName === record.purchaserName);
       purchaserUsername = bp?.purchaserUsername || '';
     } catch { /* ignore */ }
+    if (!purchaserUsername) purchaserUsername = purchaserUsernameOf(record);
     if (!purchaserUsername) {
-      purchaserUsername = registeredUsers.find((u: any) => u.companyName === record.purchaserName)?.username || '';
+      const byName = registeredUsers.filter((u: any) => u.companyName === record.purchaserName);
+      purchaserUsername = byName.length === 1 ? String(byName[0].username) : '';
     }
     if (!purchaserUsername) { message.error('无法定位该采购商账号，请在客户基础信息通过「邀约合作/采购商编号」发起'); return; }
     const apps: any[] = JSON.parse(localStorage.getItem(COOPERATION_APPLICATIONS_KEY) || '[]');
-    const dupPending = apps.some((a: any) => (a.type || 'cooperation') === 'cooperation' && !a.superseded && a.status === 'pending' && a.purchaserUsername === purchaserUsername && a.targetSupplierName === myCompany);
+    // 同一对方判定凭证优先：编号相等即同一家；无编号的历史记录才按名称全等兜底
+    const samePeerApp = (a: any) => a.purchaserUsername === purchaserUsername
+      && (myNo ? supplierNoOf(a) === myNo : String(a.targetSupplierName || '').trim() === String(myCompany || '').trim());
+    const dupPending = apps.some((a: any) => (a.type || 'cooperation') === 'cooperation' && !a.superseded && a.status === 'pending' && samePeerApp(a));
     if (dupPending) { message.warning('该采购商已有待处理的合作申请，无需重复发起'); return; }
     apps.forEach((a: any) => {
-      if (a.purchaserUsername === purchaserUsername && a.targetSupplierName === myCompany && (a.type || 'cooperation') === 'cooperation' && a.status === 'approved') a.superseded = true;
+      if (samePeerApp(a) && (a.type || 'cooperation') === 'cooperation' && a.status === 'approved') a.superseded = true;
     });
     // 采购商侧供应商列表条目：复用已有条目（终止/拒绝回退待确认），缺失则新建
     const pKey = 'purchaser_suppliers_' + purchaserUsername;
     let list: any[] = [];
     try { list = JSON.parse(localStorage.getItem(pKey) || '[]'); } catch { /* ignore */ }
     let entryId = '';
-    const existIdx = list.findIndex((s: any) => s.supplierName === myCompany);
+    const existIdx = list.findIndex((s: any) => (myNo && String(s.supplierNo || '') === myNo) || s.supplierName === myCompany);
     if (existIdx >= 0) {
       if (list[existIdx].cooperationStatus === 'terminated' || list[existIdx].cooperationStatus === 'rejected') {
         list[existIdx] = { ...list[existIdx], cooperationStatus: 'pending' };
       }
       // 供应商主动发起标记：随 purchaser_suppliers_ 同步键跨浏览器送达，采购商侧据此显示待审核
-      list[existIdx] = { ...list[existIdx], supplierInitiated: true, supplierUsername: username, supplierInitiatedDate: now };
+      list[existIdx] = { ...list[existIdx], supplierNo: myNo || list[existIdx].supplierNo || '', supplierInitiated: true, supplierUsername: username, supplierInitiatedDate: now };
       entryId = list[existIdx].id;
     } else {
       entryId = `SP-${Date.now()}`;
       list.unshift({
         id: entryId,
         supplierName: myCompany,
+        supplierNo: myNo,
         shortName: '',
         contactPerson: currentUser?.contactPerson || '',
         contactPhone: currentUser?.phone || '',
@@ -575,7 +606,7 @@ const CooperationManage: React.FC = () => {
       });
     }
     localStorage.setItem(pKey, JSON.stringify(list));
-    apps.push({
+    apps.push(withCooperationCreds({
       applicationId: `COOP-REINIT-${Date.now()}`,
       purchaserUsername,
       purchaserCompanyName: record.purchaserName,
@@ -583,6 +614,7 @@ const CooperationManage: React.FC = () => {
       purchaserContact: record.purchaserContact || '',
       purchaserPhone: record.purchaserPhone || '',
       targetSupplierName: myCompany,
+      targetSupplierNo: myNo,
       targetSupplierId: entryId,
       supplierUsername: username,
       canDirectApprove: false,
@@ -591,7 +623,7 @@ const CooperationManage: React.FC = () => {
       remark: `供应商「${myCompany}」申请重新建立合作`,
       type: 'cooperation',
       supplierInitiated: true,
-    });
+    }));
     localStorage.setItem(COOPERATION_APPLICATIONS_KEY, JSON.stringify(apps));
     window.dispatchEvent(new Event('cooperation-applications-changed'));
     message.success(`已重新发起合作申请，等待采购商「${record.purchaserName}」在其合作申请中通过`);
@@ -683,8 +715,14 @@ const CooperationManage: React.FC = () => {
           <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => { setSelectedRecord(record); setDetailVisible(true); }}>
             查看
           </Button>
+          {/* 非本方编号的申请只读：不提供批准/拒绝/删除，避免同名账号互相误操作 */}
+          {!record.canHandle && record.cooperationStatus !== 'approved' && (
+            <Tooltip title="该申请的目标供应商编号与本账号公司编号不一致，仅可查看">
+              <Tag color="default">非本公司</Tag>
+            </Tooltip>
+          )}
           {/* 合作申请的操作 */}
-          {(!record.type || record.type === 'cooperation') && record.cooperationStatus === 'pending' && (
+          {record.canHandle && (!record.type || record.type === 'cooperation') && record.cooperationStatus === 'pending' && (
             <>
               <Button type="link" size="small" style={{ color: '#52c41a' }} icon={<CheckCircleOutlined />} onClick={() => handleApprove(record)}>
                 通过
@@ -695,13 +733,13 @@ const CooperationManage: React.FC = () => {
             </>
           )}
           {/* 终止/拒绝后重新发起合作（闭环：对方合作申请页可见并可同意） */}
-          {(!record.type || record.type === 'cooperation') && record.cooperationStatus !== 'pending' && isPartnershipEnded(record) && (
+          {record.canHandle && (!record.type || record.type === 'cooperation') && record.cooperationStatus !== 'pending' && isPartnershipEnded(record) && (
             <Button type="link" size="small" style={{ color: '#52c41a' }} icon={<CheckCircleOutlined />} onClick={() => handleReInitiateCooperation(record)}>
               重新发起合作
             </Button>
           )}
           {/* 终止合作申请的操作 */}
-          {record.type === 'terminate' && record.cooperationStatus === 'pending' && (
+          {record.canHandle && record.type === 'terminate' && record.cooperationStatus === 'pending' && (
             <>
               <Button type="link" size="small" style={{ color: '#52c41a' }} icon={<CheckCircleOutlined />} onClick={() => handleApproveTerminate(record)}>
                 确认终止
@@ -720,7 +758,7 @@ const CooperationManage: React.FC = () => {
             </Tooltip>
           )}
           {/* 未合作的操作 */}
-          {record.cooperationStatus !== 'approved' && (
+          {record.canHandle && record.cooperationStatus !== 'approved' && (
             <Button type="link" size="small" danger icon={<DeleteOutlined />} onClick={() => handleDelete(record)}>
               删除
             </Button>

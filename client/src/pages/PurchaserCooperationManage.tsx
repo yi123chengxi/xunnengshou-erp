@@ -19,6 +19,7 @@ import {
 import dayjs from 'dayjs';
 import { copyText } from '../utils/clipboard';
 import { dedupePurchaserSuppliers } from '../utils/cooperationDedupe';
+import { appMatchesSupplierEntry, myCompanyNo, supplierUsernameOf, ensureCredsMigrated } from '../utils/cooperationCred';
 
 const { Text, Title } = Typography;
 
@@ -70,7 +71,9 @@ interface CooperationApplication {
   purchaserContact: string;
   purchaserPhone: string;
   targetSupplierName: string;   // 目标供应商名称
-  targetSupplierId: string;     // 目标供应商编号
+  targetSupplierNo?: string;    // 目标供应商公司编号（跨租户身份凭证）
+  purchaserNo?: string;         // 发起采购商公司编号
+  targetSupplierId: string;     // 目标供应商标识（历史字段：曾存账号/companyId/本地条目 id，不可当凭证使用）
   canDirectApprove: boolean;    // 是否可以直接审批
   supplierInitiated?: boolean;  // 供应商是否已主动发起合作邀请
   applyDate: string;
@@ -123,9 +126,13 @@ const PurchaserCooperationManage: React.FC = () => {
     localStorage.setItem(storageKey, JSON.stringify(data));
   };
 
+  // 申请记录 ↔ 本方供应商条目 的同一性判定：公司编号优先，条目 id 次之，名称全等仅作无凭证历史数据兜底
+  const sameSupplier = (app: any, s: SupplierEntry): boolean => appMatchesSupplierEntry(app, s);
+
   // 从 localStorage 重新加载数据，并同步合作/终止状态
   const reloadData = useCallback(() => {
     try {
+      ensureCredsMigrated();
       const data: SupplierEntry[] = JSON.parse(localStorage.getItem(storageKey) || '[]');
       const apps: any[] = JSON.parse(localStorage.getItem(COOPERATION_APPLICATIONS_KEY) || '[]');
       let hasChange = false;
@@ -138,7 +145,7 @@ const PurchaserCooperationManage: React.FC = () => {
               // 优先用采购商供应商条目ID匹配（最可靠）
               if (app.purchaserSupplierEntryId && app.purchaserSupplierEntryId === s.id) return true;
               // 回退到名称和供应商ID匹配
-              return app.targetSupplierName === s.supplierName || app.targetSupplierId === s.id;
+              return sameSupplier(app, s);
             }
           );
           if (approvedApp) {
@@ -157,7 +164,7 @@ const PurchaserCooperationManage: React.FC = () => {
           const terminateApp = apps.find(
             (app) =>
               app.purchaserUsername === username &&
-              (app.targetSupplierName === s.supplierName || app.targetSupplierId === s.id || app.purchaserSupplierEntryId === s.id) &&
+              sameSupplier(app, s) &&
               app.type === 'terminate' &&
               app.status === 'approved' &&
               !app.superseded
@@ -173,7 +180,7 @@ const PurchaserCooperationManage: React.FC = () => {
           const supplierTerminateApp = apps.find(
             (app) =>
               app.purchaserUsername === username &&
-              (app.targetSupplierName === s.supplierName || app.targetSupplierId === s.id || app.purchaserSupplierEntryId === s.id) &&
+              sameSupplier(app, s) &&
               app.type === 'terminate' &&
               app.supplierInitiated === true &&
               app.status === 'pending' &&
@@ -189,7 +196,7 @@ const PurchaserCooperationManage: React.FC = () => {
           const supCoopApp = apps.find(
             (app) =>
               app.purchaserUsername === username &&
-              (app.targetSupplierId === s.id || app.purchaserSupplierEntryId === s.id || app.targetSupplierName === s.supplierName) &&
+              sameSupplier(app, s) &&
               app.supplierInitiated === true &&
               (app.type || 'cooperation') === 'cooperation' &&
               app.status === 'pending' &&
@@ -299,6 +306,8 @@ const PurchaserCooperationManage: React.FC = () => {
       purchaserContact: currentUser?.contactPerson || '',
       purchaserPhone: currentUser?.phone || '',
       targetSupplierName: supplier.supplierName,
+      targetSupplierNo: String((supplier as any).supplierNo || '').trim(),
+      purchaserNo: myCompanyNo(),
       targetSupplierId: supplier.id,
       canDirectApprove: !!companyId,
       applyDate: dayjs().format('YYYY-MM-DD HH:mm:ss'),
@@ -373,13 +382,11 @@ const PurchaserCooperationManage: React.FC = () => {
         const purchaserPhone = app?.purchaserPhone || currentUser?.phone || '';
 
         // 同步到供应商端客户列表（boundPurchasers），建立合作后供应商列表自动显示
-        let supUser = (app as any)?.supplierUsername || supplier.supplierUsername || '';
+        // 供应商账号：记录/条目显式值 → 按供应商公司编号解析 → 最后才按公司名唯一命中（同名多账号时不猜测）
+        let supUser = (app as any)?.supplierUsername || supplier.supplierUsername || supplierUsernameOf(app) || '';
         if (!supUser) {
-          // 申请记录未携带供应商账号时，按供应商公司名称反查注册账号
-          try {
-            const su = registeredUsers.find((u: any) => (u.companyName || '') === (app?.targetSupplierName || supplier.supplierName));
-            if (su) supUser = su.username || '';
-          } catch { /* ignore */ }
+          const byName = registeredUsers.filter((u: any) => (u.companyName || '') === (app?.targetSupplierName || supplier.supplierName));
+          if (byName.length === 1) supUser = String(byName[0].username || '');
         }
         if (supUser) {
           const boundKey = 'boundPurchasers_' + supUser;
@@ -539,7 +546,7 @@ const PurchaserCooperationManage: React.FC = () => {
       apps0.forEach((a: any) => {
         if (
           a.purchaserUsername === username &&
-          (a.targetSupplierName === values.supplierName || a.targetSupplierId === currentSupplier.id || a.purchaserSupplierEntryId === currentSupplier.id) &&
+          sameSupplier(a, currentSupplier) &&
           (a.type || 'cooperation') === 'cooperation' &&
           a.status === 'approved'
         ) {
@@ -554,6 +561,8 @@ const PurchaserCooperationManage: React.FC = () => {
         purchaserContact: currentUser?.contactPerson || '',
         purchaserPhone: currentUser?.phone || '',
         targetSupplierName: values.supplierName,
+        targetSupplierNo: String((currentSupplier as any).supplierNo || '').trim(),
+        purchaserNo: myCompanyNo(),
         targetSupplierId: currentSupplier.id,
         purchaserSupplierEntryId: currentSupplier.id,
         canDirectApprove: false,
@@ -626,7 +635,7 @@ const PurchaserCooperationManage: React.FC = () => {
     apps.forEach((app: any) => {
       if (
         app.purchaserUsername === username &&
-        (app.targetSupplierName === terminateSupplier.supplierName || app.targetSupplierId === terminateSupplier.id || app.purchaserSupplierEntryId === terminateSupplier.id) &&
+        sameSupplier(app, terminateSupplier) &&
         app.type === 'terminate' &&
         app.status === 'approved'
       ) {
@@ -656,6 +665,8 @@ const PurchaserCooperationManage: React.FC = () => {
       purchaserContact: currentUser?.contactPerson || '',
       purchaserPhone: currentUser?.phone || '',
       targetSupplierName: terminateSupplier.supplierName,
+      targetSupplierNo: String((terminateSupplier as any).supplierNo || '').trim(),
+      purchaserNo: myCompanyNo(),
       targetSupplierId: terminateSupplier.id,
       canDirectApprove: false,
       applyDate: now,
@@ -696,7 +707,7 @@ const PurchaserCooperationManage: React.FC = () => {
         const updatedApps = apps.map((app) => {
           if (
             app.purchaserUsername === username &&
-            (app.targetSupplierName === supplier.supplierName || app.targetSupplierId === supplier.id) &&
+            sameSupplier(app, supplier) &&
             app.type === 'terminate' &&
             app.supplierInitiated === true &&
             app.status === 'pending'
@@ -719,13 +730,13 @@ const PurchaserCooperationManage: React.FC = () => {
         const terminateApp = updatedApps.find(
           (app) =>
             app.purchaserUsername === username &&
-            app.targetSupplierName === supplier.supplierName &&
+            sameSupplier(app, supplier) &&
             app.type === 'terminate' &&
             app.supplierInitiated === true &&
             app.status === 'approved'
         );
-        if (terminateApp?.targetSupplierId) {
-          const supplierBoundKey = 'boundPurchasers_' + terminateApp.targetSupplierId;
+        if (supplierUsernameOf(terminateApp)) {
+          const supplierBoundKey = 'boundPurchasers_' + supplierUsernameOf(terminateApp);
           try {
             const boundData: any[] = JSON.parse(localStorage.getItem(supplierBoundKey) || '[]');
             const updatedBound = boundData.map((bp) =>
@@ -760,7 +771,7 @@ const PurchaserCooperationManage: React.FC = () => {
         const updatedApps = apps.map((app: any) => {
           if (
             app.purchaserUsername === username &&
-            (app.targetSupplierName === supplier.supplierName || app.targetSupplierId === supplier.id || app.purchaserSupplierEntryId === supplier.id) &&
+            sameSupplier(app, supplier) &&
             app.type === 'terminate' &&
             app.supplierInitiated === true &&
             app.status === 'pending'
@@ -783,13 +794,13 @@ const PurchaserCooperationManage: React.FC = () => {
         const rejectApp = updatedApps.find(
           (app: any) =>
             app.purchaserUsername === username &&
-            app.targetSupplierName === supplier.supplierName &&
+            sameSupplier(app, supplier) &&
             app.type === 'terminate' &&
             app.supplierInitiated === true &&
             app.status === 'rejected'
         );
-        if (rejectApp?.targetSupplierId) {
-          const supplierBoundKey = 'boundPurchasers_' + rejectApp.targetSupplierId;
+        if (supplierUsernameOf(rejectApp)) {
+          const supplierBoundKey = 'boundPurchasers_' + supplierUsernameOf(rejectApp);
           try {
             const boundData: any[] = JSON.parse(localStorage.getItem(supplierBoundKey) || '[]');
             const updatedBound = boundData.map((bp: any) =>

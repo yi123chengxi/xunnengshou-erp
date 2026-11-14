@@ -53,6 +53,7 @@ import { createInviteRecord, findUnusedInviteForCustomer, findInviteRecord, buil
 import type { InviteRecord } from '../utils/inviteRegistry';
 import { startCooperationTermination, cancelCooperationTermination, TERMINATE_GRACE_MS } from '../utils/cooperationTerminate';
 import { resolveLatestCompanyName, buildCredIndex } from '../utils/nameSync';
+import { withCooperationCreds, myCompanyNo, purchaserNoOf, ensureCredsMigrated, noOfUser, isTargetSupplierApp, amTargetSupplier } from '../utils/cooperationCred';
 import { reconcileCooperationPairs } from '../utils/cooperationReconcile';
 import { dedupeBoundPurchasers } from '../utils/boundPurchaserDedupe';
 import { copyText } from '../utils/clipboard';
@@ -300,12 +301,14 @@ export const loadBoundPurchasersFromStorage = (): BoundPurchaser[] => {
     try { users = JSON.parse(localStorage.getItem('registeredUsers') || '[]'); } catch { /* ignore */ }
     const me = users.find((u: any) => u.username === owner);
     const myCompany = me?.companyName || owner;
+    // 供应商侧归属判定统一用「编号等值」，名称只作为解析不到编号时的兜底（同名多账号时不再互相串数据）
+    const amSupplier = (a: any) => isTargetSupplierApp(a, { owner, company: myCompany, no: noOfUser(me) });
     const apps: any[] = JSON.parse(localStorage.getItem(COOPERATION_APPLICATIONS_KEY) || '[]');
     if (Array.isArray(apps)) {
       const tsOfApp = (a: any) => Date.parse(String(a.approveDate || a.applyDate || '').replace(/-/g, '/')) || 0;
       const samePurchaserOf = (c: any, t: any) => (t.purchaserUsername && c.purchaserUsername === t.purchaserUsername) || (t.purchaserCompanyName && c.purchaserCompanyName === t.purchaserCompanyName);
-      const approvedTerminateApps = apps.filter((a: any) => a.type === 'terminate' && a.status === 'approved' && (a.targetSupplierName === myCompany || a.supplierUsername === owner));
-      const coopAppsOfMine = apps.filter((a: any) => (a.type || 'cooperation') === 'cooperation' && !a.superseded && (a.status === 'approved' || a.status === 'pending') && (a.targetSupplierName === myCompany || a.supplierUsername === owner));
+      const approvedTerminateApps = apps.filter((a: any) => a.type === 'terminate' && a.status === 'approved' && amSupplier(a));
+      const coopAppsOfMine = apps.filter((a: any) => (a.type || 'cooperation') === 'cooperation' && !a.superseded && (a.status === 'approved' || a.status === 'pending') && amSupplier(a));
       // 已批准解除申请对应的采购商名称：解除后若存在更新的合作申请（重新合作），该终止申请不得再回滚状态
       const terminatedNames = new Set(
         approvedTerminateApps
@@ -325,7 +328,7 @@ export const loadBoundPurchasersFromStorage = (): BoundPurchaser[] => {
       });
       apps.forEach((a: any) => {
         if ((a.type || 'cooperation') !== 'cooperation' || a.status !== 'approved' || a.superseded) return;
-        if (!(a.targetSupplierName === myCompany || a.supplierUsername === owner)) return;
+        if (!amSupplier(a)) return;
         const name = a.purchaserCompanyName || a.purchaserUsername;
         if (!name) return;
         const exists = bound.some((bp: any) => bp.purchaserName === name || (bp.purchaserUsername && bp.purchaserUsername === a.purchaserUsername));
@@ -405,15 +408,21 @@ export const loadBoundPurchasersFromStorage = (): BoundPurchaser[] => {
   try {
     const ownerT = getDataOwner();
     let myCompanyT = ownerT;
+    let myNoT = '';
     try {
       const usT = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
-      myCompanyT = usT.find((u: any) => u.username === ownerT)?.companyName || ownerT;
+      const meT = usT.find((u: any) => u.username === ownerT);
+      myCompanyT = meT?.companyName || ownerT;
+      myNoT = noOfUser(meT);
     } catch { /* ignore */ }
     const appsT: any[] = JSON.parse(localStorage.getItem(COOPERATION_APPLICATIONS_KEY) || '[]');
+    // 原写法里 !a.targetSupplierName 就放行，相当于任何未填目标供应商的终止单都会当成发给本公司的；
+    // 改为先按供应商编号等值判定，解析不出编号才退回公司名全等
+    const amSupplierT = (a: any) => isTargetSupplierApp(a, { owner: ownerT, company: myCompanyT, no: myNoT });
     const pendingOf = (bp: any) => appsT.find((a: any) =>
       a.type === 'terminate' && a.status === 'pending' && !a.superseded && a.supplierInitiated !== true &&
       (a.purchaserCompanyName === bp.purchaserName || (bp.purchaserUsername && a.purchaserUsername === bp.purchaserUsername)) &&
-      (!a.targetSupplierName || a.targetSupplierName === myCompanyT || a.supplierUsername === ownerT));
+      amSupplierT(a));
     let chT = false;
     bound = bound.map((bp: any) => {
       if (bp.status === 'approved') {
@@ -492,8 +501,10 @@ export const loadBoundPurchasersFromStorage = (): BoundPurchaser[] => {
 const hasPendingPurchaserTerminate = (bp: any): boolean => {
   try {
     const apps: any[] = JSON.parse(localStorage.getItem('cooperation_applications') || '[]');
+    // 必须同时限定“这条终止单确实是发给本供应商的”，否则别的供应商发起的终止会让本方客户列表误显示解除中
     return apps.some((a: any) =>
       a.type === 'terminate' && a.status === 'pending' && !a.superseded && a.supplierInitiated !== true &&
+      amTargetSupplier(a) &&
       (a.purchaserCompanyName === bp.purchaserName || (bp.purchaserUsername && a.purchaserUsername === bp.purchaserUsername)));
   } catch { return false; }
 };
@@ -1268,6 +1279,7 @@ const CustomerInfo: React.FC = () => {
     const currentSupplier = registeredUsers.find((u: any) => u.username === supplierUsername);
 
     // 1. 查找该采购商的登录用户名（记录优先，其次合作申请记录反查）
+    ensureCredsMigrated();
     const apps: any[] = JSON.parse(
       localStorage.getItem(COOPERATION_APPLICATIONS_KEY) || '[]'
     );
@@ -1275,6 +1287,7 @@ const CustomerInfo: React.FC = () => {
       (app: any) =>
         app.type === 'cooperation' &&
         app.status === 'approved' &&
+        amTargetSupplier(app) &&
         (app.purchaserCompanyName === terminatingCustomer.name || app.purchaserUsername === terminatingCustomer.purchaserUsername || app.purchaserUsername === terminatingCustomer.id)
     );
     const purchaserUsername = terminatingCustomer.purchaserUsername || cooperationApp?.purchaserUsername || '';
@@ -1292,14 +1305,17 @@ const CustomerInfo: React.FC = () => {
     try {
       const updatedApps = apps.map((a: any) => (
         a.type === 'terminate' && a.status === 'pending' && !a.superseded &&
+        amTargetSupplier(a) &&
         (a.purchaserCompanyName === terminatingCustomer.name || (purchaserUsername && a.purchaserUsername === purchaserUsername))
           ? { ...a, superseded: true } : a
       ));
-      updatedApps.push({
+      updatedApps.push(withCooperationCreds({
         applicationId: `TERM-${Date.now()}`,
         purchaserUsername,
         purchaserCompanyName: terminatingCustomer.name,
         targetSupplierName: currentSupplier?.companyName || supplierUsername,
+        targetSupplierNo: myCompanyNo(),
+        supplierUsername,
         targetSupplierId: supplierUsername,
         applyDate: dayjs().format('YYYY-MM-DD HH:mm:ss'),
         status: 'pending',
@@ -1307,7 +1323,7 @@ const CustomerInfo: React.FC = () => {
         type: 'terminate' as const,
         supplierInitiated: true,
         remark: `供应商「${currentSupplier?.companyName || supplierUsername}」发起终止与采购商「${terminatingCustomer.name}」的合作，7 天宽限后自动完成`,
-      });
+      }, { supplierNo: myCompanyNo(), purchaserNo: resolvePurchaserNo(terminatingCustomer) }));
       localStorage.setItem(COOPERATION_APPLICATIONS_KEY, JSON.stringify(updatedApps));
     } catch { /* ignore */ }
 
@@ -1519,19 +1535,31 @@ const CustomerInfo: React.FC = () => {
     if (!purchaserUser) return 'notfound';
     const currentUser = users.find((u: any) => u.username === myUsername);
     const supplierCompany = currentUser?.companyName || myUsername;
+    // 补凭证必须在 parse 之前：先改库再读，否则拿到的副本不含新字段，回写时会把已迁移的凭证一并抹掉
+    ensureCredsMigrated();
     const apps: any[] = JSON.parse(localStorage.getItem(COOPERATION_APPLICATIONS_KEY) || '[]');
     // 在途申请仅指 pending；历史 approved（含已解除合作后遗留）不算在途，下方统一作废后重新发起
-    const exists = apps.some((a: any) => (a.type || 'cooperation') === 'cooperation' && !a.superseded && a.purchaserUsername === purchaserUser.username && a.targetSupplierName === supplierCompany && a.status === 'pending');
+    // 同一对方判定凭证优先：采购商编号（或账号）+ 本方供应商编号；无编号的历史记录才按名称全等兜底
+    const myNo = myCompanyNo() || noOfUser(currentUser);
+    const sameSupplierSide = (a: any): boolean => {
+      if (!myNo) return a.targetSupplierName === supplierCompany;
+      const appNo = String(a.targetSupplierNo || '').trim();
+      return appNo ? appNo === myNo : a.targetSupplierName === supplierCompany;
+    };
+    const samePeerApp = (a: any) => (a.type || 'cooperation') === 'cooperation' && !a.superseded
+      && (a.purchaserUsername === purchaserUser.username || purchaserNoOf(a) === String(no))
+      && sameSupplierSide(a);
+    const exists = apps.some((a: any) => samePeerApp(a) && a.status === 'pending');
     if (exists) return 'exists';
     // 作废旧的已批准合作申请
     apps.forEach((a: any) => {
-      if (a.purchaserUsername === purchaserUser.username && a.targetSupplierName === supplierCompany && (a.type || 'cooperation') === 'cooperation' && a.status === 'approved') a.superseded = true;
+      if (samePeerApp(a) && a.status === 'approved') a.superseded = true;
     });
     // 采购商平台供应商列表条目（待合作），已存在则复用
     const pKey = 'purchaser_suppliers_' + purchaserUser.username;
     let list: any[] = [];
     try { list = JSON.parse(localStorage.getItem(pKey) || '[]'); } catch { /* ignore */ }
-    let entry = list.find((s: any) => s.supplierName === supplierCompany);
+    let entry = list.find((s: any) => (myNo && String(s.supplierNo || '') === myNo) || s.supplierName === supplierCompany);
     const now = dayjs().format('YYYY-MM-DD HH:mm:ss');
     if (!entry) {
       entry = {
@@ -1546,6 +1574,7 @@ const CustomerInfo: React.FC = () => {
         remark: '供应商通过采购商编号申请合作',
         // 供应商主动发起标记：随 purchaser_suppliers_ 同步键跨浏览器送达，采购商侧据此显示待审核
         supplierInitiated: true,
+        supplierNo: myNo,
         supplierUsername: myUsername,
         supplierInitiatedDate: now,
       };
@@ -1553,11 +1582,12 @@ const CustomerInfo: React.FC = () => {
     } else {
       // 复用已有条目：拒绝/终止后重新申请回退待确认，并刷新供应商主动发起标记
       // （cooperation_applications 不参与跨浏览器同步，标记必须落在条目上）
-      const idx = list.findIndex((s: any) => s.supplierName === supplierCompany);
+      const idx = list.findIndex((s: any) => (myNo && String(s.supplierNo || '') === myNo) || s.supplierName === supplierCompany);
       entry = {
         ...entry,
         cooperationStatus: entry.cooperationStatus === 'rejected' || entry.cooperationStatus === 'terminated' ? 'pending' : entry.cooperationStatus,
         supplierInitiated: true,
+        supplierNo: myNo || entry.supplierNo || '',
         supplierUsername: myUsername,
         supplierInitiatedDate: now,
         // 跨账号代写对方键：状态变更必须带事件时间，服务端才能据 statusTs 分辨陈旧副本并重拦截旧状态回写
@@ -1566,7 +1596,7 @@ const CustomerInfo: React.FC = () => {
       list[idx] = entry;
     }
     localStorage.setItem(pKey, JSON.stringify(list));
-    apps.push({
+    apps.push(withCooperationCreds({
       applicationId: `COOP-PNO-${Date.now()}`,
       purchaserUsername: purchaserUser.username,
       purchaserCompanyName: purchaserUser.companyName || '',
@@ -1574,6 +1604,7 @@ const CustomerInfo: React.FC = () => {
       purchaserContact: purchaserUser.contactPerson || '',
       purchaserPhone: purchaserUser.phone || '',
       targetSupplierName: supplierCompany,
+      targetSupplierNo: myNo,
       targetSupplierId: entry.id,
       supplierUsername: myUsername,
       canDirectApprove: false,
@@ -1582,7 +1613,7 @@ const CustomerInfo: React.FC = () => {
       remark: `供应商「${supplierCompany}」通过采购商编号 ${no} 申请合作`,
       type: 'cooperation',
       supplierInitiated: true,
-    });
+    }, { supplierNo: myNo, purchaserNo: no }));
     localStorage.setItem(COOPERATION_APPLICATIONS_KEY, JSON.stringify(apps));
     window.dispatchEvent(new Event('cooperation-applications-changed'));
     return 'sent';

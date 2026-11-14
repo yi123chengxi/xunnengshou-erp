@@ -29,6 +29,7 @@ import { compressImageFile } from '../utils/imageCompress';
 import { loadSupplierFinishedProducts } from '../utils/supplierProducts';
 import { loadRoleRecords, loadRoleAll, upsertRecords, loadAllReconRecordsUnion } from '../utils/reconStore';
 import { resolveLatestCompanyName } from '../utils/nameSync';
+import { appMatchesSupplierEntry, purchaserNoOf, myCompanyNo } from '../utils/cooperationCred';
 
 const { Text } = Typography;
 const PRIMARY = '#1890ff';
@@ -511,6 +512,8 @@ const PurchaserBillPage: React.FC = () => {
     try { list = JSON.parse(localStorage.getItem(supplierStorageKey) || '[]'); } catch { /* ignore */ }
     try { apps = JSON.parse(localStorage.getItem('cooperation_applications') || '[]'); } catch { /* ignore */ }
     const owner = getDataOwner();
+    // 本方采购商编号：列表项按账号分区，但存在子账号/换端读取时 username 口径不完备的情况，补一重编号等值判定
+    const myPurchaserNo = myCompanyNo();
     (Array.isArray(list) ? list : []).forEach((s: any) => {
       if (!s) return;
       const name = String(s.supplierName || '').trim();
@@ -520,8 +523,9 @@ const PurchaserBillPage: React.FC = () => {
       if (status === 'pending') {
         const ok = (Array.isArray(apps) ? apps : []).some((a: any) => a
           && (a.type || 'cooperation') === 'cooperation' && a.status === 'approved' && !a.superseded
-          && (String(a.purchaserUsername || '') === owner || String(a.purchaserUsername || '') === username)
-          && ((a.purchaserSupplierEntryId && a.purchaserSupplierEntryId === s.id) || a.targetSupplierName === name || a.targetSupplierId === s.id));
+          && ((String(a.purchaserUsername || '') === owner || String(a.purchaserUsername || '') === username)
+            || (!!myPurchaserNo && purchaserNoOf(a) === myPurchaserNo))
+          && appMatchesSupplierEntry(a, s));
         if (ok) status = 'approved';
       }
       if (status === 'rejected') return;
@@ -690,7 +694,18 @@ const PurchaserBillPage: React.FC = () => {
     };
     try {
       const owner = getDataOwner();
-      put(JSON.parse(localStorage.getItem(`pageData_basic-data_product-list_${owner}`) || '[]'));
+      loadProductMasterMap(owner).forEach((p: any) => {
+        const code = String((p && p.productCode) || '').trim();
+        const unit = String((p && p.unit) || '').trim();
+        if (code && unit && !map.has(code)) map.set(code, unit);
+      });
+      // 兜底：同浏览器内其它账户/供应商商品表副本（采购商常按供应商商品编码制单）
+      const prefix = 'pageData_basic-data_product-list_';
+      for (let i = 0; i < localStorage.length; i += 1) {
+        const k = localStorage.key(i);
+        if (!k || k.indexOf(prefix) !== 0 || k.endsWith('_ts') || k === `${prefix}${owner}`) continue;
+        try { put(JSON.parse(localStorage.getItem(k) || '[]')); } catch { /* ignore */ }
+      }
     } catch { /* ignore */ }
     put(supplierProducts);
     put(spDetailData);

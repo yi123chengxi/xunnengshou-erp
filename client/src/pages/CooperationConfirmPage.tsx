@@ -5,6 +5,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
 import { ensureDatasetFromServer } from '../utils/serverSync';
 import { safeSetItem } from '../utils/storageQuota';
+import { noOfUser, noFromAny } from '../utils/cooperationCred';
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -157,6 +158,8 @@ const CooperationConfirmPage: React.FC = () => {
       purchaserContact: '',
       purchaserPhone: tokenData.purchaserPhone,
       targetSupplierName: currentSupplier.companyName || tokenData.supplierName,
+      targetSupplierNo: noOfUser(currentSupplier),
+      purchaserNo: noFromAny(tokenData.purchaserName),
       targetSupplierId: supplierUsername,
       purchaserSupplierEntryId: (tokenData as any).purchaserSupplierEntryId || '',
       canDirectApprove: true,

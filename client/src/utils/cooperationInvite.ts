@@ -7,6 +7,7 @@
  *   供应商侧已绑定采购商（boundPurchasers_，同浏览器即时回写）。
  */
 import dayjs from 'dayjs';
+import { appMatchesSupplierEntry, noOfUser } from './cooperationCred';
 
 export const PENDING_INVITE_KEY = 'pending_cooperation_invite';
 export const COOPERATION_APPLICATIONS_KEY = 'cooperation_applications';
@@ -77,10 +78,11 @@ export const takePendingInvite = (): CooperationInvitePayload | null => {
 // ========== 采购商同意邀约：立即建立合作 ==========
 export const acceptCooperationInvite = (p: CooperationInvitePayload, purchaserOwner: string): { ok: boolean; msg: string } => {
   const users = loadRegisteredUsers();
-  const supplierUser = resolveUserByCompanyNo(p.no);
-  if (!supplierUser) return { ok: false, msg: '未找到邀约公司编号对应的供应商账号，请联系供应商核实' };
   const me = users.find((u: any) => u.username === purchaserOwner);
   const myCompany = me?.companyName || purchaserOwner;
+  const supplierUser = resolveUserByCompanyNo(p.no);
+  if (!supplierUser) return { ok: false, msg: '未找到邀约公司编号对应的供应商账号，请联系供应商核实' };
+  const myNo = noOfUser(me);
   const supplierCompany = supplierUser.companyName || supplierUser.username;
   const now = dayjs().format('YYYY-MM-DD HH:mm:ss');
   const today = dayjs().format('YYYY-MM-DD');
@@ -141,7 +143,7 @@ export const acceptCooperationInvite = (p: CooperationInvitePayload, purchaserOw
     if (
       (a.type || 'cooperation') === 'cooperation' && a.status === 'pending' && !a.superseded &&
       a.purchaserUsername === purchaserOwner &&
-      (a.targetSupplierName === supplierCompany || a.targetSupplierId === entry.id || a.purchaserSupplierEntryId === entry.id)
+      (a.targetSupplierName === supplierCompany || appMatchesSupplierEntry(a, entry))
     ) {
       a.superseded = true;
       a.status = 'rejected';
@@ -158,6 +160,8 @@ export const acceptCooperationInvite = (p: CooperationInvitePayload, purchaserOw
     purchaserContact: me?.contactPerson || '',
     purchaserPhone: me?.phone || '',
     targetSupplierName: supplierCompany,
+    targetSupplierNo: String(p.no || '').trim(),
+    purchaserNo: myNo,
     targetSupplierId: entry.id,
     purchaserSupplierEntryId: entry.id,
     supplierUsername: supplierUser.username,
@@ -215,6 +219,7 @@ export const rejectCooperationInvite = (p: CooperationInvitePayload, purchaserOw
   const myCompany = me?.companyName || purchaserOwner;
   const supplierUser = resolveUserByCompanyNo(p.no);
   const supplierCompany = supplierUser?.companyName || p.no;
+  const myNo = noOfUser(me);
   const now = dayjs().format('YYYY-MM-DD HH:mm:ss');
   const apps: any[] = JSON.parse(localStorage.getItem(COOPERATION_APPLICATIONS_KEY) || '[]');
   const appId = `COOP-INV-${Date.now()}`;
@@ -227,6 +232,8 @@ export const rejectCooperationInvite = (p: CooperationInvitePayload, purchaserOw
     purchaserContact: me?.contactPerson || '',
     purchaserPhone: me?.phone || '',
     targetSupplierName: supplierCompany,
+    targetSupplierNo: String(p.no || '').trim(),
+    purchaserNo: myNo,
     targetSupplierId: '',
     purchaserSupplierEntryId: '',
     supplierUsername: supplierUser?.username || '',
