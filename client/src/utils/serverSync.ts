@@ -56,6 +56,7 @@ const SYNC_PREFIXES = [
   'recharge_record_',          // 充值记录（开发者后台跨账号读取）
   'bound_purchasers_',         // 已绑定采购商（供应商↔采购商协作）
   'independent_purchasers_',   // 独立采购商（跨账号协作）
+  'supplier_receipt_inbox_',   // 采购商已付款待登记（采购商支付成功 → 供应商「新增收款」弹窗）
   // ==== 表格列配置（换电脑后列顺序/显隐保持一致）====
   'colWidths_', 'mainTablePageSize_', 'billAddColConfig_', 'billDetailColConfig_', 'billFieldOrder_', 'billFieldVisibility_', 'billItemDisplay_',
   'pickListFields_', 'po_view_mode_', 'print_dialog_tpl_', 'bomPrintCols_', 'prBomFieldConfig_', 'returnRegColConfig_',
@@ -188,7 +189,18 @@ function isKeyForCurrentAccount(key: string): boolean {
   return owner === cur || owner === '' || owner === 'default';
 }
 
-// ============ 服务器可用性探测（15s 缓存，超时 1.5s） ============
+/**
+ * 单向下发键：本端把数据写进「对方账号」的键（后缀是对方账号）。
+ * 必须允许任意登录账号上传/补传，否则换账号后补传队列会把它们当成“别人的数据”永久跳过；
+ * 但不能放行拉取（否则会把所有租户的收件箱整份拉到本机，白吃配额）。
+ */
+const CROSS_TENANT_PUSH_PREFIXES = ['supplier_receipt_inbox_'];
+function canUploadKey(key: string): boolean {
+  if (isKeyForCurrentAccount(key)) return true;
+  return CROSS_TENANT_PUSH_PREFIXES.some(p => key.startsWith(p));
+}
+
+// ============ 服务器可用性探测（15s 缓存，超时 1.5s）============
 let serverState: { ok: boolean; at: number } = { ok: false, at: 0 };
 async function serverAvailable(): Promise<boolean> {
   const now = Date.now();
@@ -315,8 +327,8 @@ export async function flushUploadQueue(force = false): Promise<number> {
     for (const it of items) {
       if (!isSyncKey(it.key)) { queueDelete(it.key, it.ts); continue; }
       // 换账号后队列里可能残留上一个账号的键：跳过但保留，等该账号登录后再补传，
-      // 避免把别人的数据写进当前账号
-      if (!isKeyForCurrentAccount(it.key)) continue;
+      // 避免把别人的数据写进当前账号（单向下发键除外：它们本来就要写进对方账号）
+      if (!canUploadKey(it.key)) continue;
       if (!force && it.nextAt > now) continue;
       const ok = await doUpload(it.key, it.value, it.ts, knownTs.get(it.key) ?? 0, it.removedIds);
       if (ok) {
@@ -527,6 +539,25 @@ export async function appendRowsToRemoteKey(key: string, rows: any[], idOf: (r: 
     raw(`${key}_ts`, String(Date.now()));
     saveDataset(key, json);
     return added > 0;
+  } catch { return false; }
+}
+
+/**
+ * 跨租户键上传：强制以 baseTs=0 提交，让服务端走「客户端已过期 → 记录级并集」分支，
+ * 而不是客户端自认为最新时的整键替换。用于双方都会改写的共享键（如待登记收件箱），
+ * 避免两端同时写入时一方的整键快照冲掉另一方刚追加的行。
+ * 调用方必须已完成「先拉服务端 → 并集 → 打墓碑」再调用本函数。
+ */
+export async function uploadWithUnionMerge(key: string, json: string): Promise<boolean> {
+  if (!isSyncKey(key)) return false;
+  const e = pending.get(key);
+  if (e) { clearTimeout(e.timer); pending.delete(key); }
+  const ts = Date.now();
+  enqueueUpload(key, json, ts);   // 离线/超时也能在下次联网时补传
+  try {
+    const ok = await doUpload(key, json, ts, 0);
+    if (ok) queueDelete(key, ts);
+    return ok;
   } catch { return false; }
 }
 

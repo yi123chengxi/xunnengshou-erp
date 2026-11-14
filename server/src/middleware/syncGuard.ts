@@ -94,6 +94,8 @@ const SHARED_PREFIXES = [
   'roles_', 'role_permsettings_', 'preset_role_overrides_',
   // 跨租户协作 / 开发者后台需要跨账号读取的业务键（后缀是对方账号，不能按末段判归属）
   'bound_purchasers_', 'independent_purchasers_',
+  // 采购商支付成功后写入供应商「新增收款」待登记收件箱（键后缀是供应商账号）
+  'supplier_receipt_inbox_',
   'month_end_return_', 'month_end_ship_', 'recharge_record_',
 ];
 

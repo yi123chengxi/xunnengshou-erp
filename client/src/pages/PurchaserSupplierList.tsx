@@ -51,7 +51,8 @@ import { findInviteRecord, markInviteUsed } from '../utils/inviteRegistry';
 import { isAccountingMode, writeAutoEntries, loadSubjectOptions, subjectFilterOption } from '../utils/accountingBridge';
 import { getCurrentUserDisplayName } from '../utils/billLog';
 import { buildCredIndex } from '../utils/nameSync';
-import { compressImageFile } from '../utils/imageCompress';
+import { compressImageFile, recompressDataUrl } from '../utils/imageCompress';
+import { pushPaidToSupplier } from '../utils/supplierReceiptInbox';
 import { copyText } from '../utils/clipboard';
 
 const { Text, Title } = Typography;
@@ -661,6 +662,26 @@ const PurchaserSupplierList: React.FC = () => {
       bankAccount: payBank, screenshot: payShot, operator,
     });
     if (!res.ok) { message.error(res.msg || '付款写入失败'); return; }
+    // 付款成功：同步投递到供应商「客户基础信息-客户列表-新增收款」待登记（与收/付申请支付链路同一口径）
+    const shotRaw = payShot;
+    const paidTarget = payTarget;
+    const paidAmount = payAmount;
+    const paidBank = payBank;
+    void (async () => {
+      let shot = shotRaw;
+      try { if (shot) shot = await recompressDataUrl(shot, 1400, 0.78, 300000); } catch { /* 压缩失败用原图兜底 */ }
+      await pushPaidToSupplier({
+        purchaserOwner: getDataOwner(),
+        supplierName: paidTarget.supplierName,
+        supplierUsername: paidTarget.supplierUsername,
+        paymentKey: `direct-${paidTarget.id || paidTarget.supplierName}-${Date.now()}`,
+        requestNo: '',
+        amount: paidAmount,
+        paidAt: new Date().toLocaleString('zh-CN'),
+        payAccount: paidBank,
+        screenshot: shot,
+      });
+    })().catch(() => { /* 待登记投递失败不影响本方付款/记账结果 */ });
     // 会计账薄版本：自动生成借贷两条会计分录（摘要含供应商名称）
     if (isAccountingMode(getDataOwner())) {
       writeAutoEntries(getDataOwner(), {
@@ -706,6 +727,8 @@ const PurchaserSupplierList: React.FC = () => {
       recvBankAccount: applyPayTarget.bankAccountNo || '',
       source: 'supplier',
       supplierName: applyPayTarget.supplierName,
+      // 供应商账号随单落库：支付成功后据此把待登记收款投递到供应商侧（公司名重名/改名也能对上）
+      supplierUsername: applyPayTarget.supplierUsername || '',
       debitSubject: applyDebit || '应付账款',
       creditSubject: applyCredit || '银行存款',
       status: 'pending_review',

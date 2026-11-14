@@ -14,6 +14,8 @@ import { saveDataset } from '../utils/dataStore';
 import { flushDatasetUploadAsync } from '../utils/serverSync';
 import { recordSupplierPayment, incrementCustomerReceived } from '../utils/paySummary';
 import { resolveCompanyCred } from '../utils/nameSync';
+import { pushPaidToSupplier } from '../utils/supplierReceiptInbox';
+import { recompressDataUrl } from '../utils/imageCompress';
 import { sumPayRecords, installmentStatusOf } from '../utils/receiptWrite';
 import { isNotificationTypeEnabled } from '../utils/pushNotification';
 import { isAccountingMode, writeAutoEntries, loadSubjectOptions, subjectFilterOption } from '../utils/accountingBridge';
@@ -56,6 +58,7 @@ interface PaymentRequestRec {
   recvQrcode?: string;         // 收款码图片
   source: 'manual' | 'supplier' | 'order-installment' | 'order-bank-transfer';
   supplierName?: string;
+  supplierUsername?: string;   // 供应商账号（申请时落库，支付成功后据此投递待登记收件箱）
   status: 'pending_review' | 'approved' | 'rejected' | 'paid' | 'pending_confirm' | 'confirmed';
   rejectReason?: string;
   applicant: string;
@@ -570,10 +573,33 @@ const PaymentRequestPage: React.FC = () => {
       } catch (err) { console.error('付款申请记账写入失败', err); }
     }
     // 3. 更新申请状态
+    const paidAtText = new Date().toLocaleString('zh-CN');
     save(records.map(r => r.key === payTarget.key ? {
-      ...r, status: 'paid' as const, payer: payerName, paidAt: new Date().toLocaleString('zh-CN'),
+      ...r, status: 'paid' as const, payer: payerName, paidAt: paidAtText,
       payAccount: bank.name, payScreenshot: payShot || undefined, linkedBookKey: bookKey, updatedAt: new Date().toISOString(),
     } : r));
+    // 3.1 供应商货款：支付成功即投递到供应商「客户基础信息-客户列表-新增收款」待登记收件箱
+    //     （跨租户键，行内含付款时间/金额/支付截图，供应商可快速填充金额或删除）
+    if (payTarget.source === 'supplier' && payTarget.supplierName) {
+      const shotRaw = payShot;
+      const pushTarget = payTarget;
+      void (async () => {
+        let shot = shotRaw;
+        // 截图先压到最长边 1400px：收件箱行内嵌 base64，避免整键体积膨胀到无法同步
+        try { if (shot) shot = await recompressDataUrl(shot, 1400, 0.78, 300000); } catch { /* 压缩失败用原图兜底 */ }
+        await pushPaidToSupplier({
+          purchaserOwner: owner,
+          supplierName: pushTarget.supplierName || '',
+          supplierUsername: pushTarget.supplierUsername,
+          paymentKey: pushTarget.key,
+          requestNo: pushTarget.requestNo,
+          amount: pushTarget.amount,
+          paidAt: paidAtText,
+          payAccount: bank.name,
+          screenshot: shot,
+        });
+      })().catch(() => { /* 待登记投递失败不影响本方付款/记账结果 */ });
+    }
     setPayTarget(null); setPayBankKey(''); setPayShot('');
     // 会计账薄版本：支付后自动生成借贷两条会计分录（摘要=付款说明；保证金退回默认借方=其他应付款）
     if (isAccountingMode(getDataOwner())) {

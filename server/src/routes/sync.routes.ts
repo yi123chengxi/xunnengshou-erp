@@ -58,6 +58,10 @@ const NEVER_SHRINK_PREFIXES = ['purchaser_bills_', 'pageData_customer_bill-detai
 // 都会把另一端刚建的账号擦掉（表现为「新增的子账号在别的浏览器没有」）。
 // 行内有 key/id，可按 removedIds 精确删除；未申报的缩水一律并集保留。
 const isNeverShrinkKey = (key: string): boolean => NEVER_SHRINK_PREFIXES.some(p => key.startsWith(p));
+// 带「已处理」墓碑语义的跨租户键（采购商已付款待登记收件箱）：采购商追加行、供应商打 handled 墓碑，
+// 供应商端已处理的行不得被采购商端的陈旧副本（离线期间缓存的 handled=false）复活。
+const STICKY_HANDLED_PREFIXES = ['supplier_receipt_inbox_'];
+const isStickyHandledKey = (key: string): boolean => STICKY_HANDLED_PREFIXES.some(p => key.startsWith(p));
 
 // ============ 权限类数据集变更实时通知 ============
 // 权限数据写入成功后，经聊天 WebSocket 通知该租户所有在线端（主账号 + 全部子账号）
@@ -243,7 +247,7 @@ router.put('/dataset', async (req: Request, res: Response) => {
       if (isNeverShrinkKey(key)) {
         const coop = isCooperationMirrorKey(key);
         const guarded = mergeWithExplicitRemovals(row.dataset_json, json, req.body.removedIds, coop)
-          || mergeArrayDatasets(row.dataset_json, json, isMergeAlwaysKey(key), coop);
+          || mergeArrayDatasets(row.dataset_json, json, isMergeAlwaysKey(key), coop, isStickyHandledKey(key));
         if (guarded) {
           const gTs = Math.max(ts, row.updated_at);
           await store.forceUpsertDataset(key, guarded, owner, gTs);
@@ -255,7 +259,7 @@ router.put('/dataset', async (req: Request, res: Response) => {
       // 只增不删键/墓碑语义键：即使客户端自认为最新，也强制记录级并集合并，
       // 防止本地缺数据的客户端清空服务端记录或复活已墓碑的记录
       if (APPEND_ONLY_KEYS.includes(key) || isMergeAlwaysKey(key)) {
-        const guarded = mergeArrayDatasets(row.dataset_json, json, isMergeAlwaysKey(key));
+        const guarded = mergeArrayDatasets(row.dataset_json, json, isMergeAlwaysKey(key), false, isStickyHandledKey(key));
         if (guarded) {
           const gTs = Math.max(ts, row.updated_at);
           await store.forceUpsertDataset(key, guarded, owner, gTs);
@@ -276,8 +280,8 @@ router.put('/dataset', async (req: Request, res: Response) => {
     // 客户端已过期 → 并集合并，防止旧数据删除新增记录
     const coop = isCooperationMirrorKey(key);
     const merged = isNeverShrinkKey(key)
-      ? (mergeWithExplicitRemovals(row.dataset_json, json, req.body.removedIds, coop) || mergeArrayDatasets(row.dataset_json, json, isMergeAlwaysKey(key), coop))
-      : mergeArrayDatasets(row.dataset_json, json, isMergeAlwaysKey(key), coop);
+      ? (mergeWithExplicitRemovals(row.dataset_json, json, req.body.removedIds, coop) || mergeArrayDatasets(row.dataset_json, json, isMergeAlwaysKey(key), coop, isStickyHandledKey(key)))
+      : mergeArrayDatasets(row.dataset_json, json, isMergeAlwaysKey(key), coop, isStickyHandledKey(key));
     const finalJson = merged || json;
     const finalTs = Math.max(ts, row.updated_at);
     await store.forceUpsertDataset(key, finalJson, owner, finalTs);
@@ -295,7 +299,7 @@ router.put('/dataset', async (req: Request, res: Response) => {
  * 保留 existing 中 incoming 未携带的字段。对账记录由供应商/采购商双端各写不同断言字段
  * （supResult/supPerson vs purResult/purPerson），整条覆盖会互相抹除对方刚写入的结果；
  * 字段级并集让两端贡献共存，incoming 显式携带的字段（含清空为 ''）仍以 incoming 为准。 */
-function mergeArrayDatasets(existingJson: string, incomingJson: string, fieldLevel = false, coopGuard = false): string | null {
+function mergeArrayDatasets(existingJson: string, incomingJson: string, fieldLevel = false, coopGuard = false, stickyHandled = false): string | null {
   try {
     const a = JSON.parse(existingJson);
     const b = JSON.parse(incomingJson);
@@ -313,6 +317,10 @@ function mergeArrayDatasets(existingJson: string, incomingJson: string, fieldLev
       // 字段级并集：existing 为底、incoming 覆盖其上（incoming 省略的字段保留 existing 值）
       const base = fieldLevel ? { ...av, ...r } : (coopGuard ? protectStaleStatus(av, r) : r);
       if (av.delisted === true && base.delisted !== true) return { ...base, delisted: true, delistedAt: av.delistedAt };
+      // 已处理墓碑粘滞（待登记收件箱）：服务端已 handled 的行不被对方的陈旧 handled=false 快照复活
+      if (stickyHandled && av.handled === true && base.handled !== true) {
+        return { ...base, handled: true, handledMode: av.handledMode, handledAt: av.handledAt, handledBy: av.handledBy };
+      }
       return base;
     });
     const aOnly = a.filter((r: any) => !bIds.has(idOf(r)));

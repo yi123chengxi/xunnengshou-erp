@@ -56,6 +56,8 @@ import { resolveLatestCompanyName, buildCredIndex } from '../utils/nameSync';
 import { reconcileCooperationPairs } from '../utils/cooperationReconcile';
 import { dedupeBoundPurchasers } from '../utils/boundPurchaserDedupe';
 import { copyText } from '../utils/clipboard';
+import { loadSupplierReceiptInbox, markReceiptInboxHandled, inboxRowBelongsTo } from '../utils/supplierReceiptInbox';
+import type { SupplierReceiptInboxRow } from '../utils/supplierReceiptInbox';
 
 const { Text } = Typography;
 const { Option } = Select;
@@ -851,6 +853,10 @@ const CustomerInfo: React.FC = () => {
   const [receiptCustomer, setReceiptCustomer] = useState<CustomerRecord | null>(null);
   const [receiptAmount, setReceiptAmount] = useState<number | null>(null);
   const [receiptBankKey, setReceiptBankKey] = useState('');
+  // 采购商已通过「收/付申请」支付、带待登记的款项（金额可一键回填收款金额）
+  const [receiptInboxRows, setReceiptInboxRows] = useState<SupplierReceiptInboxRow[]>([]);
+  const [receiptInboxLoading, setReceiptInboxLoading] = useState(false);
+  const receiptInboxSeq = useRef(0);   // 切换客户时丢弃上一位客户的异步结果
   const [receiptDetailVisible, setReceiptDetailVisible] = useState(false);
   const [receiptDetailCustomer, setReceiptDetailCustomer] = useState<CustomerRecord | null>(null);
   const [receiptDetailSearch, setReceiptDetailSearch] = useState('');  // 收款明细弹窗搜索关键字
@@ -1990,6 +1996,37 @@ const CustomerInfo: React.FC = () => {
     });
   };
 
+  // 采购商已支付待登记：打开「新增收款」时加载（本地即时 + 服务端补齐，换电脑/换浏览器也能看到）
+  const loadReceiptInbox = useCallback(async (customer: CustomerRecord | null) => {
+    const seq = ++receiptInboxSeq.current;
+    if (!customer) { setReceiptInboxRows([]); return; }
+    setReceiptInboxLoading(true);
+    try {
+      const rows = await loadSupplierReceiptInbox(getDataOwner());
+      if (seq !== receiptInboxSeq.current) return;   // 已切到其他客户，丢弃本次结果
+      setReceiptInboxRows(rows.filter(r => inboxRowBelongsTo(r, customer)));
+    } catch {
+      if (seq === receiptInboxSeq.current) setReceiptInboxRows([]);
+    } finally {
+      if (seq === receiptInboxSeq.current) setReceiptInboxLoading(false);
+    }
+  }, []);
+
+  // 快速填充：把该笔付款金额填入收款金额，并立即清除这条待登记（避免下次重复登记）
+  const handleQuickFillReceiptInbox = (row: SupplierReceiptInboxRow) => {
+    setReceiptAmount(Number(row.amount) || null);
+    setReceiptInboxRows(prev => prev.filter(r => r.key !== row.key));
+    void markReceiptInboxHandled(getDataOwner(), [row.key], 'fill');
+    message.success(`已填入收款金额 ¥${(Number(row.amount) || 0).toFixed(2)}，该条待登记已清除`);
+  };
+
+  // 删除待登记：仅隐去该条（打墓碑，防止服务端合并后复活）
+  const handleDeleteReceiptInbox = (row: SupplierReceiptInboxRow) => {
+    setReceiptInboxRows(prev => prev.filter(r => r.key !== row.key));
+    void markReceiptInboxHandled(getDataOwner(), [row.key], 'delete');
+    message.success('已删除该条待登记记录');
+  };
+
   // 新增收款：创建待确认记录到收/付申请-收款确认
   const handleSaveReceipt = () => {
     if (!receiptCustomer) return;
@@ -2026,6 +2063,7 @@ const CustomerInfo: React.FC = () => {
     setReceiptModalVisible(false);
     setReceiptAmount(null);
     setReceiptBankKey('');
+    setReceiptInboxRows([]);
     setReceiptCustomer(null);
     message.success('收款已提交到「收/付申请 - 收款确认」，确认到账后将自动写入银行明细、已收货款及记账');
   };
@@ -2384,7 +2422,7 @@ const CustomerInfo: React.FC = () => {
             编辑
           </Button>
           <Button type="link" size="small" icon={<DollarOutlined />} style={{ color: '#52c41a' }}
-            onClick={() => { setReceiptCustomer(record); setReceiptAmount(null); setReceiptBankKey(''); setReceiptModalVisible(true); }}>
+            onClick={() => { setReceiptCustomer(record); setReceiptAmount(null); setReceiptBankKey(''); setReceiptInboxRows([]); setReceiptModalVisible(true); void loadReceiptInbox(record); }}>
             新增收款
           </Button>
           <Button type="link" size="small" onClick={() => navigate(`/customer/price-strategy?customer=${encodeURIComponent(record.id)}`)}>
@@ -2883,32 +2921,77 @@ const CustomerInfo: React.FC = () => {
       <Modal
         title={<span><DollarOutlined style={{ marginRight: 8, color: '#52c41a' }} />新增收款{receiptCustomer ? ` — ${receiptCustomer.name}` : ''}</span>}
         open={receiptModalVisible}
-        onCancel={() => { setReceiptModalVisible(false); setReceiptAmount(null); setReceiptBankKey(''); setReceiptCustomer(null); }}
+        onCancel={() => { setReceiptModalVisible(false); setReceiptAmount(null); setReceiptBankKey(''); setReceiptInboxRows([]); setReceiptInboxLoading(false); setReceiptCustomer(null); receiptInboxSeq.current++; }}
         onOk={handleSaveReceipt}
         okText="提交"
         cancelText="取消"
-        width={420}
+        width={720}
         destroyOnClose
       >
-        <div style={{ marginTop: 16 }}>
-          <div style={{ marginBottom: 4, fontSize: 12, color: '#5a6d85' }}>收款金额(元) <span style={{ color: '#ff4d4f' }}>*</span></div>
-          <InputNumber style={{ width: '100%' }} min={0} precision={2} prefix="¥" placeholder="请输入收款金额"
-            value={receiptAmount} onChange={v => setReceiptAmount(v === null ? null : v)} />
-        </div>
-        <div style={{ marginTop: 12 }}>
-          <div style={{ marginBottom: 4, fontSize: 12, color: '#5a6d85' }}>收款银行账户</div>
-          <Select style={{ width: '100%' }} value={receiptBankKey || undefined} placeholder="选择收款入账银行账户" allowClear
-            showSearch filterOption={(input, option) => String(option?.label ?? '').toLowerCase().includes(input.toLowerCase())}
-            onChange={v => setReceiptBankKey(v || '')}
-            options={(() => {
-              try {
-                const banks: any[] = JSON.parse(localStorage.getItem(`pageData_finance_bank-account_${getDataOwner()}`) || '[]');
-                return banks.filter((b: any) => b.status !== 'disabled').map((b: any) => ({
-                  label: `${b.name} - ${b.bankName || ''} ${b.balance !== undefined ? `(余额 ¥${Number(b.balance).toFixed(2)})` : ''}`,
-                  value: b.key,
-                }));
-              } catch { return []; }
-            })()} />
+        {/* 采购商已支付待登记：来源「财务管理-收/付申请」中已支付成功的供应商货款 */}
+        {receiptInboxLoading && (
+          <div style={{ marginTop: 10, fontSize: 12, color: '#8c9bab' }}>正在获取采购商付款记录…</div>
+        )}
+        {receiptInboxRows.length > 0 && (
+          <div style={{ marginTop: 8 }}>
+            <Alert type="success" showIcon style={{ marginBottom: 8, padding: '5px 10px' }}
+              message={<span style={{ fontSize: 12 }}>采购商已通过「收/付申请」付款，可点「快速填充」把金额填入下方收款金额并自动清除该条（清除后不会再出现，避免重复登记）</span>} />
+            <Table<SupplierReceiptInboxRow>
+              bordered size="small" rowKey="key" pagination={false}
+              dataSource={receiptInboxRows}
+              scroll={{ x: 620, y: 200 }}
+              columns={[
+                {
+                  title: '付款时间', dataIndex: 'paidAt', key: 'paidAt', width: 160,
+                  render: (v: string) => <span style={{ fontSize: 12 }}>{v || '—'}</span>,
+                },
+                {
+                  title: '金额(元)', dataIndex: 'amount', key: 'amount', width: 110, align: 'right',
+                  render: (v: number) => <Text strong style={{ color: '#ff4d4f' }}>¥{(Number(v) || 0).toFixed(2)}</Text>,
+                },
+                {
+                  title: '图片', dataIndex: 'screenshot', key: 'screenshot', width: 92, align: 'center',
+                  render: (v: string) => (v
+                    ? <Image src={v} width={52} height={40} style={{ objectFit: 'cover', borderRadius: 4 }} preview={{ mask: '点击放大' }} />
+                    : <Text type="secondary" style={{ fontSize: 12 }}>无</Text>),
+                },
+                {
+                  title: '操作', key: 'action', width: 150,
+                  render: (_: unknown, row: SupplierReceiptInboxRow) => (
+                    <Space size={2}>
+                      <Button type="link" size="small" style={{ padding: 0, color: '#52c41a' }}
+                        onClick={() => handleQuickFillReceiptInbox(row)}>快速填充</Button>
+                      <Popconfirm title="确认删除该条待登记记录？" okText="删除" cancelText="取消" okButtonProps={{ danger: true }}
+                        onConfirm={() => handleDeleteReceiptInbox(row)}>
+                        <Button type="link" size="small" danger style={{ padding: 0 }}>删除</Button>
+                      </Popconfirm>
+                    </Space>
+                  ),
+                },
+              ]} />
+          </div>
+        )}
+        <div style={{ marginTop: 16, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+          <div style={{ width: 210 }}>
+            <div style={{ marginBottom: 4, fontSize: 12, color: '#5a6d85' }}>收款金额(元) <span style={{ color: '#ff4d4f' }}>*</span></div>
+            <InputNumber style={{ width: '100%' }} min={0} precision={2} prefix="¥" placeholder="请输入收款金额"
+              value={receiptAmount} onChange={v => setReceiptAmount(v === null ? null : v)} />
+          </div>
+          <div style={{ flex: 1, minWidth: 260 }}>
+            <div style={{ marginBottom: 4, fontSize: 12, color: '#5a6d85' }}>收款银行账户</div>
+            <Select style={{ width: '100%' }} value={receiptBankKey || undefined} placeholder="选择收款入账银行账户" allowClear
+              showSearch filterOption={(input, option) => String(option?.label ?? '').toLowerCase().includes(input.toLowerCase())}
+              onChange={v => setReceiptBankKey(v || '')}
+              options={(() => {
+                try {
+                  const banks: any[] = JSON.parse(localStorage.getItem(`pageData_finance_bank-account_${getDataOwner()}`) || '[]');
+                  return banks.filter((b: any) => b.status !== 'disabled').map((b: any) => ({
+                    label: `${b.name} - ${b.bankName || ''} ${b.balance !== undefined ? `(余额 ¥${Number(b.balance).toFixed(2)})` : ''}`,
+                    value: b.key,
+                  }));
+                } catch { return []; }
+              })()} />
+          </div>
         </div>
         <div style={{ marginTop: 16, padding: '8px 12px', background: '#f6f8fa', border: '1px solid #e3e8ee', borderRadius: 6, fontSize: 12, color: '#5a6d85', lineHeight: 1.8 }}>
           提交后收款记录将出现在「财务管理 - 收/付申请 - 收款确认」中，确认到账后将自动写入银行明细、客户已收货款及记账凭证。
