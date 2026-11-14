@@ -4,6 +4,7 @@ import bcrypt from 'bcryptjs';
 import dotenv from 'dotenv';
 import { store } from '../database/store';
 import { getJwtSecret } from '../utils/jwtSecret';
+import { resolveCompanyRoot } from '../services/storageUsage';
 
 dotenv.config();
 
@@ -45,23 +46,12 @@ function signToken(username: string, role: string, owner?: string): string {
   return jwt.sign({ username, role, owner: owner || username }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN } as jwt.SignOptions);
 }
 
-/** 解析数据归属账号：子账号沿 parentAccount 链追溯到真正的主账号 */
+/** 解析数据归属账号：子账号沿 parentAccount 链追溯到真正的主账号。
+ *  走 storageUsage 的 60s 缓存用户索引：/auth/me 与登录每次调用不再重复
+ *  parse 数百 KB 的 registeredUsers JSON（刷新关键路径上的服务端 CPU 热点） */
 async function resolveOwner(username: string): Promise<string> {
   try {
-    const rec = await store.getDataset('registeredUsers');
-    if (!rec) return username;
-    const users: any[] = JSON.parse(rec.dataset_json || '[]');
-    if (!Array.isArray(users)) return username;
-    let cur = username;
-    const seen = new Set<string>();
-    for (let i = 0; i < 8; i++) {
-      if (seen.has(cur)) break;
-      seen.add(cur);
-      const u = users.find((x: any) => x && x.username === cur);
-      if (!u || !u.isSubAccount || !u.parentAccount) break;
-      cur = String(u.parentAccount);
-    }
-    return cur || username;
+    return (await resolveCompanyRoot(username)) || username;
   } catch {
     return username;
   }

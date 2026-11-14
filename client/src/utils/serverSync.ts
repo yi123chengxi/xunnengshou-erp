@@ -6,7 +6,7 @@
  *   本地有但服务端没有的数据自动上传（首次迁移）；
  * - 服务端不可用时全部静默降级为纯本地模式，不影响现有功能。
  */
-import { saveDataset, loadDataset, listDatasetKeys } from './dataStore';
+import { saveDataset, loadDataset, listDatasetKeys, loadDatasetsUpdatedAt } from './dataStore';
 import { getOriginalSetItem, safeSetItem, emergencyFreeSpace } from './storageQuota';
 import { API_BASE } from './apiBase';
 import { repairPurchaserSupplierNames } from './cooperationTerminate';
@@ -835,30 +835,68 @@ export async function pullAllDatasets(): Promise<number> {
     if (!isPermSyncKey(key)) continue;
     try { permSnapBefore.set(key, localStorage.getItem(key)); } catch { /* ignore */ }
   }
-  for (const key of Object.keys(meta)) {
-    if (!isSyncKey(key) || !isKeyForCurrentAccount(key) || isEmptyOwnerKey(key)) continue;
-    // 仅上传不拉取的键（如 credit_adjustments_）：跳过拉取，避免宽限期竞态覆盖本地新数据
-    // 这类键有独立的 ensureDatasetFromServer 恢复机制
-    if (isUploadOnlyKey(key)) continue;
+  // —— 阶段0：批量读本地版本（单次 IndexedDB 事务）并逐键判定是否需要拉取 ——
+  // 旧实现每键 await localTimestamp（各一次独立 IndexedDB 事务），数百键在主线程串行空转秒级；
+  // 批量后版本读取成本降为一次事务
+  const pullKeys = Object.keys(meta).filter(k => isSyncKey(k) && isKeyForCurrentAccount(k) && !isEmptyOwnerKey(k) && !isUploadOnlyKey(k));
+  const localTsMap = new Map<string, number>();
+  {
+    const baseTs = new Map<string, number>();
+    for (const key of pullKeys) {
+      let t = 0;
+      try {
+        t = Number(localStorage.getItem(`${key}_ts`)) || 0;
+        if (!t && localStorage.getItem(key) !== null) t = 1;
+      } catch { /* ignore */ }
+      baseTs.set(key, t);
+    }
+    let idbTs: Map<string, number> = new Map();
+    try { idbTs = await loadDatasetsUpdatedAt(pullKeys); } catch { /* ignore */ }
+    for (const key of pullKeys) localTsMap.set(key, Math.max(baseTs.get(key) || 0, idbTs.get(key) || 0));
+  }
+  const fetchList: { key: string; serverTs: number; localTs: number; global: boolean }[] = [];
+  for (const key of pullKeys) {
+    const serverTs = Number(meta[key]) || 0;
+    const localTs = localTsMap.get(key) || 0;
+    const global = isGlobalKey(key);
+    // 私有键保留宽限期保护；全局键改为按 meta 版本比对：
+    // 版本未变且本地非空基 ⇒ 内容必然等于上次合并结果，直接跳过拉取。
+    // 旧实现全局键每轮无条件整键拉取：market_publish_orders(1.5MB)+registeredUsers(584KB)
+    // 每次刷新/每 60s 轮询都重传一遍并在主线程 parse，是刷新与轮询卡顿的最大浪费
+    if (serverTs <= localTs + (global ? 0 : GRACE_PERIOD_MS)) {
+      let hasLocalData = false;
+      try {
+        // 「有数据」以解析后的行数为准：本地存成 "[]" / 非数组同样视为空基，必须继续回拉服务端全量副本
+        hasLocalData = localDatasetHasRows(localStorage.getItem(key));
+      } catch { /* ignore */ }
+      if (hasLocalData) continue;
+    }
+    fetchList.push({ key, serverTs, localTs, global });
+  }
+  // —— 阶段1：变更键并行拉取（并发 6），不再按往返串行排队 ——
+  const recs = new Map<string, { json: string; updatedAt: number } | null>();
+  for (let i = 0; i < fetchList.length; i += 6) {
+    const batch = fetchList.slice(i, i + 6);
+    await Promise.all(batch.map(async (it) => {
+      try { recs.set(it.key, await fetchServerDataset(it.key)); } catch { recs.set(it.key, null); }
+    }));
+  }
+  // —— 阶段2：按原语义串行落地（写入/合并顺序与旧实现完全一致） ——
+  for (const item of fetchList) {
+    const key = item.key;
+    const serverTs = item.serverTs;
+    const localTs = item.localTs;
+    const global = item.global;
     try {
-      const serverTs = Number(meta[key]) || 0;
-      const localTs = await localTimestamp(key);
-      const global = isGlobalKey(key);
-      // 全局键跳过宽限期检查，始终拉取；私有键仍需宽限期保护
-      // 额外保护：如果私有键的 localStorage 中不存在数据（可能被 iframe/预览环境清空），
-      // 无论时间戳如何都必须从服务端拉取，否则刷新后数据丢失
-      if (!global && serverTs <= localTs + GRACE_PERIOD_MS) {
-        let hasLocalData = false;
-        try {
-          // 「有数据」以解析后的行数为准：本地存成 "[]" / 非数组同样视为空基，必须继续回拉服务端全量副本
-          hasLocalData = localDatasetHasRows(localStorage.getItem(key));
-        } catch { /* ignore */ }
-        if (hasLocalData) continue;
-      }
-      const rec = await fetchServerDataset(key);
+      const rec = recs.get(key) || null;
       if (!rec || !rec.json) continue;
       if (key === 'registeredUsers') {
         mergeRegisteredUsers(rec.json);
+        // 未变化也对齐版本：下一轮凭 meta ts 直接跳过（否则每轮重拉 584KB）
+        try {
+          const cur = Number(localStorage.getItem('registeredUsers_ts')) || 0;
+          getOriginalSetItem()('registeredUsers_ts', String(Math.max(cur, rec.updatedAt)));
+        } catch { /* ignore */ }
         applied++;
         continue;
       }
@@ -866,6 +904,13 @@ export async function pullAllDatasets(): Promise<number> {
       // 大表已迁移成「IndexedDB 主存 + localStorage 尽力缓存」，本地缓存写失败不影响落库与跨端
       const raw = ((k: string, v: string) => { try { getOriginalSetItem()(k, v); } catch { /* ignore */ } }) as (k: string, v: string) => void;
       if (global) {
+        //  raw 相同快速路径：服务端重存但内容未变时跳过 MB 级 parse/合并，仅对齐版本
+        let sameRaw = false;
+        try { sameRaw = localStorage.getItem(key) === rec.json; } catch { /* ignore */ }
+        if (sameRaw) {
+          raw(`${key}_ts`, String(rec.updatedAt));
+          continue;
+        }
         // 下架语义键：并集会让查看端复活已删除记录并经 saveDataset 回传服务器，
         // 服务端版本不旧于本地时直接用服务端整体替换；本地有未上传的新写入时保留本地，
         // 但同步服务端的下架墓碑，避免本地随后上传把已下架卡片复活

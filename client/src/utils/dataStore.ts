@@ -73,6 +73,31 @@ export const listDatasetKeys = (): Promise<string[]> => new Promise((resolve) =>
   });
 });
 
+/**
+ * 批量读取数据集 updatedAt（单个 IndexedDB 事务内并行请求）。
+ * pullAllDatasets 旧实现每键一次独立事务读本地版本，数百键串行空转秒级（主线程），
+ * 是刷新/轮询卡顿的主要客户端成因；批量后成本降为一次事务。
+ */
+export const loadDatasetsUpdatedAt = (keys: string[]): Promise<Map<string, number>> => new Promise((resolve) => {
+  const out = new Map<string, number>();
+  if (!keys || keys.length === 0) { resolve(out); return; }
+  openDb().then((db) => {
+    if (!db) { resolve(out); return; }
+    try {
+      const os = db.transaction(STORE, 'readonly').objectStore(STORE);
+      let pending = keys.length;
+      const done = () => { pending -= 1; if (pending <= 0) resolve(out); };
+      keys.forEach((k) => {
+        try {
+          const req = os.get(k);
+          req.onsuccess = () => { const r = req.result; if (r && typeof r.updatedAt === 'number') out.set(k, r.updatedAt); done(); };
+          req.onerror = () => done();
+        } catch { done(); }
+      });
+    } catch { resolve(out); }
+  });
+});
+
 /* ---------------- 产品列表共享读写助手 ---------------- */
 
 export const productListKey = (owner: string) => `pageData_basic-data_product-list_${owner}`;

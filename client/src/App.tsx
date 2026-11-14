@@ -1,5 +1,6 @@
 import React from 'react';
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import { Skeleton } from 'antd';
 import { pullAllDatasets, pullPermDatasets, isPermSyncKey } from './utils/serverSync';
 import { syncOwnerFromToken } from './utils/dataOwner';
 import { PRESET_PRINT_TEMPLATES, seedPresetPrintTemplates } from './config/presetPrintTemplates';
@@ -190,7 +191,11 @@ const SyncGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     };
   }, []);
 
-  return ready ? <>{children}</> : <Loading />;
+  return ready ? <>{children}</> : (
+    <div style={{ padding: 24 }}>
+      <Skeleton active paragraph={{ rows: 6 }} title={{ width: '40%' }} />
+    </div>
+  );
 };
 
 function App() {

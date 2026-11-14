@@ -123,13 +123,14 @@ export const tenantMembersOf = (owner: string): string[] => {
   return Array.from(out);
 };
 
-/** 向服务端确认归属账号（历史令牌没有 owner 声明时兜底，4 秒超时） */
+/** 向服务端确认归属账号（历史令牌没有 owner 声明时兜底，1.5 秒超时：
+ *  刷新关键路径上不应为一次校正空等过久，超时后回退令牌/本地链） */
 const fetchOwnerFromServer = async (): Promise<string> => {
   try {
     const token = safeGet(TOKEN_KEY);
     if (!token) return '';
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 4000);
+    const timer = setTimeout(() => ctrl.abort(), 1500);
     try {
       const res = await fetch(`${API_BASE}/auth/me`, {
         headers: { Authorization: `Bearer ${token}` },
