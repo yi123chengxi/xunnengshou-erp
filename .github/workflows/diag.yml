@@ -16,6 +16,11 @@ jobs:
       SERVER_HOST: ${{ secrets.SERVER_HOST }}
       SERVER_PASSWORD: ${{ secrets.SERVER_PASSWORD }}
     steps:
+      - name: 检出仓库（回传步骤需要 git 仓库）
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
       - name: 采集
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq sshpass
