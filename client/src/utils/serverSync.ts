@@ -255,6 +255,17 @@ const knownTs = new Map<string, number>();
 // 登记表本体与 declareShrink 实现已下沉到 shrinkRegistry（供自愈类 util 引用而不形成循环依赖），
 // 本模块只负责在上传时消费申报，并以同名导出保持既有调用方（页面/util）的引用路径不变。
 
+/** 上传被拒/超时的节流告警：静默失败会让「服务器到底有没有收到」无法区分，
+ *  信用额度跨端不更新等事故正是由这类静默造成；status=-1 表示网络/超时未拿到响应 */
+const uploadWarnTs = new Map<string, number>();
+function warnUploadFailure(key: string, status: number): void {
+  const now = Date.now();
+  const last = uploadWarnTs.get(key) || 0;
+  if (now - last < 60_000) return;
+  uploadWarnTs.set(key, now);
+  console.warn(`[serverSync] 数据集上传未成功 key=${key} status=${status}`);
+}
+
 /** 同步请求鉴权头：登录后写入的 JWT（未登录时为空对象，仅能访问公开键） */
 function authHeaders(extra?: Record<string, string>): Record<string, string> {
   const headers: Record<string, string> = { ...(extra || {}) };
@@ -320,12 +331,13 @@ async function doUpload(key: string, json: string, ts?: number, baseTs?: number,
   // 队列补传时使用入队那一刻的申报快照，避免与后续新写入的申报串味
   const removedIds = removedIdsOverride || takeRemovedIds(key);
   try {
+    // 超时 15s：DB 故障期服务端写兜底需先等 MySQL 写超时（约 5s）才落盘返回，5s 默认超时会把兜底成功误判为失败
     const res = await fetchWithTimeout(`${API_BASE}/sync/dataset`, {
       method: 'PUT',
       headers: authHeaders({ 'Content-Type': 'application/json' }),
       // 上传数据本身的写入时间戳（而非上传时刻）+ 已知服务端版本 baseTs + 显式删除申报 removedIds
       body: JSON.stringify({ key, json, updatedAt: ts || Date.now(), baseTs: baseTs ?? knownTs.get(key) ?? 0, ...(removedIds && removedIds.length ? { removedIds } : {}) }),
-    });
+    }, 15000);
     if (res.ok) {
       const data = await res.json().catch(() => null);
       if (data && typeof data.newTs === 'number') knownTs.set(key, data.newTs);
@@ -494,12 +506,13 @@ export async function flushDatasetUploadAsync(key: string, value: string): Promi
   if (!(await serverAvailable())) return false;
   const removedIds = takeRemovedIds(key);
   try {
+    // 超时 15s：同 doUpload，覆盖 DB 故障期服务端写兜底的 MySQL 等待耗时
     const res = await fetchWithTimeout(`${API_BASE}/sync/dataset`, {
       method: 'PUT',
       headers: authHeaders({ 'Content-Type': 'application/json' }),
       // 与防抖上传同语义：携带本次合法删除申报，否则立即上传会吞掉 removedIds 导致被删行被服务端并集复活
       body: JSON.stringify({ key, json: value, updatedAt: uploadTs, baseTs: knownTs.get(key) ?? 0, ...(removedIds && removedIds.length ? { removedIds } : {}) }),
-    });
+    }, 15000);
     if (res.ok) {
       const data = await res.json().catch(() => null);
       if (data && typeof data.newTs === 'number') knownTs.set(key, data.newTs);
@@ -508,10 +521,12 @@ export async function flushDatasetUploadAsync(key: string, value: string): Promi
       return true;
     }
     if (removedIds) declareShrink(key, removedIds);
+    warnUploadFailure(key, res.status);
     if (res.status === 401) handleSyncAuthRequired();
     return false;
   } catch {
     if (removedIds) declareShrink(key, removedIds);
+    warnUploadFailure(key, -1);
     return false;
   }
 }

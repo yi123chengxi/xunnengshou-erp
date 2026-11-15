@@ -7,7 +7,7 @@
  */
 import { sqliteDriver } from './store-sqlite';
 import { mysqlDriver } from './store-mysql';
-import { wbGet, wbPut, wbTombstone, wbAll, wbRemove, wbNoteWriteFail } from './writeBehind';
+import { wbGet, wbPut, wbTombstone, wbAll, wbRemove, wbNoteWriteFailCircuit, wbNoteWriteOk, wbCircuitOpen } from './writeBehind';
 
 export interface DatasetRow { dataset_key: string; dataset_json: string; updated_at: number; owner?: string }
 
@@ -116,21 +116,34 @@ export const store: StoreDriver = {
     return [...map.entries()].map(([dataset_key, updated_at]) => ({ dataset_key, updated_at }));
   },
   async forceUpsertDataset(key, json, owner, ts) {
-    try {
-      await storeBase.forceUpsertDataset(key, json, owner, ts);
-      wbRemove(key);
-    } catch (err) {
-      wbPut(key, json, owner, ts);
-      wbNoteWriteFail(key, err);
+    // 熔断打开期间不再白等 MySQL 写超时，直接落兜底
+    if (!wbCircuitOpen()) {
+      try {
+        await storeBase.forceUpsertDataset(key, json, owner, ts);
+        wbRemove(key);
+        wbNoteWriteOk();
+        return;
+      } catch (err) {
+        wbPut(key, json, owner, ts);
+        wbNoteWriteFailCircuit(key, err);
+        return;
+      }
     }
+    wbPut(key, json, owner, ts);
   },
   async deleteDataset(key) {
-    try {
-      await storeBase.deleteDataset(key);
-      wbRemove(key);
-    } catch (err) {
-      wbTombstone(key, Date.now());
-      wbNoteWriteFail(key, err);
+    if (!wbCircuitOpen()) {
+      try {
+        await storeBase.deleteDataset(key);
+        wbRemove(key);
+        wbNoteWriteOk();
+        return;
+      } catch (err) {
+        wbTombstone(key, Date.now());
+        wbNoteWriteFailCircuit(key, err);
+        return;
+      }
     }
+    wbTombstone(key, Date.now());
   },
 };

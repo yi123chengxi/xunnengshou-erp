@@ -90,6 +90,29 @@ export function wbNoteWriteFail(key: string, err: any): void {
   console.error(`[writeBehind] MySQL 写入失败，已落磁盘兜底 key=${key}: ${err && err.message ? err.message : err}`);
 }
 
+// ============ 写熔断器 ============
+// MySQL 写失败（锁等待等）单次要约 5s 才返回，故障期间每次 PUT 都白等。
+// 连续失败 3 次后熔断打开 60s：期间写入直接落兜底不再试 MySQL；
+// 任一次写成功（含回放成功）即闭合熔断恢复直写。
+let failStreak = 0;
+let openUntil = 0;
+export function wbCircuitOpen(): boolean {
+  return Date.now() < openUntil;
+}
+export function wbNoteWriteFailCircuit(key: string, err: any): void {
+  failStreak += 1;
+  if (failStreak >= 3) {
+    failStreak = 0;
+    openUntil = Date.now() + 60_000;
+    console.warn('[writeBehind] 连续写失败 3 次，熔断打开 60s：期间写入直接落磁盘兜底');
+  }
+  wbNoteWriteFail(key, err);
+}
+export function wbNoteWriteOk(): void {
+  failStreak = 0;
+  openUntil = 0;
+}
+
 /**
  * 回放调度：启动 15s 后首跑、之后每 5 分钟一轮；按 ts 升序写回底层驱动，
  * 成功即删本地兜底文件，失败静默等下一轮（DB 仍不可写时不刷日志）。
@@ -107,6 +130,7 @@ export function startWriteBehindReplay(driver: {
         if (e.tombstone) await driver.deleteDataset(e.key);
         else await driver.forceUpsertDataset(e.key, e.json, e.owner, e.updated_at);
         wbRemove(e.key);
+        wbNoteWriteOk();
         console.warn(`[writeBehind] 回放成功 key=${e.key} ts=${e.updated_at}`);
       } catch { /* DB 仍不可用，下一轮重试 */ }
     }
