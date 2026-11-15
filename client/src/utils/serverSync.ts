@@ -869,6 +869,8 @@ export async function pullAllDatasets(): Promise<number> {
   // 记录服务端各数据集版本，供后续上传作 baseTs（乐观并发）
   for (const k of Object.keys(meta)) knownTs.set(k, Number(meta[k]) || 0);
   let applied = 0;
+  // 本轮是否落地了注册表：隶属关系变化后错桶归并必须以新注册表重跑（+3s 维护跑可能早于本次拉取）
+  let registryPulled = false;
 
   // 第一步：从服务端拉取较新数据覆盖本地（仅限当前账号自己的数据集，避免拉取他人账号数据）
   // 安全策略：仅当服务端数据比本地新超过 5 秒时才覆盖，避免时钟偏差导致本地新数据被服务端旧数据覆盖
@@ -937,6 +939,7 @@ export async function pullAllDatasets(): Promise<number> {
       if (!rec || !rec.json) continue;
       if (key === 'registeredUsers') {
         mergeRegisteredUsers(rec.json);
+        registryPulled = true;
         // 未变化也对齐版本：下一轮凭 meta ts 直接跳过（否则每轮重拉 584KB）
         try {
           const cur = Number(localStorage.getItem('registeredUsers_ts')) || 0;
@@ -1133,6 +1136,10 @@ export async function pullAllDatasets(): Promise<number> {
     try { window.dispatchEvent(new Event('perm-changed')); } catch { /* ignore */ }
     try { window.dispatchEvent(new Event('dev-perms-changed')); } catch { /* ignore */ }
   }
+
+  // 注册表本轮更新（如服务端刚完成隶属串联）→ 立即以新隶属跑一次错桶归并：
+  // 会话启动 +3s 的维护跑可能早于本次拉取完成、只看到旧隶属而错过收敛窗口
+  if (registryPulled) void repairStrandedOwnerBuckets().catch(() => { /* ignore */ });
 
   // 拉取完成后再次闭环对账：服务端拉下的镜像若与本地其他镜像状态分叉，立即对齐
   try { reconcileCooperationPairs(); } catch { /* ignore */ }

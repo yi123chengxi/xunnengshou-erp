@@ -137,3 +137,18 @@ export async function migrateStrandedOwnerDatasets(): Promise<number> {
     return 0;
   }
 }
+
+// 运行期周期迁移：注册表隶属关系可能在运行期变化（如在线数据串联、账号管理改绑），
+// 仅启动时跑一次会错过窗口（历史事故：串联写入后无重启，错桶一直不收敛）。
+// 10 分钟一轮 + 在途守卫；迁移本身幂等，无错桶时两轮 meta 扫描即空转返回。
+let migrationInflight = false;
+export function startStrandedMigrationLoop(intervalMs = 10 * 60_000): void {
+  setInterval(() => {
+    if (migrationInflight) return;
+    migrationInflight = true;
+    void migrateStrandedOwnerDatasets()
+      .then((n) => { if (n > 0) console.log(`[rebucket] 周期迁移收敛 ${n} 个数据集`); })
+      .catch(() => { /* ignore */ })
+      .finally(() => { migrationInflight = false; });
+  }, intervalMs);
+}
