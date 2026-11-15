@@ -4,6 +4,8 @@
  * 直接调用 writeText 会抛错导致复制按钮"无效果"；此处优先 Clipboard API，
  * 不可用或失败时回退临时 textarea + document.execCommand('copy')。
  */
+import React from 'react';
+import { Modal } from 'antd';
 export const copyText = async (text: string): Promise<boolean> => {
   const value = String(text ?? '');
   try {
@@ -49,9 +51,9 @@ export const canReadClipboardImage = (): boolean => {
   }
 };
 
-/** 读剪贴板里的第一张图片（仅按钮点击路径；不可用时返回 unsupported 让调用方提示按 Ctrl+V） */
+/** 读剪贴板里的第一张图片；非安全上下文下改走「聚焦粘贴捕获框」（见 captureImageViaModal） */
 export const readClipboardImage = async (): Promise<ClipboardImageResult> => {
-  if (!canReadClipboardImage()) return { ok: false, reason: 'unsupported' };
+  if (!canReadClipboardImage()) return captureImageViaModal();
   try {
     const items = await navigator.clipboard.read();
     for (const item of items) {
@@ -88,6 +90,42 @@ export const imageFileFromClipboardData = (data: DataTransfer | null): File | nu
 /** 元素级 onPaste 取图：React.ClipboardEvent 同样带 clipboardData，可直接传入 */
 export const imageFileFromPasteEvent = (e: { clipboardData: DataTransfer | null }): File | null =>
   imageFileFromClipboardData(e.clipboardData || null);
+
+/**
+ * http 等非安全上下文下的取图兜底：浏览器禁止脚本读剪切板时，弹一个自动聚焦的
+ * 「粘贴捕获框」，用户在框内按一次 Ctrl+V 即完成取图（paste 事件的 clipboardData
+ * 不受安全上下文限制，是 http 部署下唯一可靠路径）。
+ * 直接关闭弹窗则按 unsupported 返回，由调用方给出引导文案。
+ */
+const captureImageViaModal = (): Promise<ClipboardImageResult> => new Promise((resolve) => {
+  let settled = false;
+  const done = (r: ClipboardImageResult) => { if (!settled) { settled = true; resolve(r); } };
+  const boxRef: { current: HTMLDivElement | null } = { current: null };
+  const modal = Modal.info({
+    title: '当前为 http 访问，浏览器不允许页面直接读取剪切板',
+    width: 460,
+    icon: null,
+    okText: '关闭',
+    content: React.createElement('div', {
+      ref: (el: HTMLDivElement | null) => { boxRef.current = el; },
+      tabIndex: 0,
+      onPaste: (e: React.ClipboardEvent<HTMLDivElement>) => {
+        const file = imageFileFromClipboardData(e.clipboardData || null);
+        if (!file) return;
+        e.preventDefault();
+        modal.destroy();
+        done({ ok: true, blob: file });
+      },
+      style: {
+        minHeight: 150, marginTop: 12, padding: 24, textAlign: 'center',
+        border: '1px dashed #91a7c9', borderRadius: 8, background: '#f5f8fc',
+        outline: 'none', color: '#5a6d85', fontSize: 13, cursor: 'text',
+      },
+    }, '本框已自动聚焦：请直接按 Ctrl + V 粘贴截图，粘贴成功后自动填入图片'),
+    afterClose: () => done({ ok: false, reason: 'unsupported' }),
+  });
+  window.setTimeout(() => { try { boxRef.current?.focus(); } catch { /* ignore */ } }, 80);
+});
 
 /** 取图失败提示：一律把用户导向 http 下也有效的 Ctrl+V 路径，不再让"已截图却读不到"无解 */
 export const clipboardImageFailureText = (reason: ClipboardImageFailure): string => {

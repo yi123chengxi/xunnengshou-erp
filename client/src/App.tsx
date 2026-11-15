@@ -3,6 +3,7 @@ import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { Skeleton } from 'antd';
 import { pullAllDatasets, pullPermDatasets, isPermSyncKey } from './utils/serverSync';
 import { syncOwnerFromToken } from './utils/dataOwner';
+import { startNewVersionWatch } from './utils/newVersionWatch';
 import { PRESET_PRINT_TEMPLATES, seedPresetPrintTemplates } from './config/presetPrintTemplates';
 import { connectChatWS, disconnectChatWS, REMOTE_UPDATE_EVENT } from './utils/chatSocket';
 import MainLayout from './layouts/MainLayout';
@@ -161,6 +162,10 @@ const SyncGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   }, []);
 
   React.useEffect(() => () => { if (intervalRef.current) clearInterval(intervalRef.current); }, []);
+
+  // 长开标签页自愈：部署新版本后仍开着的旧标签页不会自动换包，
+  // 用户会继续跑旧 JS（表现为「修复过的 bug 依旧」）；比对 main 包哈希后提示一键刷新
+  React.useEffect(() => { startNewVersionWatch(); }, []);
 
   // 空闲预取供应商首页 chunk（登录默认落地页与跨平台切换目标）：
   // 登录后/刷新后图表与页面 chunk 已在缓存，点击“切换到供应商视图”或落地时不再等懒加载下载
