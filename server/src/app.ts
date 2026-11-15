@@ -6,7 +6,8 @@ import path from 'path';
 import './database/sqlite';
 import { runCleanupFromDB } from './tasks/cleanup.task';
 import { ensureUsageBackfill } from './services/storageUsage';
-import { STORE_DRIVER, store } from './database/store';
+import { STORE_DRIVER, store, storeBase } from './database/store';
+import { startWriteBehindReplay } from './database/writeBehind';
 import { securityHeaders, corsGuard, rateLimit } from './middleware/security';
 import { upgradePlaintextUserTable, hashRegisteredUsersJson } from './middleware/syncGuard';
 import { migrateStrandedOwnerDatasets } from './services/strandedRebucket';
@@ -123,6 +124,8 @@ server.listen(PORT, async () => {
   // 版本表（/api/sync/meta）缓存预热：dataset_store 整表扫描可能很慢，
   // 不预热会让部署后第一个登录/刷新的人等满一次慢查询
   setTimeout(() => warmMetaCache(), 2000);
+  // 写兜底回放：DB 故障期间落磁盘的数据集在 DB 恢复后自动写回 MySQL（启动 15s 首跑、每 5 分钟一轮）
+  startWriteBehindReplay(storeBase);
   // 存储用量计数器背填：仅首次升级（计数器表为空）时全量聚合一次，后续走增量
   void ensureUsageBackfill().catch(() => { /* ignore */ });
   // 安全迁移：存量明文密码升级为 bcrypt（registered_users 表 + registeredUsers 数据集）

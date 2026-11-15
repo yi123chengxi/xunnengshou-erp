@@ -7,6 +7,7 @@
  */
 import { sqliteDriver } from './store-sqlite';
 import { mysqlDriver } from './store-mysql';
+import { wbGet, wbPut, wbTombstone, wbAll, wbRemove, wbNoteWriteFail } from './writeBehind';
 
 export interface DatasetRow { dataset_key: string; dataset_json: string; updated_at: number; owner?: string }
 
@@ -80,5 +81,56 @@ export interface StoreDriver {
 }
 
 const DRIVER = String(process.env.DB_DRIVER || 'sqlite').toLowerCase();
-export const store: StoreDriver = DRIVER === 'mysql' ? mysqlDriver : sqliteDriver;
+/** 底层驱动（回放任务直写用，不经兜底包装） */
+export const storeBase: StoreDriver = DRIVER === 'mysql' ? mysqlDriver : sqliteDriver;
 export const STORE_DRIVER = DRIVER === 'mysql' ? 'mysql' : 'sqlite';
+
+/**
+ * 写兜底包装：MySQL 写入失败时数据集落本地磁盘（writeBehind）并立即对外服务，
+ * DB 恢复后由回放任务写回并删除兜底文件。读路径以 updated_at 取新者：
+ * 兜底副本比库内新（故障期间写入尚未回放）时返回兜底副本；删除以墓碑表达。
+ * 读失败不吞异常（保持原有 500 语义），避免「读不到→误判新键→整键覆盖」的丢数据路径。
+ */
+export const store: StoreDriver = {
+  ...storeBase,
+  async getDataset(key) {
+    const row = await storeBase.getDataset(key);
+    const wb = wbGet(key);
+    if (!wb) return row;
+    if (wb.tombstone) return row && row.updated_at > wb.updated_at ? row : undefined;
+    if (!row || wb.updated_at >= row.updated_at) {
+      return { dataset_key: key, dataset_json: wb.json, updated_at: wb.updated_at, owner: wb.owner };
+    }
+    return row;
+  },
+  async getAllMeta() {
+    const rows = await storeBase.getAllMeta();
+    const wbList = wbAll();
+    if (wbList.length === 0) return rows;
+    const map = new Map<string, number>(rows.map((r) => [r.dataset_key, r.updated_at]));
+    for (const w of wbList) {
+      const cur = map.get(w.key);
+      if (w.tombstone) { if (cur !== undefined && cur <= w.updated_at) map.delete(w.key); continue; }
+      if (cur === undefined || cur <= w.updated_at) map.set(w.key, w.updated_at);
+    }
+    return [...map.entries()].map(([dataset_key, updated_at]) => ({ dataset_key, updated_at }));
+  },
+  async forceUpsertDataset(key, json, owner, ts) {
+    try {
+      await storeBase.forceUpsertDataset(key, json, owner, ts);
+      wbRemove(key);
+    } catch (err) {
+      wbPut(key, json, owner, ts);
+      wbNoteWriteFail(key, err);
+    }
+  },
+  async deleteDataset(key) {
+    try {
+      await storeBase.deleteDataset(key);
+      wbRemove(key);
+    } catch (err) {
+      wbTombstone(key, Date.now());
+      wbNoteWriteFail(key, err);
+    }
+  },
+};

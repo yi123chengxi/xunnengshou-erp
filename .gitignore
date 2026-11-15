@@ -22,6 +22,7 @@ server/data/*.db
 server/data/*.db-shm
 server/data/*.db-wal
 server/data/sync/
+server/data/writebehind/
 server/data/registeredUsers.json
 server/data/jwt.secret
 
