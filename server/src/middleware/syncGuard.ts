@@ -112,8 +112,10 @@ const STRICT_PRIVATE_PREFIXES = [
   'receiving_accounts_',
   // 财务/账务/业务配置（本租户独有，不允许跨租户读写）
   'reimbursement_', 'daily_bookkeeping_', 'daily_book_categories_', 'daily_book_main_categories_',
-  'general_ledger_subjects_', 'ledger_auto_subjects_', 'ledger_mode_', 'ledger_period_amounts_',
+  'general_ledger_subjects_', 'general_ledger_entries_', 'general_ledger_closed_periods_',
+  'ledger_summary_sources_', 'ledger_auto_subjects_', 'ledger_mode_', 'ledger_period_amounts_',
   'other_payables_', 'other_receivables_', 'customer_statements_', 'autoReconSettings_',
+  'invoice_apply_settings_', 'bank_reconciliation_', 'installment_posted_',
   'batchAddTemplates_', 'orderQtyTemplates_', 'billQtyTemplates_', 'addColorSpecTemplates_',
   'order_tags_', 'tax_rate_templates_', 'productionFeeQty_', 'production_schedule_lines_',
   'sb_deferred_', 'account_groups_', 'customBanks_', 'picking_reject_reasons_', 'prBomManualQty_',

@@ -33,6 +33,9 @@ const SYNC_PREFIXES = [
   'daily_book_categories_',    // 日常记账支出分类
   'daily_book_main_categories_', // 日常记账主分类
   'general_ledger_subjects_',  // 总账科目
+  'general_ledger_entries_',   // 总账/简易账分录（此前漏入白名单，换电脑即丢）
+  'general_ledger_closed_periods_', // 会计账簿已结账期间
+  'ledger_summary_sources_',   // 科目汇总取数来源配置
   'ledger_auto_subjects_',     // 自动记账科目映射
   'ledger_mode_',              // 简易账/会计账模式
   'ledger_period_amounts_',    // 期间发生额
@@ -40,6 +43,9 @@ const SYNC_PREFIXES = [
   'other_receivables_',        // 其他应收款
   'customer_statements_',      // 客户对账单
   'autoReconSettings_',        // 自动对账设置
+  'invoice_apply_settings_',   // 开票申请设置
+  'bank_reconciliation_',      // 银行对账记录
+  'installment_posted_',       // 分期收款入记账标记（跨端须一致，否则重复入账）
   // ==== 业务配置/模版（用户反馈换电脑后模版丢失）====
   'batchAddTemplates_',        // 批量新增产品模版
   'orderQtyTemplates_',        // 订单数量模版
