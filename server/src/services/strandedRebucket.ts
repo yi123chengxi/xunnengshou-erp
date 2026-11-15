@@ -88,29 +88,34 @@ export async function migrateStrandedOwnerDatasets(): Promise<number> {
       if (!suffix || !byName.has(suffix)) continue;
       const root = rootOf(suffix);
       if (!root || root === suffix) continue;
-      const src = await store.getDataset(key).catch(() => undefined);
-      if (!src) continue;
-      let rows: any[] = [];
-      try { rows = JSON.parse(src.dataset_json || '[]'); } catch { rows = []; }
-      if (!Array.isArray(rows) || rows.length === 0) continue;
-      const targetKey = key.slice(0, key.length - suffix.length) + root;
-      const tgt = await store.getDataset(targetKey).catch(() => undefined);
-      // 主桶优先：existing=错桶行、incoming=主桶行 → 同 id 行保留主桶版本，错桶独有行补入
-      const merged = mergeRowsUnionJson(src.dataset_json, tgt ? tgt.dataset_json : '[]');
-      // 归并后立刻修复订单桶：完全重复行去重 + 编号撞号重编号
-      let finalJson = merged;
-      if (targetKey.startsWith('pageData_sales_order-manage_')) {
-        try {
-          const rep = repairOrderBucket(JSON.parse(merged));
-          finalJson = JSON.stringify(rep.rows);
-          if (rep.renumbered.length > 0) console.warn(`[rebucket] 编号撞号重编号 ${rep.renumbered.map(x => `${x.from}→${x.to}`).join(',')}`);
-        } catch { /* ignore */ }
+      // 逐键隔离：单键异常（坏 JSON/单键写失败等）不得打断其余键的收敛
+      try {
+        const src = await store.getDataset(key).catch(() => undefined);
+        if (!src) continue;
+        let rows: any[] = [];
+        try { rows = JSON.parse(src.dataset_json || '[]'); } catch { rows = []; }
+        if (!Array.isArray(rows) || rows.length === 0) continue;
+        const targetKey = key.slice(0, key.length - suffix.length) + root;
+        const tgt = await store.getDataset(targetKey).catch(() => undefined);
+        // 主桶优先：existing=错桶行、incoming=主桶行 → 同 id 行保留主桶版本，错桶独有行补入
+        const merged = mergeRowsUnionJson(src.dataset_json, tgt ? tgt.dataset_json : '[]');
+        // 归并后立刻修复订单桶：完全重复行去重 + 编号撞号重编号
+        let finalJson = merged;
+        if (targetKey.startsWith('pageData_sales_order-manage_')) {
+          try {
+            const rep = repairOrderBucket(JSON.parse(merged));
+            finalJson = JSON.stringify(rep.rows);
+            if (rep.renumbered.length > 0) console.warn(`[rebucket] 编号撞号重编号 ${rep.renumbered.map(x => `${x.from}→${x.to}`).join(',')}`);
+          } catch { /* ignore */ }
+        }
+        const ts = Date.now();
+        await store.forceUpsertDataset(targetKey, finalJson, root, Math.max(ts, tgt ? tgt.updated_at : 0));
+        await store.forceUpsertDataset(key, '[]', root, Math.max(ts, src.updated_at || 0));
+        moved++;
+        console.warn(`[rebucket] 错桶数据集 ${key} 已并入主桶 ${targetKey}（${rows.length} 行）`);
+      } catch (err: any) {
+        console.error(`[rebucket] 单键迁移失败已跳过 ${key}:`, (err && err.message) || err);
       }
-      const ts = Date.now();
-      await store.forceUpsertDataset(targetKey, finalJson, root, Math.max(ts, tgt ? tgt.updated_at : 0));
-      await store.forceUpsertDataset(key, '[]', root, Math.max(ts, src.updated_at || 0));
-      moved++;
-      console.warn(`[rebucket] 错桶数据集 ${key} 已并入主桶 ${targetKey}（${rows.length} 行）`);
     }
     // 第二轮：各租户自有桶就地修复（完全重复行 + 编号撞号），不依赖是否存在错桶来源
     for (const m of meta) {
@@ -119,16 +124,21 @@ export async function migrateStrandedOwnerDatasets(): Promise<number> {
       if (!suffix || !byName.has(suffix)) continue;
       if (rootOf(suffix) !== suffix) continue; // 错桶键第一轮已处理/排空
       if (!key.startsWith('pageData_sales_order-manage_')) continue;
-      const row = await store.getDataset(key).catch(() => undefined);
-      if (!row) continue;
-      let rows2: any[] = [];
-      try { rows2 = JSON.parse(row.dataset_json || '[]'); } catch { rows2 = []; }
-      if (!Array.isArray(rows2) || rows2.length === 0) continue;
-      const rep = repairOrderBucket(rows2);
-      if (rep.removedKeys.length === 0 && rep.renumbered.length === 0) continue;
-      await store.forceUpsertDataset(key, JSON.stringify(rep.rows), suffix, Math.max(Date.now(), row.updated_at || 0));
-      moved++;
-      console.warn(`[rebucket] 订单桶 ${key} 就地修复：去重 ${rep.removedKeys.length} 行、重编号 ${rep.renumbered.length} 行`);
+      // 逐键隔离：同第一轮
+      try {
+        const row = await store.getDataset(key).catch(() => undefined);
+        if (!row) continue;
+        let rows2: any[] = [];
+        try { rows2 = JSON.parse(row.dataset_json || '[]'); } catch { rows2 = []; }
+        if (!Array.isArray(rows2) || rows2.length === 0) continue;
+        const rep = repairOrderBucket(rows2);
+        if (rep.removedKeys.length === 0 && rep.renumbered.length === 0) continue;
+        await store.forceUpsertDataset(key, JSON.stringify(rep.rows), suffix, Math.max(Date.now(), row.updated_at || 0));
+        moved++;
+        console.warn(`[rebucket] 订单桶 ${key} 就地修复：去重 ${rep.removedKeys.length} 行、重编号 ${rep.renumbered.length} 行`);
+      } catch (err: any) {
+        console.error(`[rebucket] 单键就地修复失败已跳过 ${key}:`, (err && err.message) || err);
+      }
     }
     return moved;
   } catch (err: any) {

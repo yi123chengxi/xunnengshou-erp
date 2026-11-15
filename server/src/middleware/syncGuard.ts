@@ -408,7 +408,18 @@ const TENANT_OWNER_FAMILIES = [
 
 /** 键属于租户规范家族时返回其 owner 后缀（可能为空串=污染键），否则返回 null */
 export function tenantFamilySuffix(key: string): string | null {
-  for (const p of TENANT_OWNER_FAMILIES) if (key.startsWith(p)) return key.slice(p.length);
+  for (const p of TENANT_OWNER_FAMILIES) {
+    if (!key.startsWith(p)) continue;
+    // pageData_ 是通用前缀（pageData_<页面slug>_<owner>，slug 自身含下划线/连字符），
+    // 直接 slice 前缀会把「sales_order-manage_yichengxi60」当后缀——永远匹配不到用户名，
+    // 导致订单桶的服务端重定向/启动迁移/就地修复全部静默失效（历史事故根因）。
+    // 用户名不含下划线，owner 恒为最后一段；尾段为空即空 owner 污染键。
+    if (p === 'pageData_') {
+      const i = key.lastIndexOf('_');
+      return i >= p.length - 1 ? key.slice(i + 1) : '';
+    }
+    return key.slice(p.length);
+  }
   return null;
 }
 
