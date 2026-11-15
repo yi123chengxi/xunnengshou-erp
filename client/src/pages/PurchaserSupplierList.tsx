@@ -873,10 +873,13 @@ const PurchaserSupplierList: React.FC = () => {
 
   // 供应商发布的有效信用额度（published_credit_<供应商账号>，跨浏览器从服务端拉取）
   const [publishedCredit, setPublishedCredit] = useState<Record<string, number>>({});
-  useEffect(() => {
-    let cancelled = false;
+  // 服务器是该值的唯一权威源：列表数据变化、同步事件、页面重新可见、以及 30s 心跳都要重拉。
+  // 此前只在 dataSource 变化时拉一次，页面保活不卸载时供应商增/减额度后本端永远显示旧值，
+  // 表现为“服务器上有新额度、界面不更新”
+  const refreshPublishedCredit = useCallback(() => {
     const apiBase = API_BASE;
     const owners = dataSource.map((s) => ({ id: s.id, name: s.supplierName, entry: s }));
+    if (!owners.length) { setPublishedCredit({}); return; }
     Promise.all(owners.map(async ({ id, name, entry }) => {
       let users: any[] = [];
       try { users = JSON.parse(localStorage.getItem('registeredUsers') || '[]'); } catch { users = []; }
@@ -915,13 +918,29 @@ const PurchaserSupplierList: React.FC = () => {
       }
       return { id, value: undefined as number | undefined };
     })).then((results) => {
-      if (cancelled) return;
       const m: Record<string, number> = {};
       results.forEach((r) => { if (r.value !== undefined) m[r.id] = r.value; });
-      setPublishedCredit(m);
+      // 值没变时返回旧引用，避免 30s 心跳引发无意义的重渲染与下游 memo 重算
+      setPublishedCredit((prev) => {
+        const ks = Object.keys(m);
+        const unchanged = ks.length === Object.keys(prev).length && ks.every((k) => prev[k] === m[k]);
+        return unchanged ? prev : m;
+      });
     });
-    return () => { cancelled = true; };
   }, [dataSource, makeMyPartyMatcher]);
+
+  useEffect(() => {
+    refreshPublishedCredit();
+    const timer = window.setInterval(refreshPublishedCredit, 30_000);
+    const onVis = () => { if (document.visibilityState === 'visible') refreshPublishedCredit(); };
+    document.addEventListener('visibilitychange', onVis);
+    window.addEventListener('sync-data-updated', refreshPublishedCredit);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVis);
+      window.removeEventListener('sync-data-updated', refreshPublishedCredit);
+    };
+  }, [refreshPublishedCredit]);
 
   // 信用额度(元)：供应商端「客户基础信息」中授予我司的有效信用额度（初始额度+调整净额，由供应商调整）
   const supplierCreditMap = useMemo(() => {

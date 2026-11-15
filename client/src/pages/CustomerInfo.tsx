@@ -1216,6 +1216,9 @@ const CustomerInfo: React.FC = () => {
       const anyC = c as any;
       const cred = idx.credOfName(String(c.name || '').trim());
       return {
+        // 稳定 id：服务端对 baseTs 过期的写入会走记录级并集，行无 key/id 时合并会退化为整键替换，
+        // 带上 id 后任何合并路径都能按行对齐，不会残留旧额度行
+        id: c.id,
         customerId: c.id,
         customerName: c.name,
         customerUsername: String(anyC.purchaserUsername || cred?.username || '').trim(),
@@ -1227,7 +1230,17 @@ const CustomerInfo: React.FC = () => {
     const json = JSON.stringify(rows);
     safeSetItem(key, json);
     safeSetItem(`${key}_ts`, String(Date.now()));
-    flushDatasetUploadAsync(key, json).catch(() => { /* ignore */ });
+    // 服务端是该值的唯一权威源：上传失败不得静默吞掉，否则采购商端永远读不到本次增/减。
+    // 失败 3s 后重试一次，仍失败则告警到控制台供排查
+    flushDatasetUploadAsync(key, json)
+      .then((ok) => {
+        if (ok) return true;
+        return flushDatasetUploadAsync(key, json).then((ok2) => {
+          if (!ok2) console.warn('[published_credit] 额度发布上传两次均未成功，采购商端将读不到本次变更', key);
+          return ok2;
+        });
+      })
+      .catch(() => { /* ignore */ });
   }, [allCustomers, creditAdjustments]);
 
   // 筛选数据
