@@ -39,7 +39,8 @@ import { modules } from '../layouts/MainLayout';
 import { getAllRoles, permissionModules, getMergedPermissions } from '../config/permissions';
 import * as XLSX from 'xlsx';
 import PermEditor from '../components/PermEditor';
-import { loadUserPermOverrides, saveUserPermOverrides, setPreviewUser, loadRolePermSettings, saveRolePermSettings } from '../utils/perm';
+import { loadUserPermOverrides, saveUserPermOverrides, clearUserPermOverrides, setPreviewUser, loadRolePermSettings, saveRolePermSettings } from '../utils/perm';
+import { withPresetGroups, menuAllowSeed, presetGroupNames } from '../utils/presetGroups';
 import type { PermTri } from '../config/permRegistry';
 import type { ColumnsType } from 'antd/es/table';
 
@@ -118,6 +119,24 @@ const persistRegisteredUsers = (list: any[]) => {
   const json = JSON.stringify(list);
   localStorage.setItem('registeredUsers', json);
   saveDataset('registeredUsers', json);
+};
+
+/** 读注册表里的账号行——菜单勾选（customPermissions）与角色（roles）的权威解析源。
+ *  resolvePerm 的 legacy 白名单层读的就是这一份，所以上界面回显必须读同一份，
+ *  否则会出现「账号列表行是旧副本 → 编辑弹窗永远显示修改前的勾选」。 */
+const readRegisteredUserRow = (username: string): any | null => {
+  try {
+    const users: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+    return users.find((u: any) => u.username === username) || null;
+  } catch { return null; }
+};
+
+/** 三态映射内容比对（键序无关）：用于保存后的回读校验 */
+const samePermTriMap = (a: Record<string, string>, b: Record<string, string>): boolean => {
+  const ka = Object.keys(a || {});
+  const kb = Object.keys(b || {});
+  if (ka.length !== kb.length) return false;
+  return ka.every(k => a[k] === b[k]);
 };
 
 // 分组数据持久化
@@ -346,7 +365,13 @@ const AccountManage: React.FC = () => {
   const copyFromRef = React.useRef<string>(''); // 复制建号源账号 username
 
   // 使用 Form.useWatch 获取当前角色（用于传递给权限选择器）
-  const addWatchedRoles: string[] = Form.useWatch('roles', addForm) || [];
+  // 编辑弹窗当前角色的预设菜单清单：传给 PermEditor 后，供应商菜单复选框按
+  // 「角色预设 ∪ 独立权限」的实际生效值回显，取消勾选角色预设菜单时写显式 deny
+  const editWatchedRoles: string[] = Form.useWatch('roles', editForm) || [];
+  const editRolePresetKeys = useMemo(
+    () => (editWatchedRoles.length ? getMergedPermissions(editWatchedRoles) : []),
+    [editWatchedRoles]
+  );
 
   // 同步 ref 到 state
   const updateEditPerms = (perms: string[]) => {
@@ -389,6 +414,50 @@ const AccountManage: React.FC = () => {
     } catch { /* ignore */ }
     localStorage.setItem(getAccountsStorageKey(), json);
   }, [dataSource]);
+
+  // 账号列表唯一写入口：先同步落盘、再更新内存态。
+  // 【为什么必须这个顺序】本组件同时挂着「perm-changed / storage / sync-data-updated / focus
+  //  → 从 localStorage 重读并覆盖 dataSource」的跨端 reload 监听，而保存链路里的
+  //  saveUserPermOverrides / saveRolePermSettings / persistRegisteredUsers 都会同步广播这些事件。
+  //  旧写法是「setDataSource(带副作用的 updater) → 广播事件 → 靠 useEffect 才写盘」：
+  //  React 18 会把同一批次内的 setState 延后到微任务结束才结算，事件却在这行代码之后立即同步触发，
+  //  reload 读到的是「还没落盘的旧快照」，紧随其后的第二个 setState 就把刚编辑的结果整体覆盖回旧值，
+  //  随后的持久化 effect 又因内容相同直接跳过——用户看到的就是「提示保存成功，重开编辑毫无变化」。
+  //  现在落盘在前：事件触发的 reload 回读到的必然是新值，覆盖变成幂等。
+  const dataSourceRef = useRef<AccountRecord[]>(dataSource);
+  useEffect(() => { dataSourceRef.current = dataSource; }, [dataSource]);
+  const commitRows = useCallback((rows: AccountRecord[]): boolean => {
+    const json = JSON.stringify(rows);
+    try { localStorage.setItem(getAccountsStorageKey(), json); } catch { /* 配额满/隐私模式：下面回读校验会给出明确报错 */ }
+    let stored: string | null = null;
+    try { stored = localStorage.getItem(getAccountsStorageKey()); } catch { stored = null; }
+    if (stored !== json) return false;
+    dataSourceRef.current = rows;
+    setDataSource(rows);
+    return true;
+  }, []);
+
+  // 预设分组：按角色管理的预设角色补同名同权限分组（幂等：只补缺失的），并同时写入
+  // 分组三态设置（菜单点→allow，再叠加该角色已有三态），使分组层生效口径与预设角色一致。
+  // 新增子账号窗口移除「权限角色」后，分组是子账号唯一的预设权限载体。
+  useEffect(() => {
+    try {
+      const roles = getAllRoles();
+      const { groups: merged, added } = withPresetGroups(loadGroups(), roles);
+      if (!added.length) return;
+      saveGroups(merged);
+      const settingsAll = loadRolePermSettings();
+      added.forEach(g => {
+        const role = roles.find(r => r.isPreset && r.name === g.name);
+        const roleTri = (role && role.key && settingsAll[role.key]) || {};
+        saveRolePermSettings(`__group__${g.name}`, { ...menuAllowSeed(g.permissions), ...roleTri });
+      });
+      setGroups(merged);
+    } catch { /* ignore */ }
+  }, []);
+
+  // 预设分组名集合（与预设角色一一对应：不可改名/删除，列表上打「预设」标）
+  const presetGroupSet = useMemo(() => new Set(presetGroupNames(getAllRoles())), []);
 
   // 跨浏览器同步：其他浏览器/其他电脑改了账号、分组或子账号权限 → 自动刷新列表
   // （仅在存储里确实有数据时重载，避免回退到初始演示数据）
@@ -447,6 +516,62 @@ const AccountManage: React.FC = () => {
       } catch { /* 服务端不可用：交给写入钩子/补传队列下次重试 */ }
     };
     void heal();
+  }, []);
+
+  // 存量幽灵账号清理（删除墓碑机制上线前删掉的账号，注册表里仍残留）：
+  // 本租户子账号行只存在于 registeredUsers、不在账号列表 accounts_<主账号> 里 → 视为已删除的残留。
+  // 两轮 10 分钟宽限：首次发现只打时间戳标记，下次进入仍孤儿且已过宽限才申报删除，
+  // 避免误杀「刚在别的浏览器新建、两表写入存在瞬时差」的账号。
+  // 申报后服务端会把它记入墓碑 sys_deleted_users，其他陈旧副本再也无法复活它。
+  useEffect(() => {
+    try {
+      if (localStorage.getItem('isSubAccount') === 'true') return; // 账号列表仅管理端权威
+      const accountsRaw = localStorage.getItem(getAccountsStorageKey());
+      if (!accountsRaw) return; // 本地账号列表尚未建立（首次打开/云端未拉到）：无从判断孤儿
+      const accounts: AccountRecord[] = JSON.parse(accountsRaw);
+      if (!Array.isArray(accounts) || accounts.length === 0) return;
+      const regUsers: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+      if (!Array.isArray(regUsers) || regUsers.length === 0) return;
+      const owner = resolveDataOwner();
+      if (!owner) return;
+      const accountNames = new Set(accounts.map(a => String(a.username || '')));
+      const MARK_PFX = 'orphan_reguser_mark_';
+      const now = Date.now();
+      const GRACE_MS = 10 * 60 * 1000;
+      const orphanNames: string[] = [];
+      regUsers.forEach((u: any) => {
+        // 仅限本租户子账号行：主账号/其他租户行一概不碰，把误杀面压到最小
+        if (!u || u.isSubAccount !== true) return;
+        if (String(u.parentAccount || '') !== owner) return;
+        const name = String(u.username || '');
+        if (!name || accountNames.has(name)) return;
+        orphanNames.push(name);
+      });
+      // 清理已不再是孤儿的旧标记（账号后来出现在列表里 → 撤销候选）
+      const removeKeys: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith(MARK_PFX) && !orphanNames.includes(k.slice(MARK_PFX.length))) removeKeys.push(k);
+      }
+      removeKeys.forEach(k => { try { localStorage.removeItem(k); } catch { /* ignore */ } });
+      const due = orphanNames.filter(name => {
+        const firstSeen = Number(localStorage.getItem(MARK_PFX + name) || 0) || 0;
+        if (!firstSeen) { try { localStorage.setItem(MARK_PFX + name, String(now)); } catch { /* ignore */ } return false; }
+        return now - firstSeen >= GRACE_MS;
+      });
+      if (due.length === 0) return;
+      const dueSet = new Set(due);
+      const updated = regUsers.filter((u: any) => !(u && dueSet.has(String(u.username || ''))));
+      if (updated.length === regUsers.length) return;
+      // 与 handleDelete 同口径：先显式申报缩水，再写注册表（写入钩子携带 removedIds 上传）
+      declareShrink('registeredUsers', due);
+      persistRegisteredUsers(updated);
+      due.forEach(name => {
+        clearUserPermOverrides(name);
+        try { localStorage.removeItem(MARK_PFX + name); } catch { /* ignore */ }
+      });
+      message.info(`已清理 ${due.length} 个已删除但注册表残留的账号：${due.join('、')}`);
+    } catch { /* ignore */ }
   }, []);
 
   // 自动修正：主账号姓名固定为注册时的联系人（历史数据可能仍为“系统管理员”）
@@ -515,12 +640,16 @@ const AccountManage: React.FC = () => {
   // 编辑账号
   const handleEdit = useCallback((record: AccountRecord) => {
     setSelectedRecord(record);
-    // 如果 customPermissions 为空但有角色，合并角色权限作为初始值
-    let initPerms = record.customPermissions || [];
-
+    // 回显单一权威源：菜单勾选优先取注册表（resolvePerm 解析的就是这一份），
+    // 账号列表行仅作展示副本（历史缺陷：列表行被旧副本回灌后，重开弹窗永远显示修改前的勾选）
+    const reg = readRegisteredUserRow(record.username);
+    const regPerms: string[] | null = Array.isArray(reg?.customPermissions) ? reg.customPermissions : null;
+    let initPerms = regPerms && regPerms.length > 0
+      ? regPerms
+      : (Array.isArray(record.customPermissions) && record.customPermissions.length > 0 ? record.customPermissions : []);
+    // 两处都没独立权限时（从未单独勾过）退回角色预设合并值
     if (initPerms.length === 0 && record.roles && record.roles.length > 0) {
       initPerms = getMergedPermissions(record.roles);
-
     }
     editForm.setFieldsValue({
       displayName: record.displayName,
@@ -546,52 +675,85 @@ const AccountManage: React.FC = () => {
       }
       // 手机号码：同号多账号提示（同号并存时手机号登录将被禁用），并同步 registeredUsers 供手机号登录
       const inputPhone = String(values.phone || '').trim();
-      if (inputPhone) {
+      if (inputPhone && selectedRecord) {
         try {
           const regUsers0: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
-          const dupPhones = regUsers0.filter((u: any) => u.username !== selectedRecord?.username && String(u.phone || '').trim() === inputPhone);
+          const dupPhones = regUsers0.filter((u: any) => u.username !== selectedRecord.username && String(u.phone || '').trim() === inputPhone);
           if (dupPhones.length > 0) {
             message.warning(`注意：该手机号已绑定 ${dupPhones.length} 个其他账号；同一号码绑定多个租户/子账号时，手机号登录将被禁用，请使用用户名登录`);
           }
         } catch { /* ignore */ }
       }
+      if (!selectedRecord) return;
 
-      setDataSource(prev => {
-        const updated = prev.map(item =>
-          item.key === selectedRecord?.key
-            ? {
-                ...item,
-                ...values,
-                roles: values.roles || [],
-                customPermissions: editPermsRef.current,
-                remark: values.remark || '',
-                group: values.group || '',
-                phone: inputPhone,
-              }
-            : item
-        );
-        // 同步更新 registeredUsers 中的角色和权限（含手机号，供手机号登录校验）
-        try {
-          const regUsers: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
-          const idx = regUsers.findIndex((u: any) => u.username === selectedRecord?.username);
-          if (idx >= 0) {
-            regUsers[idx].roles = values.roles || [];
-            regUsers[idx].customPermissions = editPermsRef.current;
-            regUsers[idx].phone = inputPhone;
-            // 权限编辑版本戳：子账号设备合并层按 _permTs 采纳服务端新版权限（防停留在新增时快照）
-            regUsers[idx]._permTs = Date.now();
-            persistRegisteredUsers(regUsers);
-          }
-        } catch { /* ignore */ }
-        return updated;
+      const nextRoles: string[] = values.roles || [];
+      const nextPerms: string[] = editPermsRef.current;
+      const nextRows = dataSourceRef.current.map(item =>
+        item.key === selectedRecord.key
+          ? {
+              ...item,
+              ...values,
+              roles: nextRoles,
+              customPermissions: nextPerms,
+              remark: values.remark || '',
+              group: values.group || '',
+              phone: inputPhone,
+            }
+          : item
+      );
+
+      // ① 账号列表先同步落盘（commitRows 内部会回读校验），在任何广播之前
+      if (!commitRows(nextRows)) {
+        message.error('保存失败：本地存储写入未成功（通常是浏览器存储空间已满或处于隐私模式），请清理后重试');
+        return;
+      }
+      // ② 同步注册表中的角色/独立权限/手机号（权限解析与手机号登录的真实数据源）
+      let regWritten = false;
+      try {
+        const regUsers: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+        const idx = regUsers.findIndex((u: any) => u.username === selectedRecord.username);
+        if (idx >= 0) {
+          regUsers[idx].roles = nextRoles;
+          regUsers[idx].customPermissions = nextPerms;
+          regUsers[idx].phone = inputPhone;
+          // 权限编辑版本戳：子账号设备合并层按 _permTs 采纳服务端新版权限（防停留在新增时快照）
+          regUsers[idx]._permTs = Date.now();
+          persistRegisteredUsers(regUsers);
+          regWritten = true;
+        }
+      } catch { /* ignore */ }
+      // ③ 三态覆写（会同步广播 perm-changed；此时本地存储已是新值，回灌不再丢编辑）
+      const overridesOk = saveUserPermOverrides(selectedRecord.username, overrideDraft);
+
+      // ④ 回读校验：宁可报错也不报「成功」。旧实现无条件 message.success，
+      //    把配额写失败/静默 no-op 全部掩盖成了「提示成功但重开毫无变化」
+      const verifyReg = readRegisteredUserRow(selectedRecord.username);
+      const permsApplied = !!verifyReg
+        && Array.isArray(verifyReg.customPermissions)
+        && JSON.stringify(verifyReg.customPermissions) === JSON.stringify(nextPerms)
+        && JSON.stringify(verifyReg.roles || []) === JSON.stringify(nextRoles);
+      const overridesApplied = samePermTriMap(loadUserPermOverrides(selectedRecord.username), overrideDraft);
+      if (!overridesOk || !overridesApplied) {
+        message.error('权限未保存：本地存储写入未成功（通常是浏览器存储空间已满或处于隐私模式），请清理后重试');
+        return;
+      }
+      if (!regWritten || !permsApplied) {
+        message.error('菜单勾选/角色未写入注册表（可能本地存储已满或该账号尚未同步到云端），请重试或先同步账号');
+        return;
+      }
+      message.success('账号信息更新成功（已本地落盘，云端同步由系统自动重试）');
+      // 后台确认云端：不阻塞弹窗，失败只降级为明确警告。旧行为是“本地写成功就当全部端已生效”，
+      //  导致用户在其他电脑上看不到修改时完全无从判断原因
+      void flushDatasetUploadAsync('registeredUsers', localStorage.getItem('registeredUsers') || '[]').then((cloudOk) => {
+        if (!cloudOk) {
+          message.warning('权限已在本机保存，但云端同步暂时失败（服务器当前不可写）：同步成功前其他电脑/浏览器看到的仍是旧权限，系统将自动重试');
+        }
       });
-      if (selectedRecord) saveUserPermOverrides(selectedRecord.username, overrideDraft);
-      message.success('账号信息更新成功');
       setEditVisible(false);
       updateEditPerms([]);
       editForm.resetFields();
-    }).catch(() => { /* 校验失败：表单行内提示并滚动到首个错误项，不抛未处理异常 */ });
-  }, [editForm, selectedRecord, overrideDraft]);
+    }).catch(() => { /* 校验失败：表单行内提示并滚动到首个错误项 */ message.warning('保存已取消：请检查表单中标红的必填项后重试'); });
+  }, [editForm, selectedRecord, overrideDraft, commitRows]);
 
   // 删除账号
   const handleDelete = useCallback((record: AccountRecord) => {
@@ -606,7 +768,12 @@ const AccountManage: React.FC = () => {
     }
     // 账号列表也按行并集保留：删除必须在写存储前显式申报，否则刷新后被删账号复活
     declareShrink(getAccountsStorageKey(), [String(record.key)]);
-    setDataSource(prev => prev.filter(item => item.key !== record.key));
+    if (!commitRows(dataSourceRef.current.filter(item => item.key !== record.key))) {
+      message.error('删除失败：本地存储写入未成功（通常是浏览器存储空间已满）');
+      return;
+    }
+    // 个人三态覆写独立键一并清理，否则同名新账号会继承旧覆写
+    clearUserPermOverrides(record.username);
     // 同步到 registeredUsers 中移除该子账号，使其无法再登录
     try {
       const regUsers: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
@@ -616,7 +783,7 @@ const AccountManage: React.FC = () => {
       persistRegisteredUsers(updated);
     } catch { /* ignore */ }
     message.success(`账号 ${record.displayName} 已删除`);
-  }, []);
+  }, [commitRows]);
 
   // 启用/禁用账号
   const handleToggleStatus = useCallback((record: AccountRecord) => {
@@ -630,11 +797,13 @@ const AccountManage: React.FC = () => {
       return;
     }
     const newStatus = record.status === 'normal' ? 'disabled' : 'normal';
-    setDataSource(prev =>
-      prev.map(item =>
-        item.key === record.key ? { ...item, status: newStatus } : item
-      )
-    );
+    // 先落盘再写注册表：避免中间被 focus/storage 等 reload 事件用旧快照覆盖回原来的启用状态
+    if (!commitRows(dataSourceRef.current.map(item =>
+      item.key === record.key ? { ...item, status: newStatus } : item
+    ))) {
+      message.error('操作失败：本地存储写入未成功');
+      return;
+    }
     // 同步更新 registeredUsers 中的账号状态，禁用后无法登录
     try {
       const regUsers: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
@@ -647,18 +816,16 @@ const AccountManage: React.FC = () => {
       }
     } catch { /* ignore */ }
     message.success(newStatus === 'normal' ? `账号 ${record.displayName} 已启用` : `账号 ${record.displayName} 已禁用`);
-  }, []);
+  }, [commitRows]);
 
   // 切换屏蔽弹窗状态
   const handleToggleNotificationBlock = useCallback((record: AccountRecord) => {
     const newVal = !record.notificationBlocked;
-    setDataSource(prev =>
-      prev.map(item =>
-        item.key === record.key ? { ...item, notificationBlocked: newVal } : item
-      )
-    );
+    commitRows(dataSourceRef.current.map(item =>
+      item.key === record.key ? { ...item, notificationBlocked: newVal } : item
+    ));
     message.success(`账号 ${record.displayName} ${newVal ? '已屏蔽' : '已取消屏蔽'}弹窗通知`);
-  }, []);
+  }, [commitRows]);
 
   // ========== 分组管理 ==========
   const handleAddGroup = useCallback(() => {
@@ -682,6 +849,10 @@ const AccountManage: React.FC = () => {
   }, [groupForm, groups]);
 
   const handleDeleteGroup = useCallback((name: string) => {
+    if (presetGroupSet.has(name)) {
+      message.warning('预设分组与角色管理的预设角色一一对应，不可删除；如需收紧权限请在分组编辑中调整');
+      return;
+    }
     Modal.confirm({
       title: `确认删除分组「{name}」？`,
       content: '删除后该分组下的账号将变为“未指定分组」',
@@ -689,15 +860,15 @@ const AccountManage: React.FC = () => {
       onOk: () => {
         const newGroups = groups.filter(g => g.name !== name);
         setGroups(newGroups); saveGroups(newGroups);
-        // 清除账号中的分组标记
-        setDataSource(prev => prev.map(item =>
+        // 清除账号中的分组标记（先落盘，避免随后的 reload 事件用旧列表覆盖）
+        commitRows(dataSourceRef.current.map(item =>
           item.group === name ? { ...item, group: '' } : item
         ));
         if (selectedGroup === name) setSelectedGroup('');
         message.success(`分组「{name}」已删除`);
       },
     });
-  }, [groups, selectedGroup]);
+  }, [groups, selectedGroup, commitRows, presetGroupSet]);
 
   const handleGroupModalOk = useCallback(() => {
     groupForm.validateFields().then(values => {
@@ -707,6 +878,9 @@ const AccountManage: React.FC = () => {
       const menuAllow = Object.keys(groupPermDraft).filter(k => groupPermDraft[k] === 'allow' && !k.startsWith('fn:') && !k.startsWith('field:'));
       if (editingGroup) {
         // 编辑模式：重命名分组
+        if (newName !== editingGroup && presetGroupSet.has(editingGroup)) {
+          message.warning('预设分组不可改名（与角色管理的预设角色一一对应）'); return;
+        }
         if (newName !== editingGroup && groups.some(g => g.name === newName)) {
           message.warning('该分组名称已存在'); return;
         }
@@ -714,7 +888,10 @@ const AccountManage: React.FC = () => {
           g.name === editingGroup ? { name: newName, permissions: menuAllow } : g
         );
         setGroups(newGroups); saveGroups(newGroups);
-        setDataSource(prev => prev.map(item =>
+        // 组名变更后成员账号的 group 必须先落盘：紧随其后的 saveRolePermSettings 会同步广播
+        // perm-changed，本页 reload 若读到尚未写盘的旧列表，会把成员刚刚改好的分组覆盖回旧组名，
+        // 表现为「改了没生效」且分组权限层（__group__）静默失效
+        commitRows(dataSourceRef.current.map(item =>
           item.group === editingGroup ? { ...item, group: newName } : item
         ));
         if (selectedGroup === editingGroup) setSelectedGroup(newName);
@@ -731,7 +908,7 @@ const AccountManage: React.FC = () => {
       saveRolePermSettings(`__group__${newName}`, groupPermDraft);
       setGroupModalVisible(false); groupForm.resetFields(); setGroupPerms([]); setGroupPermDraft({});
     }).catch(() => { /* 校验失败：表单行内提交*/ });
-  }, [editingGroup, groups, selectedGroup, groupForm, groupPerms, groupPermDraft]);
+  }, [editingGroup, groups, selectedGroup, groupForm, groupPerms, groupPermDraft, commitRows, presetGroupSet]);
 
   // 重置密码
   const handleResetPwd = useCallback((record: AccountRecord) => {
@@ -772,15 +949,15 @@ const AccountManage: React.FC = () => {
     setAddVisible(true);
   }, [addForm]);
 
-  // 复制账号：复用源账号的角色/独立权限/个人三态覆写/分组，快速创建新子账号
+  // 复制账号：复用源账号的独立权限/个人三态覆写/分组，快速创建新子账号
   const handleCopy = useCallback((record: AccountRecord) => {
     copyFromRef.current = record.username;
     addForm.resetFields();
-    addForm.setFieldsValue({ roles: record.roles || [], group: record.group || '', remark: `复制自 ${record.displayName}` });
+    addForm.setFieldsValue({ group: record.group || '', remark: `复制自 ${record.displayName}` });
     updateAddPerms(record.customPermissions || []);
     addGroupPermsRef.current = [];
     setAddVisible(true);
-    message.info(`已复制「${record.displayName}」的角色与权限，请为新账号填写用户名/姓名/密码`);
+    message.info(`已复制「${record.displayName}」的部门与独立权限，请为新账号填写用户名/姓名/密码`);
   }, [addForm]);
 
   const handleAddConfirm = useCallback(() => {
@@ -864,7 +1041,8 @@ const AccountManage: React.FC = () => {
         username: values.username,
         displayName: values.displayName,
         role: values.role,
-        roles: values.roles || [],
+        // 新建窗已移除「权限角色」：子账号权限由所属部门（分组）预设承载
+        roles: [],
         customPermissions: addPermsRef.current,
         accountType: '子账号',
         status: 'normal',
@@ -875,14 +1053,19 @@ const AccountManage: React.FC = () => {
         group: values.group || '',
         phone: inputPhone,
       };
-      setDataSource(prev => [newAccount, ...prev]);
+      // 先同步落盘再写注册表：下面的复制建号分支会广播 perm-changed，本页 reload 若读到
+      // 尚未写盘的旧列表，会把刚创建的行直接从内存态抹掉（表现为新建的子账号刷新又没了）
+      if (!commitRows([newAccount, ...dataSourceRef.current])) {
+        message.error('创建失败：本地存储写入未成功（通常是浏览器存储空间已满）');
+        return;
+      }
 
       // 同时写入 registeredUsers，使子账号可以登录
       registeredUsers.push({
         username: inputUsername,
         password: values.password,
         role: currentUserRole,
-        roles: values.roles || [],
+        roles: [], // 新建窗已移除「权限角色」：权限由分组预设承载（customPermissions 已含分组权限快照）
         customPermissions: addPermsRef.current,
         _permTs: Date.now(),
         _createTs: Date.now(), // 创建事件标记：服务端据此识别重复创建（含跨租户撞名）并拒绝后建方
@@ -901,7 +1084,6 @@ const AccountManage: React.FC = () => {
         saveUserPermOverrides(inputUsername, loadUserPermOverrides(copyFromRef.current));
         copyFromRef.current = '';
       }
-  
       // 等待服务端确认：失败要明确告知「账号尚未上云、暂不能登录」，
       // 被拒（重名/不足8位）则回滚本地行，避免留下「本地有号、服务端无号」的登不上账号
       const jsonNow = localStorage.getItem('registeredUsers') || '[]';
@@ -912,7 +1094,7 @@ const AccountManage: React.FC = () => {
           const rest = (JSON.parse(localStorage.getItem('registeredUsers') || '[]') as any[]).filter(u => u.username !== inputUsername);
           persistRegisteredUsers(rest);
         } catch { /* ignore */ }
-        setDataSource(prev => prev.filter(a => a.username !== inputUsername));
+        commitRows(dataSourceRef.current.filter(a => a.username !== inputUsername));
         message.error(rejected[0].reason);
         return;
       }
@@ -925,7 +1107,7 @@ const AccountManage: React.FC = () => {
       updateAddPerms([]);
       addForm.resetFields();
     }).catch(() => { /* 校验失败：表单行内提示并滚动到首个错误项 */ });
-  }, [addForm, dataSource]);
+  }, [addForm, dataSource, commitRows]);
 
   // ==================== 账号导入 ====================
   const [importVisible, setImportVisible] = useState(false);
@@ -1011,7 +1193,9 @@ const AccountManage: React.FC = () => {
       maxId += 1;
       const groupPerms = groups.find(g => g.name === r.group)?.permissions || [];
       newAccounts.push({
-        key: String(maxId),
+        // 行主键必须跨端唯一：用「列表长度/maxId」做 key 在多浏览器并发导入时会撞车，
+        // 服务端并集合并按 key 去重会互相抹除（与新建子账号处同一口径）
+        key: `acc_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
         id: `ACC-${String(maxId).padStart(3, '0')}`,
         username: r.username,
         displayName: r.displayName,
@@ -1044,8 +1228,12 @@ const AccountManage: React.FC = () => {
         needsPasswordChange: true, // 首次登录必须修改密码
       });
     });
+    // 先落盘账号列表再写注册表（与新建/编辑同一口径：任何广播前回读到的都是新值）
+    if (!commitRows([...newAccounts, ...dataSourceRef.current])) {
+      message.error('导入失败：本地存储写入未成功（通常是浏览器存储空间已满）');
+      return;
+    }
     persistRegisteredUsers(registeredUsers);
-    setDataSource(prev => [...newAccounts, ...prev]);
     setImportVisible(false);
     setImportRows([]);
     message.success(`成功导入 ${newAccounts.length} 个账号：权限继承所属分组，首次登录须修改密码`);
@@ -1058,13 +1246,13 @@ const AccountManage: React.FC = () => {
           const rest = (JSON.parse(localStorage.getItem('registeredUsers') || '[]') as any[]).filter(u => !names.has(String(u.username)));
           persistRegisteredUsers(rest);
         } catch { /* ignore */ }
-        setDataSource(prev => prev.filter(a => !names.has(a.username)));
+        commitRows(dataSourceRef.current.filter(a => !names.has(a.username)));
         message.error(`以下账号被服务端拒绝并已回滚：${rejected.map(r => `${r.username}（${r.reason}）`).join('；')}`);
       } else if (!ok) {
         message.warning('导入账号已写入本机，但云端同步失败（服务器当前不可写）：同步成功前这些账号无法登录，系统将自动重试');
       }
     });
-  }, [importRows, groups, dataSource]);
+  }, [importRows, groups, dataSource, commitRows]);
 
   // 服务端拒绝清单（后台队列补传被拒）→ 回滚本地行并提示，避免留下登不上的账号
   useEffect(() => {
@@ -1077,14 +1265,14 @@ const AccountManage: React.FC = () => {
         const rest = reg.filter((u: any) => !names.has(String(u.username)));
         if (rest.length !== reg.length) {
           persistRegisteredUsers(rest);
-          setDataSource(prev => prev.filter(a => !names.has(a.username)));
+          commitRows(dataSourceRef.current.filter(a => !names.has(a.username)));
           message.error(`账号 ${Array.from(names).join('、')} 被服务端拒绝（重名或不足8位），已本地回滚`);
         }
       } catch { /* ignore */ }
     };
     window.addEventListener('registered-users-rejected', onRejected);
     return () => window.removeEventListener('registered-users-rejected', onRejected);
-  }, []);
+  }, [commitRows]);
 
   // 搜索和重置（查询时自动刷新表单数据）
   const handleSearch = useCallback(() => {
@@ -1128,7 +1316,8 @@ const AccountManage: React.FC = () => {
     const currentUser = localStorage.getItem('username') || '';
     switch (key) {
       case 'batch-enable': {
-        setDataSource(prev => prev.map(item =>
+        // 先落盘再写注册表（与其他写入口同一口径，避免中间事件用旧快照回灌内存态）
+        commitRows(dataSourceRef.current.map(item =>
           selectedRowKeys.includes(item.key) && item.accountType !== '主账号'
             ? { ...item, status: 'normal' } : item
         ));
@@ -1151,7 +1340,7 @@ const AccountManage: React.FC = () => {
         break;
       }
       case 'batch-disable': {
-        setDataSource(prev => prev.map(item =>
+        commitRows(dataSourceRef.current.map(item =>
           selectedRowKeys.includes(item.key) && item.accountType !== '主账号' && item.username !== currentUser
             ? { ...item, status: 'disabled' } : item
         ));
@@ -1182,12 +1371,15 @@ const AccountManage: React.FC = () => {
           cancelText: '取消',
           onOk: () => {
             // 找出将被删除的账号用户名
-            const deleteTargets = dataSource.filter(
+            const deleteRows = dataSourceRef.current.filter(
               item => selectedRowKeys.includes(item.key) && item.accountType !== '主账号' && item.username !== currentUser
-            ).map(d => d.username);
-            setDataSource(prev => prev.filter(item =>
+            );
+            const deleteTargets = deleteRows.map(d => d.username);
+            commitRows(dataSourceRef.current.filter(item =>
               (!selectedRowKeys.includes(item.key) || item.accountType === '主账号' || item.username === currentUser)
             ));
+            // 个人三态覆写独立键一并清理，避免同名新账号继承旧覆写
+            deleteRows.forEach(d => clearUserPermOverrides(d.username));
             // 账号列表按行并集保留，批量删除同样需显式申报
             declareShrink(getAccountsStorageKey(), selectedRowKeys.map(String));
             // 同步到 registeredUsers 中移除
@@ -1204,7 +1396,7 @@ const AccountManage: React.FC = () => {
         });
         break;
     }
-  }, [selectedRowKeys]);
+  }, [selectedRowKeys, commitRows]);
 
   const batchMenuItems = [
     { key: 'batch-enable', icon: <CheckCircleOutlined />, label: '批量启用' },
@@ -1368,11 +1560,18 @@ const AccountManage: React.FC = () => {
               transition: 'all 0.2s',
             }}
           >
-            <Text style={{ flex: 1 }}>{g.name}</Text>
+            <Text style={{ flex: 1 }}>
+              {g.name}
+              {presetGroupSet.has(g.name) && (
+                <Tag color="gold" style={{ marginLeft: 6, marginRight: 0, fontSize: 10, lineHeight: '16px', padding: '0 4px' }}>预设</Tag>
+              )}
+            </Text>
             <Space size={2}>
               <Tag>{groupCounts.counts[g.name] || 0}</Tag>
               <EditOutlined style={{ fontSize: 12, color: '#999', cursor: 'pointer' }} onClick={(e) => { e.stopPropagation(); handleEditGroup(g.name); }} />
-              <DeleteOutlined style={{ fontSize: 12, color: '#ff4d4f', cursor: 'pointer' }} onClick={(e) => { e.stopPropagation(); handleDeleteGroup(g.name); }} />
+              {!presetGroupSet.has(g.name) && (
+                <DeleteOutlined style={{ fontSize: 12, color: '#ff4d4f', cursor: 'pointer' }} onClick={(e) => { e.stopPropagation(); handleDeleteGroup(g.name); }} />
+              )}
             </Space>
           </div>
         ))}
@@ -1669,8 +1868,10 @@ const AccountManage: React.FC = () => {
           >
             <Input placeholder="请输入手机号码（选填，可用于登录）" prefix={<MobileOutlined />} allowClear />
           </Form.Item>
-          <Form.Item name="roles" label="权限角色" rules={[{ required: true, message: '请至少选择一个角色' }]}>
-            <Select mode="multiple" placeholder="请选择角色（可多选）" allowClear>
+          {/* 角色选填：新建子账号窗口已移除角色字段（分组是预设权限载体），
+              若编辑窗强制必填，新建的子账号 roles 恒为空 → 任何权限修改都会被校验静默拦住 */}
+          <Form.Item name="roles" label="权限角色（选填）" extra="不选角色时，子账号的预设权限由所属分组提供">
+            <Select mode="multiple" placeholder="请选择角色（可多选，可不选）" allowClear>
               {getAllRoles().map(r => (
                 <Option key={r.key} value={r.name}>{r.name}{r.isPreset ? ' (预设)' : ''}</Option>
               ))}
@@ -1679,11 +1880,12 @@ const AccountManage: React.FC = () => {
           {/* 权限配置（单一区域）：左侧菜单复选框=菜单级授权（角色预设基础上追加），右侧三态=按键/字段细粒度覆写 */}
           <div style={{ marginBottom: 16 }}>
             <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 8 }}>
-              菜单前复选框＝该账号是否拥有此菜单：供应商菜单在角色预设基础上追加；采购商/加工厂平台菜单默认开放，取消勾选＝对该账号隐藏（写入禁止覆写）；右侧允许/禁止/继承为按键与字段的细粒度覆写（最高优先级）
+              菜单前复选框＝该账号是否实际拥有此菜单（已含角色预设）：取消勾选角色预设带来的菜单会写入“禁止”覆写；
+              采购商/加工厂平台菜单默认开放，取消勾选＝对该账号隐藏（写入禁止覆写）；右侧允许/禁止/继承为按键与字段的细粒度覆写（最高优先级）
             </Text>
             <div style={{ padding: 12, background: '#fafafa', borderRadius: 8, border: '1px solid #d9d9d9' }}>
               <PermEditor scopes={['supplier', 'purchaser', 'factory']} value={overrideDraft} onChange={setOverrideDraft}
-                pageChecks={editPerms} onPageChecksChange={updateEditPerms} />
+                pageChecks={editPerms} onPageChecksChange={updateEditPerms} rolePresetKeys={editRolePresetKeys} />
             </div>
           </div>
           <Form.Item name="group" label="所属部门">
@@ -1723,18 +1925,6 @@ const AccountManage: React.FC = () => {
         </div>
         <Form autoComplete="off" form={addForm} layout="vertical" scrollToFirstError
           onValuesChange={(changedValues) => {
-            if (changedValues.roles) {
-              const newRoles: string[] = changedValues.roles || [];
-              if (newRoles.length > 0) {
-                const newRolePerms = getMergedPermissions(newRoles);
-                const current = addPermsRef.current;
-                const existing = new Set(current);
-                const toAdd = newRolePerms.filter(p => !existing.has(p));
-                if (toAdd.length > 0) {
-                  updateAddPerms(current.concat(toAdd));
-                }
-              }
-            }
             if (changedValues.group !== undefined) {
               // 选择所属部门后自动继承部门权限（切换部门时移除上次自动继承的部门权限）
               const grpName: string = changedValues.group || '';
@@ -1826,19 +2016,12 @@ const AccountManage: React.FC = () => {
           </Row>
           <Row gutter={16}>
             <Col span={12}>
-              <Form.Item name="roles" label="权限角色">
-                <Select mode="multiple" placeholder="请选择角色（可多选，可选）" allowClear>
-                  {getAllRoles().map(r => (
-                    <Option key={r.key} value={r.name}>{r.name}{r.isPreset ? ' (预设)' : ''}</Option>
-                  ))}
-                </Select>
-              </Form.Item>
-            </Col>
-            <Col span={12}>
               <Form.Item name="group" label="所属部门" rules={[{ required: true, message: '请选择所属部门' }]}>
-                <Select placeholder="请选择部门（自动继承部门权限）" allowClear>
+                <Select placeholder="请选择部门（子账号权限由部门预设承载）" allowClear>
                   {groups.map(g => (
-                    <Option key={g.name} value={g.name}>{g.name}</Option>
+                    <Option key={g.name} value={g.name}>
+                      {g.name}{presetGroupSet.has(g.name) ? '（预设）' : ''}
+                    </Option>
                   ))}
                 </Select>
               </Form.Item>
@@ -1857,9 +2040,9 @@ const AccountManage: React.FC = () => {
             {addPermExpanded && (
               <div style={{ marginTop: 8, padding: 12, background: '#fafafa', borderRadius: 8, border: '1px solid #d9d9d9', maxHeight: 300, overflowY: 'auto' }}>
                 <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 12 }}>
-                  此处设置的权限将在角色权限基础上额外追加，仅对此子账号生效
+                  此处设置的权限将在所属部门（分组）权限基础上额外追加，仅对此子账号生效
                 </Text>
-                <CustomPermSelector value={addPerms} onChange={updateAddPerms} roles={addWatchedRoles} />
+                <CustomPermSelector value={addPerms} onChange={updateAddPerms} roles={[]} />
               </div>
             )}
           </div>

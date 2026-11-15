@@ -65,12 +65,45 @@ const readAccountGroup = (username: string): string => {
   } catch { return ''; }
 };
 
-/** 账号个人三态覆写（存 registeredUsers 条目 permOverrides，与角色/独立权限同源） */
+/**
+ * 账号个人三态覆写存储。
+ * 历史实现只存 registeredUsers 行内（permOverrides），有两个致命点：
+ * 1) registeredUsers 是几百 KB 的整键 blob，浏览器配额紧张时 setItem 会被配额守卫
+ *    静默降级（不抛异常），于是「保存成功」其实一个字节都没落盘；
+ * 2) 整键上传后要经服务端 mergeRegisteredUsersJson 的 _permTs 版本保护，跨端陈旧副本
+ *    会把刚写的覆写回滚掉。
+ * 现改为：权威副本落独立小键 user_perm_overrides_<账号>（与 dev_customer_perms_ 同型，
+ * KB 级、单账号独占、无行级并集冲突），同时继续镜像回 registeredUsers 供旧客户端与
+ * 其他浏览器读取。读取顺序：独立小键 → 注册表历史值（不做写回，避免每次读都产生写入风暴）。
+ */
+export const userPermOverridesKey = (username: string): string => `user_perm_overrides_${username}`;
+
+const readOverrideStore = (username: string): Record<string, PermTri> | null => {
+  try {
+    const raw = localStorage.getItem(userPermOverridesKey(username));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, PermTri> : null;
+  } catch { return null; }
+};
+
 export const loadUserPermOverrides = (username: string): Record<string, PermTri> => {
+  const own = readOverrideStore(username);
+  if (own) return own;
   const u = readRegisteredUser(username);
   return u && u.permOverrides && typeof u.permOverrides === 'object' ? u.permOverrides : {};
 };
-export const saveUserPermOverrides = (username: string, overrides: Record<string, PermTri>) => {
+/** 保存个人三态覆写；返回 false 表示本地落盘失败（配额满/隐私模式），调用方必须如实提示，
+ *  不能再报「保存成功」——历史上正是这种无条件成功提示把写入失败掩盖成了「改了没反应」 */
+export const saveUserPermOverrides = (username: string, overrides: Record<string, PermTri>): boolean => {
+  let ok = false;
+  try {
+    const json = JSON.stringify(overrides || {});
+    localStorage.setItem(userPermOverridesKey(username), json);
+    ok = localStorage.getItem(userPermOverridesKey(username)) === json;
+  } catch { ok = false; }
+  // 兼容镜像：仍写注册表字段（旧客户端只读这里）。注册表里没有该账号时不再静默跳过——
+  // 独立小键已权威落盘，镜像失败不影响本次保存结果。
   try {
     const users: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
     const idx = users.findIndex(u => u.username === username);
@@ -80,8 +113,22 @@ export const saveUserPermOverrides = (username: string, overrides: Record<string
       localStorage.setItem('registeredUsers', JSON.stringify(users));
     }
   } catch { /* ignore */ }
-  appendPermAudit('账号个人覆写保存', `账号=${username}；显式设置 ${Object.keys(overrides).length} 项`);
+  appendPermAudit('账号个人覆写保存', `账号=${username}；显式设置 ${Object.keys(overrides || {}).length} 项${ok ? '' : '；本地存储写入失败'}`);
   emitPermChanged();
+  return ok;
+};
+/** 删除个人覆写（账号删除时清理，避免遗留键被同名新账号继承）。
+ *  注册表镜像同步清空：否则删掉小键后旧覆写会从镜像里「复活」。 */
+export const clearUserPermOverrides = (username: string): void => {
+  try { localStorage.removeItem(userPermOverridesKey(username)); } catch { /* ignore */ }
+  try {
+    const users: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+    const idx = users.findIndex(u => u.username === username);
+    if (idx >= 0 && users[idx].permOverrides !== undefined) {
+      users[idx] = { ...users[idx], permOverrides: {}, _permTs: Date.now() };
+      localStorage.setItem('registeredUsers', JSON.stringify(users));
+    }
+  } catch { /* ignore */ }
 };
 
 // ===================== 权限变更审计日志 =====================

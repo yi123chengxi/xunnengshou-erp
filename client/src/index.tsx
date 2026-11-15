@@ -12,7 +12,7 @@ import './index.css';
 dayjs.locale('zh-cn');
 import { installStorageQuotaGuard, registerSetItemHook, proactiveQuotaCleanup } from './utils/storageQuota';
 import { installStorageWriteFailureNotice } from './utils/storageFailureNotice';
-import { scheduleDatasetUpload, installUploadQueueRetry } from './utils/serverSync';
+import { scheduleDatasetUpload, installUploadQueueRetry, reconcileSessionIdentity } from './utils/serverSync';
 import { hydrateProductListCache } from './utils/dataStore';
 import { hydrateImageUrlMap } from './utils/imageSpace';
 import { initPushNotifications } from './utils/pushNotification';
@@ -131,6 +131,11 @@ setTimeout(() => proactiveQuotaCleanup(), 2000);
 // Web Push：注册 Service Worker + 请求通知权限 + 创建订阅
 // 登录成功后会再次调用以确保订阅与当前用户绑定
 initPushNotifications();
+
+// 会话身份自愈：注册表行被修复（主账号曾被陈旧副本误标为子账号）后，登录时写入的
+// isSubAccount/parentAccount 快照仍是旧值，resolvePerm 会继续走子账号分支导致菜单塌缩；
+// 启动时先对齐一次，不等拉取/重登
+try { reconcileSessionIdentity(); } catch { /* ignore */ }
 
 // 懒加载 chunk 失败守卫：版本更新后旧页面引用已删除的旧 hash chunk 会 404，
 // 未捕获异常将整棵 React 树卸载造成整页空白；此处统一捕获并自动刷新一次加载新版本，

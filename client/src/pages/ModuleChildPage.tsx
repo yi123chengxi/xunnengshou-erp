@@ -7767,29 +7767,17 @@ const ModuleChildPage: React.FC = () => {
         }
       }
     }
-    // 缺货发货门禁：任一明细库存不足阻断发货并引导缺货拆分
-    const shortageDocs: { id: string; lines: any[] }[] = [];
-    records.forEach(rec => {
-      const oid = rec.orderId || rec.id;
-      const ord = readOrderFromStorage(oid) || rec;
-      const lines = shortageLinesOf(ord, pickStockMap);
-      if (lines.length) shortageDocs.push({ id: oid, lines });
-    });
-    if (shortageDocs.length) {
-      const first = shortageDocs[0];
+    // 发货确认（正常/强制共用）：force=true 时绕过缺货门禁，实际库存允许扣成负数（出库单与库存日志留痕）
+    const confirmShip = (force: boolean, shortageText: string) => {
       Modal.confirm({
-        title: '存在缺货明细，无法发货', centered: true,
-        content: shortageDocs.map(d => `订单 ${d.id}：${d.lines.map((l: any) => `${l.code} 需${l.need}/库存${l.stock}`).join('；')}`).join('\n'),
-        okText: '去拆分', cancelText: '取消',
-        onOk: () => { const rec = records.find(r => (r.orderId || r.id) === first.id); if (rec) openShortageSplit(rec); },
-      });
-      return;
-    }
-    Modal.confirm({
-      title: '立即发货',
-      content: `确定将选中的 ${records.length} 条拣货单立即发货？订单将变更为“已发货”并从打单拣货移除，同时生成销售出库单并扣减商品实际库存。`,
-      okText: '确定', cancelText: '取消',
-      onOk: () => {
+        title: force ? '强制发货（缺货放行）' : '立即发货',
+        content: force
+          ? `以下明细库存不足，强制发货后实际库存将扣为负数（可在库存日志追溯）：\n${shortageText}\n仍要将选中的 ${records.length} 条拣货单发货？订单将变更为“已发货”并从打单拣货移除，同时生成销售出库单。`
+          : `确定将选中的 ${records.length} 条拣货单立即发货？订单将变更为“已发货”并从打单拣货移除，同时生成销售出库单并扣减商品实际库存。`,
+        okText: force ? '确认强制发货' : '确定',
+        okButtonProps: force ? { danger: true } : undefined,
+        cancelText: '取消',
+        onOk: () => {
         const owner = getDataOwner();
         const omKey = `pageData_sales_order-manage_${owner}`;
         const soKey = `sales_outbound_${owner}`;
@@ -7857,7 +7845,7 @@ const ModuleChildPage: React.FC = () => {
         setDataSource(prev => prev.map(r => ids.has(r.id) ? { ...r, orderStatus: '已完成', auditStatus: '', shipTime: now, completeTime: now } : r));
         // 写入订单操作日志：发货痕迹（含出库单号）+ 交易完成
         shippedDocs.forEach(d => {
-          appendOrderLog(d.id, '订单发货', `打单拣货发货：生成出库单 ${d.docNo}，订单状态变更为已完成`);
+          appendOrderLog(d.id, '订单发货', `打单拣货发货${force ? '（强制·缺货放行）' : ''}：生成出库单 ${d.docNo}，订单状态变更为已完成`);
           appendOrderLog(d.id, '交易完成', '供应商已发货，订单交易自动完成');
         });
         // 分段付款订单：发货后结转 借预收账款/贷主营业务收入（会计账薄模式，sourceKey 幂等）
@@ -7955,9 +7943,41 @@ const ModuleChildPage: React.FC = () => {
           }
         });
         setSelectedRowKeys([]);
-        message.success(`已发货 ${records.length} 条订单：已生成销售出库单并扣减实际库存`);
+        message.success(force
+          ? `已强制发货 ${records.length} 条订单：已生成销售出库单并扣减实际库存（缺货放行，库存可能为负）`
+          : `已发货 ${records.length} 条订单：已生成销售出库单并扣减实际库存`);
       },
+      });
+    };
+    // 缺货发货门禁：任一明细库存不足先阻断并引导缺货拆分；弹窗内「强制发货」可绕过门禁直接发货
+    const shortageDocs: { id: string; lines: any[] }[] = [];
+    records.forEach(rec => {
+      const oid = rec.orderId || rec.id;
+      const ord = readOrderFromStorage(oid) || rec;
+      const lines = shortageLinesOf(ord, pickStockMap);
+      if (lines.length) shortageDocs.push({ id: oid, lines });
     });
+    if (shortageDocs.length) {
+      const first = shortageDocs[0];
+      const shortageText = shortageDocs.map(d => `订单 ${d.id}：${d.lines.map((l: any) => `${l.code} 需${l.need}/库存${l.stock}`).join('；')}`).join('\n');
+      let dlg: ReturnType<typeof Modal.confirm>;
+      dlg = Modal.confirm({
+        title: '存在缺货明细，无法发货', centered: true,
+        content: shortageText,
+        okText: '去拆分', cancelText: '取消',
+        onOk: () => { const rec = records.find(r => (r.orderId || r.id) === first.id); if (rec) openShortageSplit(rec); },
+        // 强制发货入口：绕过缺货门禁进入强制发货确认（库存允许扣负，出库单/库存日志/订单日志留痕）
+        footer: (_, { OkBtn, CancelBtn }) => (
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+            <CancelBtn />
+            <OkBtn />
+            <Button danger onClick={() => { dlg.destroy(); confirmShip(true, shortageText); }}>强制发货</Button>
+          </div>
+        ),
+      });
+      return;
+    }
+    confirmShip(false, '');
   }, [selectedRowKeys, filteredData, getDataOwner, getCurrentUserDisplayName, pushRecordToPage, genOutboundNo, appendOrderLog, refreshBillDetailStorage, readOrderFromStorage, shortageLinesOf, pickStockMap, openShortageSplit]);
 
   // 打单拣货派生视图迁移：历史拣货单按 orderId 合并回订单字段（备份旧键后退役）；无关联订单的遗留单转 legacy 键只读展示

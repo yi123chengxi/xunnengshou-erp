@@ -147,54 +147,39 @@ const recordLoginLog = (username: string, success: boolean, detail?: string) => 
 };
 
 // === 新设备验证工具函数 ===
-// 生成设备指纹（基于浏览器特征）
-const getDeviceFingerprint = (): string => {
-  const nav = window.navigator;
-  const screen = window.screen;
-  const raw = [
-    nav.userAgent,
-    nav.language,
-    screen.width + 'x' + screen.height,
-    screen.colorDepth,
-    new Date().getTimezoneOffset(),
-    nav.platform,
-    nav.hardwareConcurrency || '',
-  ].join('|');
-  // 简单 hash
-  let hash = 0;
-  for (let i = 0; i < raw.length; i++) {
-    const char = raw.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash; // Convert to 32bit integer
-  }
-  return 'fp_' + Math.abs(hash).toString(36) + '_' + raw.length;
-};
-
-// 检查是否为可信设备
-const isTrustedDevice = (username: string): boolean => {
+// 信任判定已从「浏览器设备指纹（localStorage，可伪造且换浏览器即失效）」改为
+// 「服务端出口 IP 信任期」：陌生 IP 首次登录需短信验证码，验证通过后该 IP 30 天内免验证，
+// 到期进入下一个轮回重新验证。信任记录存服务端 sys_trusted_ips_<账号>，客户端不可自封。
+const checkIpTrust = async (username: string): Promise<boolean> => {
   try {
-    const devices: string[] = JSON.parse(localStorage.getItem(`trusted_devices_${username}`) || '[]');
-    return devices.includes(getDeviceFingerprint());
-  } catch { return false; }
-};
-
-// 将设备标记为可信
-const trustDevice = (username: string) => {
-  try {
-    const key = `trusted_devices_${username}`;
-    const devices: string[] = JSON.parse(localStorage.getItem(key) || '[]');
-    const fp = getDeviceFingerprint();
-    if (!devices.includes(fp)) {
-      devices.push(fp);
-      // 最多保留10个可信设备
-      if (devices.length > 10) devices.shift();
-      safeSetItem(key, JSON.stringify(devices));
-    }
-  } catch { /* ignore */ }
+    const resp = await fetch(`${SMS_API_BASE}/sms/check-ip-trust`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username }),
+    });
+    const data = await resp.json();
+    if (data.code !== 0) return false;
+    return data.data?.trusted === true;
+  } catch { return false; } // 查询失败按不可信处理（fail-closed，走验证流程）
 };
 
 // 内存登录候选（初始为空：演示账号已取消；注册成功后临时追加便于同会话登录，真值源为 registeredUsers）
 const mockUsers: { username: string; password: string; role: string; name: string }[] = [];
+
+// 首次登录改密提示只弹一次：置 forcePasswordChange 的同时清掉注册表标记并上传，
+// 无论用户是改密成功还是用 X 关掉弹窗，后续登录都不再弹
+const markFirstLoginPromptShown = (username: string) => {
+  safeSetItem('forcePasswordChange', 'true');
+  try {
+    const regUsers: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+    const idx = regUsers.findIndex((u: any) => u.username === username);
+    if (idx >= 0 && regUsers[idx].needsPasswordChange) {
+      regUsers[idx].needsPasswordChange = false;
+      safeSetItem('registeredUsers', JSON.stringify(regUsers));
+      void flushDatasetUpload('registeredUsers', localStorage.getItem('registeredUsers') || '[]');
+    }
+  } catch { /* ignore */ }
+};
 
 // 一次性清理残留演示账号：从 registeredUsers（含服务端同步副本）移除内置演示凭据，
 // 并清除遗留的演示账号会话（应用启动时已执行，登录页加载再兜底一次）
@@ -354,12 +339,10 @@ const Auth: React.FC = () => {
     }
 
     if (foundUser.needsPasswordChange && foundUser.isSubAccount) {
-      safeSetItem('forcePasswordChange', 'true');
+      markFirstLoginPromptShown(foundUser.username);
     }
 
-    // 标记设备为可信
-    trustDevice(foundUser.username);
-    recordLoginLog(foundUser.username, true, '新设备验证通过，登录成功');
+    recordLoginLog(foundUser.username, true, '新设备（陌生 IP）验证通过，登录成功');
 
     // 登录成功后初始化 Web Push 推送订阅
     initPushNotifications();
@@ -392,17 +375,16 @@ const Auth: React.FC = () => {
       const resp = await fetch(`${SMS_API_BASE}/sms/send-device-code`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone }),
+        body: JSON.stringify({ phone, username: pendingLoginUser?.username || '' }),
       });
       const data = await resp.json();
       if (data.code !== 0) {
         message.error(data.message || '验证码发送失败，请稍后重试');
         return false;
       }
-      // 生产环境未配置短信服务：服务端返回 smsUnconfigured，回退为跳过新设备验证直接登录
+      // 生产环境未配置短信服务：服务端返回 smsUnconfigured（服务端已同步记录本次 IP 信任），回退为跳过新设备验证直接登录
       if (data.data?.smsUnconfigured) {
         if (pendingLoginUser) {
-          trustDevice(pendingLoginUser.username);
           setDeviceVerifyVisible(false);
           completeLogin(pendingLoginUser, pendingIsViewOnly);
           message.warning('服务器未配置短信服务，本次已跳过新设备验证；配置阿里云短信后将自动恢复验证');
@@ -439,7 +421,7 @@ const Auth: React.FC = () => {
       const resp = await fetch(`${SMS_API_BASE}/sms/verify-code`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone, code: deviceVerifyInput }),
+        body: JSON.stringify({ phone, code: deviceVerifyInput, username: pendingLoginUser?.username || '' }),
       });
       const data = await resp.json();
       if (data.code !== 0) {
@@ -449,7 +431,7 @@ const Auth: React.FC = () => {
       if (!pendingLoginUser) return;
       setDeviceVerifyVisible(false);
       completeLogin(pendingLoginUser, pendingIsViewOnly);
-      message.success('设备验证通过，已信任此设备');
+      message.success('验证通过，该 IP 地址 30 天内免验证登录');
     } catch {
       message.error('网络异常，验证失败，请稍后重试');
     }
@@ -587,7 +569,7 @@ const Auth: React.FC = () => {
 
   // 命中用户后的公共处理（账号密码登录与短信验证码登录共用）
   // loginMethod: 'account' | 'sms'，短信验证码登录已验证手机号身份，跳过新设备验证
-  const proceedWithUser = (foundUser: any, loginMethod: 'account' | 'sms' = 'account') => {
+  const proceedWithUser = async (foundUser: any, loginMethod: 'account' | 'sms' = 'account') => {
     // 检查账号是否被禁用
     if (foundUser.accountStatus === 'disabled') {
       message.error('该账号已被禁用，请联系管理员');
@@ -668,11 +650,11 @@ const Auth: React.FC = () => {
 
     message.success(`登录成功！欢迎回来，${foundUser.name}`);
 
-    // === 安全检查：新设备验证 ===
-    // 短信验证码登录已验证手机号身份，跳过新设备验证；开发环境也跳过
+    // === 安全检查：陌生 IP 验证（30 天信任期由服务端裁决） ===
+    // 短信验证码登录已验证手机号身份，跳过；开发环境也跳过
     const isProduction = process.env.NODE_ENV === 'production';
-    if (loginMethod !== 'sms' && isProduction && !isTrustedDevice(foundUser.username)) {
-      // 新设备，需要验证
+    if (loginMethod !== 'sms' && isProduction && !(await checkIpTrust(foundUser.username))) {
+      // 陌生 IP，需要验证
       setPendingLoginUser(foundUser);
       setPendingIsViewOnly(isViewOnly);
       setDeviceVerifyStep(0);
@@ -681,12 +663,12 @@ const Auth: React.FC = () => {
       setDeviceVerifyInput('');
       setDeviceVerifyCountdown(0);
       setDeviceVerifyVisible(true);
-      recordLoginLog(foundUser.username, true, '新设备登录，等待验证');
+      recordLoginLog(foundUser.username, true, '陌生 IP 登录，等待短信验证');
       setLoading(false);
       return;
     }
 
-    // 可信设备，直接登录
+    // 信任 IP，直接登录
     safeSetItem('userRole', foundUser.role);
     safeSetItem('username', foundUser.username);
     safeSetItem('isViewOnly', isViewOnly ? 'true' : 'false');
@@ -737,7 +719,7 @@ const Auth: React.FC = () => {
     }
 
     if (foundUser.needsPasswordChange && foundUser.isSubAccount) {
-      safeSetItem('forcePasswordChange', 'true');
+      markFirstLoginPromptShown(foundUser.username);
     }
 
     // 待受理供应商合作邀约：登录后直达供应商列表页弹窗确认
@@ -1446,7 +1428,10 @@ const Auth: React.FC = () => {
         <Form.Item>
           <Button 
             type="primary" 
-            htmlType="submit" 
+            /* 不能用 htmlType="submit”：onClick 的 validateFields 与原生 submit 触发的
+               rc-field-form 内部校验会竞态（lastValidatePromise 被后者覆盖，前者以
+               outOfDate 拒绝落入 catch），表现为点击登录必报「请检查登录信息」 */
+            htmlType="button" 
             loading={loading}
             block
             onClick={handleLogin}
@@ -2139,15 +2124,25 @@ const Auth: React.FC = () => {
           </Space>
         }
         open={deviceVerifyVisible}
-        closable={false}
+        closable
         maskClosable={false}
+        onCancel={() => {
+          // 右上角 X：放弃本次验证回到登录框（不登录）；信任期不受影响
+          setDeviceVerifyVisible(false);
+          setPendingLoginUser(null);
+          setDeviceVerifyStep(0);
+          setDeviceVerifyInput('');
+          setDeviceVerifyCountdown(0);
+          setLoading(false);
+          message.info('已取消新设备验证，如需登录请重新输入密码');
+        }}
         footer={null}
         width={460}
       >
         <div style={{ marginBottom: 16 }}>
           <Alert
             message="安全验证"
-            description="系统检测到您正在新设备上登录，为保障账号安全，请完成身份验证。"
+            description="系统检测到您来自陌生 IP 地址登录，为保障账号安全，请完成身份验证；验证通过后该 IP 30 天内免验证。"
             type="warning"
             showIcon
           />

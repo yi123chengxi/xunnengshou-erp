@@ -100,14 +100,15 @@ body {
   font-weight: 600;
 }
 
-/* 主按钮样式 */
-.ant-btn-primary {
+/* 主按钮样式（排除 danger 按钮：!important 品牌色会压掉 antd 危险红色，
+   导致删除/强制发货等危险确认失去警示语义） */
+.ant-btn-primary:not(.ant-btn-dangerous) {
   background: var(--primary-color) !important;
   border-color: var(--primary-color) !important;
   border-radius: 8px !important;
 }
 
-.ant-btn-primary:hover {
+.ant-btn-primary:not(.ant-btn-dangerous):hover {
   background: var(--primary-hover) !important;
   border-color: var(--primary-hover) !important;
 }

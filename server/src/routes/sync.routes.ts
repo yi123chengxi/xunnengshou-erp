@@ -14,6 +14,7 @@ import {
   attachSyncUser, currentSyncUser, requireSyncAuth, isKeyAllowed, filterMetaForUser,
   sanitizeRegisteredUsersJson, hashRegisteredUsersJson, hashPassword, mergeRegisteredUsersJson,
   filterRegisteredUsersCreations, tenantFamilySuffix, isEmptyOwnerFamilyKey, mergeRowsUnionJson, SyncUser,
+  filterResurrectedUsersJson, applyDeletedUsersLedger, DELETED_USERS_LEDGER_KEY,
 } from '../middleware/syncGuard';
 import { notifyDatasetUpdated } from '../ws/chat-ws';
 
@@ -126,7 +127,7 @@ export function warmMetaCache(): void {
 // 权限数据写入成功后，经聊天 WebSocket 通知该租户所有在线端（主账号 + 全部子账号）
 // 立即增量拉取，使「另一个浏览器给子账号改权限」无需刷新/等轮询即可生效。
 const PERM_NOTIFY_EXACT = ['registeredUsers'];
-const PERM_NOTIFY_PREFIXES = ['dev_', 'roles_', 'role_permsettings_', 'preset_role_overrides_', 'accounts_', 'account_groups_'];
+const PERM_NOTIFY_PREFIXES = ['dev_', 'roles_', 'role_permsettings_', 'preset_role_overrides_', 'accounts_', 'account_groups_', 'user_perm_overrides_'];
 
 function permNotifyTargets(key: string, user: SyncUser | null): string[] {
   if (!user) return [];
@@ -137,6 +138,10 @@ function permNotifyTargets(key: string, user: SyncUser | null): string[] {
   // 开发者后台改客户权限：键内后缀是被改的客户账号，直接通知该客户
   const m = key.match(/^dev_customer_(?:perms|deny)_(.+)$/);
   if (m && m[1]) targets.add(m[1]);
+  // 主账号给子账号改个人覆写：键内后缀是子账号名，必须直接通知该子账号，
+  // 否则子账号端只能等 30/60 秒轮询（旧版“改完不生效”的最后一个尾巴）
+  const mu = key.match(/^user_perm_overrides_(.+)$/);
+  if (mu && mu[1]) targets.add(mu[1]);
   return [...targets];
 }
 
@@ -308,6 +313,16 @@ router.put('/dataset', async (req: Request, res: Response) => {
     if (key === 'registeredUsers') {
       const existing = await store.getDataset(key).catch(() => null);
       const existingJson = existing ? existing.dataset_json : null;
+      // 删除墓碑：丢弃陈旧副本复活的已删账号行（username 命中墓碑且 _createTs 不晚于删除时刻）
+      let deletedLedger: Record<string, number> = {};
+      try {
+        const ledgerRow = await store.getDataset(DELETED_USERS_LEDGER_KEY).catch(() => null);
+        if (ledgerRow && ledgerRow.dataset_json) {
+          const parsedLedger = JSON.parse(ledgerRow.dataset_json);
+          if (parsedLedger && typeof parsedLedger === 'object' && !Array.isArray(parsedLedger)) deletedLedger = parsedLedger;
+        }
+      } catch { /* 墓碑不可用时不阻断写入 */ }
+      json = filterResurrectedUsersJson(json, deletedLedger);
       // 服务端权威准入：被拒行不参与合并，避免后创建方覆盖先创建方的密码与资料
       const filtered = filterRegisteredUsersCreations(json, existingJson);
       registeredRejected = filtered.rejected;
@@ -315,6 +330,22 @@ router.put('/dataset', async (req: Request, res: Response) => {
       // （子账号会话也要能建号：旧逻辑把子账号写入直接拦在客户端，导致新账号只留在本机）
       const guarded = existingJson ? mergeRegisteredUsersJson(existingJson, filtered.cleanJson, req.body.removedIds) : filtered.cleanJson;
       json = await hashRegisteredUsersJson(guarded, existingJson);
+      // 本次申报删除的账号（仅认存量中确实存在的 username）记入墓碑，后续陈旧副本无法再复活它；
+      // 同名重建（_createTs 晚于删除时刻）会由 applyDeletedUsersLedger 自动清除墓碑
+      try {
+        const existingNames = new Set<string>();
+        if (existingJson) {
+          const oldRows = JSON.parse(existingJson);
+          if (Array.isArray(oldRows)) oldRows.forEach((u: any) => { if (u && u.username) existingNames.add(String(u.username)); });
+        }
+        const removedNames = (Array.isArray(req.body.removedIds) ? req.body.removedIds : [])
+          .map((x: any) => String(x))
+          .filter((n: string) => n && existingNames.has(n));
+        const nextLedger = applyDeletedUsersLedger(deletedLedger, filtered.cleanJson, removedNames);
+        if (nextLedger) {
+          await store.forceUpsertDataset(DELETED_USERS_LEDGER_KEY, JSON.stringify(nextLedger), '', Date.now());
+        }
+      } catch { /* 墓碑维护失败不阻断账号写入 */ }
     }
     // 响应携带拒绝清单：建号方据此回滚本地行并提示，避免「本地有号、服务端无号」的登不上账号
     const savedJson = (obj: Record<string, any>) => res.json(registeredRejected.length ? { ...obj, rejected: registeredRejected } : obj);

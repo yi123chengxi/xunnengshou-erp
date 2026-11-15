@@ -2230,8 +2230,15 @@ const MainLayout: React.FC = () => {
           </Space>
         }
         open={forcePwdVisible}
-        closable={false}
+        closable
         maskClosable={false}
+        onCancel={() => {
+          // 右上角 X：首次提示可关闭；改密标记在登录时已清除，后续登录不会再弹
+          localStorage.removeItem('forcePasswordChange');
+          setForcePwdVisible(false);
+          forcePwdForm.resetFields();
+          message.info('已跳过首次改密提示；为保障账号安全，建议尽快在右上角个人中心修改初始密码');
+        }}
         footer={null}
         width={420}
       >

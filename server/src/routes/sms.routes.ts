@@ -18,6 +18,58 @@ interface CodeRec { code: string; expiresAt: number; attempts: number; }
 const codeStore = new Map<string, CodeRec>();
 const sendThrottle = new Map<string, { last: number; day: string; count: number }>();
 
+// ============ 新设备验证：IP 信任期（30 天一个轮回） ============
+// 信任记录存服务端 dataset_store 的 sys_trusted_ips_<账号> = [{ip, until}]：
+// sys_ 前缀在 syncGuard.isKeyAllowed 里对客户端全禁读写，杜绝调用方「自封可信」。
+// 口径：陌生 IP 首次登录需短信验证码；验证通过后该 IP 30 天内免验证；
+// 到期后下一个轮回重新验证（不在登录时续期，保证 30 天硬轮回）。
+const IP_TRUST_MS = 30 * 24 * 60 * 60 * 1000;
+
+/** 客户端出口 IP：优先 X-Forwarded-For 第一跳（生产 Nginx 反代），缺失回退 req.ip */
+export function clientIpOf(req: Request): string {
+  const fwd = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  return fwd || String(req.ip || '');
+}
+
+const ipTrustKey = (username: string) => `sys_trusted_ips_${username}`;
+
+async function readTrustedIps(username: string): Promise<{ ip: string; until: number }[]> {
+  try {
+    const row = await store.getDataset(ipTrustKey(username));
+    if (!row) return [];
+    const list = JSON.parse(row.dataset_json || '[]');
+    return Array.isArray(list) ? list.filter((r: any) => r && typeof r.ip === 'string' && Number(r.until) > 0) : [];
+  } catch { return []; }
+}
+
+async function writeTrustedIps(username: string, list: { ip: string; until: number }[]): Promise<void> {
+  try {
+    await store.forceUpsertDataset(ipTrustKey(username), JSON.stringify(list), '', Date.now());
+  } catch { /* 存储不可用：信任期失效降级为「每次验证」，不影响登录主链路 */ }
+}
+
+/** 当前请求 IP 是否在该账号的信任期内 */
+export async function isIpTrustedFor(username: string, req: Request): Promise<boolean> {
+  if (!username) return false;
+  const ip = clientIpOf(req);
+  if (!ip) return false;
+  const now = Date.now();
+  const list = await readTrustedIps(username);
+  const alive = list.filter(r => r.until > now);
+  if (alive.length !== list.length) void writeTrustedIps(username, alive); // 顺带剪枝过期记录
+  return alive.some(r => r.ip === ip);
+}
+
+/** 验证通过后记录信任：自此刻起 30 天免验证码 */
+async function markIpTrusted(username: string, req: Request): Promise<void> {
+  const ip = clientIpOf(req);
+  if (!username || !ip) return;
+  const now = Date.now();
+  const list = (await readTrustedIps(username)).filter(r => r.until > now && r.ip !== ip);
+  list.push({ ip, until: now + IP_TRUST_MS });
+  await writeTrustedIps(username, list);
+}
+
 /** 按手机号查找账号（服务端用户表 + 客户端同步的 registeredUsers 数据集并集） */
 async function findUsersByPhone(phone: string): Promise<any[]> {
   const out: any[] = [];
@@ -111,6 +163,17 @@ router.post('/login', async (req: Request, res: Response) => {
   }
 });
 
+/** 新设备验证：查询当前出口 IP 是否在该账号的 30 天信任期内（登录前调用，仅返回布尔） */
+router.post('/check-ip-trust', async (req: Request, res: Response) => {
+  try {
+    const username = String(req.body?.username || '').trim();
+    if (!username) { res.json({ code: 400, message: '缺少 username' }); return; }
+    res.json({ code: 0, data: { trusted: await isIpTrustedFor(username, req) } });
+  } catch (err: any) {
+    res.status(500).json({ code: 500, message: err.message });
+  }
+});
+
 /** 新设备验证：发送验证码到账号绑定手机（不依赖服务端用户表，前置门槛为密码已校验通过） */
 router.post('/send-device-code', async (req: Request, res: Response) => {
   try {
@@ -134,6 +197,9 @@ router.post('/send-device-code', async (req: Request, res: Response) => {
           return;
         }
         codeStore.delete(phone);
+        // 跳过验证等同信任本次出口 IP：否则未配置短信期间每次登录都会弹验证窗
+        const skipUser = String(req.body?.username || '').trim();
+        if (skipUser) await markIpTrusted(skipUser, req);
         res.json({ code: 0, data: { smsUnconfigured: true }, message: '短信服务未配置（生产回退：跳过新设备验证）' });
         return;
       }
@@ -150,8 +216,8 @@ router.post('/send-device-code', async (req: Request, res: Response) => {
   }
 });
 
-/** 新设备验证：校验验证码（通过后即消费） */
-router.post('/verify-code', (req: Request, res: Response) => {
+/** 新设备验证：校验验证码（通过后即消费）；携带 username 时同步记录该出口 IP 30 天信任 */
+router.post('/verify-code', async (req: Request, res: Response) => {
   try {
     const phone = String(req.body?.phone || '').trim();
     const code = String(req.body?.code || '').trim();
@@ -161,6 +227,8 @@ router.post('/verify-code', (req: Request, res: Response) => {
     if (rec.attempts >= 5) { codeStore.delete(phone); res.json({ code: 400, message: '验证码错误次数过多，请重新获取' }); return; }
     if (rec.code !== code) { rec.attempts += 1; res.json({ code: 400, message: '验证码不正确' }); return; }
     codeStore.delete(phone);
+    const trustUser = String(req.body?.username || '').trim();
+    if (trustUser) await markIpTrusted(trustUser, req);
     res.json({ code: 0, message: '验证通过' });
   } catch (err: any) {
     res.status(500).json({ code: 500, message: err.message });

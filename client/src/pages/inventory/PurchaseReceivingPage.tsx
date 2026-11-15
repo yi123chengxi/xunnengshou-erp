@@ -5,7 +5,7 @@ import {
 } from 'antd';
 import {
   PlusOutlined, DeleteOutlined, EyeOutlined, ExportOutlined,
-  InboxOutlined, BarcodeOutlined, AppstoreOutlined, CheckOutlined, FileTextOutlined,
+  InboxOutlined, BarcodeOutlined, AppstoreOutlined, CheckOutlined, FileTextOutlined, EditOutlined,
 } from '@ant-design/icons';
 import { updateProductStock, generateDocNo } from '../../utils/stockUtils';
 import { getCurrentUserDisplayName } from '../../utils/billLog';
@@ -65,6 +65,8 @@ const PurchaseReceivingPage: React.FC = () => {
   const [pickVisible, setPickVisible] = useState(false);
   const [pickSearch, setPickSearch] = useState('');
   const [pickQty, setPickQty] = useState<Record<string, number>>({});
+  // 添加商品弹窗复选框勾选的商品编码（批量添加用）
+  const [pickChecked, setPickChecked] = useState<string[]>([]);
   // 数量模版（与订单管理共用存储键）
   const [qtyTemplates, setQtyTemplates] = useState<QtyTemplate[]>(() => loadQtyTemplates(getDataOwner()));
   const [qtyTplVisible, setQtyTplVisible] = useState(false);
@@ -87,15 +89,28 @@ const PurchaseReceivingPage: React.FC = () => {
     try { return JSON.parse(localStorage.getItem(`pageData_basic-data_product-list_${getDataOwner()}`) || '[]'); } catch { return []; }
   }, [addVisible]);
 
+  // 按入库类型过滤的商品列表：原材料入库→原材料；成品入库→成品（排除被脏数据标成成品的半成品 SEMI- 行）
+  const typeProducts = useMemo(() => {
+    const list = Array.isArray(productList) ? productList : [];
+    if (formType === '成品入库') return list.filter((p: any) => p.productType === '成品' && !String(p.productCode || '').startsWith('SEMI-'));
+    if (formType === '原材料入库') return list.filter((p: any) => p.productType === '原材料');
+    return list;
+  }, [productList, formType]);
+
   const saveData = useCallback((list: RecvRecord[]) => {
     setDataSource(list);
     localStorage.setItem(STORAGE_KEY(), JSON.stringify(list));
   }, []);
 
-  // 扫码/手动输入商品编码（重复扫码自动累加数量）
+  // 扫码/手动输入商品编码（重复扫码自动累加数量）；取数范围与入库类型一致，
+  // 避免原材料入库单混入成品（或反之）
   const handleScan = useCallback((code: string) => {
-    const prod = productList.find((p: any) => p.productCode === code);
-    if (!prod) { message.warning(`未找到商品编码: ${code}`); return; }
+    const prod = typeProducts.find((p: any) => p.productCode === code);
+    if (!prod) {
+      const anyProd = (Array.isArray(productList) ? productList : []).find((p: any) => p.productCode === code);
+      if (anyProd) { message.warning(`商品 ${code} 的产品类型为「${anyProd.productType || '未设置'}」，与当前入库类型「${formType}」不符`); return; }
+      message.warning(`未找到商品编码: ${code}`); return;
+    }
     const existIdx = formItems.findIndex(i => i.productCode === code);
     if (existIdx >= 0) {
       const ni = [...formItems];
@@ -113,22 +128,22 @@ const PurchaseReceivingPage: React.FC = () => {
       }]);
     }
     setScanCode('');
-  }, [productList, formItems, scanDefaultQty]);
+  }, [typeProducts, productList, formType, formItems, scanDefaultQty]);
 
   const handleScanKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Enter') { e.preventDefault(); if (scanCode.trim()) handleScan(scanCode.trim()); }
   }, [scanCode, handleScan]);
 
-  // 选择商品弹窗：过滤后的商品列表
+  // 选择商品弹窗：过滤后的商品列表（先按入库类型过滤，再按关键字搜索）
   const pickProducts = useMemo(() => {
     const q = pickSearch.trim().toLowerCase();
-    if (!q) return productList;
-    return productList.filter((p: any) =>
+    if (!q) return typeProducts;
+    return typeProducts.filter((p: any) =>
       (p.productCode || '').toLowerCase().includes(q) ||
       (p.shortName || '').toLowerCase().includes(q) ||
       (p.name || '').toLowerCase().includes(q)
     );
-  }, [productList, pickSearch]);
+  }, [typeProducts, pickSearch]);
 
   // 选择商品弹窗添加（已存在则累加数量）
   const handlePickAdd = useCallback((prod: any) => {
@@ -151,6 +166,40 @@ const PurchaseReceivingPage: React.FC = () => {
     }
     message.success(`已添加 ${prod.productCode}，数量 ${qty}`);
   }, [pickQty, scanDefaultQty, formItems]);
+
+  // 添加商品弹窗：复选框勾选后批量添加（每行数量取该行「添加数量」，未填取默认数量；已存在则累加）
+  const handleBatchPickAdd = useCallback(() => {
+    if (pickChecked.length === 0) return;
+    const codes = new Set(pickChecked);
+    const master = Array.isArray(productList) ? productList : [];
+    const prods = master.filter((p: any) => codes.has(p.productCode));
+    if (prods.length === 0) { message.warning('未找到勾选的商品'); return; }
+    const next = [...formItems];
+    prods.forEach((prod: any) => {
+      const qty = pickQty[prod.productCode] ?? scanDefaultQty;
+      const idx = next.findIndex(i => i.productCode === prod.productCode);
+      if (idx >= 0) next[idx] = { ...next[idx], quantity: (next[idx].quantity || 0) + qty };
+      else next.push({
+        productCode: prod.productCode,
+        productName: prod.shortName || prod.name || '',
+        unit: prod.unit || '',
+        spec: prod.spec || '',
+        quantity: qty,
+        price: Number(prod.costPrice) || 0,
+        remark: '',
+      });
+    });
+    setFormItems(next);
+    setPickChecked([]);
+    message.success(`已批量添加 ${prods.length} 项商品`);
+  }, [pickChecked, productList, pickQty, scanDefaultQty, formItems]);
+
+  // 批量填充数量：所有明细行数量统一填为「默认数量」（与扫码新增同口径）
+  const handleBatchFillQty = useCallback(() => {
+    if (formItems.length === 0) { message.warning('请先添加入库商品'); return; }
+    setFormItems(formItems.map(it => ({ ...it, quantity: scanDefaultQty })));
+    message.success(`已将 ${formItems.length} 项商品数量填充为 ${scanDefaultQty}`);
+  }, [formItems, scanDefaultQty]);
 
   // 数量模版：保存/删除（与订单管理共用存储键）
   const handleChangeQtyTemplates = useCallback((list: QtyTemplate[]) => {
@@ -223,7 +272,7 @@ const PurchaseReceivingPage: React.FC = () => {
   }, [formItems, formType, formSupplier, formOperator, formRemark, dataSource, productList, saveData]);
 
   const resetForm = () => {
-    setFormType('原材料入库'); setFormSupplier(''); setFormItems([]); setFormRemark(''); setScanCode(''); setPickSearch(''); setPickQty({}); setCheckedTpl({});
+    setFormType('原材料入库'); setFormSupplier(''); setFormItems([]); setFormRemark(''); setScanCode(''); setPickSearch(''); setPickQty({}); setPickChecked([]); setCheckedTpl({});
   };
 
   // 导出
@@ -343,7 +392,14 @@ const PurchaseReceivingPage: React.FC = () => {
             ))}
           </Col>
           <Col span={3} style={{ display: 'flex', alignItems: 'flex-end' }}>
-            <Button type="dashed" icon={<PlusOutlined />} block onClick={() => setPickVisible(true)}>添加商品</Button>
+            <Button type="dashed" icon={<PlusOutlined />} block onClick={() => { setPickChecked([]); setPickVisible(true); }}>添加商品</Button>
+          </Col>
+        </Row>
+        <Row style={{ marginBottom: 8 }} justify="end">
+          <Col>
+            <Tooltip title={`将所有明细行数量统一填充为默认数量（当前 ${scanDefaultQty}）`}>
+              <Button size="small" icon={<EditOutlined />} onClick={handleBatchFillQty}>批量填充数量</Button>
+            </Tooltip>
           </Col>
         </Row>
         <Table
@@ -379,11 +435,16 @@ const PurchaseReceivingPage: React.FC = () => {
         {formItems.length === 0 && <div style={{ textAlign: 'center', padding: '16px 0', color: '#999' }}>请扫码或手动添加商品</div>}
       </Modal>
 
-      {/* 添加商品选择弹窗 */}
+      {/* 添加商品选择弹窗（按入库类型过滤：原材料入库→原材料列表，成品入库→成品列表；支持复选批量添加） */}
       <Modal
-        title={<span><AppstoreOutlined style={{ marginRight: 8, color: PRIMARY }} />选择商品</span>}
+        title={<span><AppstoreOutlined style={{ marginRight: 8, color: PRIMARY }} />选择商品 — {formType === '成品入库' ? '成品列表' : '原材料列表'}</span>}
         open={pickVisible} onCancel={() => setPickVisible(false)}
-        footer={null} centered width={800} zIndex={1200}
+        footer={(
+          <Space>
+            <Button onClick={() => setPickVisible(false)}>关闭</Button>
+            <Button type="primary" disabled={pickChecked.length === 0} onClick={handleBatchPickAdd}>添加选中（{pickChecked.length}）</Button>
+          </Space>
+        )} centered width={800} zIndex={1200}
       >
         <Input.Search
           placeholder="搜索商品编码/简称" value={pickSearch}
@@ -392,9 +453,14 @@ const PurchaseReceivingPage: React.FC = () => {
         <Table
           bordered size="small" pagination={{ pageSize: 8, showTotal: t => `共 ${t} 条` }}
           dataSource={pickProducts} rowKey="productCode"
+          rowSelection={{
+            selectedRowKeys: pickChecked,
+            onChange: keys => setPickChecked(keys.map(String)),
+          }}
           columns={[
             { title: '商品编码', dataIndex: 'productCode', width: 130, align: 'center' as const },
-            { title: '商品简称', key: 'name', width: 130, align: 'center' as const, render: (_: any, r: any) => r.shortName || r.name || '' },
+            { title: '商品简称', key: 'name', width: 120, align: 'center' as const, render: (_: any, r: any) => r.shortName || r.name || '' },
+            { title: '产品类型', dataIndex: 'productType', width: 90, align: 'center' as const, render: (v: string) => v || '—' },
             { title: '单位', dataIndex: 'unit', width: 60, align: 'center' as const },
             { title: '添加数量', key: 'qty', width: 110, align: 'center' as const,
               render: (_: any, r: any) => (

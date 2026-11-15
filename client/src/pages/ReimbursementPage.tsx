@@ -191,7 +191,8 @@ const ReimbursementPage: React.FC = () => {
   const [recvFormBank, setRecvFormBank] = useState('');
   const [recvFormImage, setRecvFormImage] = useState('');
   const receivingAccountOptions = useMemo(() => receivingAccounts.map((r: any) => ({
-    label: `${r.type === '支付宝' ? '🟢' : r.type === '银行账户' ? '🏦' : '📱'} ${r.name} ${r.account}${r.bankName ? ` (${r.bankName})` : ''}`,
+    // 账号后紧跟账户类型（支付宝/银行账户/收款码），避免同名不同类账户混淆；银行名仍殿后
+    label: `${r.type === '支付宝' ? '🟢' : r.type === '银行账户' ? '🏦' : '📱'} ${r.name} ${r.account} (${r.type})${r.bankName ? ` (${r.bankName})` : ''}`,
     value: r.key,
   })), [receivingAccounts]);
 
@@ -513,7 +514,7 @@ const ReimbursementPage: React.FC = () => {
     const icon = acc.type === '支付宝' ? '🟢' : acc.type === '银行账户' ? '🏦' : '📱';
     return (
       <div style={{ fontSize: 12 }}>
-        <div>{icon} {acc.name}</div>
+        <div>{icon} {acc.name}{acc.type ? ` (${acc.type})` : ''}</div>
         <div style={{ fontSize: 11, color: '#888', wordBreak: 'break-all' }}>{acc.account}{acc.bankName ? ` (${acc.bankName})` : ''}</div>
         {acc.type === '收款码' && acc.image && (
           <Image src={acc.image} width={36} height={36} style={{ objectFit: 'cover', borderRadius: 4, marginTop: 2 }} />
@@ -1038,7 +1039,7 @@ const ReimbursementPage: React.FC = () => {
         || (r.receivingAccountName ? { name: r.receivingAccountName, account: r.receivingAccountNo || '', type: r.receivingAccountType || '' } : null);
       if (!acc) return <span style={{ color: '#999' }}>账户已删除</span>;
       const icon = acc.type === '支付宝' ? '🟢' : acc.type === '银行账户' ? '🏦' : '📱';
-      return <span style={{ fontSize: 12 }}>{icon} {acc.name}<div style={{ fontSize: 11, color: '#888' }}>{acc.account}</div></span>;
+      return <span style={{ fontSize: 12 }}>{icon} {acc.name}{acc.type ? ` (${acc.type})` : ''}<div style={{ fontSize: 11, color: '#888' }}>{acc.account}</div></span>;
     } },
     { title: '来源', key: 'source', width: 80, align: 'center', render: (_v, r: ReimbursementRecord) => (
       r.source === 'daily_book' ? <Tag color="purple">日常记账</Tag> : <Tag>手动申请</Tag>

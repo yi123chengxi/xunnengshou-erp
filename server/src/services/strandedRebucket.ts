@@ -67,6 +67,28 @@ export async function migrateStrandedOwnerDatasets(): Promise<number> {
     if (!Array.isArray(users) || users.length === 0) return 0;
     const byName = new Map<string, any>();
     users.forEach((u: any) => { if (u && u.username) byName.set(String(u.username), u); });
+    // 身份污染修复（启动即修，不等客户端自愈）：被其他行当作父账号引用、自己却被标成
+    // 子账号且父账号悬空（指向不存在的账号）的行，恢复为主账号。真实事故：yichengxi60
+    // 被一份陈旧本地注册表改写成 sub/parent='admin'（admin 不存在），主账号登录后走
+    // 子账号角色层（roles 空）→ 供应商菜单全部被拒，表现为「所有权限突然没了」。
+    const referencedAsParent = new Set<string>();
+    users.forEach((u: any) => { if (u && u.parentAccount) referencedAsParent.add(String(u.parentAccount)); });
+    let healedIdentity = 0;
+    users.forEach((u: any) => {
+      if (!u || !u.username || u.isSubAccount !== true) return;
+      const name = String(u.username);
+      const parent = u.parentAccount ? String(u.parentAccount) : '';
+      const dangling = !parent || !byName.has(parent);
+      if (dangling && referencedAsParent.has(name)) {
+        console.warn(`[rebucket] 身份修复：${name} 被误标为子账号且父账号「${parent || '(空)'}」不存在，恢复为主账号`);
+        u.isSubAccount = false;
+        u.parentAccount = '';
+        healedIdentity++;
+      }
+    });
+    if (healedIdentity > 0) {
+      await store.forceUpsertDataset('registeredUsers', JSON.stringify(users), '', Math.max(Date.now(), rec.updated_at || 0));
+    }
     const rootOf = (name: string): string => {
       let cur = name;
       const seen = new Set<string>([cur]);

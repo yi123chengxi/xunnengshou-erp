@@ -211,6 +211,9 @@ export async function initPushNotifications(): Promise<void> {
   }
 
   // 监听来自 Service Worker 的点击消息
+  // 守卫：HTTP 环境（生产 IP 直连）下 navigator.serviceWorker 为 undefined，
+  // 裸调 addEventListener 会抛未捕获 TypeError（控制台红色报错的历史缺陷）
+  if (!('serviceWorker' in navigator) || !navigator.serviceWorker) return;
   navigator.serviceWorker.addEventListener('message', (event) => {
     if (event.data?.type === 'PUSH_NOTIFICATION_CLICK') {
       handlePushNotificationClick(event.data);

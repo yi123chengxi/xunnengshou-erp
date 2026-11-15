@@ -92,6 +92,9 @@ const SHARED_PREFIXES = [
   'invoice_record_', 'invoice_apply_requests_', 'purchaser_suppliers_', 'boundPurchasers_',
   'published_credit_', 'credit_adjustments_', 'price_strategy_',
   'roles_', 'role_permsettings_', 'preset_role_overrides_',
+  // 账号个人三态权限覆写（user_perm_overrides_<账号>）：与 registeredUsers.permOverrides 同源，
+  // 主账号管理子账号权限、子账号自己登录都需跨端读到；泄露面不大于已是公共键的注册表
+  'user_perm_overrides_',
   // 跨租户协作 / 开发者后台需要跨账号读取的业务键（后缀是对方账号，不能按末段判归属）
   'bound_purchasers_', 'independent_purchasers_',
   // 采购商支付成功后写入供应商「新增收款」待登记收件箱（键后缀是供应商账号）
@@ -158,6 +161,11 @@ export type SyncAction = 'read' | 'write' | 'delete';
  */
 export function isKeyAllowed(key: string, user: SyncUser | null, action: SyncAction): boolean {
   if (!key) return false;
+  // 删除墓碑例外：登录客户端只读（用于剪枝本地陈旧注册表行），写仍仅限服务端；须先于 sys_ 全禁判断
+  if (key === DELETED_USERS_LEDGER_KEY) return action === 'read' && !!user;
+  // 服务端自用键（如新设备验证的 IP 信任期 sys_trusted_ips_<账号>）：对客户端全禁读写，
+  // 否则账号本人可经 /api/sync 自封可信 IP，短信二次验证形同虚设
+  if (key.startsWith('sys_')) return false;
   if (isPublicKey(key)) return true;
   if (!user) return false;
   if (action === 'read') {
@@ -261,6 +269,16 @@ export function mergeRegisteredUsersJson(existingJson: string, incomingJson: str
     const existByName = new Map<string, any>();
     existing.forEach((u: any) => { if (u && u.username) existByName.set(String(u.username), u); });
 
+    // 身份字段保护所需的两个集合：全量用户名（并集口径）与「被他人当作父账号」集合。
+    // 身份（isSubAccount/parentAccount）决定租户数据归属与 resolvePerm 的解析分支：
+    // 一旦被任意陈旧副本把主账号改写成子账号，主账号登录即走子账号角色层（roles 空）→
+    // 供应商菜单全部被拒，表现为「主账号突然所有权限都没了」（真实事故：yichengxi60 被
+    // 改写成 sub、parent 指向注册表里根本不存在的历史幽灵账号 'admin'）。
+    const allNames = new Set<string>(existByName.keys());
+    incoming.forEach((u: any) => { if (u && u.username) allNames.add(String(u.username)); });
+    const referencedAsParent = new Set<string>();
+    existing.forEach((u: any) => { if (u && u.parentAccount) referencedAsParent.add(String(u.parentAccount)); });
+
     // 显式删除只认可存量中确实存在的 username（交集 + 上限），防伪造超量删除
     const rmSet = new Set<string>();
     (Array.isArray(removedNames) ? removedNames : [])
@@ -285,6 +303,22 @@ export function mergeRegisteredUsersJson(existingJson: string, incomingJson: str
       const newTs = Number(u._permTs) || 0;
       if (newTs <= oldTs) {
         REGISTERED_USER_PERM_FIELDS.forEach((f) => { if (old[f] !== undefined) row[f] = old[f]; });
+      }
+      // 身份字段守卫（见上方集合注释）：
+      //  a) 主→子：一律拒绝（存量主账号不可能合法地变成子账号）；
+      //  b) 子→主：仅作为污染修复通道放行——存量行父账号悬空（指向不存在的账号）
+      //     且被其他行当作父账号引用时，才允许 incoming 把它恢复为主账号；
+      //  c) 子→子改父：父目标悬空（不存在/自环）时保留服务端值，防污染父链。
+      const oldIsSub = old.isSubAccount === true;
+      const incIsSub = u.isSubAccount === true;
+      const oldParent = old.parentAccount ? String(old.parentAccount) : '';
+      const incParent = u.parentAccount ? String(u.parentAccount) : '';
+      if (oldIsSub !== incIsSub || (oldIsSub && incParent !== oldParent)) {
+        const oldDangling = oldIsSub && (!oldParent || !allNames.has(oldParent));
+        const keepOldIdentity = () => { row.isSubAccount = old.isSubAccount; row.parentAccount = old.parentAccount; };
+        if (!oldIsSub && incIsSub) keepOldIdentity();
+        else if (oldIsSub && !incIsSub) { if (!(oldDangling && referencedAsParent.has(name))) keepOldIdentity(); }
+        else if (!incParent || !allNames.has(incParent) || incParent === name) keepOldIdentity();
       }
       // 客户端显式改密（明文）：丢掉继承的旧哈希，交给 hashRegisteredUsersJson 重算
       if (typeof u.password === 'string' && u.password && u.passwordHash === undefined) {
@@ -347,6 +381,58 @@ export function filterRegisteredUsersCreations(
     });
     return { cleanJson: JSON.stringify(clean), rejected };
   } catch { return { cleanJson: incomingJson, rejected: [] }; }
+}
+
+/**
+// ============ 注册表删除墓碑（防已删账号复活） ============
+
+/**
+ * 行级并集合并会让「任何一份陈旧副本的上传」复活已删除账号：declareShrink 只保护
+ * 发起删除那一端的本次上传，其他浏览器的本地注册表仍含该行，下次任何写入触发上传时
+ * 并集又把它补回服务端——表现为「账号管理里删了，负责人下拉/登录仍能看到」。
+ * 服务端用墓碑记录被删 username 与删除时刻：合并时直接丢弃命中墓碑的陈旧行；
+ * 仅当 _createTs 晚于删除时刻的同名重建才放行并清除墓碑。
+ */
+export const DELETED_USERS_LEDGER_KEY = 'sys_deleted_users';
+const LEDGER_TTL_MS = 90 * 24 * 60 * 60 * 1000;
+
+/** 丢弃陈旧副本复活的行：username 命中墓碑且 _createTs 不晚于删除时刻 */
+export function filterResurrectedUsersJson(json: string, ledger: Record<string, number>): string {
+  try {
+    const list = JSON.parse(json);
+    if (!Array.isArray(list)) return json;
+    const out = list.filter((u: any) => {
+      const name = u && u.username ? String(u.username) : '';
+      if (!name || !(name in ledger)) return true;
+      return (Number(u._createTs) || 0) > (Number(ledger[name]) || 0);
+    });
+    return JSON.stringify(out);
+  } catch { return json; }
+}
+
+/** 维护墓碑：记入本次申报删除 + 清除同名重建 + 剪枝过期（90 天）；无变化返回 null */
+export function applyDeletedUsersLedger(
+  ledger: Record<string, number>,
+  incomingJson: string,
+  removedNames: string[],
+  now = Date.now()
+): Record<string, number> | null {
+  const next: Record<string, number> = { ...ledger };
+  let changed = false;
+  for (const name of Object.keys(next)) {
+    if (now - (Number(next[name]) || 0) > LEDGER_TTL_MS) { delete next[name]; changed = true; }
+  }
+  let incoming: any[] = [];
+  try { const p = JSON.parse(incomingJson); if (Array.isArray(p)) incoming = p; } catch { /* ignore */ }
+  removedNames.forEach(n => {
+    if (n && next[n] === undefined) { next[n] = now; changed = true; }
+  });
+  incoming.forEach((u: any) => {
+    const name = u && u.username ? String(u.username) : '';
+    const createTs = Number(u && u._createTs) || 0;
+    if (name && createTs && next[name] !== undefined && createTs > next[name]) { delete next[name]; changed = true; }
+  });
+  return changed ? next : null;
 }
 
 /**

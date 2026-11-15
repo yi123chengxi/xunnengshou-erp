@@ -31,6 +31,12 @@ interface Props {
   /** 分组权限模式：左侧每个菜单前显示复选框，直接映射三态——
    * 勾选=allow（组内成员拥有该页面权限）、取消勾选=deny（隐藏该页面）；未操作=继承（默认显示勾选） */
   menuCheckTri?: boolean;
+  /** 当前角色预设已覆盖的菜单点（getMergedPermissions(roles) 结果）。
+   * 传入时供应商菜单复选框按「实际生效值」回显（角色预设 ∪ 独立权限），
+   * 取消勾选一个由角色预设带来的菜单时会写入显式 deny 覆写。
+   * 背景：legacy 层是并集语义（角色 ∪ customPermissions），仅从独立权限清单里删除
+   * 根本删不掉角色预设的菜单，用户取消勾选后子账号照样能看到该菜单——又一个「改了没生效」。 */
+  rolePresetKeys?: string[];
 }
 
 const TriRadio: React.FC<{ value?: PermTri; onChange: (v: PermTri) => void }> = ({ value, onChange }) => (
@@ -48,7 +54,7 @@ const TriRadio: React.FC<{ value?: PermTri; onChange: (v: PermTri) => void }> = 
   />
 );
 
-const PermEditor: React.FC<Props> = ({ scopes, value, onChange, pageChecks, onPageChecksChange, menuCheckTri }) => {
+const PermEditor: React.FC<Props> = ({ scopes, value, onChange, pageChecks, onPageChecksChange, menuCheckTri, rolePresetKeys }) => {
   const [search, setSearch] = useState('');
   const allMenuKeys = useMemo(() => scopes.flatMap(s => menuKeysOf(s)), [scopes]);
   const [selMenu, setSelMenu] = useState<string>(allMenuKeys[0] || '');
@@ -58,19 +64,34 @@ const PermEditor: React.FC<Props> = ({ scopes, value, onChange, pageChecks, onPa
   // 采购商/加工厂菜单点默认放行，复选框映射三态覆写（取消勾选=写入 deny 隐藏，勾选=恢复继承）
   // 分组模式（menuCheckTri）：全平台菜单复选框直接映射三态（勾选=allow 拥有页面权限，取消=deny 隐藏）
   const showPageChecks = menuCheckTri || (pageChecks !== undefined && !!onPageChecksChange);
+  const inRolePreset = (key: string): boolean => !!rolePresetKeys && rolePresetKeys.includes(key);
   const togglePage = (key: string, checked: boolean) => {
     const cur = new Set(pageChecks || []);
     if (checked) cur.add(key); else cur.delete(key);
     onPageChecksChange?.(Array.from(cur));
+    // 取消勾选角色预设已覆盖的菜单：并集语义下光删独立权限无效，必须写显式 deny；
+    // 重新勾选则清除 deny，回到继承链
+    if (rolePresetKeys && inRolePreset(key)) set(key, checked ? 'inherit' : 'deny');
   };
   const toggleGroupPages = (keys: string[], checked: boolean) => {
     const cur = new Set(pageChecks || []);
     keys.forEach(k => { if (checked) cur.add(k); else cur.delete(k); });
     onPageChecksChange?.(Array.from(cur));
+    if (rolePresetKeys) {
+      const affected = keys.filter(inRolePreset);
+      if (affected.length) batch(affected, checked ? 'inherit' : 'deny');
+    }
   };
   const isPageChecked = (scope: PermScope, key: string): boolean => {
     if (menuCheckTri) return value[key] !== 'deny';
-    return scope === 'supplier' ? (pageChecks || []).includes(key) : value[key] !== 'deny';
+    if (scope === 'supplier') {
+      // 有角色预设清单时按实际生效值回显（否则用户看到“未勾选”但菜单仍可见）
+      const effective = rolePresetKeys
+        ? rolePresetKeys.includes(key) || (pageChecks || []).includes(key)
+        : (pageChecks || []).includes(key);
+      return effective && value[key] !== 'deny';
+    }
+    return value[key] !== 'deny';
   };
   const togglePageByScope = (scope: PermScope, key: string, checked: boolean) => {
     if (menuCheckTri) { set(key, checked ? 'allow' : 'deny'); return; }
@@ -167,7 +188,9 @@ const PermEditor: React.FC<Props> = ({ scopes, value, onChange, pageChecks, onPa
                           <span onClick={e => e.stopPropagation()} title={menuCheckTri
                             ? '勾选=组内成员拥有该页面权限（允许）；取消勾选=隐藏该页面（禁止）'
                             : scope === 'supplier'
-                              ? '勾选=该账号拥有此菜单（角色预设基础上追加）'
+                              ? (rolePresetKeys
+                                ? '按实际生效值回显（角色预设 ∪ 独立权限）；取消勾选＝对该账号隐藏此菜单（由角色预设带来的菜单会写入禁止覆写）'
+                                : '勾选=该账号拥有此菜单（角色预设基础上追加）')
                               : '取消勾选=对该账号隐藏此菜单（写入禁止覆写）；勾选=恢复可见（沿继承链）'}>
                             <Checkbox checked={isPageChecked(scope, i.key)} onChange={e => togglePageByScope(scope, i.key, e.target.checked)} />
                           </span>

@@ -25,7 +25,7 @@ export { declareShrink } from './shrinkRegistry';
 // 否则任一端在源数据未拉全时算出 0 快照上传，会经 pull 宽限期覆盖其他端的正确快照，表现为采购总额跳动/归 0
 const SYNC_PREFIXES = [
   // ==== 原有业务数据 ====
-  'pageData_', 'custom_', 'warehouses_', 'purchaser_suppliers_', 'boundPurchasers_', 'accounts_', 'shop_info_', 'shop_profit_', 'month_end_check_', 'withdrawal_record_', 'dev_', 'hr_', 'newstyle_', 'brandauth_', 'molds_', 'credit_adjustments_', 'published_credit_', 'payment_requests_', 'payment_request_managers_', 'notification_settings_', 'print_template_', 'price_strategy_', 'user_notice_', 'invoice_record_', 'invoice_apply_requests_', 'purchaser_bills_', 'recon_db_', 'roles_', 'preset_role_overrides_', 'role_permsettings_', 'customers_', 'supplier_payments_', 'customerReceipts_', 'inventory_check_', 'inventory_outbound_', 'purchase_receiving_', 'stock_change_log_', 'sales_outbound_',
+  'pageData_', 'custom_', 'warehouses_', 'purchaser_suppliers_', 'boundPurchasers_', 'accounts_', 'shop_info_', 'shop_profit_', 'month_end_check_', 'withdrawal_record_', 'dev_', 'hr_', 'newstyle_', 'brandauth_', 'molds_', 'credit_adjustments_', 'published_credit_', 'payment_requests_', 'payment_request_managers_', 'notification_settings_', 'print_template_', 'price_strategy_', 'user_notice_', 'invoice_record_', 'invoice_apply_requests_', 'purchaser_bills_', 'recon_db_', 'roles_', 'preset_role_overrides_', 'role_permsettings_', 'user_perm_overrides_', 'customers_', 'supplier_payments_', 'customerReceipts_', 'inventory_check_', 'inventory_outbound_', 'purchase_receiving_', 'stock_change_log_', 'sales_outbound_',
   // ==== 财务/账务（此前仅存本机，换电脑即丢）====
   'reimbursement_',            // 报销单 + 报销付款 + 报销负责人（三者同前缀）
   'receiving_accounts_',       // 报销/日常记账-本人垫付收款账户库（键后缀为登录账号，子账号各自独立）
@@ -126,7 +126,7 @@ export function isUploadOnlyKey(key: string): boolean {
  */
 const PERM_SYNC_PREFIXES = [
   'role_permsettings_', 'roles_', 'preset_role_overrides_',
-  'accounts_', 'account_groups_',
+  'accounts_', 'account_groups_', 'user_perm_overrides_',
 ];
 export function isPermSyncKey(key: string): boolean {
   return key === 'registeredUsers' || key.startsWith('dev_') || PERM_SYNC_PREFIXES.some(p => key.startsWith(p));
@@ -168,6 +168,10 @@ function keyOwner(key: string): string | null {
   if (key === 'recon_records' || key === 'recon_feedback' || key === 'company_renames') return null;
   // 分平台对账独立库（recon_db_supplier_<账号> / recon_db_purchaser_<账号>）：跨租户协作数据，全局同步
   if (key.startsWith('recon_db_')) return null;
+  // 账号个人三态覆写（user_perm_overrides_<账号>）：与 registeredUsers 内的 permOverrides 同源共享，
+  // 子账号浏览器也必须能拉到自己那份（键内后缀是子账号名，按 owner 判定会被 currentOwner=主账号过滤掉），
+  // 故按全局键处理；权限覆写本身已在公共注册表里对全网可见，不构成新的泄露面
+  if (key.startsWith('user_perm_overrides_')) return null;
   // 单令牌合作邀约：键内是随机令牌，不含账号；供应商凭 URL 中的 token 精确读取
   if (key.startsWith('cooperation_token_')) return null;
   // 供应商/采购商绩效键为 <platform>_analytics_<账号>_<后缀>，账号在倒数第二段
@@ -716,10 +720,90 @@ function mergeRegisteredUsers(serverJson: string): any[] | null {
     if (permsChanged) {
       try { window.dispatchEvent(new Event('perm-changed')); } catch { /* ignore */ }
     }
+    reconcileSessionIdentity();
     return local;
   } catch {
     return null;
   }
+}
+
+/**
+ * 删除墓碑剪枝：注册表拉取是「只增不改」的行级合并，服务端删掉的账号行永远无法
+ * 经 pull 从本地消失——陈旧副本一经上传又会把它 union 回服务端（表现为账号管理里
+ * 删了，负责人设置下拉/其他浏览器仍能看到）。服务端在申报删除时记入墓碑
+ * sys_deleted_users={username:删除时刻}，这里拉取墓碑并剪掉本地命中且 _createTs
+ * 不晚于删除时刻的行（同名重建 _createTs 晚于删除时刻的放行），返回剪掉的条数。
+ */
+export async function pruneTombstonedUsers(): Promise<number> {
+  try {
+    const rec = await fetchServerDataset('sys_deleted_users');
+    if (!rec || !rec.json) return 0;
+    let ledger: Record<string, number> = {};
+    try {
+      const parsed = JSON.parse(rec.json);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ledger = parsed;
+    } catch { return 0; }
+    if (Object.keys(ledger).length === 0) return 0;
+    const local: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+    if (!Array.isArray(local) || local.length === 0) return 0;
+    const kept = local.filter((u: any) => {
+      const name = u && u.username ? String(u.username) : '';
+      if (!name || !(name in ledger)) return true;
+      return (Number(u._createTs) || 0) > (Number(ledger[name]) || 0);
+    });
+    if (kept.length === local.length) return 0;
+    const raw = getOriginalSetItem();
+    const json = JSON.stringify(kept);
+    raw('registeredUsers', json);
+    raw('registeredUsers_ts', String(Date.now()));
+    saveDataset('registeredUsers', json);
+    // 剪枝后同标签页派发权限事件：已挂载页面的成员下拉/菜单门控立即重算；
+    // 不回传：本地剪掉的行服务端墓碑已覆盖，后续任何副本上传都会被服务端过滤
+    try { window.dispatchEvent(new Event('perm-changed')); } catch { /* ignore */ }
+    return local.length - kept.length;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * 会话身份与注册表行对齐（身份污染自愈）。
+ * 登录时写入的 localStorage isSubAccount/parentAccount 是当时快照；注册表行被修复
+ * （主账号被陈旧副本误标为子账号后由服务端/本地恢复）后，若不同步这两个字段，
+ * resolvePerm 仍走子账号角色层，主账号菜单继续塌缩。
+ * 同时对污染行做本地就地修复：被标为 sub 但父账号悬空（指向不存在的账号）且被其他行
+ * 当作父账号引用 → 恢复为主账号并回传服务端（服务端身份守卫认可该修复通道）。
+ */
+export function reconcileSessionIdentity(): boolean {
+  try {
+    const username = localStorage.getItem('username') || '';
+    if (!username) return false;
+    const users: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+    const row = users.find((u: any) => u && u.username === username);
+    if (!row) return false;
+    let rowIsSub = row.isSubAccount === true;
+    let rowParent = String(row.parentAccount || '');
+    if (rowIsSub) {
+      const names = new Set(users.map((u: any) => String((u && u.username) || '')));
+      const referenced = users.some((u: any) => u && u.parentAccount && String(u.parentAccount) === username);
+      if ((!rowParent || !names.has(rowParent)) && referenced) {
+        row.isSubAccount = false;
+        row.parentAccount = '';
+        rowIsSub = false;
+        rowParent = '';
+        const json = JSON.stringify(users);
+        localStorage.setItem('registeredUsers', json);
+        saveDataset('registeredUsers', json);
+      }
+    }
+    const sesIsSub = localStorage.getItem('isSubAccount') === 'true';
+    const sesParent = String(localStorage.getItem('parentAccount') || '');
+    if (rowIsSub === sesIsSub && rowParent === sesParent) return false;
+    localStorage.setItem('isSubAccount', rowIsSub ? 'true' : 'false');
+    localStorage.setItem('parentAccount', rowParent);
+    try { window.dispatchEvent(new Event('perm-changed')); } catch { /* ignore */ }
+    return true;
+  } catch { return false; }
 }
 
 /**
@@ -1150,6 +1234,9 @@ export async function pullAllDatasets(): Promise<number> {
   try { repairPurchaserSupplierNames(); } catch { /* ignore */ }
   try { postFixed += repairCounterpartyNames().length; } catch { /* ignore */ }
   try { if (healReconTerminalLinks()) postFixed++; } catch { /* ignore */ }
+  // 删除墓碑剪枝：mergeRegisteredUsers 只增不减，本地陈旧副本里的已删账号行
+  // 必须凭服务端墓碑剪掉，否则负责人下拉等成员候选仍能看到它，下次上传还会复活它
+  try { postFixed += await pruneTombstonedUsers(); } catch { /* ignore */ }
   if (postFixed > 0) applied++;
 
   // 第二步：本地有但服务端没有的数据集 → 自动上传（首次迁移，仅限当前账号）
@@ -1220,6 +1307,9 @@ export async function pullPermDatasets(): Promise<number> {
     return 0;
   }
   let applied = 0;
+  // 先剪掉命中删除墓碑的陈旧行，再跑增量合并（否则 mergeRegisteredUsers 只增不减，
+  // 已删账号永远留在本地下拉里）
+  try { applied += await pruneTombstonedUsers(); } catch { /* ignore */ }
   for (const key of Object.keys(meta)) {
     if (!isMyPermKey(key)) continue;
     if (!isSyncKey(key) || !isKeyForCurrentAccount(key)) continue;
