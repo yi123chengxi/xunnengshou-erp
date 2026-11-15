@@ -45,7 +45,7 @@ import {
   takePendingInvite, acceptCooperationInvite, rejectCooperationInvite, resolveUserByCompanyNo,
 } from '../utils/cooperationInvite';
 import {
-  withCooperationCreds, appMatchesSupplierEntry, myCompanyNo, ensureCredsMigrated,
+  withCooperationCreds, appMatchesSupplierEntry, myCompanyNo, ensureCredsMigrated, findUserByNoOrUniqueName,
 } from '../utils/cooperationCred';
 import type { CooperationInvitePayload } from '../utils/cooperationInvite';
 import { dedupePurchaserSuppliers } from '../utils/cooperationDedupe';
@@ -327,10 +327,11 @@ const PurchaserSupplierList: React.FC = () => {
   };
 
   // 从 registeredUsers 获取供应商注册信息（联系人/电话/邮箱/法人/地址等）
-  const resolveSupplierProfile = (companyName: string): Partial<SupplierEntry> => {
+  // 按公司编号优先定位，名称仅在唯一命中时兜底：同名多账号时返回空对象（宁可不回填，
+  // 也不能把另一家账号的联系人/银行账户写到本方供应商卡片上）
+  const resolveSupplierProfile = (supplierNo: string, companyName: string): Partial<SupplierEntry> => {
     try {
-      const users = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
-      const u = users.find((x: any) => x.companyName === companyName);
+      const u = findUserByNoOrUniqueName(supplierNo, companyName);
       if (!u) return {};
       const result: Partial<SupplierEntry> = {};
       if (u.contactPerson) result.contactPerson = u.contactPerson;
@@ -388,7 +389,10 @@ const PurchaserSupplierList: React.FC = () => {
           );
           if (approvedApp) {
             hasChange = true;
-            const profile = resolveSupplierProfile(approvedApp.targetSupplierName || s.supplierName);
+            const profile = resolveSupplierProfile(
+              String(approvedApp.targetSupplierNo || '').trim() || String((s as any).supplierNo || '').trim(),
+              approvedApp.targetSupplierName || s.supplierName
+            );
             return {
               ...s,
               ...profile,
@@ -452,7 +456,7 @@ const PurchaserSupplierList: React.FC = () => {
             if (p) { hasChange = true; return { ...s, orderPrefix: p }; }
           }
           // 建立合作后自动同步供应商最新注册信息（联系人/电话/地址等）
-          const profile = resolveSupplierProfile(s.supplierName);
+          const profile = resolveSupplierProfile(String((s as any).supplierNo || '').trim(), s.supplierName);
           const needSync = Object.keys(profile).some(k => {
             const key = k as keyof SupplierEntry;
             return profile[key] && !s[key];

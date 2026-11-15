@@ -53,7 +53,7 @@ import { createInviteRecord, findUnusedInviteForCustomer, findInviteRecord, buil
 import type { InviteRecord } from '../utils/inviteRegistry';
 import { startCooperationTermination, cancelCooperationTermination, TERMINATE_GRACE_MS } from '../utils/cooperationTerminate';
 import { resolveLatestCompanyName, buildCredIndex } from '../utils/nameSync';
-import { withCooperationCreds, myCompanyNo, purchaserNoOf, ensureCredsMigrated, noOfUser, isTargetSupplierApp, amTargetSupplier } from '../utils/cooperationCred';
+import { withCooperationCreds, myCompanyNo, purchaserNoOf, ensureCredsMigrated, noOfUser, isTargetSupplierApp, amTargetSupplier, noFromUsername, noFromCompanyName, findUserByNoOrUniqueName } from '../utils/cooperationCred';
 import { reconcileCooperationPairs } from '../utils/cooperationReconcile';
 import { dedupeBoundPurchasers } from '../utils/boundPurchaserDedupe';
 import { copyText } from '../utils/clipboard';
@@ -513,10 +513,15 @@ const hasPendingPurchaserTerminate = (bp: any): boolean => {
 // 存于 registeredUsers.addressDetail / businessAddress，供应商侧须关联读取，否则详情与列表地址为空
 const findPurchaserAccount = (bp: any): any => {
   try {
-    const users = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
-    return users.find((x: any) =>
-      (bp?.purchaserUsername && x.username === bp.purchaserUsername) ||
-      (bp?.purchaserName && (x.companyName || '').trim() === String(bp.purchaserName).trim())) || null;
+    const un = String(bp?.purchaserUsername || '').trim();
+    if (un) {
+      const users = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+      const byUser = users.find((x: any) => String(x?.username || '') === un);
+      if (byUser) return byUser;
+    }
+    // 无账号或账号已不在注册表：按编号 > 名称唯一命中解析，同名多账号时返回 null
+    // （旧写法按 companyName find-first，会把同名另一家的企业信息当成本客户的）
+    return findUserByNoOrUniqueName(bp?.purchaserNo, bp?.purchaserName);
   } catch { return null; }
 };
 
@@ -567,16 +572,10 @@ export const loadAllCustomersFromStorage = (): CustomerRecord[] => {
   return [...directCustomers, ...purchaserCustomers];
 };
 
-// 采购商编号：优先记录值，其次按客户名称解析注册账号的公司编号
+// 采购商编号：优先记录值，其次按账号/客户名称解析（名称同名多账号时返回空，不 find-first 认错主体）
 const resolvePurchaserNo = (record: CustomerRecord): string => {
   if (record.purchaserNo) return record.purchaserNo;
-  try {
-    const users = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
-    const u = users.find((x: any) => (x.companyName || '').trim() === (record.name || '').trim());
-    if (u?.companyNo) return String(u.companyNo);
-    if (u?.companyShortName) return String(u.companyShortName);
-  } catch { /* ignore */ }
-  return '';
+  return noFromUsername((record as any).purchaserUsername) || noFromCompanyName(record.name);
 };
 
 // 解析绑定采购商关联的直接客户档案：customerId 直连 > 采购商编号命中 > 同名命中
@@ -590,9 +589,8 @@ const resolveLinkedDirectCustomer = (bp: any, customers: CustomerRecord[]): Cust
   if (!pname) return null;
   let no = '';
   try {
-    const users = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
-    const u = users.find((x: any) => (bp.purchaserUsername && x.username === bp.purchaserUsername) || (x.companyName || '').trim() === pname);
-    no = String(u?.companyNo || '').trim();
+    // 账号优先，名称仅在唯一命中时兜底：同名多账号时不猜编号，避免把客户行关联到另一家
+    no = noFromUsername(bp.purchaserUsername) || noFromCompanyName(pname);
   } catch { /* ignore */ }
   if (no) {
     const byNo = customers.find(c => String((c as any).purchaserNo || '').trim() === no);
@@ -629,19 +627,29 @@ export const showCustomerDetail = (record: CustomerRecord) => {
     if (!purchaserUsername && record.type === 'purchaser') {
       try {
         const apps = JSON.parse(localStorage.getItem(COOPERATION_APPLICATIONS_KEY) || '[]');
-        const matchedApp = apps.find((a: any) =>
+        // 先按采购商编号等值找，找不到再按名称找且要求唯一命中：
+        // 同名多账号时旧写法会拿到另一家的 purchaserUsername，进而展示别家的法人与地址
+        const myNo = String((record as any).purchaserNo || '').trim();
+        const byNo = myNo ? apps.filter((a: any) => purchaserNoOf(a) === myNo) : [];
+        const byName = apps.filter((a: any) =>
           (a.purchaserCompanyName || '').trim() === name || (a.purchaserName || '').trim() === name
         );
+        const hits = byNo.length ? byNo : byName;
+        const matchedApp = hits.length === 1 ? hits[0] : null;
         purchaserUsername = matchedApp?.purchaserUsername || '';
       } catch { /* ignore */ }
     }
-    // 2. 优先按采购商账号用户名精确查找，其次按公司名称/用户名/邮箱查找
-    accountInfo = registeredUsers.find((u: any) => {
-      if (purchaserUsername && u.username === purchaserUsername) return true;
-      if (name && ((u.companyName || '').trim() === name || (u.username || '').trim() === name)) return true;
-      if (record.email && u.email && u.email === record.email) return true;
-      return false;
-    }) || null;
+    // 2. 账号精确命中 > 编号唯一命中 > 公司名称/用户名唯一命中 > 邮箱唯一命中（任何一档歧义就不回填，不 find-first）
+    const uniq = (pred: (u: any) => boolean): any => {
+      const hit = registeredUsers.filter(pred);
+      return hit.length === 1 ? hit[0] : null;
+    };
+    const pno = String((record as any).purchaserNo || '').trim();
+    accountInfo = (purchaserUsername ? registeredUsers.find((u: any) => u.username === purchaserUsername) : null)
+      || uniq((u: any) => !!pno && (String(u.companyNo || '').trim() === pno || noOfUser(u) === pno))
+      || uniq((u: any) => !!name && ((u.companyName || '').trim() === name || (u.username || '').trim() === name))
+      || uniq((u: any) => !!record.email && !!u.email && u.email === record.email)
+      || null;
   } catch { /* ignore */ }
   const legalPerson = accountInfo?.legalPerson || record.legalPerson || '';
   const wechatQr = accountInfo?.wechatQr || record.wechatQr || '';

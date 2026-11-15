@@ -8,7 +8,7 @@
 import {
   noOfUser, noFromCompanyName, usernameFromNo, supplierNoOf, purchaserNoOf,
   amTargetSupplier, isTargetSupplierApp, appMatchesSupplierEntry,
-  withCooperationCreds, migrateCooperationCreds,
+  withCooperationCreds, migrateCooperationCreds, findUserByNoOrUniqueName,
 } from '../cooperationCred';
 
 const APPS_KEY = 'cooperation_applications';
@@ -129,6 +129,29 @@ describe('申请记录 ↔ 供应商条目 同一性判定', () => {
     expect(appMatchesSupplierEntry({ targetSupplierName: '乙皮料公司' }, entry)).toBe(true);
     expect(appMatchesSupplierEntry({ targetSupplierName: '乙皮料公司二分厂' }, entry)).toBe(false);
     expect(appMatchesSupplierEntry({}, entry)).toBe(false);
+  });
+});
+
+describe('档案回填时的账号定位', () => {
+  beforeEach(() => seed('p-supplier-1'));
+
+  it('编号唯一命中优先于名称，同名两账号能分清到底是哪一家', () => {
+    expect(findUserByNoOrUniqueName('A002', '甲贸易有限公司')?.username).toBe('p-supplier-2');
+    expect(findUserByNoOrUniqueName('A001', '甲贸易有限公司')?.username).toBe('p-supplier-1');
+  });
+
+  it('无编号且同名多账号时返回 null，不得 find-first 把别家银行账户当成本方供应商的', () => {
+    expect(findUserByNoOrUniqueName('', '甲贸易有限公司')).toBeNull();
+  });
+
+  it('名称唯一命中时正常返回，编号不存在则退回名称档', () => {
+    expect(findUserByNoOrUniqueName('', '乙皮料公司')?.username).toBe('s-main');
+    expect(findUserByNoOrUniqueName('ZZZZ', '乙皮料公司')?.username).toBe('s-main');
+  });
+
+  it('编号与名称都拿不到时返回 null', () => {
+    expect(findUserByNoOrUniqueName('', '')).toBeNull();
+    expect(findUserByNoOrUniqueName(undefined, undefined)).toBeNull();
   });
 });
 

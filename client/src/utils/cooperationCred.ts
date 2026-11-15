@@ -62,6 +62,25 @@ export const noFromCompanyName = (name: string): string => {
   return hit.length === 1 ? noOfUser(hit[0]) : '';
 };
 
+/**
+ * 定位一个注册账号用于回填对方档案（联系人/电话/地址/法人/银行账户）。
+ * 优先级：公司编号等值 > 公司名称全等；两档都只做唯一命中，歧义一律返回 null。
+ * 这里宁可少回填一份资料，也不能把同名另一家账号的银行账户/地址写到本方卡片上；
+ * 旧写法 users.find(x => x.companyName === name) 在同名多账号时永远取第一个，属于静默认错主体。
+ */
+export const findUserByNoOrUniqueName = (no: any, name: any): any | null => {
+  const users = loadUsers();
+  const n = String(no || '').trim();
+  if (n) {
+    const byNo = users.filter((u: any) => String(u?.companyNo || '').trim() === n || noOfUser(u) === n);
+    if (byNo.length) return byNo.length === 1 ? byNo[0] : null;
+  }
+  const nm = String(name || '').trim();
+  if (!nm) return null;
+  const byName = users.filter((u: any) => String(u?.companyName || '').trim() === nm);
+  return byName.length === 1 ? byName[0] : null;
+};
+
 /** 解析任意"账号名/编号/公司名"混合值为公司编号（历史字段语义分裂专用） */
 const resolveNo = (v: any): string => {
   const s = String(v || '').trim();
