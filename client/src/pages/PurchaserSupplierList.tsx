@@ -894,9 +894,14 @@ const PurchaserSupplierList: React.FC = () => {
       // 匹配走主体身份键（账号/公司编号优先，名称与改名链兜底）：供应商档案里的我司名称
       // 可能与我司注册全称不一致（只按名称全等会永远匹配不上 → 额度静默显示 0）
       const same = makeMyPartyMatcher();
+      // 服务端对 SHARED 键（published_credit_）要求登录：必须带 JWT。
+      // 此前这里是裸 fetch，拿到 401 后被下方 continue 静默吞掉，
+      // 额度永远走不到发布值、只能回退本地复刻（跨浏览器读不到供应商私有键）→ 恒显示 0
+      let auth: Record<string, string> = {};
+      try { const t = localStorage.getItem('token'); if (t) auth = { Authorization: `Bearer ${t}` }; } catch { /* ignore */ }
       for (const c of cands) {
         try {
-          const res = await fetch(`${apiBase}/sync/dataset?key=published_credit_${c.username}`);
+          const res = await fetch(`${apiBase}/sync/dataset?key=published_credit_${c.username}`, { headers: auth });
           if (!res.ok) continue;
           const data = await res.json();
           const rows: any[] = JSON.parse(data?.json || '[]');
