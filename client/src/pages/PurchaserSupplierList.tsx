@@ -916,6 +916,32 @@ const PurchaserSupplierList: React.FC = () => {
           if (row) return { id, value: Number(row.effective) || 0 };
         } catch { /* ignore */ }
       }
+      // 发布键读不到（供应商端上传失败/旧版本未发布）时的服务器权威兜底：
+      // boundPurchasers_<供应商> 与 credit_adjustments_<供应商> 同为 SHARED 键，登录即可跨租户读，
+      // 按供应商端同公式 base + 调整净额 现算，保证“服务器有数据界面就有数据”，
+      // 不再依赖本浏览器 localStorage 里根本不存在的对方私有键
+      const readDataset = async (k: string): Promise<any[]> => {
+        try {
+          const r = await fetch(`${apiBase}/sync/dataset?key=${encodeURIComponent(k)}`, { headers: auth });
+          if (!r.ok) return [];
+          const d = await r.json();
+          const arr = JSON.parse(d?.json || '[]');
+          return Array.isArray(arr) ? arr : [];
+        } catch { return []; }
+      };
+      for (const c of cands) {
+        const bps = await readDataset(`boundPurchasers_${c.username}`);
+        const bp = bps.find((b: any) => same({ username: b.purchaserUsername, no: b.purchaserNo, name: b.purchaserName }))
+          || bps.find((b: any) => same({ username: b.purchaserUsername, no: b.purchaserNo, name: b.purchaserName }, true));
+        if (!bp) continue;
+        const adjs = await readDataset(`credit_adjustments_${c.username}`);
+        const adjName = String(bp.purchaserName || '');
+        const net = adjs
+          .filter((r: any) => (bp.id && r.customerId === bp.id) || (adjName && r.customerName === adjName))
+          .reduce((s: number, r: any) => s + (r.type === 'increase' ? r.amount : -r.amount), 0);
+        const base = bp.credit !== undefined && bp.credit !== null ? Number(bp.credit) || 0 : 0;
+        return { id, value: Math.round((base + net) * 100) / 100 };
+      }
       return { id, value: undefined as number | undefined };
     })).then((results) => {
       const m: Record<string, number> = {};
