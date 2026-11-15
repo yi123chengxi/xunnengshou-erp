@@ -15,6 +15,7 @@ import { migrateLegacyReconRecords } from './reconStore';
 import { repairCounterpartyNames } from './nameSync';
 import { healReconTerminalLinks } from './reconHeal';
 import { getSessionOwner, tenantMembersOf, mergeStrandedTenantDataset } from './dataOwner';
+import { repairOrderBucket } from './orderRepair';
 import { queuePut, queueDelete, queueAll } from './uploadQueue';
 import { takeRemovedIds, peekRemovedIds, declareShrink } from './shrinkRegistry';
 export { declareShrink } from './shrinkRegistry';
@@ -779,6 +780,29 @@ export async function repairStrandedOwnerBuckets(): Promise<number> {
             flushDatasetUpload(srcKey, '[]');
           }
         } catch { /* 单键失败不影响其余 */ }
+      }
+      // 订单桶自愈：完全重复行去重 + 编号撞号重编号（每会话一次，幂等）。
+      // 重复行来自历史会话 owner 翻转/多次落地的 concat；撞号来自主账号本地视图
+      // 缺失子账号订单时取号重启（MC 号是查找回写主键，必须唯一）
+      if (family === 'pageData_sales_order-manage_') {
+        try {
+          let cur: any[] = [];
+          try { cur = JSON.parse(localStorage.getItem(canonical) || '[]'); } catch { cur = []; }
+          if (Array.isArray(cur) && cur.length > 0) {
+            const rep = repairOrderBucket(cur);
+            if (rep.removedKeys.length > 0 || rep.renumbered.length > 0) {
+              const json = JSON.stringify(rep.rows);
+              deps.safeSetItem(canonical, json);
+              try { getOriginalSetItem()(`${canonical}_ts`, String(Date.now())); } catch { /* ignore */ }
+              try { saveDataset(canonical, json); } catch { /* ignore */ }
+              // 重复行删除必须申报，否则服务端永不缩水并集会把它们复活
+              if (rep.removedKeys.length > 0) declareShrink(canonical, rep.removedKeys);
+              flushDatasetUpload(canonical, json);
+              rep.renumbered.forEach(x => console.warn('[sync] 订单编号撞号已重编号', x.from, '→', x.to));
+              moved++;
+            }
+          }
+        } catch { /* ignore */ }
       }
     }
     if (moved > 0) {

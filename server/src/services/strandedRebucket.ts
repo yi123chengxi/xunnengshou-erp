@@ -12,6 +12,53 @@
 import { store } from '../database/store';
 import { tenantFamilySuffix, mergeRowsUnionJson } from '../middleware/syncGuard';
 
+// ============ 订单桶修复（与客户端 utils/orderRepair.ts 同口径） ============
+const rowKeyOf = (r: any): string => (r && (r.key || r.id)) ? String(r.key || r.id) : '';
+const rowTsOf = (r: any): number => {
+  const t = Number(r && r.updatedAt) || 0;
+  if (t) return t;
+  const s = String((r && (r.updateTime || r.payTime || r.createTime)) || '');
+  const p = Date.parse(s.replace(/-/g, '/'));
+  return Number.isFinite(p) ? p : 0;
+};
+/** 完全重复行（同 key）去重 + MC 编号撞号重编号（最近更新者保留原号） */
+export function repairOrderBucket(rows: any[]): { rows: any[]; removedKeys: string[]; renumbered: { key: string; from: string; to: string }[] } {
+  const removedKeys: string[] = [];
+  const renumbered: { key: string; from: string; to: string }[] = [];
+  if (!Array.isArray(rows) || rows.length === 0) return { rows: Array.isArray(rows) ? rows : [], removedKeys, renumbered };
+  const seen = new Set<string>();
+  const deduped: any[] = [];
+  rows.forEach((r) => {
+    const k = rowKeyOf(r);
+    if (k && seen.has(k)) { removedKeys.push(k); return; }
+    if (k) seen.add(k);
+    deduped.push(r);
+  });
+  const taken = new Set<string>();
+  deduped.forEach((r) => { if (r && r.id) taken.add(String(r.id)); });
+  const nextFree = (): string => {
+    let max = 0;
+    taken.forEach((id) => { const m = id.match(/^MC(\d+)$/); if (m) max = Math.max(max, Number(m[1])); });
+    let cand = `MC${String(max + 1).padStart(6, '0')}`;
+    while (taken.has(cand)) { max += 1; cand = `MC${String(max + 1).padStart(6, '0')}`; }
+    taken.add(cand);
+    return cand;
+  };
+  const byId = new Map<string, any[]>();
+  deduped.forEach((r) => {
+    const id = r && r.id ? String(r.id) : '';
+    if (!id || !/^MC\d+$/.test(id)) return;
+    const g = byId.get(id);
+    if (g) g.push(r); else byId.set(id, [r]);
+  });
+  byId.forEach((group, id) => {
+    if (group.length < 2) return;
+    group.sort((a, b) => rowTsOf(b) - rowTsOf(a));
+    group.slice(1).forEach((r) => { const to = nextFree(); renumbered.push({ key: rowKeyOf(r), from: id, to }); r.id = to; });
+  });
+  return { rows: deduped, removedKeys, renumbered };
+}
+
 export async function migrateStrandedOwnerDatasets(): Promise<number> {
   try {
     const rec = await store.getDataset('registeredUsers');
@@ -50,11 +97,38 @@ export async function migrateStrandedOwnerDatasets(): Promise<number> {
       const tgt = await store.getDataset(targetKey).catch(() => undefined);
       // 主桶优先：existing=错桶行、incoming=主桶行 → 同 id 行保留主桶版本，错桶独有行补入
       const merged = mergeRowsUnionJson(src.dataset_json, tgt ? tgt.dataset_json : '[]');
+      // 归并后立刻修复订单桶：完全重复行去重 + 编号撞号重编号
+      let finalJson = merged;
+      if (targetKey.startsWith('pageData_sales_order-manage_')) {
+        try {
+          const rep = repairOrderBucket(JSON.parse(merged));
+          finalJson = JSON.stringify(rep.rows);
+          if (rep.renumbered.length > 0) console.warn(`[rebucket] 编号撞号重编号 ${rep.renumbered.map(x => `${x.from}→${x.to}`).join(',')}`);
+        } catch { /* ignore */ }
+      }
       const ts = Date.now();
-      await store.forceUpsertDataset(targetKey, merged, root, Math.max(ts, tgt ? tgt.updated_at : 0));
+      await store.forceUpsertDataset(targetKey, finalJson, root, Math.max(ts, tgt ? tgt.updated_at : 0));
       await store.forceUpsertDataset(key, '[]', root, Math.max(ts, src.updated_at || 0));
       moved++;
       console.warn(`[rebucket] 错桶数据集 ${key} 已并入主桶 ${targetKey}（${rows.length} 行）`);
+    }
+    // 第二轮：各租户自有桶就地修复（完全重复行 + 编号撞号），不依赖是否存在错桶来源
+    for (const m of meta) {
+      const key = m.dataset_key;
+      const suffix = tenantFamilySuffix(key);
+      if (!suffix || !byName.has(suffix)) continue;
+      if (rootOf(suffix) !== suffix) continue; // 错桶键第一轮已处理/排空
+      if (!key.startsWith('pageData_sales_order-manage_')) continue;
+      const row = await store.getDataset(key).catch(() => undefined);
+      if (!row) continue;
+      let rows2: any[] = [];
+      try { rows2 = JSON.parse(row.dataset_json || '[]'); } catch { rows2 = []; }
+      if (!Array.isArray(rows2) || rows2.length === 0) continue;
+      const rep = repairOrderBucket(rows2);
+      if (rep.removedKeys.length === 0 && rep.renumbered.length === 0) continue;
+      await store.forceUpsertDataset(key, JSON.stringify(rep.rows), suffix, Math.max(Date.now(), row.updated_at || 0));
+      moved++;
+      console.warn(`[rebucket] 订单桶 ${key} 就地修复：去重 ${rep.removedKeys.length} 行、重编号 ${rep.renumbered.length} 行`);
     }
     return moved;
   } catch (err: any) {
