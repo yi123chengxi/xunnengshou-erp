@@ -142,10 +142,13 @@ const DevFeedbackPage: React.FC = () => {
     },
     {
       title: '操作', key: 'action', width: 90, fixed: 'right' as const,
-      render: (_: any, r: FeedbackRow) => (
-        <Button type="link" size="small" icon={<CheckCircleOutlined />} style={r.handled ? { color: '#8c8c8c' } : { color: '#52c41a', fontWeight: 600 }}
-          onClick={() => openHandle(r)}>{r.handled ? '查看/更新' : '已处理'}</Button>
-      ),
+      render: (_: any, r: FeedbackRow) => (r.handled ? (
+        <Button type="link" size="small" icon={<CheckCircleOutlined />} style={{ color: '#8c8c8c' }}
+          onClick={() => openHandle(r)}>查看/更新</Button>
+      ) : (
+        // 未处理的反馈：操作列显示橙色「未处理」（可点击打开处理弹窗，保留处理入口）
+        <Text style={{ color: '#fa8c16', fontWeight: 600, cursor: 'pointer' }} onClick={() => openHandle(r)}>未处理</Text>
+      )),
     },
   ];
 

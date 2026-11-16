@@ -364,6 +364,7 @@ export type NotificationType =
   | 'recharge-apply'      // 充值申请通知
   | 'recharge-result'     // 充值审批结果
   | 'withdraw-task'       // 提现任务通知
+  | 'inventory-task'      // 盘点任务通知（月末盘点-店铺资金）
   | 'withdraw-receipt'    // 提现到账通知
   | 'sales-task'          // 销售额统计任务通知
   | 'pay-request'         // 收/付申请待处理（收款确认/付款审核/待支付）
@@ -379,6 +380,7 @@ export function getNotificationSettings(owner?: string): Record<NotificationType
     'recharge-apply': true,
     'recharge-result': true,
     'withdraw-task': true,
+    'inventory-task': true,
     'withdraw-receipt': true,
     'sales-task': true,
     'pay-request': true,

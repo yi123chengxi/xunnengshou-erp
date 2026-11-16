@@ -37,6 +37,8 @@ import { getProvinceOptions, getCityOptions, getDistrictOptions } from '../utils
 import { safeSetItem } from '../utils/storageQuota';
 import { saveDataset } from '../utils/dataStore';
 import { showNativeNotification, showTimedNotification, isNotificationBlocked, isNotificationTypeEnabled } from '../utils/pushNotification';
+import { recoverRechargeNotifications } from '../utils/rechargeNotification';
+import { isShopPersonMe } from '../utils/shopScope';
 import { useDevPermSet, isPermAllowed } from '../utils/devPerms';
 import { menuVisible, menuKeyFromPath, usePermTick } from '../utils/perm';
 import { compressImageFile } from '../utils/imageCompress';
@@ -593,6 +595,26 @@ const PurchaserLayout: React.FC = () => {
     return () => window.removeEventListener('navigate-to-recharge', handler);
   }, [navigate]);
 
+  // 全局监听：盘点任务通知跳转（从任何页面跳转到店铺管理 > 月末盘点，子页切换由 ShopManagementPage 监听同事件完成）
+  useEffect(() => {
+    const handler = () => {
+      const key = 'finance/shop-management';
+      const title = '店铺管理';
+      const path = `/purchaser/${key}`;
+      setActiveMenu(key);
+      setTabs(prev => {
+        if (prev.some(t => t.key === key)) return prev;
+        const pinned = prev.filter(t => t.pinned);
+        const unpinned = prev.filter(t => !t.pinned);
+        return [...pinned, ...unpinned, { key, title, path, pinned: false }];
+      });
+      setActiveTab(key);
+      navigate(path);
+    };
+    window.addEventListener('navigate-to-inventory-check', handler);
+    return () => window.removeEventListener('navigate-to-inventory-check', handler);
+  }, [navigate]);
+
   // ===================== 全局确认支付弹窗 =====================
   const [globalPayVisible, setGlobalPayVisible] = useState(false);
   const [globalPayRecord, setGlobalPayRecord] = useState<any>(null);
@@ -612,7 +634,9 @@ const PurchaserLayout: React.FC = () => {
 
   useEffect(() => {
     const handler = (e: Event) => {
-      const { recordKey } = (e as CustomEvent).detail;
+      const { recordKey, markConsumed } = (e as CustomEvent).detail;
+      // 标记已消费：通知层检测到后不再回退跳转提现页
+      if (typeof markConsumed === 'function') markConsumed();
       const owner = getDataOwner();
       try {
         const records = JSON.parse(localStorage.getItem(`recharge_record_${owner}`) || '[]');
@@ -633,75 +657,12 @@ const PurchaserLayout: React.FC = () => {
   // 待审核通知：持续显示，用户关闭后定期重新弹出
   // 被驳回通知：点击关闭
   // 已支付通知：5秒自动关闭
+  // 逻辑已抽至共享模块 rechargeNotification（含 antd 降级），与 MainLayout 成对挂载防单侧断链
   useEffect(() => {
     const owner = getDataOwner();
     const currentUser = localStorage.getItem('username') || '';
     if (!owner || !currentUser) return;
-
-    const showNotifications = () => {
-      try {
-        const records: any[] = JSON.parse(localStorage.getItem(`recharge_record_${owner}`) || '[]');
-        if (records.length === 0) return;
-        // 已显示过的通知记录（避免重复）
-        const paidShownKey = `rech_paid_shown_${owner}`;
-        const rejectedShownKey = `rech_rejected_shown_${owner}`;
-        const paidShown: string[] = JSON.parse(localStorage.getItem(paidShownKey) || '[]');
-        const rejectedShown: string[] = JSON.parse(localStorage.getItem(rejectedShownKey) || '[]');
-        const newPaidShown = [...paidShown];
-        const newRejectedShown = [...rejectedShown];
-
-        records.forEach((r: any) => {
-          const amountStr = `¥${(r.amount || 0).toFixed(2)}`;
-
-          // 财务负责人视角：待审核记录 → 持续通知（关闭后定期重新弹出）
-          if (r.status === 'pending' && r.financePerson === currentUser) {
-            if (!isNotificationBlocked(currentUser)) {
-              showNativeNotification(
-                '【充值审批】' + (r.shopName || ''),
-                `${r.shopName} 申请充值 ${amountStr}，请点击处理`,
-                () => window.dispatchEvent(new CustomEvent('show-recharge-pay', { detail: { recordKey: r.key } })),
-                `rech-pending-${r.key}`
-              );
-            }
-          }
-
-          // 申请人视角：被驳回记录 → 仅首次弹出一次（不随间隔重复）
-          if (r.status === 'rejected' && r.applicant === currentUser && !rejectedShown.includes(r.key)) {
-            if (!isNotificationBlocked(currentUser)) {
-              showNativeNotification(
-                '【充值被驳回】' + (r.shopName || ''),
-                `${r.shopName} 充值申请已被驳回，原因：${r.rejectReason || '未说明'}`,
-                () => { sessionStorage.setItem('navigate_recharge_tab', '1'); window.dispatchEvent(new CustomEvent('navigate-to-recharge')); },
-                `rech-rejected-${r.key}`
-              );
-            }
-            newRejectedShown.push(r.key);
-          }
-
-          // 申请人视角：已支付记录 → 5秒自动关闭（仅首次显示）
-          if (r.status === 'paid' && r.applicant === currentUser && !paidShown.includes(r.key)) {
-            if (!isNotificationBlocked(currentUser)) {
-              showTimedNotification(
-                '【充值已支付】' + (r.shopName || ''),
-                `${r.shopName} 充值 ${amountStr} 已由财务确认支付`,
-                5000,
-                `rech-paid-${r.key}`
-              );
-            }
-            newPaidShown.push(r.key);
-          }
-        });
-
-        // 保存已显示记录（避免重复弹出）
-        if (newPaidShown.length > paidShown.length) {
-          localStorage.setItem(paidShownKey, JSON.stringify(newPaidShown));
-        }
-        if (newRejectedShown.length > rejectedShown.length) {
-          localStorage.setItem(rejectedShownKey, JSON.stringify(newRejectedShown));
-        }
-      } catch {}
-    };
-
+    const showNotifications = () => recoverRechargeNotifications(owner, currentUser);
     // 首次延迟 800ms 后显示
     const initTimer = setTimeout(showNotifications, 800);
     // 每 30 秒重新检查待审核记录并重新弹出（用户关闭后自动恢复）
@@ -730,7 +691,7 @@ const PurchaserLayout: React.FC = () => {
         const threeDaysAgo = dayjs().subtract(3, 'day').startOf('day');
         shopKeys.forEach(shopKey => {
           const shop = shops.find((s: any) => s.key === shopKey);
-          if (!shop || shop.person !== currentUser) return; // 仅店铺负责人
+          if (!shop || !isShopPersonMe(owner, shop.person)) return; // 仅店铺负责人（shop.person 存显示名，需用别名匹配 username）
           // 最近 3 天已有该店铺提现记录 → 任务完成，不再提醒
           const done = wdRecords.some((r: any) => r.shopName === shop.shopName && dayjs(r.createdAt || r.withdrawalDate).isAfter(threeDaysAgo));
           if (done) return;
@@ -744,6 +705,48 @@ const PurchaserLayout: React.FC = () => {
           const native = showNativeNotification(title, body, onClick, `wd-task-${shopKey}`);
           if (!native) {
             notification.warning({ key: `wd-task-${shopKey}`, message: title, description: body, closeIcon: false, duration: 0, onClick });
+          }
+        });
+      } catch { /* ignore */ }
+    };
+    const initTimer = setTimeout(check, 1200);
+    const interval = setInterval(check, 60000);
+    return () => { clearTimeout(initTimer); clearInterval(interval); };
+  }, [getDataOwner]);
+
+  // ===================== 全局盘点任务通知恢复（负责人电脑） =====================
+  // 发布端写入 month_end_check_task_status_<owner>（随 month_end_check_ 前缀同步），
+  // 负责人浏览器轮询拉取到任务后，若本人是店铺负责人且该月份无盘点记录则系统级弹窗提醒，直到盘点完成。
+  useEffect(() => {
+    const owner = getDataOwner();
+    const currentUser = localStorage.getItem('username') || '';
+    if (!owner || !currentUser) return;
+    const check = () => {
+      if (!isNotificationTypeEnabled('inventory-task')) return;
+      if (isNotificationBlocked(currentUser)) return;
+      try {
+        const taskMap: Record<string, { month?: string }> = JSON.parse(localStorage.getItem(`month_end_check_task_status_${owner}`) || '{}');
+        const shopKeys = Object.keys(taskMap);
+        if (shopKeys.length === 0) return;
+        const shops: any[] = JSON.parse(localStorage.getItem(`shop_info_${owner}`) || '[]');
+        let checkRecords: any[] = [];
+        try { checkRecords = JSON.parse(localStorage.getItem(`month_end_check_${owner}`) || '[]'); } catch { checkRecords = []; }
+        shopKeys.forEach(shopKey => {
+          const month = String(taskMap[shopKey]?.month || '');
+          const shop = shops.find((s: any) => s.key === shopKey);
+          if (!shop || !isShopPersonMe(owner, shop.person)) return; // 仅店铺负责人（shop.person 存显示名，需用别名匹配）
+          const done = checkRecords.some((r: any) => r.calcMonth === month && (r.shopId === shopKey || r.shopName === shop.shopName));
+          if (done) { notification.destroy(`inv-task-${shopKey}`); return; }
+          const title = '盘点任务提醒';
+          const body = `店铺「${shop.shopName}」有 ${month} 盘点任务待处理，请及时录入盘点记录`;
+          const onClick = () => {
+            window.focus();
+            sessionStorage.setItem('navigate_check_month', month);
+            window.dispatchEvent(new CustomEvent('navigate-to-inventory-check'));
+          };
+          const native = showNativeNotification(title, body, onClick, `inv-task-${shopKey}`);
+          if (!native) {
+            notification.warning({ key: `inv-task-${shopKey}`, message: title, description: body, closeIcon: false, duration: 0, onClick });
           }
         });
       } catch { /* ignore */ }

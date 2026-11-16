@@ -270,6 +270,8 @@ const PurchaserBillPage: React.FC = () => {
   // 对账记录（判断供应商是否已发起对账）
   const [reconRecords, setReconRecords] = useState<any[]>([]);
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
+  // 采购账单列表每页显示数量（受控 + 按账号持久化；pageSize 传常量不配 onChange 会令 size changer 静默失效）
+  const [billPageSize, setBillPageSize] = useState<number>(() => { try { return Number(localStorage.getItem(`purchaserBillPageSize_${getDataOwner()}`)) || 10; } catch { return 10; } });
 
   // 采购账单搜索（点击查询后生效）
   const emptyPSearch = { no: '', date: '', style: '', code: '', supplier: '', qty: '', amount: '', recon: '', source: '' };
@@ -1334,8 +1336,8 @@ const PurchaserBillPage: React.FC = () => {
         </div>
       );
     } },
-    qty: { title: '数量', dataIndex: 'totalQty', key: 'qty', width: 80, align: 'center' as const, render: (v: any) => { const n = Number(v) || 0; return <Text style={{ color: n > 0 ? '#52c41a' : n < 0 ? '#ff4d4f' : undefined }}>{n}</Text>; } },
-    amount: { title: '采购金额', dataIndex: 'totalAmount', key: 'amount', width: 100, align: 'center' as const, render: (v: any) => { const n = Number(v) || 0; return <Text style={{ color: n > 0 ? '#52c41a' : n < 0 ? '#ff4d4f' : undefined }}>¥{n.toFixed(2)}</Text>; } },
+    qty: { title: '数量', dataIndex: 'totalQty', key: 'qty', width: 80, align: 'center' as const, render: (v: any) => { const n = Number(v) || 0; return <Text style={{ color: n > 0 ? '#52c41a' : n < 0 ? '#ff4d4f' : undefined, fontWeight: 'bold' }}>{n}</Text>; } },
+    amount: { title: '采购金额', dataIndex: 'totalAmount', key: 'amount', width: 100, align: 'center' as const, render: (v: any) => { const n = Number(v) || 0; return <Text style={{ color: n > 0 ? '#52c41a' : n < 0 ? '#ff4d4f' : undefined, fontWeight: 'bold' }}>¥{n.toFixed(2)}</Text>; } },
     supplier: { title: '供应商', dataIndex: 'supplier', key: 'supplier', width: 140, align: 'center' as const, render: (t: string) => t || '-' },
     reconcileResult: { title: '对账结果', dataIndex: 'reconcileResult', key: 'reconcileResult', width: 90, align: 'center' as const, render: (t: string, r: BillRecord) => { const val = t || (matchPurchaserRecon(reconRecords, r) ? '已发起对账' : ''); const displayVal = val === '已对账' ? '对账完成' : val; return val ? <Tag color={val === '已发起对账' ? 'blue' : val === '一致' || val === '已对账' || val === '对账完成' || val === '按供方入账' ? 'green' : val === '不相符' ? 'red' : 'orange'}>{displayVal}</Tag> : '-'; } },
     diffNote: { title: '差异说明', dataIndex: 'diffNote', key: 'diffNote', width: 120, align: 'center' as const, ellipsis: true, render: (t: string) => t || '-' },
@@ -1460,7 +1462,7 @@ const PurchaserBillPage: React.FC = () => {
         )}
         <Table bordered columns={columns} dataSource={filteredBills} rowKey="key" scroll={{ x: 1400 }} size="middle"
           rowSelection={{ selectedRowKeys, onChange: keys => setSelectedRowKeys(keys) }}
-          pagination={{ pageSize: 10, showTotal: t => `共 ${t} 条` }} locale={{ emptyText: '暂无采购账单，点击“新建单据”录入' }} />
+          pagination={{ pageSize: billPageSize, showSizeChanger: true, pageSizeOptions: ['10', '20', '50', '100'], showTotal: t => `共 ${t} 条`, onChange: (_page, size) => { if (size && size !== billPageSize) { setBillPageSize(size); try { localStorage.setItem(`purchaserBillPageSize_${getDataOwner()}`, String(size)); } catch { /* ignore */ } } } }} locale={{ emptyText: '暂无采购账单，点击“新建单据”录入' }} />
       </Card>
 
       {/* 页面底部：账单来源与账单对账等功能说明 */}

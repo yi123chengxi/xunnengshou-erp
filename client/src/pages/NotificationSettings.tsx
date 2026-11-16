@@ -38,6 +38,13 @@ const NOTIFICATION_ITEMS: NotifItem[] = [
     tagColor: '#722ed1',
   },
   {
+    key: 'inventory-task',
+    label: '盘点任务通知',
+    description: '发布月末盘点任务后，通知店铺负责人及时录入对应月份的盘点记录，直到盘点完成',
+    tag: '财务',
+    tagColor: '#722ed1',
+  },
+  {
     key: 'withdraw-receipt',
     label: '提现到账通知',
     description: '提现确认到账后，通知相关人员银行流水已更新',

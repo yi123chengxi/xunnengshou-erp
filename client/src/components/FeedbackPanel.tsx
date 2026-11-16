@@ -233,7 +233,8 @@ const FeedbackPanel: React.FC = () => {
         <Button type="link" size="small" icon={<ReloadOutlined />} onClick={reloadRecords}
           style={{ padding: 0, height: 20, fontSize: 12 }}>刷新</Button>
       </div>
-      <div style={{ maxHeight: 240, overflowY: 'auto', paddingRight: 2 }}>
+      {/* 默认只显示约3条（折叠态行高约33px+间距8px），超出出现纵向滚动条；展开某条时放宽限高避免详情困在小滚动区 */}
+      <div style={{ maxHeight: expandedKey ? 240 : 128, overflowY: 'auto', paddingRight: 2 }}>
         {records.length === 0 ? (
           <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ margin: '10px 0' }}
             description={<span style={{ fontSize: 12 }}>还没有提交过反馈</span>} />

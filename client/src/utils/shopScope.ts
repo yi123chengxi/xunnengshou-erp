@@ -102,6 +102,50 @@ export const scopeShopRecords = <T extends { shopId?: string; shopName?: string 
   });
 };
 
+// ===================== 负责人身份别名匹配 =====================
+// 陷阱：ShopListPage 负责人选择存的是 acc.displayName || acc.person || acc.username（显示名），
+// 而登录会话 localStorage.username 是账号名——直接 shop.person === username 比较永假，
+// 提现任务等「仅负责人弹窗」的判定全部失效。凡是要把 shop.person 与当前用户比对的场景，
+// 都必须用本别名集合匹配（accounts_<owner> 与 registeredUsers 均已入同步白名单，负责人电脑可解析）。
+
+/** 当前登录用户的全部身份别名（username + 各来源显示名） */
+export const getCurrentUserAliases = (owner: string): string[] => {
+  const username = getCurrentUsername();
+  if (!username) return [];
+  const aliases = new Set<string>([username]);
+  try {
+    const accounts = JSON.parse(localStorage.getItem(`accounts_${owner}`) || '[]');
+    const acc = accounts.find((a: any) => a.username === username);
+    if (acc) [acc.displayName, acc.person, acc.contactPerson].forEach((v: any) => v && aliases.add(String(v)));
+  } catch { /* ignore */ }
+  try {
+    const users = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+    const user = users.find((u: any) => u.username === username);
+    if (user) [user.displayName, user.contactPerson, user.companyName].forEach((v: any) => v && aliases.add(String(v)));
+  } catch { /* ignore */ }
+  return Array.from(aliases);
+};
+
+/** shop.person 是否指向当前登录用户（兼容存显示名与存 username 两种历史口径） */
+export const isShopPersonMe = (owner: string, person?: string): boolean =>
+  !!person && getCurrentUserAliases(owner).includes(person);
+
+/** 把 shop.person（显示名或账号名）反查为 username，供 Web Push 按账号定向推送 */
+export const resolvePersonToUsername = (owner: string, person: string): string => {
+  if (!person) return '';
+  try {
+    const accounts = JSON.parse(localStorage.getItem(`accounts_${owner}`) || '[]');
+    const acc = accounts.find((a: any) => a.username === person || (a.displayName || a.person || a.username) === person);
+    if (acc?.username) return String(acc.username);
+  } catch { /* ignore */ }
+  try {
+    const users = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+    const user = users.find((u: any) => u.username === person || u.displayName === person || u.contactPerson === person);
+    if (user?.username) return String(user.username);
+  } catch { /* ignore */ }
+  return person;
+};
+
 // 编辑门控：编辑权限→全部；否则仅本人负责/创建的记录
 export const canEditShopData = (owner: string, person?: string, creator?: string): boolean => {
   if (canEditAllShops(owner)) return true;

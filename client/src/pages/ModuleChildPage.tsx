@@ -1107,22 +1107,28 @@ const ModuleChildPage: React.FC = () => {
   const [mainTablePageSize, setMainTablePageSize] = useState(() => {
     try { return Number(readScopedItem('mainTablePageSize')) || 10; } catch { return 10; }
   });
-  // 表格体动态高度：实测表体顶边到视口底边的剩余空间（顶边不随表体高度变化，无反馈循环），
-  // 使页面不出现窗口级垂直滚动条、横向滚动条固定在窗口最下方
+  // 表格体动态高度：以「表格卡片真实底边」为基准（而非窗口底边），
+  // 减去固定表头与分页器的实际占位，得到表体精确高度。
+  // 卡片下方若存在兄弟节点（如账单明细底部的说明块）会压缩卡片可用高度，
+  // 用 window.innerHeight 预留会把表体算高、经 min=max 锁死后溢出卡片(overflow:hidden)，
+  // 表现为「滚到底最后一行被裁半截、分页器叠进表体内部」。
   const tableCardRef = useRef<HTMLDivElement>(null);
   const [tableBodyHeight, setTableBodyHeight] = useState<number>(() => Math.max(window.innerHeight - 340, 300));
   useEffect(() => {
     const calcTableHeight = () => {
       const card = tableCardRef.current;
-      let top = 0;
-      if (card) {
-        const bodyEl = card.querySelector('.ant-table-body') as HTMLElement | null;
-        // 加回窗口滚动距离：消除页面已滚动时顶边测量误差，
-        // 避免表体高度被算大后将横向滚动条与分页器顶出屏幕外
-        top = (bodyEl || card).getBoundingClientRect().top + window.pageYOffset;
-      }
-      // 底部预留：分页器(32px+上下边距8px)+少量余量，避免横向滚动条与页码间出现大间隙
-      const next = Math.max(window.innerHeight - top - 44, 200);
+      if (!card) return;
+      const headerEl = (card.querySelector('.ant-table-header') || card.querySelector('.ant-table-thead')) as HTMLElement | null;
+      const bodyEl = card.querySelector('.ant-table-body') as HTMLElement | null;
+      const pagEl = card.querySelector('.ant-pagination') as HTMLElement | null;
+      const cardRect = card.getBoundingClientRect();
+      // 表体顶边：优先固定表头底边，退回表体自身顶边；均为视口坐标，
+      // 与卡片底边同坐标系，差值不受页面滚动量影响（无需再加 pageYOffset）
+      const bodyTop = headerEl ? headerEl.getBoundingClientRect().bottom
+        : (bodyEl ? bodyEl.getBoundingClientRect().top : cardRect.top);
+      // 分页器占位：实测高度 + 上下 margin(4+4)；缺失时按 40 估
+      const pagReserve = pagEl ? pagEl.getBoundingClientRect().height + 8 : 40;
+      const next = Math.max(Math.round(cardRect.bottom - bodyTop - pagReserve), 80);
       setTableBodyHeight(prev => (Math.abs(prev - next) > 1 ? next : prev));
     };
     calcTableHeight();
@@ -1130,7 +1136,10 @@ const ModuleChildPage: React.FC = () => {
     let ro: ResizeObserver | null = null;
     if (typeof ResizeObserver !== 'undefined') {
       ro = new ResizeObserver(() => calcTableHeight());
+      // 观察卡片本身：其底边随下方兄弟节点（说明块）与窗口尺寸变化，
+      // 而表体高度变化不会反向改变卡片高度（min=max 已锁），无反馈循环
       ro.observe(document.body);
+      if (tableCardRef.current) ro.observe(tableCardRef.current);
     }
     return () => {
       window.removeEventListener('resize', calcTableHeight);
@@ -11461,7 +11470,7 @@ const handleBatchAttrsConfirm = () => {
           const n = Number(val) || 0;
           const color = n > 0 ? '#52c41a' : n < 0 ? '#ff4d4f' : '#1a2b45';
           const node = (
-            <Text style={{ fontFamily: 'monospace', color, fontWeight: 500 }}>
+            <Text style={{ fontFamily: 'monospace', color, fontWeight: 'bold' }}>
               {money ? `¥${n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : n}
             </Text>
           );

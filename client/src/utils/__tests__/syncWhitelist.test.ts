@@ -33,5 +33,7 @@ describe('财务域同步白名单', () => {
     WAREHOUSE_KEYS.forEach(k => expect(isSyncKey(k)).toBe(true));
     // 提现任务状态必须同步：负责人电脑靠拉取该键才能弹出提现任务提醒
     expect(isSyncKey('withdrawal_task_status_owner1')).toBe(true);
+    // 盘点任务状态必须同步（随 month_end_check_ 前缀入白名单）：负责人电脑靠拉取该键弹出盘点任务提醒
+    expect(isSyncKey('month_end_check_task_status_owner1')).toBe(true);
   });
 });

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   Card, Table, Button, Space, message, Typography, Modal, Input, InputNumber, DatePicker,
-  Row, Col, Select, Popconfirm, Tag, Image, Checkbox, Upload, Progress, Tooltip,
+  Row, Col, Select, Popconfirm, Tag, Image, Checkbox, Upload, Progress, Tooltip, notification,
 } from 'antd';
 import {
   PlusOutlined, EditOutlined, DeleteOutlined, ReloadOutlined,
@@ -134,7 +134,8 @@ const fmt = (v: number | undefined | null) => {
   return '¥' + v.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
 
-import { scopeShopRecords, canEditShopData } from '../utils/shopScope';
+import { scopeShopRecords, canEditShopData, isShopPersonMe, resolvePersonToUsername } from '../utils/shopScope';
+import { sendPushNotification, showNativeNotification, isNotificationTypeEnabled } from '../utils/pushNotification';
 
 // ===================== 主组件 =====================
 const MonthEndCheckPage: React.FC = () => {
@@ -216,6 +217,70 @@ const MonthEndCheckPage: React.FC = () => {
   const [editVisible, setEditVisible] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [editRecord, setEditRecord] = useState<MonthEndRecord | null>(null);
+
+  // ===================== 发布盘点任务 =====================
+  // 任务状态键前缀 month_end_check_ 已入同步白名单（双端成对登记），负责人电脑拉取后由布局层全局弹窗恢复
+  const taskStatusKey = `month_end_check_task_status_${owner}`;
+  const [taskVisible, setTaskVisible] = useState(false);
+  const [taskMonth, setTaskMonth] = useState<string>(dayjs().subtract(1, 'month').format('YYYY-MM'));
+  const [taskSelected, setTaskSelected] = useState<string[]>([]);
+
+  /** 指定月份该店铺在店铺资金表中是否已有盘点记录 */
+  const hasCheckRecordInMonth = useCallback((shopKey: string, shopName: string, month: string): boolean => {
+    if (!month) return false;
+    return records.some(r => r.calcMonth === month && (r.shopId === shopKey || r.shopName === shopName));
+  }, [records]);
+
+  const handleLaunchInventoryTask = useCallback(() => {
+    if (!taskMonth) { message.warning('请选择盘点月份'); return; }
+    if (taskSelected.length === 0) { message.warning('请至少选择一个店铺'); return; }
+    const selectedShops = shops.filter(s => taskSelected.includes(s.key));
+    // 任务状态落库：走 safeSetItem 触发写入钩子上传服务端（removeItem/裸 setItem 均不会同步）
+    try {
+      const taskData: Record<string, { month: string; launchedAt: string }> = JSON.parse(localStorage.getItem(taskStatusKey) || '{}');
+      selectedShops.forEach(shop => { taskData[shop.key] = { month: taskMonth, launchedAt: dayjs().format('YYYY-MM-DD HH:mm') }; });
+      safeSetItem(taskStatusKey, JSON.stringify(taskData));
+    } catch { /* ignore */ }
+    const notifTitle = '盘点任务通知';
+    const notifBody = (name: string) => `店铺「${name}」有 ${taskMonth} 盘点任务，请及时录入盘点记录`;
+    selectedShops.forEach(shop => {
+      if (!isNotificationTypeEnabled('inventory-task')) return;
+      const onClickHandler = () => {
+        window.focus();
+        sessionStorage.setItem('navigate_check_month', taskMonth);
+        window.dispatchEvent(new CustomEvent('navigate-to-inventory-check'));
+      };
+      // 发布端本人恰为负责人时本地立即弹窗（原生通知不可用则降级页内通知）
+      if (isShopPersonMe(owner, shop.person)) {
+        const native = showNativeNotification(notifTitle, notifBody(shop.shopName), onClickHandler, `inv-task-${shop.key}`);
+        if (!native) {
+          notification.warning({ key: `inv-task-${shop.key}`, message: notifTitle, description: notifBody(shop.shopName), closeIcon: false, duration: 0, onClick: onClickHandler });
+        }
+      }
+      // Web Push 推送（HTTPS 环境下关闭浏览器也能送达；push 按 username 定向，需从显示名反查）
+      const uname = resolvePersonToUsername(owner, shop.person || '');
+      if (uname) {
+        sendPushNotification(uname, notifTitle, notifBody(shop.shopName), { url: window.location.origin + '/finance/shop-management/check' });
+      }
+    });
+    message.success(`已向 ${selectedShops.length} 个店铺负责人发布 ${taskMonth} 盘点任务`);
+    setTaskVisible(false);
+    setTaskSelected([]);
+  }, [taskMonth, taskSelected, shops, taskStatusKey, owner]);
+
+  // 通知点击承接：跳转进入时定位到店铺资金页并按任务月份筛选（留言只在消费到时删除）
+  useEffect(() => {
+    const consume = () => {
+      const m = sessionStorage.getItem('navigate_check_month');
+      if (!m) return;
+      sessionStorage.removeItem('navigate_check_month');
+      setActiveSubTab('summary');
+      setFilterMonth(m);
+    };
+    consume();
+    window.addEventListener('navigate-to-inventory-check', consume);
+    return () => window.removeEventListener('navigate-to-inventory-check', consume);
+  }, []);
 
   // ===================== 数据加载 =====================
   const reload = useCallback(() => {
@@ -1141,6 +1206,7 @@ const MonthEndCheckPage: React.FC = () => {
                 allowClear style={{ width: 160 }} prefix={<SearchOutlined />} />
               <Button icon={<ReloadOutlined />} onClick={reload}>刷新</Button>
               <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增记录</Button>
+              <Button icon={<SendOutlined />} onClick={() => { setTaskSelected([]); setTaskVisible(true); }}>发布盘点任务</Button>
               <Tag color="blue">{records.length} 条记录</Tag>
             </Space>
           </Col>
@@ -1261,6 +1327,52 @@ const MonthEndCheckPage: React.FC = () => {
             )}
           </div>
         )}
+      </Modal>
+
+      {/* ========== 发布盘点任务弹窗 ========== */}
+      <Modal
+        title={<span><SendOutlined style={{ marginRight: 8 }} />发布盘点任务</span>}
+        open={taskVisible}
+        onCancel={() => { setTaskVisible(false); setTaskSelected([]); }}
+        onOk={handleLaunchInventoryTask}
+        okText="发布任务" cancelText="取消"
+        width={700}
+        bodyStyle={{ padding: '16px 24px' }}
+      >
+        <div style={{ marginBottom: 12 }}>
+          <Text style={{ marginRight: 8 }}>盘点月份：</Text>
+          <DatePicker picker="month" allowClear={false} value={taskMonth ? dayjs(taskMonth + '-01') : undefined}
+            onChange={v => { setTaskMonth(v ? v.format('YYYY-MM') : ''); setTaskSelected([]); }} />
+        </div>
+        <Table<ShopInfo>
+          rowKey="key"
+          size="small"
+          bordered
+          pagination={false}
+          scroll={{ y: 360 }}
+          dataSource={shops}
+          rowSelection={{
+            selectedRowKeys: taskSelected,
+            onChange: (keys) => setTaskSelected(keys as string[]),
+            getCheckboxProps: (r) => ({ disabled: hasCheckRecordInMonth(r.key, r.shopName, taskMonth) }),
+          }}
+          columns={[
+            { title: '店铺名称', dataIndex: 'shopName', key: 'shopName', width: 180,
+              render: (v: string) => <Text strong>{v}</Text> },
+            { title: '负责人', dataIndex: 'person', key: 'person', width: 100, align: 'center' as const,
+              render: (v: string) => v ? <Text>{v}</Text> : <Text type="secondary">—</Text> },
+            { title: '盘点状况', key: 'status', width: 120, align: 'center' as const,
+              render: (_: any, r: ShopInfo) => {
+                const done = hasCheckRecordInMonth(r.key, r.shopName, taskMonth);
+                return done
+                  ? <Text style={{ color: '#52c41a', fontWeight: 'bold' }}>已盘点</Text>
+                  : <Text style={{ color: '#ff4d4f', fontWeight: 'bold' }}>未盘点</Text>;
+              } },
+          ]}
+        />
+        <div style={{ marginTop: 8, color: '#999', fontSize: 12 }}>
+          * 盘点状况按所选月份统计店铺资金记录；已盘点的店铺不可重复发布任务，发布后通知对应负责人及时录入盘点记录
+        </div>
       </Modal>
       </>)}
 

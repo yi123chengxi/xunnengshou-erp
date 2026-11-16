@@ -15,8 +15,9 @@ import useResizableColumns from '../hooks/useResizableColumns';
 import FieldConfigModal from '../components/FieldConfigModal';
 import { safeSetItem } from '../utils/storageQuota';
 import { sendPushNotification, showNativeNotification, isNotificationBlocked, showTimedNotification, isNotificationTypeEnabled } from '../utils/pushNotification';
+import { showRechargeNotification } from '../utils/rechargeNotification';
 import { saveDataset } from '../utils/dataStore';
-import { scopeShopRecords, canEditShopData } from '../utils/shopScope';
+import { scopeShopRecords, canEditShopData, isShopPersonMe, resolvePersonToUsername } from '../utils/shopScope';
 import { isAccountingMode, writeAutoEntries, removeAutoEntries, loadSubjectOptions } from '../utils/accountingBridge';
 
 const { Text, Title } = Typography;
@@ -370,13 +371,44 @@ const WithdrawalRecordPage: React.FC = () => {
     }
   }, []);
 
-  // 页面加载时恢复通知 — 已移至 PurchaserLayout 全局处理，避免重复弹窗
-  // （全局恢复确保任何页面加载/刷新时都能看到待处理通知）
+  // 监听全局充值通知点击：本页已挂载时直接打开确认支付弹窗，并标记事件已消费（阻止通知层回退跳转）
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail || {};
+      const recordKey = detail.recordKey;
+      if (typeof detail.markConsumed === 'function') detail.markConsumed();
+      if (!recordKey) return;
+      const rec = rechargeRecords.find(r => r.key === recordKey);
+      if (!rec || rec.status !== 'pending') return;
+      setPayRecord(rec); setPayBankKey(''); setRechDebit('销售费用'); setRechCredit('银行存款'); setPayVisible(true);
+    };
+    window.addEventListener('show-recharge-pay', handler);
+    return () => window.removeEventListener('show-recharge-pay', handler);
+  }, [rechargeRecords]);
+
+  // 挂载时消费通知点击留言（其他页面点击充值审批通知跳转而来）
+  // 注意：留言只在成功打开弹窗后删除——StrictMode 双调用/重挂载会先 cleanup 再重新执行，
+  // 若进 effect 就删键，第二次执行读不到留言 → 冷启动跳转后确认支付弹窗永不弹出
+  useEffect(() => {
+    const t = setTimeout(() => {
+      const pendingKey = sessionStorage.getItem('open_recharge_pay_key');
+      if (!pendingKey) return;
+      let list: any[] = [];
+      try { list = JSON.parse(localStorage.getItem(`recharge_record_${owner}`) || '[]'); } catch { list = []; }
+      const rec = list.find((r: any) => r.key === pendingKey && r.status === 'pending');
+      if (!rec) { sessionStorage.removeItem('open_recharge_pay_key'); return; }
+      sessionStorage.removeItem('open_recharge_pay_key');
+      setActiveTab('recharge');
+      setPayRecord(rec); setPayBankKey(''); setRechDebit('销售费用'); setRechCredit('银行存款'); setPayVisible(true);
+    }, 400);
+    return () => clearTimeout(t);
+  }, [owner]);
+
+  // 页面加载时恢复通知 — 已移至布局层（rechargeNotification 共享模块）全局处理，避免重复弹窗
 
   // ========== 提现任务通知轮询：每1分钟检查，已提现→终止，未提现→重新通知 ==========
   useEffect(() => {
     if (activeTaskNotifs.size === 0) return;
-    const currentUser = localStorage.getItem('username') || '';
     const interval = setInterval(() => {
       const threeDaysAgo = dayjs().subtract(3, 'day').startOf('day');
       // 重新加载最新的提现记录
@@ -391,9 +423,9 @@ const WithdrawalRecordPage: React.FC = () => {
           // 已提现 → 终止，不再通知
           resolved.push(shopKey);
         } else {
-          // 未提现 → 仅当前用户是负责人时才重新发送本地通知
+          // 未提现 → 仅当前用户是负责人时才重新发送本地通知（shop.person 存显示名，需用别名匹配）
           const shop = shops.find(s => s.key === shopKey);
-          if (isNotificationTypeEnabled('withdraw-task') && shop?.person === currentUser) {
+          if (isNotificationTypeEnabled('withdraw-task') && isShopPersonMe(owner, shop?.person)) {
             const remindTitle = '提现任务提醒';
             const remindBody = `店铺「${shopName}」提现任务仍未完成，请及时处理`;
             const onClickHandler = () => {
@@ -427,7 +459,7 @@ const WithdrawalRecordPage: React.FC = () => {
       }
     }, 60000); // 每1分钟检查一次
     return () => clearInterval(interval);
-  }, [activeTaskNotifs, storageKey, shops]);
+  }, [activeTaskNotifs, storageKey, shops, owner]);
 
   // 组件卸载时清理定时器
   useEffect(() => {
@@ -468,7 +500,6 @@ const WithdrawalRecordPage: React.FC = () => {
     }
     const selectedShops = shops.filter(s => withdrawTaskSelected.includes(s.key));
     const newNotifs = new Map(activeTaskNotifs);
-    const currentUser = localStorage.getItem('username') || '';
     // 为每个店铺发送通知
     selectedShops.forEach(shop => {
       newNotifs.set(shop.key, shop.shopName);
@@ -481,8 +512,8 @@ const WithdrawalRecordPage: React.FC = () => {
           sessionStorage.setItem('navigate_withdrawal_tab', '1');
           window.dispatchEvent(new CustomEvent('navigate-to-recharge'));
         };
-        // 仅当当前用户是负责人时才显示本地通知（原生通知 + 页面内通知兆底）
-        if (shop.person === currentUser) {
+        // 仅当当前用户是负责人时才显示本地通知（原生通知 + 页面内通知兆底；shop.person 存显示名，需用别名匹配）
+        if (isShopPersonMe(owner, shop.person)) {
           const nativeNotif = showNativeNotification(
             notifTitle, notifBody, onClickHandler, `withdraw-task-${shop.key}`
           );
@@ -497,8 +528,8 @@ const WithdrawalRecordPage: React.FC = () => {
             });
           }
         }
-        // Web Push 推送（关闭浏览器也能收到，始终发送给负责人）
-        const person = shop.person;
+        // Web Push 推送（关闭浏览器也能收到，始终发送给负责人；push 按 username 定向，需反查）
+        const person = resolvePersonToUsername(owner, shop.person || '');
         if (person) {
           sendPushNotification(
             person, notifTitle, notifBody,
@@ -518,7 +549,7 @@ const WithdrawalRecordPage: React.FC = () => {
     message.success(`已向 ${selectedShops.length} 个店铺负责人发起提现任务`);
     setWithdrawTaskVisible(false);
     setWithdrawTaskSelected([]);
-  }, [shops, withdrawTaskSelected, taskStatusKey, activeTaskNotifs]);
+  }, [shops, withdrawTaskSelected, taskStatusKey, activeTaskNotifs, owner]);
 
   // 清空提现任务状态
   const handleClearWithdrawTask = useCallback(() => {
@@ -582,13 +613,16 @@ const WithdrawalRecordPage: React.FC = () => {
           localStorage.setItem(rejKey, JSON.stringify(shown.filter(k => k !== applyEditKey)));
         } catch {}
       }
-      // 通知财务负责人（系统级通知 + Web Push，已屏蔽则跳过）
+      // 通知财务负责人（系统级通知 + antd 降级 + Web Push，已屏蔽则跳过）
+      // HTTP 非安全上下文下原生通知恒被浏览器拒绝，不降级则静默丢失
       if (applyFinancePerson && !isNotificationBlocked(applyFinancePerson)) {
-        showNativeNotification(
+        showRechargeNotification(
+          'warning',
+          `rech-pending-${applyEditKey}`,
           '【充值审批】' + (shop?.shopName || ''),
           `${shop?.shopName} ${isRejected ? '重新申请' : '更新'}充值 ¥${applyAmount.toFixed(2)}，请点击处理`,
+          0,
           () => window.dispatchEvent(new CustomEvent('show-recharge-pay', { detail: { recordKey: applyEditKey } })),
-          `rech-pending-${applyEditKey}`
         );
         sendPushNotification(
           applyFinancePerson,
@@ -610,13 +644,15 @@ const WithdrawalRecordPage: React.FC = () => {
         createdAt: new Date().toLocaleString('zh-CN'), updatedAt: '',
       };
       saveRechRecords([rec, ...rechargeRecords]);
-      // 通知财务负责人（系统级通知 + Web Push，已屏蔽则跳过）
+      // 通知财务负责人（系统级通知 + antd 降级 + Web Push，已屏蔽则跳过）
       if (applyFinancePerson && !isNotificationBlocked(applyFinancePerson)) {
-        showNativeNotification(
+        showRechargeNotification(
+          'warning',
+          `rech-pending-${rec.key}`,
           '【充值审批】' + (shop?.shopName || ''),
           `${shop?.shopName} 申请充值 ¥${applyAmount.toFixed(2)}，请点击处理`,
+          0,
           () => window.dispatchEvent(new CustomEvent('show-recharge-pay', { detail: { recordKey: rec.key } })),
-          `rech-pending-${rec.key}`
         );
         sendPushNotification(
           applyFinancePerson,
@@ -760,13 +796,15 @@ const WithdrawalRecordPage: React.FC = () => {
     saveRechRecords(updated);
     setRejectVisible(false); setRejectRecord(null); setRejectReason('');
     notification.destroy(`rech-notify-${rejectRecord.key}`);
-    // 通知申请人（系统级通知，已屏蔽则跳过）
+    // 通知申请人（系统级通知 + antd 降级，已屏蔽则跳过；与负责人端恢复 effect 同 key，去重不双弹）
     if (rejectRecord.applicant && !isNotificationBlocked(rejectRecord.applicant)) {
-      showNativeNotification(
+      showRechargeNotification(
+        'warning',
+        `rech-rejected-${rejectRecord.key}`,
         '【充值被驳回】' + (rejectRecord.shopName || ''),
         `${rejectRecord.shopName} 的充值申请已被驳回，原因：${rejectReason.trim()}`,
+        0,
         () => { sessionStorage.setItem('navigate_recharge_tab', '1'); window.dispatchEvent(new CustomEvent('navigate-to-recharge')); },
-        `rech-rejected-${rejectRecord.key}`
       );
     }
     message.success('已驳回');

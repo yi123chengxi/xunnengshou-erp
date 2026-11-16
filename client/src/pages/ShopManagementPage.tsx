@@ -65,6 +65,13 @@ const ShopManagementPage: React.FC = () => {
     return () => window.removeEventListener('navigate-to-recharge', handler);
   }, []);
 
+  // 监听盘点任务通知跳转事件：切到月末盘点子页（月份筛选由 MonthEndCheckPage 消费同事件完成）
+  useEffect(() => {
+    const handler = () => setActiveKey('check');
+    window.addEventListener('navigate-to-inventory-check', handler);
+    return () => window.removeEventListener('navigate-to-inventory-check', handler);
+  }, []);
+
   const handleMenuClick = useCallback(({ key }: { key: string }) => {
     setActiveKey(key);
   }, []);

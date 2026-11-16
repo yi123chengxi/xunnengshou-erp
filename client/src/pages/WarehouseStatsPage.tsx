@@ -1549,14 +1549,15 @@ const NoteTab: React.FC = () => {
   const [notes, setNotes] = useState<NoteItem[]>(() => safeJson<NoteItem[]>(sk.note, []));
   const [visible, setVisible] = useState(false); const [editing, setEditing] = useState<NoteItem | null>(null); const [form] = Form.useForm();
   const save = (l: NoteItem[]) => { setNotes(l); writeJson(sk.note, l); window.dispatchEvent(new Event('note-changed')); };
-  // 从分组中收集所有成员（质检员 + 打包员 + 外贸组长）
+  // 人员候选：租户全部人员（含子账号，loadTenantUsers 已按 parentAccount 链隔离）∪ 分组名单（保留手输成员）
   const staffOpts = useMemo(() => {
     const groups = safeJson<PackGroup[]>(sk.group, []);
-    const set = new Set<string>();
-    groups.forEach(g => { if (g.inspector) set.add(g.inspector); if (g.packer) set.add(g.packer); if (g.foreignTeam) set.add(g.foreignTeam); });
-    return Array.from(set).sort();
+    const map = new Map<string, string>();
+    loadTenantUsers().forEach((u: any) => { const n = tenantUserDisplayName(u); if (n) map.set(n, `${n}${u.isSubAccount ? '' : '（管理员）'}`); });
+    groups.forEach(g => { [g.inspector, g.packer, g.foreignTeam].forEach(n => { if (n && !map.has(n)) map.set(n, n); }); });
+    return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0])).map(([value, label]) => ({ value, label }));
   }, []);
-  const openAdd = () => { setEditing(null); form.setFieldsValue({ note: '', person: '', amount: 0, date: todayIso(), month: dayjs().format('YYYY-MM'), type: 'reward' }); setVisible(true); };
+  const openAdd = () => { setEditing(null); form.setFieldsValue({ note: '', person: undefined, amount: null, date: todayIso(), month: dayjs().format('YYYY-MM'), type: 'reward' }); setVisible(true); };
   const openEdit = (r: NoteItem) => { setEditing(r); form.setFieldsValue({ ...r, type: r.type || 'reward' }); setVisible(true); };
   const handleSave = () => { form.validateFields().then(v => { const rec: NoteItem = { key: editing?.key || genKey('NT'), ...v }; const list = editing ? notes.map(x => x.key === editing.key ? rec : x) : [rec, ...notes]; save(list); setVisible(false); message.success(editing ? '已更新' : '已新增'); }).catch(() => {}); };
   const cols: ColumnsType<NoteItem> = [
@@ -1582,8 +1583,8 @@ const NoteTab: React.FC = () => {
           </Form.Item>
           <Form.Item name="note" label="备注内容" rules={[{ required: true }]}><Input.TextArea rows={3} /></Form.Item>
           <Row gutter={12}>
-            <Col span={8}><Form.Item name="person" label="人员"><Select showSearch allowClear placeholder="选择人员" options={staffOpts.map(s => ({ value: s, label: s }))} filterOption={(input, option) => String(option?.label ?? '').toLowerCase().includes(input.toLowerCase())} /></Form.Item></Col>
-            <Col span={8}><Form.Item name="amount" label="金额"><InputNumber min={0} style={{ width: '100%' }} /></Form.Item></Col>
+            <Col span={8}><Form.Item name="person" label="人员" rules={[{ required: true, message: '请选择人员' }]}><Select showSearch allowClear placeholder="选择人员" options={staffOpts} filterOption={(input, option) => String(option?.label ?? '').toLowerCase().includes(input.toLowerCase())} /></Form.Item></Col>
+            <Col span={8}><Form.Item name="amount" label="金额" rules={[{ required: true, message: '请输入金额' }, { validator: (_: any, v: any) => (v === null || v === undefined || Number(v) > 0) ? Promise.resolve() : Promise.reject(new Error('金额须大于 0')) }]}><InputNumber min={0} style={{ width: '100%' }} /></Form.Item></Col>
             <Col span={8}><Form.Item name="date" label="日期"><Input /></Form.Item></Col>
           </Row>
           <Form.Item name="month" label="月份"><Input placeholder="YYYY-MM" /></Form.Item>
