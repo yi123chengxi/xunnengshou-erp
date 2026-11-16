@@ -106,6 +106,8 @@ const SHARED_PREFIXES = [
  *  注意：user_notice_ 的键格式为 user_notice_<账号>_<id>，末段不是账号，且开发者后台会代写他人通知，未纳入严格私有。 */
 const STRICT_PRIVATE_PREFIXES = [
   'customers_', 'accounts_', 'withdrawal_record_', 'month_end_check_',
+  // 提现任务状态（键末段为主账号）：发起后需同步到同租户负责人电脑弹出提醒
+  'withdrawal_task_status_',
   'shop_info_', 'shop_profit_', 'inventory_check_', 'stock_change_log_', 'sales_outbound_',
   'customerReceipts_', 'supplier_payments_', 'warehouses_', 'hr_', 'newstyle_', 'custom_',
   'notification_settings_',
@@ -131,6 +133,8 @@ const STRICT_PRIVATE_PREFIXES = [
   'supplier_analytics_', 'purchaser_analytics_',
   // BOM/款式设计图片的云端 URL 绑定表（prodImgUrl_<账号>）
   'prodImgUrl_',
+  // 仓库统计（备货/急采/配货/工价/分组/奖惩/负责人/导入数据源，键末段为账号）：与客户端 SYNC_PREFIXES 成对补入
+  'ws_',
 ];
 
 /** 键的归属账号；共享键返回 null（与客户端 keyOwner 一致：取最后一个下划线后的账号名） */

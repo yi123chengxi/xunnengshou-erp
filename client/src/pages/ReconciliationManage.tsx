@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import {
-  Card, Row, Col, Typography, Statistic, Table, Input, Select, Button,
+  Card, Row, Col, Typography, Statistic, Table, Input, Select, Button, AutoComplete,
   Space, Tag, message, Modal, Form, Descriptions, Dropdown,
   Popconfirm, Badge, Tooltip, Tabs, Steps, Divider, Alert, Result,
   InputNumber, DatePicker, Timeline, Popover, Checkbox, Upload, Image, Switch,
@@ -552,6 +552,8 @@ const ReconciliationManage: React.FC = () => {
   const [searchText, setSearchText] = useState('');
   const [typeFilter, setTypeFilter] = useState<string>('');
   const [resultFilter, setResultFilter] = useState<string>('');
+  // 对方名称搜索（供应商平台=客户名称，采购商平台=供应商名称）：点击下拉候选列表，输入模糊检索
+  const [cpFilter, setCpFilter] = useState('');
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
 
   // 详情抽屉
@@ -620,6 +622,17 @@ const ReconciliationManage: React.FC = () => {
 
   const roleData = useMemo(() => dataSource.filter(r => (isPurchaser ? isMineAsPurchaser(r) : isMineAsSupplier(r))), [dataSource, isPurchaser, isMineAsPurchaser, isMineAsSupplier]);
 
+  // 对方名称取值口径（与表格「对方名称」列一致）：采购商平台对方=供应商；供应商平台对方=客户（采购商发起的请求显示采购商公司）
+  const cpNameOf = useCallback((r: ReconRecord) => String(
+    (isPurchaser ? (r.supplierName || r.counterparty) : (r.initiator === 'purchaser' ? (r.customerName || r.counterparty) : r.counterparty)) || ''
+  ).trim(), [isPurchaser]);
+  // 搜索框下拉候选：本方全部对账记录的对方名称去重
+  const cpOptions = useMemo(() => {
+    const set = new Set<string>();
+    roleData.forEach(r => { const n = cpNameOf(r); if (n) set.add(n); });
+    return Array.from(set).map(n => ({ value: n }));
+  }, [roleData, cpNameOf]);
+
   // ==================== 统计 ====================
   const stats = useMemo(() => {
     const total = roleData.length;
@@ -647,9 +660,11 @@ const ReconciliationManage: React.FC = () => {
         item.counterparty.includes(searchText);
       const matchType = !typeFilter || (typeFilter === 'customer' ? (item.initiator || 'supplier') === 'purchaser' : (item.initiator || 'supplier') !== 'purchaser');
       const matchResult = !resultFilter || item.reconResult === resultFilter;
-      return matchSearch && matchType && matchResult;
+      const cpKw = cpFilter.trim();
+      const matchCp = !cpKw || cpNameOf(item).includes(cpKw);
+      return matchSearch && matchType && matchResult && matchCp;
     });
-  }, [roleData, activeTab, searchText, typeFilter, resultFilter, isPurchaser]);
+  }, [roleData, activeTab, searchText, typeFilter, resultFilter, cpFilter, cpNameOf, isPurchaser]);
 
   // 采购商平台：按单据编号自动匹配采购账单，核对明细与总金额（款式编码汇总核对数量）
   useEffect(() => {
@@ -1502,7 +1517,41 @@ const ReconciliationManage: React.FC = () => {
     setSearchText('');
     setTypeFilter('');
     setResultFilter('');
+    setCpFilter('');
   }, []);
+
+  // ==================== 表体贴底：动态测量纵向滚动高度，分页始终紧贴窗口底部 ====================
+  const tableWrapRef = useRef<HTMLDivElement>(null);
+  const [tableScrollY, setTableScrollY] = useState<number>(360);
+  const measureTableHeight = useCallback(() => {
+    const wrap = tableWrapRef.current;
+    if (!wrap) return;
+    // 保活隐藏（display:none）时 rect 全 0，不测量避免把高度写坏
+    if (!wrap.getBoundingClientRect().width) return;
+    // 底边锚点：优先标签页容器，其次 Content 底边减去其内边距（禁用 innerHeight 直测，会因容器 padding 偏高裁切分页）
+    const pane = wrap.closest('.ant-tabs-tabpane') as HTMLElement | null;
+    const content = wrap.closest('.ant-layout-content') as HTMLElement | null;
+    const bottom = pane ? pane.getBoundingClientRect().bottom
+      : content ? content.getBoundingClientRect().bottom - (parseFloat(getComputedStyle(content).paddingBottom) || 0)
+      : window.innerHeight;
+    const thead = wrap.querySelector('.ant-table-thead');
+    const bodyTop = thead ? thead.getBoundingClientRect().bottom : wrap.getBoundingClientRect().top + 60;
+    // 52 ≈ 分页 32 + 边框 4 + 安全余量 16（与项目贴底惯例一致）
+    setTableScrollY(Math.max(200, Math.floor(bottom - bodyTop - 52)));
+  }, []);
+  useEffect(() => {
+    measureTableHeight();
+    const t1 = setTimeout(measureTableHeight, 350);  // 首帧表格渲染完成后重测
+    const t2 = setTimeout(measureTableHeight, 1200); // 数据拉取渲染完成后重测
+    window.addEventListener('resize', measureTableHeight);
+    window.addEventListener('focus', measureTableHeight); // 保活页切回时重测
+    return () => { clearTimeout(t1); clearTimeout(t2); window.removeEventListener('resize', measureTableHeight); window.removeEventListener('focus', measureTableHeight); };
+  }, [measureTableHeight]);
+  // 行数少时撑满表体（min=max），使分页仍落在窗口底部
+  useEffect(() => {
+    const body = tableWrapRef.current?.querySelector('.ant-table-body') as HTMLElement | null;
+    if (body) body.style.minHeight = `${tableScrollY}px`;
+  }, [tableScrollY, filteredData.length]);
 
   // ==================== 表格列 ====================
   const columns: ColumnsType<ReconRecord> = [
@@ -1841,7 +1890,7 @@ const ReconciliationManage: React.FC = () => {
           style={{ marginBottom: -16 }}
           items={[
             { key: 'all', label: <Space><FileTextOutlined />全部 ({roleData.length})</Space> },
-            { key: 'customer', label: <Space><UserOutlined />客户对账 ({roleData.filter(r => (r.initiator || 'supplier') === 'purchaser').length})</Space> },
+            { key: 'customer', label: <Space><UserOutlined />{isPurchaser ? '我方对账' : '客户对账'} ({roleData.filter(r => (r.initiator || 'supplier') === 'purchaser').length})</Space> },
             { key: 'supplier', label: <Space><ShopOutlined />供应商对账 ({roleData.filter(r => (r.initiator || 'supplier') !== 'purchaser').length})</Space> },
             { key: 'pending', label: <Space><ClockCircleOutlined />待入账 ({stats.pending})</Space> },
             { key: 'abnormal', label: <Space><WarningOutlined />异常单据 ({stats.detailDiff + stats.amountDiff})</Space> },
@@ -1862,6 +1911,18 @@ const ReconciliationManage: React.FC = () => {
             />
           </Col>
           <Col xs={12} sm={4}>
+            {/* 对方名称搜索：点击即下拉候选列表（供应商平台=客户，采购商平台=供应商），输入时模糊过滤候选并即时筛选 */}
+            <AutoComplete
+              placeholder={isPurchaser ? '供应商名称' : '客户名称'}
+              value={cpFilter}
+              onChange={v => setCpFilter(v || '')}
+              options={cpOptions}
+              filterOption={(input, option) => String(option?.value ?? '').toLowerCase().includes(input.toLowerCase())}
+              allowClear
+              style={{ width: '100%' }}
+            />
+          </Col>
+          <Col xs={12} sm={4}>
             <Select
               placeholder="对账类型"
               value={typeFilter || undefined}
@@ -1869,7 +1930,7 @@ const ReconciliationManage: React.FC = () => {
               allowClear
               style={{ width: '100%' }}
             >
-              <Option value="customer">客户对账</Option>
+              <Option value="customer">{isPurchaser ? '我方对账' : '客户对账'}</Option>
               <Option value="supplier">供应商对账</Option>
             </Select>
           </Col>
@@ -1939,7 +2000,8 @@ const ReconciliationManage: React.FC = () => {
         </Row>
       </Card>
 
-      {/* 数据表格 */}
+      {/* 数据表格（表体纵向滚动，分页紧贴窗口底部） */}
+      <div ref={tableWrapRef}>
       <Card bodyStyle={{ padding: '0 24px 24px' }}>
         <Table
           rowSelection={{
@@ -1948,7 +2010,7 @@ const ReconciliationManage: React.FC = () => {
           }}
           columns={columns}
           dataSource={filteredData}
-          scroll={{ x: 1400 }}
+          scroll={{ x: 1400, y: tableScrollY }}
           size="middle"
           pagination={{
             showSizeChanger: true,
@@ -1960,6 +2022,7 @@ const ReconciliationManage: React.FC = () => {
           locale={{ emptyText: '暂无对账数据' }}
         />
       </Card>
+      </div>
 
       {/* ============ 明细详情弹窗（屏幕居中显示，加宽） ============ */}
       <Modal

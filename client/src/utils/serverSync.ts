@@ -62,6 +62,7 @@ const SYNC_PREFIXES = [
   'month_end_return_',         // 月末退货统计（开发者后台跨账号读取）
   'month_end_ship_',           // 月末出货统计（开发者后台跨账号读取）
   'recharge_record_',          // 充值记录（开发者后台跨账号读取）
+  'withdrawal_task_status_',   // 提现任务状态（发起提现任务后须同步到负责人电脑，否则负责人端全局通知恢复无数据可弹）
   'bound_purchasers_',         // 已绑定采购商（供应商↔采购商协作）
   'independent_purchasers_',   // 独立采购商（跨账号协作）
   'supplier_receipt_inbox_',   // 采购商已付款待登记（采购商支付成功 → 供应商「新增收款」弹窗）
@@ -74,6 +75,9 @@ const SYNC_PREFIXES = [
   'supplierFieldOrder_', 'supplierFieldVisibility_', 'facFieldOrder_', 'facFieldVis_',
   'facCoopFieldOrder_', 'facCoopFieldVis_', 'ownbrand_fieldorder_', 'ownbrand_fieldvis_',
   'sos_fieldOrder_', 'sos_fieldVis_', 'ws_stockFieldOrder_', 'ws_stockFieldVis_',
+  // ==== 仓库统计（备货/急采/配货/工价/分组/奖惩/负责人/导入数据源，键为 ws_*_<账号>）====
+  // 此前只存本机，导致其他电脑登录同账号看不到新增数据（与服务端 STRICT_PRIVATE_PREFIXES 成对补入）
+  'ws_',
   'salesFieldOrder_', 'salesFieldVisibility_', 'bizLicenseFieldOrder_', 'bizLicenseFieldVisibility_',
   'rechFieldOrder_', 'rechFieldVis_', 'salesOutboundDisplay_', 'chat_quick_company_', 'chat_quick_personal_',
   'picking_reject_reasons_', 'customBanks_', 'prBomManualQty_',

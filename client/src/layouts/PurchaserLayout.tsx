@@ -36,7 +36,7 @@ import { STORAGE_SUBSCRIBE_DISABLED } from '../utils/billingPolicy';
 import { getProvinceOptions, getCityOptions, getDistrictOptions } from '../utils/regions';
 import { safeSetItem } from '../utils/storageQuota';
 import { saveDataset } from '../utils/dataStore';
-import { showNativeNotification, showTimedNotification, isNotificationBlocked } from '../utils/pushNotification';
+import { showNativeNotification, showTimedNotification, isNotificationBlocked, isNotificationTypeEnabled } from '../utils/pushNotification';
 import { useDevPermSet, isPermAllowed } from '../utils/devPerms';
 import { menuVisible, menuKeyFromPath, usePermTick } from '../utils/perm';
 import { compressImageFile } from '../utils/imageCompress';
@@ -706,6 +706,50 @@ const PurchaserLayout: React.FC = () => {
     const initTimer = setTimeout(showNotifications, 800);
     // 每 30 秒重新检查待审核记录并重新弹出（用户关闭后自动恢复）
     const interval = setInterval(showNotifications, 30000);
+    return () => { clearTimeout(initTimer); clearInterval(interval); };
+  }, [getDataOwner]);
+
+  // ===================== 全局提现任务通知恢复（负责人电脑） =====================
+  // 发起提现任务只在发布端写入 withdrawal_task_status_<owner>，该键已入同步白名单；
+  // 负责人浏览器轮询拉取到任务后，若本人是店铺负责人且最近 3 天无提现记录，则系统级弹窗提醒，
+  // 直到提现完成。此前仅在发布端本地弹窗，负责人在另一台电脑收不到。
+  useEffect(() => {
+    const owner = getDataOwner();
+    const currentUser = localStorage.getItem('username') || '';
+    if (!owner || !currentUser) return;
+    const check = () => {
+      if (!isNotificationTypeEnabled('withdraw-task')) return;
+      if (isNotificationBlocked(currentUser)) return;
+      try {
+        const taskMap: Record<string, string> = JSON.parse(localStorage.getItem(`withdrawal_task_status_${owner}`) || '{}');
+        const shopKeys = Object.keys(taskMap);
+        if (shopKeys.length === 0) return;
+        const shops: any[] = JSON.parse(localStorage.getItem(`shop_info_${owner}`) || '[]');
+        let wdRecords: any[] = [];
+        try { wdRecords = JSON.parse(localStorage.getItem(`withdrawal_record_${owner}`) || '[]'); } catch { wdRecords = []; }
+        const threeDaysAgo = dayjs().subtract(3, 'day').startOf('day');
+        shopKeys.forEach(shopKey => {
+          const shop = shops.find((s: any) => s.key === shopKey);
+          if (!shop || shop.person !== currentUser) return; // 仅店铺负责人
+          // 最近 3 天已有该店铺提现记录 → 任务完成，不再提醒
+          const done = wdRecords.some((r: any) => r.shopName === shop.shopName && dayjs(r.createdAt || r.withdrawalDate).isAfter(threeDaysAgo));
+          if (done) return;
+          const title = '提现任务提醒';
+          const body = `店铺「${shop.shopName}」有提现任务待处理，请及时办理提现`;
+          const onClick = () => {
+            window.focus();
+            sessionStorage.setItem('navigate_withdrawal_tab', '1');
+            window.dispatchEvent(new CustomEvent('navigate-to-recharge'));
+          };
+          const native = showNativeNotification(title, body, onClick, `wd-task-${shopKey}`);
+          if (!native) {
+            notification.warning({ key: `wd-task-${shopKey}`, message: title, description: body, closeIcon: false, duration: 0, onClick });
+          }
+        });
+      } catch { /* ignore */ }
+    };
+    const initTimer = setTimeout(check, 1200);
+    const interval = setInterval(check, 60000);
     return () => { clearTimeout(initTimer); clearInterval(interval); };
   }, [getDataOwner]);
 

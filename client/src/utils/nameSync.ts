@@ -75,6 +75,8 @@ export const resolveCompanyCred = (name: string, map?: Map<string, { username: s
 // 导致同一主体被拆成两半（采购总额/已收货款/额度取不到数）。
 // 本索引把「一行数据的归属主体」归一为一个身份键：账号 > 公司编号 > 改名链折叠后的名称，
 // 名称字段保留原样仅用于展示，匹配一律走身份键；未能解析出凭证的行退回名称，行为与旧实现一致。
+// 主体=企业（公司）而非登录账号：主账号与其名下全部子账号（含多级链）归一为主账号身份键，
+// 否则同名主/子账号会让「账单行凭证=u:子账号」与「客户档案名→身份键」分叉，采购总额等汇总恒为 0。
 export interface PartyParts { username?: any; no?: any; name?: any; }
 export interface CredIndex {
   /** 行 → 身份键（'u:账号' 或 'n:折叠名'）；无法定位主体时返回 '' */
@@ -107,7 +109,7 @@ export const buildCredIndex = (): CredIndex => {
   });
   const fold = (n: string): string => { let t = n; let g = 0; while (chain.has(t) && g++ < 10) t = chain.get(t) as string; return t; };
   const u2c = new Map<string, any>();
-  // 名称/简称/编号/账号 → 候选账号集（同名多账号 = 歧义，不得按名称归到某个账号）
+  // 名称/简称/编号/账号 → 候选账号集；主/子账号是同一主体，仅相互独立（非父子链）的账号同名才算歧义
   const byKey = new Map<string, Set<string>>();
   users.forEach((u: any) => {
     if (!u || !u.username) return;
@@ -119,15 +121,34 @@ export const buildCredIndex = (): CredIndex => {
       byKey.get(s)!.add(String(u.username));
     });
   });
+  // 账号 → 归属主账号：沿 isSubAccount/parentAccount 链上溯；断链（父账号不在表内）就地停止不归一，
+  // 保证归一结果一定是表内真实存在的账号，与名称解析路径给出的身份键完全同值
+  const rootOf = (un: string): string => {
+    let cur = un;
+    const seen = new Set<string>();
+    let g = 0;
+    while (g++ < 10 && !seen.has(cur)) {
+      const u = u2c.get(cur);
+      if (!u || !u.isSubAccount || !u.parentAccount) break;
+      const next = String(u.parentAccount);
+      if (!u2c.has(next)) break;
+      seen.add(cur);
+      cur = next;
+    }
+    return cur;
+  };
   const userByName = (n: string): any => {
     if (!n) return null;
     const set = byKey.get(n);
-    if (!set || set.size !== 1) return null;
-    return u2c.get(Array.from(set)[0]) || null;
+    if (!set || !set.size) return null;
+    const roots = new Set<string>();
+    set.forEach((un) => roots.add(rootOf(un)));
+    if (roots.size !== 1) return null;
+    return u2c.get(Array.from(roots)[0]) || null;
   };
   const identity = (p: PartyParts): string => {
     const un = String(p?.username || '').trim();
-    if (un && u2c.has(un)) return 'u:' + un;
+    if (un && u2c.has(un)) return 'u:' + rootOf(un);
     const no = String(p?.no || '').trim();
     if (no) { const u = userByName(no) || (chain.has(no) ? userByName(fold(no)) : null); if (u) return 'u:' + String(u.username); }
     const raw = String(p?.name || '').trim();

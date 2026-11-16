@@ -2139,14 +2139,7 @@ const Auth: React.FC = () => {
         footer={null}
         width={460}
       >
-        <div style={{ marginBottom: 16 }}>
-          <Alert
-            message="安全验证"
-            description="系统检测到您来自陌生 IP 地址登录，为保障账号安全，请完成身份验证；验证通过后该 IP 30 天内免验证。"
-            type="warning"
-            showIcon
-          />
-        </div>
+        {/* 安全验证提示块已按需求移除：本弹窗本身就是安全验证流程，无需重复警告 */}
 
         {/* 步骤0：选择验证方式 */}
         {deviceVerifyStep === 0 && (
@@ -2189,7 +2182,7 @@ const Auth: React.FC = () => {
               message="验证码已发送至您的手机"
               description={
                 <span>
-                  账号「{pendingLoginUser?.username}」的绑定手机已收到验证码，请在下方输入。
+                  账号「{pendingLoginUser?.username}」的绑定手机{pendingLoginUser?.phone ? `[${String(pendingLoginUser.phone).slice(-4)}]` : ''}已收到验证码，请在下方输入。
                 </span>
               }
               type="success"

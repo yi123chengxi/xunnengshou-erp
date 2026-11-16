@@ -23,4 +23,15 @@ describe('财务域同步白名单', () => {
     expect(isSyncKey('customer_pay_summary_owner1')).toBe(false);
     expect(isSyncKey('supplier_pay_summary_owner1')).toBe(false);
   });
+
+  it('仓库统计各存储键必须纳入跨端同步白名单（历史缺陷：只存本机致他端看不到新增）', () => {
+    const WAREHOUSE_KEYS = [
+      'ws_stock_owner1', 'ws_urgent_owner1', 'ws_pick_owner1',
+      'ws_wage_owner1', 'ws_urgentWage_owner1', 'ws_pickWage_owner1',
+      'ws_group_owner1', 'ws_note_owner1', 'ws_managers_owner1', 'ws_orderLabel_owner1',
+    ];
+    WAREHOUSE_KEYS.forEach(k => expect(isSyncKey(k)).toBe(true));
+    // 提现任务状态必须同步：负责人电脑靠拉取该键才能弹出提现任务提醒
+    expect(isSyncKey('withdrawal_task_status_owner1')).toBe(true);
+  });
 });

@@ -508,11 +508,12 @@ const WithdrawalRecordPage: React.FC = () => {
       }
     });
     setActiveTaskNotifs(newNotifs);
-    // 保存任务状态
+    // 保存任务状态：必须走 safeSetItem（已入同步白名单），经写入钩子上传服务端，
+    // 负责人电脑拉取后由 PurchaserLayout 全局通知恢复弹窗；裸 setItem 无配额保护易静默丢写
     try {
       const taskData: Record<string, string> = JSON.parse(localStorage.getItem(taskStatusKey) || '{}');
       selectedShops.forEach(shop => { taskData[shop.key] = dayjs().format('YYYY-MM-DD HH:mm'); });
-      localStorage.setItem(taskStatusKey, JSON.stringify(taskData));
+      safeSetItem(taskStatusKey, JSON.stringify(taskData));
     } catch { /* ignore */ }
     message.success(`已向 ${selectedShops.length} 个店铺负责人发起提现任务`);
     setWithdrawTaskVisible(false);
@@ -526,7 +527,8 @@ const WithdrawalRecordPage: React.FC = () => {
       content: '清空后所有店铺的提现状态将重置，可重新发起提现任务',
       okText: '确认清空', okType: 'danger', cancelText: '取消',
       onOk: () => {
-        localStorage.removeItem(taskStatusKey);
+        // 排空上传而非 removeItem：服务端仍留旧快照时下次拉取会把任务复活
+        safeSetItem(taskStatusKey, '{}');
         // 清除所有页面内通知、定时器和活跃通知状态
         activeTaskNotifs.forEach((_, shopKey) => {
           notification.destroy(`withdraw-task-${shopKey}`);

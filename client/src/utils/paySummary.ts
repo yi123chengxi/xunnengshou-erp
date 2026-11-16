@@ -7,6 +7,7 @@
 // - 防漂移三层：写后自校验 / storage·sync 事件自愈 / 空闲分片巡检（requestIdleCallback 每次只校验一个对象）
 
 import { buildCredIndex } from './nameSync';
+import type { CredIndex } from './nameSync';
 
 export interface SupplierSummaryEntry { purchaseTotal: number; paidTotal: number; paidCount: number; updatedAt: string; }
 export interface CustomerSummaryEntry { purchaseTotal: number; receivedTotal: number; receivedCount: number; updatedAt: string; }
@@ -54,6 +55,22 @@ const buildTargetIndex = (names: Set<string>) => {
   return { idx, targetFor };
 };
 
+// 行 → 目标归属：先按凭证身份键；未命中再退纯名称身份键，
+// 覆盖「同名多个独立账号」的行凭证被按名称补到另一账号的场景（凭证分叉但名称即主体），
+// 不会重复计入：每行仍只命中一个目标。主/子账号同一主体由 buildCredIndex 归一保证。
+const matchTarget = (
+  idx: CredIndex, targetFor: Map<string, string>,
+  p: { username?: any; no?: any; name?: any },
+): string | undefined => {
+  const k = idx.identity(p);
+  const t = k ? targetFor.get(k) : undefined;
+  if (t) return t;
+  const nm = trimName(p?.name);
+  if (!nm) return undefined;
+  const k2 = idx.identity({ name: nm });
+  return k2 && k2 !== k ? targetFor.get(k2) : undefined;
+};
+
 // ================= 采购商侧：供应商快照 =================
 export const loadSupplierSummary = (owner: string): SummaryMap<SupplierSummaryEntry> => readJson(supplierSummaryKey(owner), {}) || {};
 const ensureSup = (m: SummaryMap<SupplierSummaryEntry>, name: string): SupplierSummaryEntry => (m[name] || (m[name] = { purchaseTotal: 0, paidTotal: 0, paidCount: 0, updatedAt: '' }));
@@ -65,8 +82,7 @@ const computeSupPurchaseCents = (owner: string, targets: Set<string>): Map<strin
   const { idx, targetFor } = buildTargetIndex(targets);
   const bills: any[] = readJson(billsKey(owner), []) || [];
   bills.forEach(b => {
-    const k = idx.identity({ username: b?.supplierUsername, no: b?.supplierNo, name: b?.supplier });
-    const t = k ? targetFor.get(k) : undefined;
+    const t = matchTarget(idx, targetFor, { username: b?.supplierUsername, no: b?.supplierNo, name: b?.supplier });
     if (!t) return;
     per.set(t, (per.get(t) || 0) + toCents(b?.totalAmount));
   });
@@ -79,8 +95,7 @@ const computeSupPaidCents = (owner: string, targets: Set<string>): Map<string, {
   const { idx, targetFor } = buildTargetIndex(targets);
   const pays: any[] = readJson(supplierPaymentsKey(owner), []) || [];
   pays.forEach(p => {
-    const k = idx.identity({ username: p?.supplierUsername, no: p?.supplierNo, name: p?.supplierName });
-    const t = k ? targetFor.get(k) : undefined;
+    const t = matchTarget(idx, targetFor, { username: p?.supplierUsername, no: p?.supplierNo, name: p?.supplierName });
     if (!t) return;
     const e = per.get(t) || { cents: 0, count: 0 };
     e.cents += payCents(p); e.count += 1;
@@ -228,8 +243,7 @@ export const loadSupplierPayments = (owner: string, supplierName: string): any[]
   return pays
     .filter(p => {
       if (nm && trimName(p?.supplierName) === nm) return true;
-      const k = idx.identity({ username: p?.supplierUsername, no: p?.supplierNo, name: p?.supplierName });
-      return !!want && k === want;
+      return !!want && matchTarget(idx, new Map([[want, want]]), { username: p?.supplierUsername, no: p?.supplierNo, name: p?.supplierName }) !== undefined;
     })
     .slice()
     .sort((a, b) => String(b.createdAt || b.payDate || '').localeCompare(String(a.createdAt || a.payDate || '')));
@@ -251,8 +265,7 @@ export const computePurchaseCents = (owner: string, targets: Set<string>): Map<s
   const { idx, targetFor } = buildTargetIndex(targets);
   const bills: any[] = readJson(billDetailKey(owner), []) || [];
   bills.forEach(b => {
-    const k = idx.identity({ username: b?.customerUsername, no: b?.customerNo, name: b?.customerName });
-    const t = k ? targetFor.get(k) : undefined;
+    const t = matchTarget(idx, targetFor, { username: b?.customerUsername, no: b?.customerNo, name: b?.customerName });
     if (!t) return;
     per.set(t, (per.get(t) || 0) + toCents(b?.totalAmount));
   });
@@ -266,8 +279,7 @@ const computeReceivedCents = (owner: string, targets: Set<string>, idNameMap: Re
   const recs: any[] = readJson(receiptsKey(owner), []) || [];
   recs.forEach(r => {
     const mappedName = r?.customerId ? trimName(idNameMap[r.customerId]) : '';
-    const k = idx.identity({ username: r?.customerUsername, no: r?.customerNo, name: mappedName || trimName(r?.customerName) });
-    const t = k ? targetFor.get(k) : undefined;
+    const t = matchTarget(idx, targetFor, { username: r?.customerUsername, no: r?.customerNo, name: mappedName || trimName(r?.customerName) });
     if (!t) return;
     const e = per.get(t) || { cents: 0, count: 0 };
     e.cents += toCents(r?.amount); e.count += 1;
@@ -285,9 +297,9 @@ export const makeReceiptMatcher = (custName: string, custId?: string, idNameMap:
   return (r: any): boolean => {
     if (id && trimName(r?.customerId) === id) return true;
     if (nm && trimName(r?.customerName) === nm) return true;
+    if (!want) return false;
     const mappedName = r?.customerId ? trimName(idNameMap[r.customerId]) : '';
-    const k = idx.identity({ username: r?.customerUsername, no: r?.customerNo, name: mappedName || trimName(r?.customerName) });
-    return !!want && k === want;
+    return matchTarget(idx, new Map([[want, want]]), { username: r?.customerUsername, no: r?.customerNo, name: mappedName || trimName(r?.customerName) }) !== undefined;
   };
 };
 

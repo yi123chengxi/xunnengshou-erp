@@ -142,6 +142,8 @@ const PaymentRequestPage: React.FC = () => {
   const [approveTarget, setApproveTarget] = useState<PaymentRequestRec | null>(null);
   const [approveDebit, setApproveDebit] = useState('');
   const [approveCredit, setApproveCredit] = useState('银行存款');
+  // 收款方账户详情弹窗（列表「收款方」列点击公司标签打开）
+  const [accountDetailTarget, setAccountDetailTarget] = useState<PaymentRequestRec | null>(null);
   const [formDebit, setFormDebit] = useState('应付账款');
   const [formCredit, setFormCredit] = useState('银行存款');
 
@@ -1213,7 +1215,8 @@ const PaymentRequestPage: React.FC = () => {
     { title: '申请金额', dataIndex: 'amount', key: 'amount', width: 110, align: 'right', render: v => <Text strong style={{ color: PRIMARY }}>¥{Number(v).toLocaleString('zh-CN', { minimumFractionDigits: 2 })}</Text> },
     { title: '收款方', key: 'recv', width: 200, render: (_v, r) => (
       <div>
-        <div>{r.supplierName ? <Tag color="blue">{r.supplierName}</Tag> : r.recvAccountName}</div>
+        {/* 公司名可点击 → 弹窗查看收款账户详情（含支行名称，字段带复制按钮） */}
+        <div>{r.supplierName ? <Tag color="blue" style={{ cursor: 'pointer' }} onClick={() => setAccountDetailTarget(r)}>{r.supplierName}</Tag> : r.recvAccountName}</div>
         <div style={{ fontSize: 11, color: '#999' }}>{recvSummary(r)}</div>
       </div>
     ) },
@@ -1571,6 +1574,35 @@ const PaymentRequestPage: React.FC = () => {
             </div>
             <div style={{ marginTop: 12, fontSize: 11, color: '#999' }}>支付后将写入日常记账（{payTarget.category}）、付款账户银行明细{payTarget.source === 'supplier' ? '与供应商已付货款明细' : ''}</div>
           </div>
+        )}
+      </Modal>
+
+      {/* ==================== 收款方账户详情弹窗（收款方列点击打开；账户名称/银行账户带复制按钮） ==================== */}
+      <Modal
+        title={<span style={{ color: PRIMARY }}><BankOutlined style={{ marginRight: 8 }} />收款账户详情</span>}
+        open={!!accountDetailTarget}
+        onCancel={() => setAccountDetailTarget(null)}
+        footer={<Button onClick={() => setAccountDetailTarget(null)}>关闭</Button>}
+        width={560}
+      >
+        {accountDetailTarget && (
+          <Descriptions column={2} size="small" bordered>
+            {accountDetailTarget.supplierName && <Descriptions.Item label="收款方" span={2}><Tag color="blue">{accountDetailTarget.supplierName}</Tag></Descriptions.Item>}
+            <Descriptions.Item label="收款方式">{accountDetailTarget.recvType === 'bank' ? '银行账户' : '收款码'}</Descriptions.Item>
+            <Descriptions.Item label="账户名称">
+              {/* copyable：Typography 复制按钮，clipboard 不可用时内部自动回退 execCommand（HTTP 环境可用） */}
+              <Text copyable={{ text: accountDetailTarget.recvAccountName }}>{accountDetailTarget.recvAccountName}</Text>
+            </Descriptions.Item>
+            {accountDetailTarget.recvType === 'bank' ? (<>
+              <Descriptions.Item label="开户银行">{accountDetailTarget.recvBankName || '—'}</Descriptions.Item>
+              <Descriptions.Item label="支行名称">{accountDetailTarget.recvBranchName || '—'}</Descriptions.Item>
+              <Descriptions.Item label="银行账户" span={2}>
+                <Text copyable={{ text: accountDetailTarget.recvBankAccount || '' }} style={{ fontFamily: 'monospace' }}>{accountDetailTarget.recvBankAccount || '—'}</Text>
+              </Descriptions.Item>
+            </>) : (
+              <Descriptions.Item label="收款码" span={2}>{accountDetailTarget.recvQrcode ? <Image src={accountDetailTarget.recvQrcode} width={90} height={90} style={{ objectFit: 'cover' }} /> : '—'}</Descriptions.Item>
+            )}
+          </Descriptions>
         )}
       </Modal>
 

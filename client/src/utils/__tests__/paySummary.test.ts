@@ -117,6 +117,36 @@ describe('computePurchaseCents 采购总额', () => {
     refreshCustomerPurchase(OWNER, ['', '   ']);
     expect(Object.keys(loadCustomerSummary(OWNER)).length).toBe(0);
   });
+
+  it('客户公司含子账号：账单行凭证存子/孙账号也计入同一主体（生产全为0回归）', () => {
+    localStorage.setItem('registeredUsers', JSON.stringify([
+      { username: 'm1', companyName: '甲公司新名', companyShortName: '甲公司', companyNo: 'N1' },
+      { username: 's1', isSubAccount: true, parentAccount: 'm1', companyName: '甲公司新名' },
+      { username: 's2', isSubAccount: true, parentAccount: 's1', companyName: '甲公司新名' },
+    ]));
+    put(K_BILLS, [
+      { customerName: '甲公司新名', customerUsername: 'm1', totalAmount: 100 },
+      { customerName: '甲公司新名', customerUsername: 's1', totalAmount: 50 },
+      { customerName: '甲公司旧名', totalAmount: 25 },
+      { customerName: '甲公司新名', customerUsername: 's2', totalAmount: 12.5 },
+    ]);
+    refreshCustomerPurchase(OWNER, ['甲公司新名']);
+    expect(loadCustomerSummary(OWNER)['甲公司新名'].purchaseTotal).toBe(18750);
+    expect(computeCustomerPurchaseCents(OWNER, '甲公司新名')).toBe(18750);
+  });
+
+  it('同名多个独立账号时行凭证被补到另一账号，名称身份键兜底仍计入', () => {
+    localStorage.setItem('registeredUsers', JSON.stringify([
+      { username: 'a1', companyName: '星尚鞋业', companyNo: 'A1N' },
+      { username: 'a2', companyName: '星尚鞋业', companyNo: 'A2N' },
+    ]));
+    localStorage.setItem('company_renames', '[]');
+    put(K_BILLS, [
+      { customerName: '星尚鞋业', customerUsername: 'a2', totalAmount: 80 },
+      { customerName: '星尚鞋业', totalAmount: 20 },
+    ]);
+    expect(computeCustomerPurchaseCents(OWNER, '星尚鞋业')).toBe(10000);
+  });
 });
 
 describe('已收货款与收款明细判定', () => {

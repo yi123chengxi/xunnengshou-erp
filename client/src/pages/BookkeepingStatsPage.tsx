@@ -32,9 +32,11 @@ const BookkeepingStatsPage: React.FC = () => {
 
   const goBack = () => {
     const p = location.pathname;
-    if (p.startsWith('/purchaser/')) navigate('/purchaser/finance/daily-bookkeeping');
-    else if (p.startsWith('/factory/')) navigate('/factory/finance/daily-bookkeeping');
-    else navigate('/finance/daily-bookkeeping');
+    const prefix = p.startsWith('/purchaser/') ? '/purchaser' : p.startsWith('/factory/') ? '/factory' : '';
+    // 从简易账薄「日常记账」页签进入（携带来源标记）→ 返回简易账薄（其默认页签即日常记账）；
+    // 从独立日常记账页进入 → 仍返回独立页
+    if ((location.state as any)?.fromSimpleLedger) navigate(`${prefix}/finance/simple-ledger`);
+    else navigate(`${prefix}/finance/daily-bookkeeping`);
   };
 
   const allRecords = useMemo<BookRecord[]>(() => {
@@ -274,7 +276,8 @@ const BookkeepingStatsPage: React.FC = () => {
   );
 
   return (
-    <div style={{ padding: 16 }}>
+    // 页内纵向滚动：标签页激活态下外层 Content 为 overflow:hidden，高度撑满+自身滚动条才能看到全部图表
+    <div style={{ padding: 16, height: '100%', overflowY: 'auto' }}>
       {/* 顶部导航 */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <Space>

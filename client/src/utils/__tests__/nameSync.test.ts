@@ -98,3 +98,52 @@ describe('buildCredIndex 展示名与同主体判定', () => {
     expect(idx.isSameParty('甲公司新名', '  ')).toBe(false);
   });
 });
+
+describe('buildCredIndex 主/子账号同一主体归一（生产回归：客户公司含子账号致采购总额全为0）', () => {
+  /** m1 主账号 + s1（子）+ s2（孙，多级链）共用公司名；orphan 父账号不在表内（断链） */
+  const seedFamily = () => {
+    localStorage.clear();
+    localStorage.setItem('registeredUsers', JSON.stringify([
+      { username: 'm1', companyName: '丙公司', companyNo: 'N9' },
+      { username: 's1', isSubAccount: true, parentAccount: 'm1', companyName: '丙公司' },
+      { username: 's2', isSubAccount: true, parentAccount: 's1', companyName: '丙公司' },
+      { username: 'orphan', isSubAccount: true, parentAccount: 'ghost', companyName: '断链公司' },
+    ]));
+    localStorage.setItem('company_renames', '[]');
+  };
+
+  it('同名候选全在同一主账号链下不再判歧义，解析为主账号', () => {
+    seedFamily();
+    const idx = buildCredIndex();
+    expect(idx.identityOfName('丙公司')).toBe('u:m1');
+    expect(idx.credOfName('丙公司')).toEqual({ username: 'm1', companyNo: 'N9' });
+  });
+
+  it('子账号/多级孙账号凭证归一为主账号身份键', () => {
+    seedFamily();
+    const idx = buildCredIndex();
+    expect(idx.identity({ username: 's1' })).toBe('u:m1');
+    expect(idx.identity({ username: 's2' })).toBe('u:m1');
+    expect(idx.identity({ username: 's1' })).toBe(idx.identityOfName('丙公司'));
+    expect(idx.isSameParty('丙公司', '断链公司')).toBe(false);
+  });
+
+  it('断链子账号（父账号不在表内）就地停止不归一，身份键仍为自身', () => {
+    seedFamily();
+    const idx = buildCredIndex();
+    expect(idx.identity({ username: 'orphan' })).toBe('u:orphan');
+    expect(idx.identityOfName('断链公司')).toBe('u:orphan');
+  });
+
+  it('同公司名下混合独立账号与家族账号仍判歧义，禁止归到任一账号', () => {
+    localStorage.clear();
+    localStorage.setItem('registeredUsers', JSON.stringify([
+      { username: 'm1', companyName: '丁公司' },
+      { username: 's1', isSubAccount: true, parentAccount: 'm1', companyName: '丁公司' },
+      { username: 'x9', companyName: '丁公司' },
+    ]));
+    localStorage.setItem('company_renames', '[]');
+    const idx = buildCredIndex();
+    expect(idx.identityOfName('丁公司')).toBe('n:丁公司');
+  });
+});

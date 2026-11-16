@@ -978,9 +978,11 @@ const DailyBookkeepingPage: React.FC<{ flush?: boolean }> = ({ flush = false }) 
           <Space style={{ display: 'flex', alignItems: 'center' }}>
             <Button icon={<FundOutlined />} onClick={() => {
               const p = location.pathname;
-              if (p.startsWith('/purchaser/')) navigate('/purchaser/finance/daily-bookkeeping-stats');
-              else if (p.startsWith('/factory/')) navigate('/factory/finance/daily-bookkeeping-stats');
-              else navigate('/finance/daily-bookkeeping-stats');
+              // 携带来源标记：从简易账薄内嵌页进入时，统计分析页的「返回日常记账」应回到简易账薄的日常记账页签
+              const st = { state: { fromSimpleLedger: flush } };
+              if (p.startsWith('/purchaser/')) navigate('/purchaser/finance/daily-bookkeeping-stats', st);
+              else if (p.startsWith('/factory/')) navigate('/factory/finance/daily-bookkeeping-stats', st);
+              else navigate('/finance/daily-bookkeeping-stats', st);
             }}>统计分析</Button>
             <Button icon={<DownloadOutlined />} onClick={handleExport}>导出</Button>
             <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>新增记账</Button>

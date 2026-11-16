@@ -184,6 +184,15 @@ const emptyStock = (): StockRecord => ({
   commission: 0, person: '', foreignTeam: '',
 });
 
+// 材质下拉空列表引导：材质选项来自「工价管理」工价记录与已有记录回填，两处都无时下拉全空，
+// 需在 notFoundContent 中给出新增材质的路径，避免用户以为无法选择而卡住
+const materialEmptyHint = (path: string) => (
+  <div style={{ padding: '8px 10px', fontSize: 12, color: '#8c8c8c', lineHeight: '20px' }}>
+    <div style={{ color: '#595959' }}>暂无可选材质</div>
+    <div>{path}</div>
+  </div>
+);
+
 const StockTab: React.FC = () => {
   const owner = getDataOwner();
   const sk = SK(owner);
@@ -361,7 +370,13 @@ const StockTab: React.FC = () => {
   const save = (list: StockRecord[]) => { setRecords(list); writeJson(sk.stock, list); };
   const reload = () => { setRecords(safeJson<StockRecord[]>(sk.stock, [])); setWageRates(safeJson<StockWageRate[]>(sk.wage, [])); setPackGroups(safeJson<PackGroup[]>(sk.group, [])); };
   useEffect(() => { reload(); }, [owner]);
-  useEffect(() => { const fn = () => reload(); window.addEventListener('storage', fn); return () => window.removeEventListener('storage', fn); }, [sk.stock]);
+  // 原生 storage 事件不因同页自身写入触发：工价管理页签保存后广播 wage-changed 重读，
+  // sync-data-updated 覆盖他端浏览器同步落地的工价，否则材质下拉须刷新浏览器才更新
+  useEffect(() => {
+    const fn = () => reload();
+    ['storage', 'wage-changed', 'sync-data-updated'].forEach(ev => window.addEventListener(ev, fn));
+    return () => { ['storage', 'wage-changed', 'sync-data-updated'].forEach(ev => window.removeEventListener(ev, fn)); };
+  }, [sk.stock]);
   // 挂载时异步加载导入数据源 + 监听变更事件
   useEffect(() => {
     const refresh = () => setOlRecords(readOLSync(owner));
@@ -383,6 +398,8 @@ const StockTab: React.FC = () => {
   const teamRateMap = useMemo(() => { const m: Record<string, number> = {}; wageRates.forEach(w => { if (w.teamRate) m[w.material] = w.teamRate; }); return m; }, [wageRates]);
   const inspectors = useMemo(() => {
     const s = new Set<string>();
+    // 候选纳入本租户全部成员（主账号+子账号），以便质检员可选他人；仍默认本人（见 openAdd）
+    loadTenantUsers().forEach(u => { const n = tenantUserDisplayName(u); if (n) s.add(n); });
     packGroups.forEach(g => { if (g.inspector) s.add(g.inspector); });
     records.forEach(r => { if (r.qcInspector) s.add(r.qcInspector); });
     const cur = getDisplayName();
@@ -776,7 +793,7 @@ const StockTab: React.FC = () => {
             <Col span={6}><Form.Item name="productCode" label="货号"><Input placeholder="如 9001" /></Form.Item></Col>
             <Col span={6}><Form.Item name="quantity" label="数量" rules={[{ required: true }]}><InputNumber min={0} style={{ width: '100%' }} /></Form.Item></Col>
             <Col span={6}><Form.Item name="qcInspector" label="质检员"><Select showSearch allowClear options={inspectors.map(x => ({ value: x, label: x }))} placeholder="选择质检员" /></Form.Item></Col>
-            <Col span={6}><Form.Item name="material" label="材质" rules={[{ required: true, message: '必填' }]}><Select showSearch allowClear options={materials.map(x => ({ value: x, label: x }))} placeholder="选择材质" onChange={handleMaterialChange} /></Form.Item></Col>
+            <Col span={6}><Form.Item name="material" label="材质" rules={[{ required: true, message: '必填' }]}><Select showSearch allowClear options={materials.map(x => ({ value: x, label: x }))} notFoundContent={materialEmptyHint('新增材质路径：切换到本页「工价管理」页签 → 备货单工价 →「新增工价」填写材质名称保存；或到「导入数据源」页签导入含材质的标签数据，再回到本页用「更新信息 → 更新材质」回填')} placeholder="选择材质" onChange={handleMaterialChange} /></Form.Item></Col>
           </Row>
           {wagePreview && (
             <div style={{ background: '#f6ffed', border: '1px solid #b7eb8f', padding: '8px 12px', marginBottom: 12, fontSize: 12, color: '#52c41a' }}>
@@ -1071,9 +1088,16 @@ const UrgentTab: React.FC = () => {
   const save = (l: UrgentRecord[]) => { setRecords(l); writeJson(sk.urgent, l); };
   const reload = () => { setRecords(safeJson<UrgentRecord[]>(sk.urgent, [])); setWageRates(safeJson<UrgentWageRate[]>(sk.urgentWage, [])); setPackGroups(safeJson<PackGroup[]>(sk.group, [])); };
   useEffect(() => { reload(); }, [owner]);
-  useEffect(() => { const fn = () => reload(); window.addEventListener('storage', fn); return () => window.removeEventListener('storage', fn); }, [sk.urgent]);
+  // 同备货单统计：工价管理同页写入不触发 storage 事件，凭 wage-changed/sync-data-updated 重读急采工价
+  useEffect(() => {
+    const fn = () => reload();
+    ['storage', 'wage-changed', 'sync-data-updated'].forEach(ev => window.addEventListener(ev, fn));
+    return () => { ['storage', 'wage-changed', 'sync-data-updated'].forEach(ev => window.removeEventListener(ev, fn)); };
+  }, [sk.urgent]);
   const inspectors = useMemo(() => {
     const s = new Set<string>();
+    // 候选纳入本租户全部成员（主账号+子账号），以便质检员可选他人；仍默认本人
+    loadTenantUsers().forEach(u => { const n = tenantUserDisplayName(u); if (n) s.add(n); });
     packGroups.forEach(g => { if (g.inspector) s.add(g.inspector); });
     records.forEach(r => { if (r.inspector) s.add(r.inspector); });
     const cur = getDisplayName(); if (cur && cur !== '未知') s.add(cur);
@@ -1354,7 +1378,7 @@ const UrgentTab: React.FC = () => {
             <Col span={6}><Form.Item name="quantity" label="数量" rules={[{ required: true }]}><InputNumber min={0} style={{ width: '100%' }} /></Form.Item></Col>
             <Col span={6}><Form.Item name="inspector" label="质检员"><Select showSearch allowClear options={inspectors.map(x => ({ value: x, label: x }))} placeholder="选择质检员" /></Form.Item></Col>
             <Col span={6}><Form.Item name="inspectorId" label="质检员编号"><Input /></Form.Item></Col>
-            <Col span={6}><Form.Item name="material" label="材质" rules={[{ required: true, message: '必填' }]}><Select showSearch allowClear options={materials.map(x => ({ value: x, label: x }))} placeholder="选择材质" onChange={handleMaterialChange} /></Form.Item></Col>
+            <Col span={6}><Form.Item name="material" label="材质" rules={[{ required: true, message: '必填' }]}><Select showSearch allowClear options={materials.map(x => ({ value: x, label: x }))} notFoundContent={materialEmptyHint('新增材质路径：切换到本页「工价管理」页签 → 急采工价 →「新增工价」填写材质名称保存；或到「导入数据源」页签导入含材质的标签数据，再回到本页用「更新信息 → 更新材质」回填')} placeholder="选择材质" onChange={handleMaterialChange} /></Form.Item></Col>
           </Row>
           {wagePreview && (
             <div style={{ background: '#f6ffed', border: '1px solid #b7eb8f', padding: '8px 12px', marginBottom: 12, fontSize: 12, color: '#52c41a' }}>
@@ -1380,7 +1404,7 @@ const WageTab: React.FC = () => {
   // ---- 备货单工价 ----
   const [stockRates, setStockRates] = useState<StockWageRate[]>(() => safeJson<StockWageRate[]>(sk.wage, []));
   const [stockVisible, setStockVisible] = useState(false); const [stockEditing, setStockEditing] = useState<StockWageRate | null>(null); const [stockForm] = Form.useForm();
-  const stockSave = (l: StockWageRate[]) => { setStockRates(l); writeJson(sk.wage, l); };
+  const stockSave = (l: StockWageRate[]) => { setStockRates(l); writeJson(sk.wage, l); window.dispatchEvent(new Event('wage-changed')); };
   const stockOpenAdd = () => { setStockEditing(null); stockForm.setFieldsValue({ material: '', rate: 0, packRate: 0, teamRate: 0 }); setStockVisible(true); };
   const stockOpenEdit = (r: StockWageRate) => { setStockEditing(r); stockForm.setFieldsValue({ material: r.material, rate: r.rate, packRate: r.packRate || 0, teamRate: r.teamRate || 0 }); setStockVisible(true); };
   const stockHandleSave = () => { stockForm.validateFields().then(v => { const rec: StockWageRate = { key: stockEditing?.key || genKey('SWR'), material: v.material, rate: v.rate, packRate: Number(v.packRate) || 0, teamRate: Number(v.teamRate) || 0 }; const list = stockEditing ? stockRates.map(x => x.key === stockEditing.key ? rec : x) : [rec, ...stockRates]; stockSave(list); setStockVisible(false); message.success(stockEditing ? '已更新' : '已新增'); }).catch(() => {}); };
@@ -1394,7 +1418,7 @@ const WageTab: React.FC = () => {
   // ---- 急采工价 ----
   const [urgentRates, setUrgentRates] = useState<UrgentWageRate[]>(() => safeJson<UrgentWageRate[]>(sk.urgentWage, []));
   const [urgentVisible, setUrgentVisible] = useState(false); const [urgentEditing, setUrgentEditing] = useState<UrgentWageRate | null>(null); const [urgentForm] = Form.useForm();
-  const urgentSave = (l: UrgentWageRate[]) => { setUrgentRates(l); writeJson(sk.urgentWage, l); };
+  const urgentSave = (l: UrgentWageRate[]) => { setUrgentRates(l); writeJson(sk.urgentWage, l); window.dispatchEvent(new Event('wage-changed')); };
   const urgentOpenAdd = () => { setUrgentEditing(null); urgentForm.setFieldsValue({ material: '', rate: 0, packRate: 0, teamRate: 0 }); setUrgentVisible(true); };
   const urgentOpenEdit = (r: UrgentWageRate) => { setUrgentEditing(r); urgentForm.setFieldsValue({ material: r.material, rate: r.rate, packRate: r.packRate || 0, teamRate: r.teamRate || 0 }); setUrgentVisible(true); };
   const urgentHandleSave = () => { urgentForm.validateFields().then(v => { const rec: UrgentWageRate = { key: urgentEditing?.key || genKey('UWR'), material: v.material, rate: v.rate, packRate: Number(v.packRate) || 0, teamRate: Number(v.teamRate) || 0 }; const list = urgentEditing ? urgentRates.map(x => x.key === urgentEditing.key ? rec : x) : [rec, ...urgentRates]; urgentSave(list); setUrgentVisible(false); message.success(urgentEditing ? '已更新' : '已新增'); }).catch(() => {}); };
@@ -1408,7 +1432,7 @@ const WageTab: React.FC = () => {
   // ---- 配货员工价 ----
   const [pickRates, setPickRates] = useState<PickWageRate[]>(() => safeJson<PickWageRate[]>(sk.pickWage, []));
   const [pickVisible, setPickVisible] = useState(false); const [pickEditing, setPickEditing] = useState<PickWageRate | null>(null); const [pickForm] = Form.useForm();
-  const pickSave = (l: PickWageRate[]) => { setPickRates(l); writeJson(sk.pickWage, l); };
+  const pickSave = (l: PickWageRate[]) => { setPickRates(l); writeJson(sk.pickWage, l); window.dispatchEvent(new Event('wage-changed')); };
   const pickOpenAdd = () => { setPickEditing(null); pickForm.setFieldsValue({ rate: 0 }); setPickVisible(true); };
   const pickOpenEdit = (r: PickWageRate) => { setPickEditing(r); pickForm.setFieldsValue({ rate: r.rate }); setPickVisible(true); };
   const pickHandleSave = () => { pickForm.validateFields().then(v => { const rec: PickWageRate = { key: pickEditing?.key || genKey('PWR'), rate: v.rate }; const list = pickEditing ? pickRates.map(x => x.key === pickEditing.key ? rec : x) : [rec, ...pickRates]; pickSave(list); setPickVisible(false); message.success(pickEditing ? '已更新' : '已新增'); }).catch(() => {}); };
@@ -1763,7 +1787,15 @@ const OrderLabelTab: React.FC = () => {
     window.addEventListener('resize', calc);
     return () => { clearTimeout(t1); clearTimeout(t2); window.removeEventListener('resize', calc); };
   }, [pageSize]);
-  const wageRates = useMemo<StockWageRate[]>(() => safeJson<StockWageRate[]>(sk.wage, []), [sk.wage]);
+  // 工价变更 tick：本页签的 wageRates 是派生读取，同页写入不触发 storage 事件，
+  // 凭 wage-changed/sync-data-updated 递增 tick 驱动重算，否则材质下拉须刷新浏览器才更新
+  const [wageTick, setWageTick] = useState(0);
+  useEffect(() => {
+    const fn = () => setWageTick(t => t + 1);
+    ['wage-changed', 'sync-data-updated'].forEach(ev => window.addEventListener(ev, fn));
+    return () => { ['wage-changed', 'sync-data-updated'].forEach(ev => window.removeEventListener(ev, fn)); };
+  }, []);
+  const wageRates = useMemo<StockWageRate[]>(() => safeJson<StockWageRate[]>(sk.wage, []), [sk.wage, wageTick]);
   const materials = useMemo(() => Array.from(new Set(wageRates.map(w => w.material).filter(Boolean))), [wageRates]);
   const save = (l: OrderLabelRecord[]) => { setRecords(l); writeOL(owner, l); };
   const emptyRec = (): OrderLabelRecord => ({ key: genKey('OL'), orderNo: '', label: '', styleNo: '', quantity: 0, material: '', createdAt: todayIso(), creator: getDisplayName() });
@@ -2014,7 +2046,7 @@ const OrderLabelTab: React.FC = () => {
             <Col span={12}><Form.Item name="label" label="标签" rules={[{ required: true, message: '必填' }]}><Input placeholder="如 洞洞鞋棉鞋" onChange={e => { const mat = matchMaterial(e.target.value); if (mat) form.setFieldValue('material', mat); }} /></Form.Item></Col>
             <Col span={12}><Form.Item name="styleNo" label="款号"><Input placeholder="如 9001" /></Form.Item></Col>
             <Col span={12}><Form.Item name="quantity" label="数量" rules={[{ required: true }]}><InputNumber min={0} style={{ width: '100%' }} /></Form.Item></Col>
-            <Col span={12}><Form.Item name="material" label="材质"><Select showSearch allowClear options={materials.map(x => ({ value: x, label: x }))} placeholder="自动匹配或手动选择" /></Form.Item></Col>
+            <Col span={12}><Form.Item name="material" label="材质"><Select showSearch allowClear options={materials.map(x => ({ value: x, label: x }))} notFoundContent={materialEmptyHint('新增材质路径：先到「工价管理」页签 → 备货单工价 →「新增工价」填写材质名称保存，此处即可选择；也可直接在「标签」中输入材质关键词自动匹配')} placeholder="自动匹配或手动选择" /></Form.Item></Col>
           </Row>
         </Form>
       </Modal>
