@@ -15459,9 +15459,9 @@ const handleBatchAttrsConfirm = () => {
                       return (
                         <div>
 
-                          {/* 商品表格 */}
-                          <div style={{ border: '1px solid #f0f0f0', borderRadius: 6, overflow: 'hidden' }}>
-                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                          {/* 商品表格：小屏弹窗宽度不足时容器横向滚动（原 overflow:hidden 会裁掉右侧列且滚动条失效） */}
+                          <div style={{ border: '1px solid #f0f0f0', borderRadius: 6, overflowX: 'auto', overflowY: 'hidden' }}>
+                            <table className="order-items-scroll-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                               <thead>
                                 <tr style={{ background: '#fafafa' }}>
                                   <th style={{ padding: '8px 10px', textAlign: 'center', borderBottom: '1px solid #f0f0f0', width: 36 }}>
@@ -16446,9 +16446,9 @@ const handleBatchAttrsConfirm = () => {
                     return (
                       <div>
 
-                        {/* 商品表格 */}
-                        <div style={{ border: '1px solid #f0f0f0', borderRadius: 6, overflow: 'hidden' }}>
-                          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                        {/* 商品表格：小屏弹窗宽度不足时容器横向滚动（原 overflow:hidden 会裁掉右侧列且滚动条失效） */}
+                        <div style={{ border: '1px solid #f0f0f0', borderRadius: 6, overflowX: 'auto', overflowY: 'hidden' }}>
+                          <table className="order-items-scroll-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                             <thead>
                               <tr style={{ background: '#fafafa' }}>
                                 {showField('image') && <th style={{ padding: '8px 10px', textAlign: 'center', borderBottom: '1px solid #f0f0f0', width: 50 }}>图片</th>}

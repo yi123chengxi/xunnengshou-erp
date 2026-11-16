@@ -113,6 +113,15 @@ body {
   border-color: var(--primary-hover) !important;
 }
 
+/* 订单编辑/详情/新增弹窗货品明细表：小屏容器横向滚动；
+   左右 padding 由内联 10px 压到 6px，把表格 min-content 地板从 ~812px 降到 ~716px，
+   使 1920 宽屏（容器 ~807px）不再残留 5px 伪溢出，小屏仍可正常横滚 */
+.order-items-scroll-table th,
+.order-items-scroll-table td {
+  padding-left: 6px !important;
+  padding-right: 6px !important;
+}
+
 /* 标签样式 */
 .ant-tag {
   border-radius: 4px !important;
