@@ -619,6 +619,19 @@ export async function fetchServerDataset(key: string): Promise<{ json: string; u
   }
 }
 
+/** 拉服务端数据集清单（key→updatedAt，已按读权限过滤）：供墓碑/错桶等探针提前跳过
+ *  「不存在或无权读」的键，避免盲探刷 404/403 控制台噪声；失败返回空清单（探针本轮跳过） */
+async function fetchSyncMeta(): Promise<Record<string, number>> {
+  try {
+    const res = await fetchWithTimeout(`${API_BASE}/sync/meta`, { headers: authHeaders() }, 5000);
+    if (res.status === 401) { handleSyncAuthRequired(); return {}; }
+    if (!res.ok) return {};
+    return (await res.json()) || {};
+  } catch {
+    return {};
+  }
+}
+
 /**
  * 跨租户键安全追加（防擦除不变量）：
  * 先取服务端现有内容，与本地、待追加行按 id 做并集（服务端行优先保留、仅补缺失行），
@@ -734,8 +747,11 @@ function mergeRegisteredUsers(serverJson: string): any[] | null {
  * sys_deleted_users={username:删除时刻}，这里拉取墓碑并剪掉本地命中且 _createTs
  * 不晚于删除时刻的行（同名重建 _createTs 晚于删除时刻的放行），返回剪掉的条数。
  */
-export async function pruneTombstonedUsers(): Promise<number> {
+export async function pruneTombstonedUsers(meta?: Record<string, number> | null): Promise<number> {
   try {
+    // meta 清单（服务端按读权限过滤）里没有墓碑键 = 账本尚未创建，跳过探测，
+    // 避免每轮拉取都打一条 404 控制台噪声
+    if (meta && !('sys_deleted_users' in meta)) return 0;
     const rec = await fetchServerDataset('sys_deleted_users');
     if (!rec || !rec.json) return 0;
     let ledger: Record<string, number> = {};
@@ -835,7 +851,7 @@ let strandedRepairRunning = false;
  *   再申报删除+上传空数组排空来源键（不排空会被永不缩水并集复活）。
  * 幂等：来源键排空后后续会话 fetch 到空数组自动跳过。
  */
-export async function repairStrandedOwnerBuckets(): Promise<number> {
+export async function repairStrandedOwnerBuckets(meta?: Record<string, number> | null): Promise<number> {
   if (strandedRepairRunning) return 0;
   strandedRepairRunning = true;
   try {
@@ -843,6 +859,9 @@ export async function repairStrandedOwnerBuckets(): Promise<number> {
     if (!owner) return 0;
     const members = tenantMembersOf(owner).filter(m => m !== owner);
     if (members.length === 0) return 0;
+    // 凭 meta 清单跳过「不存在或本账号无权读」的成员桶：旧实现逐键盲探，
+    // 每轮拉取刷出一串 404/403 控制台噪声（服务端鉴权拒绝本就是他桶私有的正确行为）
+    const metaMap = meta || (await fetchSyncMeta());
     const deps = {
       safeSetItem: (k: string, v: string) => { try { getOriginalSetItem()(k, v); } catch { /* ignore */ } },
       declareShrink,
@@ -857,6 +876,7 @@ export async function repairStrandedOwnerBuckets(): Promise<number> {
       // 服务端错桶（其他设备写下）：主账号端不拉取这些键，必须显式回源
       for (const m of members) {
         const srcKey = `${family}${m}`;
+        if (!(srcKey in metaMap)) continue;
         try {
           const rec = await fetchServerDataset(srcKey);
           if (!rec || !rec.json) continue;
@@ -1223,7 +1243,7 @@ export async function pullAllDatasets(): Promise<number> {
 
   // 注册表本轮更新（如服务端刚完成隶属串联）→ 立即以新隶属跑一次错桶归并：
   // 会话启动 +3s 的维护跑可能早于本次拉取完成、只看到旧隶属而错过收敛窗口
-  if (registryPulled) void repairStrandedOwnerBuckets().catch(() => { /* ignore */ });
+  if (registryPulled) void repairStrandedOwnerBuckets(meta).catch(() => { /* ignore */ });
 
   // 拉取完成后再次闭环对账：服务端拉下的镜像若与本地其他镜像状态分叉，立即对齐
   try { reconcileCooperationPairs(); } catch { /* ignore */ }
@@ -1236,7 +1256,7 @@ export async function pullAllDatasets(): Promise<number> {
   try { if (healReconTerminalLinks()) postFixed++; } catch { /* ignore */ }
   // 删除墓碑剪枝：mergeRegisteredUsers 只增不减，本地陈旧副本里的已删账号行
   // 必须凭服务端墓碑剪掉，否则负责人下拉等成员候选仍能看到它，下次上传还会复活它
-  try { postFixed += await pruneTombstonedUsers(); } catch { /* ignore */ }
+  try { postFixed += await pruneTombstonedUsers(meta); } catch { /* ignore */ }
   if (postFixed > 0) applied++;
 
   // 第二步：本地有但服务端没有的数据集 → 自动上传（首次迁移，仅限当前账号）
@@ -1308,8 +1328,8 @@ export async function pullPermDatasets(): Promise<number> {
   }
   let applied = 0;
   // 先剪掉命中删除墓碑的陈旧行，再跑增量合并（否则 mergeRegisteredUsers 只增不减，
-  // 已删账号永远留在本地下拉里）
-  try { applied += await pruneTombstonedUsers(); } catch { /* ignore */ }
+  // 已删账号永远留在本地下拉里）；传入 meta 避免账本未创建时每轮打 404
+  try { applied += await pruneTombstonedUsers(meta); } catch { /* ignore */ }
   for (const key of Object.keys(meta)) {
     if (!isMyPermKey(key)) continue;
     if (!isSyncKey(key) || !isKeyForCurrentAccount(key)) continue;
