@@ -1,0 +1,137 @@
+/* 全局样式：与 Web 端 antd 设计语言同源（主色 #1677FF / 背景 #F5F6F8 / 卡片白底圆角）
+   designWidth=750：此处 px 数值即 rpx 数值 */
+page {
+  background: #f5f6f8;
+  font-size: 28px;
+  color: #1f2733;
+  font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+}
+
+.card {
+  background: #fff;
+  border-radius: 16px;
+  margin: 20px 24px;
+  padding: 24px;
+  box-shadow: 0 2px 8px rgba(31, 39, 51, 0.04);
+}
+
+.card-title {
+  font-size: 30px;
+  font-weight: 600;
+  margin-bottom: 16px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 0;
+}
+
+.muted {
+  color: #8a94a6;
+  font-size: 24px;
+}
+
+.amount {
+  color: #f5222d;
+  font-weight: 600;
+}
+
+.tag {
+  display: inline-block;
+  padding: 2px 12px;
+  border-radius: 6px;
+  font-size: 22px;
+  line-height: 32px;
+}
+.tag-orange { background: #fff7e6; color: #fa8c16; }
+.tag-blue { background: #e6f4ff; color: #1677ff; }
+.tag-red { background: #fff1f0; color: #f5222d; }
+.tag-green { background: #f6ffed; color: #52c41a; }
+.tag-cyan { background: #e6fffb; color: #13c2c2; }
+.tag-gray { background: #f0f0f0; color: #8c8c8c; }
+
+.btn-primary {
+  background: #1677ff;
+  color: #fff;
+  border-radius: 12px;
+  font-size: 30px;
+  line-height: 84px;
+  text-align: center;
+}
+.btn-primary::after { border: none; }
+.btn-danger {
+  background: #fff1f0;
+  color: #f5222d;
+  border-radius: 12px;
+  font-size: 30px;
+  line-height: 84px;
+  text-align: center;
+}
+.btn-danger::after { border: none; }
+
+.input {
+  background: #f5f6f8;
+  border-radius: 12px;
+  padding: 18px 20px;
+  font-size: 28px;
+  margin-bottom: 20px;
+}
+
+.textarea {
+  background: #f5f6f8;
+  border-radius: 12px;
+  padding: 18px 20px;
+  font-size: 28px;
+  width: 100%;
+  min-height: 140px;
+  box-sizing: border-box;
+}
+
+.empty {
+  text-align: center;
+  color: #8a94a6;
+  font-size: 26px;
+  padding: 80px 0;
+}
+
+.segment {
+  display: flex;
+  background: #eef1f5;
+  border-radius: 12px;
+  padding: 6px;
+  margin: 20px 24px 0;
+}
+.segment-item {
+  flex: 1;
+  text-align: center;
+  font-size: 26px;
+  line-height: 56px;
+  color: #5a6d85;
+  border-radius: 10px;
+}
+.segment-item.active {
+  background: #fff;
+  color: #1677ff;
+  font-weight: 600;
+}
+
+.grid {
+  display: flex;
+  flex-wrap: wrap;
+}
+.grid-item {
+  width: 25%;
+  text-align: center;
+  padding: 20px 0;
+}
+.grid-icon {
+  font-size: 44px;
+  line-height: 56px;
+}
+.grid-label {
+  font-size: 24px;
+  color: #5a6d85;
+  margin-top: 8px;
+}

@@ -1,0 +1,19 @@
+{
+  "miniprogramRoot": "dist/weapp/",
+  "projectname": "xns-erp-mini",
+  "description": "讯能手ERP微信小程序",
+  "appid": "wx0000000000000000",
+  "compileType": "miniprogram",
+  "libVersion": "3.5.5",
+  "setting": {
+    "urlCheck": false,
+    "es6": true,
+    "enhance": true,
+    "postcss": true,
+    "minified": true,
+    "coverView": true,
+    "nodeModules": false,
+    "showShadowRootInWxmlPanel": true
+  },
+  "condition": {}
+}

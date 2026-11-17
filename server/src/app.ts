@@ -27,6 +27,7 @@ import financeReconciliationRoutes from './routes/finance/reconciliation.routes'
 import financeAccountRoutes from './routes/finance/account.routes';
 import dashboardRoutes from './routes/dashboard.routes';
 import authRoutes from './routes/auth.routes';
+import wxRoutes from './routes/wx.routes';
 import syncRoutes, { warmMetaCache } from './routes/sync.routes';
 import jstRoutes from './routes/jst.routes';
 import pushRoutes from './routes/push.routes';
@@ -59,6 +60,8 @@ app.use('/downloads', express.static(path.join(__dirname, '../downloads')));
 // API路由（先挂限流，再挂业务路由）
 app.use('/api/auth/login', rateLimit({ name: 'auth-login', windowMs: 5 * 60_000, max: 30, message: '登录尝试过于频繁，请稍后再试' }));
 app.use('/api/auth', rateLimit({ name: 'auth', windowMs: 60_000, max: 120 }));
+// 微信小程序接口：登录/绑定含微信 code 换取与凭据校验，与 auth 同档限流
+app.use('/api/wx', rateLimit({ name: 'wx', windowMs: 60_000, max: 120 }));
 app.use('/api/sms', rateLimit({ name: 'sms', windowMs: 60_000, max: 60, message: '验证码请求过于频繁，请稍后再试' }));
 // 同步轮询：60s 一轮会拉取多键 + 写回，单 IP 每分钟上限 2400 次以拦截脚本扫描，不拦截正常轮询
 app.use('/api/sync', rateLimit({ name: 'sync', windowMs: 60_000, max: 2400, message: '同步请求过于频繁，请稍后再试' }));
@@ -66,6 +69,7 @@ app.use('/api/sync', rateLimit({ name: 'sync', windowMs: 60_000, max: 2400, mess
 app.use('/api/images', rateLimit({ name: 'images', windowMs: 60_000, max: 300, message: '图片操作过于频繁，请稍后再试' }));
 
 app.use('/api/auth', authRoutes);
+app.use('/api/wx', wxRoutes);
 app.use('/api/sms', smsRoutes);
 app.use('/api/enterprise', enterpriseRoutes);
 app.use('/api/sync', syncRoutes);

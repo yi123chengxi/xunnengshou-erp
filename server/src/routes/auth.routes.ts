@@ -69,6 +69,82 @@ export async function issueToken(username: string, role?: string): Promise<strin
   return signToken(username, finalRole, await resolveOwner(username));
 }
 
+// ============ 凭据三源校验（mock → registered_users → registeredUsers 数据集）============
+/** 所有凭据入口（网页登录 / 短信登录 / 微信小程序绑定）共用；校验顺序不可调整，
+ *  口径与网页登录严格一致：明文直接比对、不校验 status（数据集 status 为中文审核态） */
+export interface CredentialUser { username: string; role: string; name: string; company_name: string }
+export async function verifyCredentials(
+  username: string,
+  password: string,
+): Promise<{ ok: true; user: CredentialUser } | { ok: false; status: number; message: string }> {
+  // 1. mock 用户（演示账号已取消，数组恒空，保留分支以维持三源顺序契约）
+  const mockUser = MOCK_USERS.find(u => u.username === username && u.password === password);
+  if (mockUser) {
+    return { ok: true, user: { username: mockUser.username, role: mockUser.role, name: mockUser.name, company_name: mockUser.company_name } };
+  }
+
+  // 2. registered_users 表
+  const dbUser = await store.getUser(username) as {
+    username: string; password: string; role: string;
+    company_name: string; contact_person: string; status: string;
+  } | undefined;
+  if (dbUser) {
+    if (dbUser.status !== 'active') return { ok: false, status: 403, message: '该账号已被禁用' };
+    let passwordValid = false;
+    if (dbUser.password.startsWith('$2a$') || dbUser.password.startsWith('$2b$')) {
+      passwordValid = await bcrypt.compare(password, dbUser.password);
+    } else {
+      passwordValid = dbUser.password === password;
+    }
+    if (!passwordValid) return { ok: false, status: 401, message: '用户名或密码错误' };
+    return {
+      ok: true,
+      user: {
+        username: dbUser.username,
+        role: dbUser.role,
+        name: dbUser.contact_person || dbUser.company_name || dbUser.username,
+        company_name: dbUser.company_name,
+      },
+    };
+  }
+
+  // 3. Web 端注册账号（全局同步数据集 registeredUsers）：兼容 bcrypt 哈希与历史明文两种存储
+  try {
+    const rec = await store.getDataset('registeredUsers');
+    if (rec) {
+      const users: any[] = JSON.parse(rec.dataset_json || '[]');
+      const hit = Array.isArray(users) ? users.find((u: any) => u && u.username === username) : null;
+      if (hit) {
+        const storedHash = typeof hit.passwordHash === 'string' ? hit.passwordHash : '';
+        const storedPlain = typeof hit.password === 'string' ? hit.password : '';
+        let ok = false;
+        if (storedHash && /^\$2[aby]\$/.test(storedHash)) {
+          ok = await bcrypt.compare(String(password || ''), storedHash);
+        } else if (storedHash) {
+          ok = storedHash === String(password || '');
+        } else if (storedPlain) {
+          ok = storedPlain === String(password || '');
+        }
+        if (!ok) return { ok: false, status: 401, message: '用户名或密码错误' };
+        let role = String(hit.role || 'supplier');
+        if (role === 'supplier,purchaser' || role === 'purchaser,supplier') role = 'both';
+        return {
+          ok: true,
+          user: {
+            username: hit.username,
+            role,
+            name: hit.contactPerson || hit.companyName || hit.displayName || hit.username,
+            company_name: hit.companyName || '',
+          },
+        };
+      }
+    }
+  } catch (e: any) {
+    console.error('[auth] registeredUsers 数据集读取失败:', e.message);
+  }
+  return { ok: false, status: 401, message: '用户名或密码错误' };
+}
+
 // ============ 路由 ============
 const router = Router();
 
@@ -83,111 +159,14 @@ router.post('/login', async (req: Request, res: Response) => {
       res.status(400).json({ code: 400, message: '用户名和密码不能为空' });
       return;
     }
-
-    // 1. 在 mock 用户中查找
-    const mockUser = MOCK_USERS.find(u => u.username === username && u.password === password);
-    if (mockUser) {
-      const token = signToken(mockUser.username, mockUser.role, mockUser.username);
-      res.json({
-        code: 200,
-        data: {
-          token,
-          user: { username: mockUser.username, role: mockUser.role, name: mockUser.name, company_name: mockUser.company_name },
-        },
-        message: '登录成功',
-      });
+    const result = await verifyCredentials(String(username), String(password));
+    if (!result.ok) {
+      res.status(result.status).json({ code: result.status, message: result.message });
       return;
     }
-
-    // 2. 在 registered_users 表中查找
-    const dbUser = await store.getUser(username) as {
-      username: string; password: string; role: string;
-      company_name: string; contact_person: string; status: string;
-    } | undefined;
-
-    if (dbUser) {
-      if (dbUser.status !== 'active') {
-        res.status(403).json({ code: 403, message: '该账号已被禁用' });
-        return;
-      }
-
-      // 验证密码（支持 bcrypt 和明文两种，兼容历史数据）
-      let passwordValid = false;
-      if (dbUser.password.startsWith('$2a$') || dbUser.password.startsWith('$2b$')) {
-        passwordValid = await bcrypt.compare(password, dbUser.password);
-      } else {
-        passwordValid = dbUser.password === password;
-      }
-
-      if (!passwordValid) {
-        res.status(401).json({ code: 401, message: '用户名或密码错误' });
-        return;
-      }
-
-      const token = signToken(dbUser.username, dbUser.role, await resolveOwner(dbUser.username));
-      res.json({
-        code: 200,
-        data: {
-          token,
-          user: {
-            username: dbUser.username,
-            role: dbUser.role,
-            name: dbUser.contact_person || dbUser.company_name || dbUser.username,
-            company_name: dbUser.company_name,
-          },
-        },
-        message: '登录成功',
-      });
-      return;
-    }
-
-    // 3. Web 端注册账号（全局同步数据集 registeredUsers）：兼容 bcrypt 哈希与历史明文两种存储
-    //    打印客户端等非网页入口必须能登录 Web 注册的账号，否则出现"用户名或密码错误"
-    try {
-      const rec = await store.getDataset('registeredUsers');
-      if (rec) {
-        const users: any[] = JSON.parse(rec.dataset_json || '[]');
-        const hit = Array.isArray(users) ? users.find((u: any) => u && u.username === username) : null;
-        if (hit) {
-          const storedHash = typeof hit.passwordHash === 'string' ? hit.passwordHash : '';
-          const storedPlain = typeof hit.password === 'string' ? hit.password : '';
-          let ok = false;
-          if (storedHash && /^\$2[aby]\$/.test(storedHash)) {
-            ok = await bcrypt.compare(String(password || ''), storedHash);
-          } else if (storedHash) {
-            ok = storedHash === String(password || '');
-          } else if (storedPlain) {
-            // 历史数据：明文密码（登录成功后会随下一次同步被服务端哈希化）
-            ok = storedPlain === String(password || '');
-          }
-          if (!ok) {
-            res.status(401).json({ code: 401, message: '用户名或密码错误' });
-            return;
-          }
-          let role = String(hit.role || 'supplier');
-          if (role === 'supplier,purchaser' || role === 'purchaser,supplier') role = 'both';
-          const token = signToken(hit.username, role, await resolveOwner(hit.username));
-          res.json({
-            code: 200,
-            data: {
-              token,
-              user: {
-                username: hit.username,
-                role,
-                name: hit.contactPerson || hit.companyName || hit.displayName || hit.username,
-                company_name: hit.companyName || '',
-              },
-            },
-            message: '登录成功',
-          });
-          return;
-        }
-      }
-    } catch (e: any) {
-      console.error('[auth] registeredUsers 数据集读取失败:', e.message);
-    }
-
-    res.status(401).json({ code: 401, message: '用户名或密码错误' });
+    const u = result.user;
+    const token = signToken(u.username, u.role, await resolveOwner(u.username));
+    res.json({ code: 200, data: { token, user: u }, message: '登录成功' });
     return;
   } catch (err: any) {
     console.error('[auth] login error:', err.message);
