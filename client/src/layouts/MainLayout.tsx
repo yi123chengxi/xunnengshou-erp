@@ -61,7 +61,7 @@ import { recoverRechargeNotifications } from '../utils/rechargeNotification';
 import { isShopPersonMe } from '../utils/shopScope';
 import { showNativeNotification, isNotificationBlocked, isNotificationTypeEnabled } from '../utils/pushNotification';
 import { showTaskNotify, TASK_NOTIFY_RESHOW_EVENT } from '../utils/taskNotify';
-import { getFinancePendingCounts, isFinancePendingStorageKey } from '../utils/financePending';
+import { getFinancePendingCounts, isFinancePendingStorageKey, FinancePending } from '../utils/financePending';
 
 const { Header, Sider, Content } = Layout;
 const { Text } = Typography;
@@ -332,10 +332,10 @@ const MainLayout: React.FC = () => {
   const allOpenKeys = ['basic-data', 'customer', 'sales', 'production', 'ecommerce', 'inventory', 'finance', 'hr-manage', 'settings', 'jst'];
   const [openKeys, setOpenKeys] = useState<string[]>(allOpenKeys);
   const [isViewOnly, setIsViewOnly] = useState(false);
-  // 财务管理主菜单红色气泡：报销/收付申请/开票申请中属于当前账号的待处理任务数
-  const [financePendingTotal, setFinancePendingTotal] = useState(0);
+  // 财务管理待处理任务气泡：父级显示总数，报销/收付申请/开票申请三个子菜单各自显示本页数量（便于展开后定位待处理页面）
+  const [financePending, setFinancePending] = useState<FinancePending>({ total: 0, reimbursement: 0, paymentRequest: 0, invoiceApply: 0 });
   useEffect(() => {
-    const refresh = () => { try { setFinancePendingTotal(getFinancePendingCounts().total); } catch { /* 忽略 */ } };
+    const refresh = () => { try { setFinancePending(getFinancePendingCounts()); } catch { /* 忽略 */ } };
     refresh();
     const iv = setInterval(refresh, 10000);
     const onStorage = (e: StorageEvent) => { if (isFinancePendingStorageKey(e.key)) refresh(); };
@@ -348,6 +348,19 @@ const MainLayout: React.FC = () => {
       window.removeEventListener('sync-data-updated', onSync);
     };
   }, []);
+  // 财务子菜单项标签：按页面分项挂红色气泡，0 时不显示
+  const financeChildLabel = useCallback((childKey: string, label: string): React.ReactNode => {
+    const n = childKey === 'reimbursement' ? financePending.reimbursement
+      : childKey === 'payment-request' ? financePending.paymentRequest
+      : childKey === 'invoice-apply' ? financePending.invoiceApply : 0;
+    if (n <= 0) return label;
+    return (
+      <span style={{ display: 'inline-flex', alignItems: 'center' }}>
+        {label}
+        <Badge count={n} size="small" color="#ff4d4f" offset={[2, -2]} style={{ marginLeft: 4 }} />
+      </span>
+    );
+  }, [financePending]);
   const contentRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
   const location = useLocation();
@@ -1047,15 +1060,16 @@ const MainLayout: React.FC = () => {
       </div>
     );
     const buildChild = (modKey: string, child: MenuChild): any => {
+      const childLabel = (ck: string, cl: string) => (modKey === 'finance' ? financeChildLabel(ck, cl) : cl);
       if (child.children && child.children.length) {
         const sub = child.children
           .filter(g => vis(`${modKey}/${g.key}`))
-          .map(g => ({ key: `${modKey}/${g.key}`, label: g.label }));
+          .map(g => ({ key: `${modKey}/${g.key}`, label: childLabel(g.key, g.label) }));
         if (sub.length === 0) return null;
         return { key: `${modKey}/${child.key}`, label: child.label, children: sub };
       }
       if (!vis(`${modKey}/${child.key}`)) return null;
-      return { key: `${modKey}/${child.key}`, label: child.label };
+      return { key: `${modKey}/${child.key}`, label: childLabel(child.key, child.label) };
     };
     // 电商常用：把 新款进度/店铺管理/商机市场 归为一个一级菜单（叶子 key 用真实路由全路径）
     const ecomVisible = (key: string) => vis(key);
@@ -1077,10 +1091,10 @@ const MainLayout: React.FC = () => {
       ? { key: 'ecommerce', icon: collapsed ? collapsedIcon(<ShoppingOutlined />, '电商') : <ShoppingOutlined />, label: '电商常用', children: ecommerceChildren }
       : null;
     // 财务管理：待处理任务（报销/收付申请/开票申请）红色气泡，0 时不显示
-    const financeLabel = financePendingTotal > 0 ? (
+    const financeLabel = financePending.total > 0 ? (
       <span style={{ display: 'inline-flex', alignItems: 'center' }}>
         财务管理
-        <Badge count={financePendingTotal} size="small" color="#ff4d4f" offset={[2, -2]} style={{ marginLeft: 4 }} />
+        <Badge count={financePending.total} size="small" color="#ff4d4f" offset={[2, -2]} style={{ marginLeft: 4 }} />
       </span>
     ) : '财务管理';
     return modules
@@ -1105,12 +1119,12 @@ const MainLayout: React.FC = () => {
         return { key: mod.key, icon: collapsed ? collapsedIcon(mod.icon, mod.shortLabel || mod.label.slice(0, 2)) : mod.icon, label: mod.key === 'finance' ? financeLabel : mod.label, children };
       })
       .filter(Boolean);
-  }, [permTick, collapsed, financePendingTotal]);
+  }, [permTick, collapsed, financePending, financeChildLabel]);
 
   // 折叠侧边栏菜单项计算（自定义渲染用）
   interface CollapsedMenuItem {
     key: string; icon: React.ReactNode; shortLabel: string;
-    children?: { key: string; label: string }[];
+    children?: { key: string; label: React.ReactNode }[];
     direct?: boolean;
   }
   const collapsedMenuItems: CollapsedMenuItem[] = useMemo(() => {
@@ -1147,16 +1161,17 @@ const MainLayout: React.FC = () => {
             return vis(`${mod.key}/${c.key}`);
           })
           .flatMap(c => {
+            const childLabel = (ck: string, cl: string) => (mod.key === 'finance' ? financeChildLabel(ck, cl) : cl);
             if (c.children && c.children.length) {
-              return c.children.filter(g => vis(`${mod.key}/${g.key}`)).map(g => ({ key: `${mod.key}/${g.key}`, label: g.label }));
+              return c.children.filter(g => vis(`${mod.key}/${g.key}`)).map(g => ({ key: `${mod.key}/${g.key}`, label: childLabel(g.key, g.label) }));
             }
-            return [{ key: `${mod.key}/${c.key}`, label: c.label }];
+            return [{ key: `${mod.key}/${c.key}`, label: childLabel(c.key, c.label) }];
           });
         if (children.length === 0) return null;
         return { key: mod.key, icon: mod.icon, shortLabel: mod.shortLabel || mod.label.slice(0, 2), children } as CollapsedMenuItem;
       })
       .filter(Boolean) as CollapsedMenuItem[];
-  }, [permTick]);
+  }, [permTick, financeChildLabel]);
 
   // 根据 key 获取菜单标题
   // 非菜单路由标题映射
@@ -1457,8 +1472,8 @@ const MainLayout: React.FC = () => {
                   {/* 折叠态：财务管理简称右上角挂待处理任务红点气泡 */}
                   <span style={{ fontSize: 13, color: 'rgba(255,255,255,0.75)', marginTop: 4, lineHeight: 1, position: 'relative' }}>
                     {item.shortLabel}
-                    {item.key === 'finance' && financePendingTotal > 0 && (
-                      <Badge count={financePendingTotal} size="small" color="#ff4d4f" offset={[4, -6]} style={{ position: 'absolute', top: -6, right: -14 }} />
+                    {item.key === 'finance' && financePending.total > 0 && (
+                      <Badge count={financePending.total} size="small" color="#ff4d4f" offset={[4, -6]} style={{ position: 'absolute', top: -6, right: -14 }} />
                     )}
                   </span>
                 </div>

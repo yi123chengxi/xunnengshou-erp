@@ -39,7 +39,7 @@ import { saveDataset } from '../utils/dataStore';
 import { showNativeNotification, showTimedNotification, isNotificationBlocked, isNotificationTypeEnabled } from '../utils/pushNotification';
 import { recoverRechargeNotifications } from '../utils/rechargeNotification';
 import { showTaskNotify, TASK_NOTIFY_RESHOW_EVENT } from '../utils/taskNotify';
-import { getFinancePendingCounts, isFinancePendingStorageKey } from '../utils/financePending';
+import { getFinancePendingCounts, isFinancePendingStorageKey, FinancePending } from '../utils/financePending';
 import { isShopPersonMe } from '../utils/shopScope';
 import { useDevPermSet, isPermAllowed } from '../utils/devPerms';
 import { menuVisible, menuKeyFromPath, usePermTick } from '../utils/perm';
@@ -218,10 +218,10 @@ const PurchaserLayout: React.FC = () => {
   }, []);
   const allOpenKeys = ['ecommerce', 'suppliers', 'product-data', 'finance', 'settings'];
   const [openKeys, setOpenKeys] = useState<string[]>(allOpenKeys);
-  // 财务管理主菜单红色气泡：报销/收付申请/开票申请中属于当前账号的待处理任务数
-  const [financePendingTotal, setFinancePendingTotal] = useState(0);
+  // 财务管理待处理任务气泡：父级显示总数，报销/收付申请子菜单各自显示本页数量（便于展开后定位待处理页面）
+  const [financePending, setFinancePending] = useState<FinancePending>({ total: 0, reimbursement: 0, paymentRequest: 0, invoiceApply: 0 });
   useEffect(() => {
-    const refresh = () => { try { setFinancePendingTotal(getFinancePendingCounts().total); } catch { /* 忽略 */ } };
+    const refresh = () => { try { setFinancePending(getFinancePendingCounts()); } catch { /* 忽略 */ } };
     refresh();
     const iv = setInterval(refresh, 10000);
     const onStorage = (e: StorageEvent) => { if (isFinancePendingStorageKey(e.key)) refresh(); };
@@ -234,6 +234,18 @@ const PurchaserLayout: React.FC = () => {
       window.removeEventListener('sync-data-updated', onSync);
     };
   }, []);
+  // 财务子菜单项标签：按页面分项挂红色气泡，0 时不显示
+  const financeChildLabel = useCallback((childKey: string, label: string): React.ReactNode => {
+    const n = childKey === 'reimbursement' ? financePending.reimbursement
+      : childKey === 'payment-request' ? financePending.paymentRequest : 0;
+    if (n <= 0) return label;
+    return (
+      <span style={{ display: 'inline-flex', alignItems: 'center' }}>
+        {label}
+        <Badge count={n} size="small" color="#ff4d4f" offset={[2, -2]} style={{ marginLeft: 4 }} />
+      </span>
+    );
+  }, [financePending]);
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -568,15 +580,15 @@ const PurchaserLayout: React.FC = () => {
           return { key, label: item.label, children };
         }
         if (!allow(key)) return null;
-        return { key, label: item.label };
+        return { key, label: parentKey === 'finance' ? financeChildLabel(item.key, item.label) : item.label };
       };
       const result: any = { key: menu.key, icon: menu.icon, label: menu.label };
       // 财务管理：待处理任务（报销/收付申请/开票申请）红色气泡，0 时不显示
-      if (menu.key === 'finance' && financePendingTotal > 0) {
+      if (menu.key === 'finance' && financePending.total > 0) {
         result.label = (
           <span style={{ display: 'inline-flex', alignItems: 'center' }}>
             财务管理
-            <Badge count={financePendingTotal} size="small" color="#ff4d4f" offset={[2, -2]} style={{ marginLeft: 4 }} />
+            <Badge count={financePending.total} size="small" color="#ff4d4f" offset={[2, -2]} style={{ marginLeft: 4 }} />
           </span>
         );
       }
@@ -589,7 +601,7 @@ const PurchaserLayout: React.FC = () => {
       }
       return result;
     }).filter(Boolean);
-  }, [permTick, financePendingTotal]);
+  }, [permTick, financePending, financeChildLabel]);
 
   const onMenuClick: MenuProps['onClick'] = (info) => {
     const key = info.key;

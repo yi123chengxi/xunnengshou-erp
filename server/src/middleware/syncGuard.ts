@@ -108,7 +108,7 @@ const STRICT_PRIVATE_PREFIXES = [
   'customers_', 'accounts_', 'withdrawal_record_', 'month_end_check_',
   // 提现任务状态（键末段为主账号）：发起后需同步到同租户负责人电脑弹出提醒
   'withdrawal_task_status_',
-  'shop_info_', 'shop_profit_', 'inventory_check_', 'stock_change_log_', 'sales_outbound_',
+  'shop_info_', 'shop_profit_', 'shopmgr_', 'inventory_check_', 'stock_change_log_', 'sales_outbound_',
   'customerReceipts_', 'supplier_payments_', 'warehouses_', 'hr_', 'newstyle_', 'custom_',
   'notification_settings_',
   // 图片空间索引（图片空间页面走 /api/images；此处防止经 /api/sync 直读他人图片清单）

@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useMemo, useRef } from 'react';
 import {
   Card, Row, Col, Table, Typography, Button, Space, Input, Modal,
-  InputNumber, Tag, Tooltip, message, Descriptions, Statistic, Checkbox, Progress, Select,
+  InputNumber, Tag, Tooltip, message, Descriptions, Statistic, Checkbox, Progress, Select, Segmented,
 } from 'antd';
 import {
   PlusOutlined, DeleteOutlined, EyeOutlined, ExportOutlined,
@@ -72,6 +72,8 @@ const InventoryCheckPage: React.FC = () => {
   const [scanCode, setScanCode] = useState('');
   const [scanDefaultQty, setScanDefaultQty] = useState(1);
   const [pickVisible, setPickVisible] = useState(false);
+  // 选择商品弹窗分类页签：默认成品，切换原材料只看原材料（与采购入库同口径 productType 中文枚举）
+  const [pickTab, setPickTab] = useState<'成品' | '原材料'>('成品');
   const [pickSearch, setPickSearch] = useState('');
   const [pickQty, setPickQty] = useState<Record<string, number>>({});
   // 添加商品弹窗：勾选的商品编码（支持勾选多行后批量添加）
@@ -134,16 +136,19 @@ const InventoryCheckPage: React.FC = () => {
     if (e.key === 'Enter') { e.preventDefault(); if (scanCode.trim()) handleScan(scanCode.trim()); }
   }, [scanCode, handleScan]);
 
-  // 选择商品弹窗：过滤后的商品列表
+  // 选择商品弹窗：先按分类页签过滤再按关键字搜索；成品分支追加 SEMI- 前缀第二判据排除半成品脏数据（既有契约）
   const pickProducts = useMemo(() => {
+    const tabbed = pickTab === '成品'
+      ? productList.filter((p: any) => p.productType === '成品' && !(p.productCode || '').startsWith('SEMI-'))
+      : productList.filter((p: any) => p.productType === '原材料');
     const q = pickSearch.trim().toLowerCase();
-    if (!q) return productList;
-    return productList.filter((p: any) =>
+    if (!q) return tabbed;
+    return tabbed.filter((p: any) =>
       (p.productCode || '').toLowerCase().includes(q) ||
       (p.shortName || '').toLowerCase().includes(q) ||
       (p.name || '').toLowerCase().includes(q)
     );
-  }, [productList, pickSearch]);
+  }, [productList, pickTab, pickSearch]);
 
   // 选择商品弹窗添加（盘点数量累加，差异自动重算）
   const handlePickAdd = useCallback((prod: any) => {
@@ -469,7 +474,7 @@ const InventoryCheckPage: React.FC = () => {
             ))}
           </Col>
           <Col span={3} style={{ display: 'flex', alignItems: 'flex-end' }}>
-            <Button type="dashed" icon={<PlusOutlined />} block onClick={() => setPickVisible(true)}>添加商品</Button>
+            <Button type="dashed" icon={<PlusOutlined />} block onClick={() => { setPickTab('成品'); setPickVisible(true); }}>添加商品</Button>
           </Col>
         </Row>
        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginBottom: 8 }}>
@@ -561,6 +566,11 @@ const InventoryCheckPage: React.FC = () => {
         open={pickVisible} onCancel={() => { setPickVisible(false); setPickSelected([]); }}
         footer={null} centered width={800} zIndex={1200}
       >
+        <Segmented
+          options={['成品', '原材料']} value={pickTab}
+          onChange={v => setPickTab(v as '成品' | '原材料')}
+          style={{ marginBottom: 12 }}
+        />
         <Input.Search
           placeholder="搜索商品编码/简称" value={pickSearch}
           onChange={e => setPickSearch(e.target.value)} style={{ marginBottom: 12 }} allowClear

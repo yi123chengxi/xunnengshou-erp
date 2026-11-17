@@ -44,6 +44,7 @@ const SYNC_PREFIXES = [
   'customer_statements_',      // 客户对账单
   'autoReconSettings_',        // 自动对账设置
   'invoice_apply_settings_',   // 开票申请设置
+  'shopmgr_',                  // 店铺管理负责人设置（shopmgr_managers_<主账号>）：店铺列表/月末盘点/提现充值可见性过滤须在负责人电脑也生效，此前只存本机导致换电脑即丢
   'bank_reconciliation_',      // 银行对账记录
   'installment_posted_',       // 分期收款入记账标记（跨端须一致，否则重复入账）
   // ==== 业务配置/模版（用户反馈换电脑后模版丢失）====

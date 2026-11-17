@@ -687,7 +687,13 @@ const ShopListPage: React.FC = () => {
           {canFn('supplier', SHOP_MENU_KEY, 'import') && (
             <Button icon={<ImportOutlined />} onClick={() => { setImportData([]); setImportFileName(''); setImportMode('add'); setMatchField('shopName'); setImportVisible(true); }}>导入</Button>
           )}
-          {isAdmin && <Tooltip title={`负责人：${managerDisplayNames()}`}>
+          {isAdmin && <Tooltip title={(
+            <div style={{ maxWidth: 320 }}>
+              <div>负责人：{managerDisplayNames()}</div>
+              <div style={{ marginTop: 4 }}>权限覆盖范围：店铺列表、月末盘点、月利润表、提现/充值</div>
+              <div>管理员可见全部店铺；店铺负责人仅可见自己负责的店铺，组长另可见本组组员的店铺；勾选「查看」的负责人可见全部</div>
+            </div>
+          )}>
             <Button icon={<TeamOutlined />} onClick={() => { setManagerDraft(shopManagerPerms.map(p => ({ ...p }))); setManagerModalVisible(true); }}>负责人设置</Button>
           </Tooltip>}
           {canFn('supplier', SHOP_MENU_KEY, 'add') && (
