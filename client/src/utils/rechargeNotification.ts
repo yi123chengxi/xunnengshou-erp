@@ -11,6 +11,7 @@
  */
 import { notification } from 'antd';
 import { showNativeNotification, showTimedNotification, isNotificationBlocked } from './pushNotification';
+import { showTaskNotify } from './taskNotify';
 
 /** 原生通知优先，HTTP/权限受限环境下降级 antd 页内通知（同 key 去重，防止双布局/周期重弹叠加） */
 export function showRechargeNotification(
@@ -23,6 +24,8 @@ export function showRechargeNotification(
 ): void {
   const native = showNativeNotification(title, body, onClick, key);
   if (native) return;
+  // 常驻待办（duration 0）走任务提醒助手：带 X 关闭、关闭后 30 秒重弹、多条自动折叠
+  if (duration === 0) { showTaskNotify(key, title, body, onClick); return; }
   const open = kind === 'warning' ? notification.warning : notification.info;
   open({ key, message: title, description: body, closeIcon: false, duration, onClick });
 }

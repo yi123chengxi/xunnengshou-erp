@@ -38,6 +38,8 @@ import { safeSetItem } from '../utils/storageQuota';
 import { saveDataset } from '../utils/dataStore';
 import { showNativeNotification, showTimedNotification, isNotificationBlocked, isNotificationTypeEnabled } from '../utils/pushNotification';
 import { recoverRechargeNotifications } from '../utils/rechargeNotification';
+import { showTaskNotify, TASK_NOTIFY_RESHOW_EVENT } from '../utils/taskNotify';
+import { getFinancePendingCounts, isFinancePendingStorageKey } from '../utils/financePending';
 import { isShopPersonMe } from '../utils/shopScope';
 import { useDevPermSet, isPermAllowed } from '../utils/devPerms';
 import { menuVisible, menuKeyFromPath, usePermTick } from '../utils/perm';
@@ -137,6 +139,11 @@ const purchaserMenus = [
 const EXTRA_TITLES: Record<string, string> = {
   'finance/daily-bookkeeping-stats': '记账统计分析',
   'finance/daily-bookkeeping': '日常记账',
+  // 店铺管理子路由直跳时的中文标题（否则回退取末段显示英文 check/withdrawal）
+  'shop-management/check': '月末盘点',
+  'shop-management/withdrawal': '提现/充值',
+  'ecommerce/shop-management/check': '月末盘点',
+  'ecommerce/shop-management/withdrawal': '提现/充值',
 };
 
 // 根据菜单 key 查找标题
@@ -211,6 +218,22 @@ const PurchaserLayout: React.FC = () => {
   }, []);
   const allOpenKeys = ['ecommerce', 'suppliers', 'product-data', 'finance', 'settings'];
   const [openKeys, setOpenKeys] = useState<string[]>(allOpenKeys);
+  // 财务管理主菜单红色气泡：报销/收付申请/开票申请中属于当前账号的待处理任务数
+  const [financePendingTotal, setFinancePendingTotal] = useState(0);
+  useEffect(() => {
+    const refresh = () => { try { setFinancePendingTotal(getFinancePendingCounts().total); } catch { /* 忽略 */ } };
+    refresh();
+    const iv = setInterval(refresh, 10000);
+    const onStorage = (e: StorageEvent) => { if (isFinancePendingStorageKey(e.key)) refresh(); };
+    const onSync = () => refresh();
+    window.addEventListener('storage', onStorage);
+    window.addEventListener('sync-data-updated', onSync);
+    return () => {
+      clearInterval(iv);
+      window.removeEventListener('storage', onStorage);
+      window.removeEventListener('sync-data-updated', onSync);
+    };
+  }, []);
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -548,6 +571,15 @@ const PurchaserLayout: React.FC = () => {
         return { key, label: item.label };
       };
       const result: any = { key: menu.key, icon: menu.icon, label: menu.label };
+      // 财务管理：待处理任务（报销/收付申请/开票申请）红色气泡，0 时不显示
+      if (menu.key === 'finance' && financePendingTotal > 0) {
+        result.label = (
+          <span style={{ display: 'inline-flex', alignItems: 'center' }}>
+            财务管理
+            <Badge count={financePendingTotal} size="small" color="#ff4d4f" offset={[2, -2]} style={{ marginLeft: 4 }} />
+          </span>
+        );
+      }
       if (menu.children) {
         const children = menu.children.map((child: any) => buildItem(menu.key, child)).filter(Boolean);
         if (!children.length) return null;
@@ -557,7 +589,7 @@ const PurchaserLayout: React.FC = () => {
       }
       return result;
     }).filter(Boolean);
-  }, [permTick]);
+  }, [permTick, financePendingTotal]);
 
   const onMenuClick: MenuProps['onClick'] = (info) => {
     const key = info.key;
@@ -667,7 +699,9 @@ const PurchaserLayout: React.FC = () => {
     const initTimer = setTimeout(showNotifications, 800);
     // 每 30 秒重新检查待审核记录并重新弹出（用户关闭后自动恢复）
     const interval = setInterval(showNotifications, 30000);
-    return () => { clearTimeout(initTimer); clearInterval(interval); };
+    const onReshow = () => showNotifications();
+    window.addEventListener(TASK_NOTIFY_RESHOW_EVENT, onReshow);
+    return () => { clearTimeout(initTimer); clearInterval(interval); window.removeEventListener(TASK_NOTIFY_RESHOW_EVENT, onReshow); };
   }, [getDataOwner]);
 
   // ===================== 全局提现任务通知恢复（负责人电脑） =====================
@@ -703,15 +737,15 @@ const PurchaserLayout: React.FC = () => {
             window.dispatchEvent(new CustomEvent('navigate-to-recharge'));
           };
           const native = showNativeNotification(title, body, onClick, `wd-task-${shopKey}`);
-          if (!native) {
-            notification.warning({ key: `wd-task-${shopKey}`, message: title, description: body, closeIcon: false, duration: 0, onClick });
-          }
+          if (!native) showTaskNotify(`wd-task-${shopKey}`, title, body, onClick);
         });
       } catch { /* ignore */ }
     };
     const initTimer = setTimeout(check, 1200);
     const interval = setInterval(check, 60000);
-    return () => { clearTimeout(initTimer); clearInterval(interval); };
+    const onReshow = () => check();
+    window.addEventListener(TASK_NOTIFY_RESHOW_EVENT, onReshow);
+    return () => { clearTimeout(initTimer); clearInterval(interval); window.removeEventListener(TASK_NOTIFY_RESHOW_EVENT, onReshow); };
   }, [getDataOwner]);
 
   // ===================== 全局盘点任务通知恢复（负责人电脑） =====================
@@ -745,15 +779,15 @@ const PurchaserLayout: React.FC = () => {
             window.dispatchEvent(new CustomEvent('navigate-to-inventory-check'));
           };
           const native = showNativeNotification(title, body, onClick, `inv-task-${shopKey}`);
-          if (!native) {
-            notification.warning({ key: `inv-task-${shopKey}`, message: title, description: body, closeIcon: false, duration: 0, onClick });
-          }
+          if (!native) showTaskNotify(`inv-task-${shopKey}`, title, body, onClick);
         });
       } catch { /* ignore */ }
     };
     const initTimer = setTimeout(check, 1200);
     const interval = setInterval(check, 60000);
-    return () => { clearTimeout(initTimer); clearInterval(interval); };
+    const onReshow = () => check();
+    window.addEventListener(TASK_NOTIFY_RESHOW_EVENT, onReshow);
+    return () => { clearTimeout(initTimer); clearInterval(interval); window.removeEventListener(TASK_NOTIFY_RESHOW_EVENT, onReshow); };
   }, [getDataOwner]);
 
   const handleGlobalConfirmPay = () => {

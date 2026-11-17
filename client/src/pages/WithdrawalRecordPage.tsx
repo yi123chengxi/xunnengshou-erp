@@ -16,6 +16,7 @@ import FieldConfigModal from '../components/FieldConfigModal';
 import { safeSetItem } from '../utils/storageQuota';
 import { sendPushNotification, showNativeNotification, isNotificationBlocked, showTimedNotification, isNotificationTypeEnabled } from '../utils/pushNotification';
 import { showRechargeNotification } from '../utils/rechargeNotification';
+import { showTaskNotify } from '../utils/taskNotify';
 import { saveDataset } from '../utils/dataStore';
 import { scopeShopRecords, canEditShopData, isShopPersonMe, resolvePersonToUsername } from '../utils/shopScope';
 import { isAccountingMode, writeAutoEntries, removeAutoEntries, loadSubjectOptions } from '../utils/accountingBridge';
@@ -437,16 +438,7 @@ const WithdrawalRecordPage: React.FC = () => {
               remindTitle, remindBody, onClickHandler,
               `withdraw-task-remind-${shopKey}-${Date.now()}`
             );
-            if (!nativeNotif) {
-              notification.warning({
-                key: `withdraw-task-remind-${shopKey}-${Date.now()}`,
-                message: remindTitle,
-                description: remindBody,
-                closeIcon: false,
-                duration: 0,
-                onClick: onClickHandler,
-              });
-            }
+            if (!nativeNotif) showTaskNotify(`withdraw-task-remind-${shopKey}`, remindTitle, remindBody, onClickHandler);
           }
         }
       });
@@ -517,16 +509,7 @@ const WithdrawalRecordPage: React.FC = () => {
           const nativeNotif = showNativeNotification(
             notifTitle, notifBody, onClickHandler, `withdraw-task-${shop.key}`
           );
-          if (!nativeNotif) {
-            notification.warning({
-              key: `withdraw-task-${shop.key}`,
-              message: notifTitle,
-              description: notifBody,
-              closeIcon: false,
-              duration: 0,
-              onClick: onClickHandler,
-            });
-          }
+          if (!nativeNotif) showTaskNotify(`withdraw-task-${shop.key}`, notifTitle, notifBody, onClickHandler);
         }
         // Web Push 推送（关闭浏览器也能收到，始终发送给负责人；push 按 username 定向，需反查）
         const person = resolvePersonToUsername(owner, shop.person || '');

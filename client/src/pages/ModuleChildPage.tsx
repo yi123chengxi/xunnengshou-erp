@@ -4932,9 +4932,20 @@ const ModuleChildPage: React.FC = () => {
 
   // 账单明细：撤回对账（删除对账管理中的对应记录，账单恢复待对账）
   const handleWithdrawRecon = useCallback((record: Record<string, any>) => {
+    // 自动发起对账开启时，撤回后账单回到“待对账”会被执行器在到期后重新自动发起，故提示先关开关
+    const autoReconOn = loadAutoReconSettings(getDataOwner()).enabled;
     Modal.confirm({
       title: '撤回对账',
-      content: `确定撤回账单 ${record.outboundNo || record.id} 的对账吗？撤回后对账管理中的对应记录将被删除，账单恢复为“待对账”。`,
+      content: (
+        <div>
+          <div>{`确定撤回账单 ${record.outboundNo || record.id} 的对账吗？撤回后对账管理中的对应记录将被删除，账单恢复为“待对账”。`}</div>
+          {autoReconOn && (
+            <div style={{ marginTop: 8, color: '#fa8c16', fontWeight: 600 }}>
+              注意：当前已开启“自动发起对账设置”，撤回后该账单恢复为“待对账”将被系统自动重新发起对账。请先关闭自动发起对账设置开关，再撤回对账。
+            </div>
+          )}
+        </div>
+      ),
       okText: '确认撤回',
       cancelText: '取消',
       onOk: () => {

@@ -60,6 +60,8 @@ import { loadUserNotices, markUserNoticeRead, markAllUserNoticesRead, clearUserN
 import { recoverRechargeNotifications } from '../utils/rechargeNotification';
 import { isShopPersonMe } from '../utils/shopScope';
 import { showNativeNotification, isNotificationBlocked, isNotificationTypeEnabled } from '../utils/pushNotification';
+import { showTaskNotify, TASK_NOTIFY_RESHOW_EVENT } from '../utils/taskNotify';
+import { getFinancePendingCounts, isFinancePendingStorageKey } from '../utils/financePending';
 
 const { Header, Sider, Content } = Layout;
 const { Text } = Typography;
@@ -330,6 +332,22 @@ const MainLayout: React.FC = () => {
   const allOpenKeys = ['basic-data', 'customer', 'sales', 'production', 'ecommerce', 'inventory', 'finance', 'hr-manage', 'settings', 'jst'];
   const [openKeys, setOpenKeys] = useState<string[]>(allOpenKeys);
   const [isViewOnly, setIsViewOnly] = useState(false);
+  // 财务管理主菜单红色气泡：报销/收付申请/开票申请中属于当前账号的待处理任务数
+  const [financePendingTotal, setFinancePendingTotal] = useState(0);
+  useEffect(() => {
+    const refresh = () => { try { setFinancePendingTotal(getFinancePendingCounts().total); } catch { /* 忽略 */ } };
+    refresh();
+    const iv = setInterval(refresh, 10000);
+    const onStorage = (e: StorageEvent) => { if (isFinancePendingStorageKey(e.key)) refresh(); };
+    const onSync = () => refresh();
+    window.addEventListener('storage', onStorage);
+    window.addEventListener('sync-data-updated', onSync);
+    return () => {
+      clearInterval(iv);
+      window.removeEventListener('storage', onStorage);
+      window.removeEventListener('sync-data-updated', onSync);
+    };
+  }, []);
   const contentRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
   const location = useLocation();
@@ -459,7 +477,9 @@ const MainLayout: React.FC = () => {
     const show = () => recoverRechargeNotifications(owner, currentUser, (path) => navigate(path));
     const initTimer = setTimeout(show, 800);
     const interval = setInterval(show, 30000);
-    return () => { clearTimeout(initTimer); clearInterval(interval); };
+    const onReshow = () => show();
+    window.addEventListener(TASK_NOTIFY_RESHOW_EVENT, onReshow);
+    return () => { clearTimeout(initTimer); clearInterval(interval); window.removeEventListener(TASK_NOTIFY_RESHOW_EVENT, onReshow); };
   }, [navigate]);
 
   // ===================== 提现任务通知恢复（系统级） =====================
@@ -494,15 +514,15 @@ const MainLayout: React.FC = () => {
             navigate('/finance/shop-management/withdrawal');
           };
           const native = showNativeNotification(title, body, onClick, `wd-task-${shopKey}`);
-          if (!native) {
-            notification.warning({ key: `wd-task-${shopKey}`, message: title, description: body, closeIcon: false, duration: 0, onClick });
-          }
+          if (!native) showTaskNotify(`wd-task-${shopKey}`, title, body, onClick);
         });
       } catch { /* ignore */ }
     };
     const initTimer = setTimeout(check, 1200);
     const interval = setInterval(check, 60000);
-    return () => { clearTimeout(initTimer); clearInterval(interval); };
+    const onReshow = () => check();
+    window.addEventListener(TASK_NOTIFY_RESHOW_EVENT, onReshow);
+    return () => { clearTimeout(initTimer); clearInterval(interval); window.removeEventListener(TASK_NOTIFY_RESHOW_EVENT, onReshow); };
   }, [navigate]);
 
   // ===================== 盘点任务通知恢复（系统级） =====================
@@ -538,15 +558,15 @@ const MainLayout: React.FC = () => {
             navigate('/finance/shop-management/check');
           };
           const native = showNativeNotification(title, body, onClick, `inv-task-${shopKey}`);
-          if (!native) {
-            notification.warning({ key: `inv-task-${shopKey}`, message: title, description: body, closeIcon: false, duration: 0, onClick });
-          }
+          if (!native) showTaskNotify(`inv-task-${shopKey}`, title, body, onClick);
         });
       } catch { /* ignore */ }
     };
     const initTimer = setTimeout(check, 1200);
     const interval = setInterval(check, 60000);
-    return () => { clearTimeout(initTimer); clearInterval(interval); };
+    const onReshow = () => check();
+    window.addEventListener(TASK_NOTIFY_RESHOW_EVENT, onReshow);
+    return () => { clearTimeout(initTimer); clearInterval(interval); window.removeEventListener(TASK_NOTIFY_RESHOW_EVENT, onReshow); };
   }, [navigate]);
 
   // 设置模态框
@@ -1056,6 +1076,13 @@ const MainLayout: React.FC = () => {
     const ecommerceItem = ecommerceChildren.length
       ? { key: 'ecommerce', icon: collapsed ? collapsedIcon(<ShoppingOutlined />, '电商') : <ShoppingOutlined />, label: '电商常用', children: ecommerceChildren }
       : null;
+    // 财务管理：待处理任务（报销/收付申请/开票申请）红色气泡，0 时不显示
+    const financeLabel = financePendingTotal > 0 ? (
+      <span style={{ display: 'inline-flex', alignItems: 'center' }}>
+        财务管理
+        <Badge count={financePendingTotal} size="small" color="#ff4d4f" offset={[2, -2]} style={{ marginLeft: 4 }} />
+      </span>
+    ) : '财务管理';
     return modules
       .map(mod => {
         // 新款进度已并入电商常用，不再作为顶级直跳模块渲染
@@ -1075,10 +1102,10 @@ const MainLayout: React.FC = () => {
           .filter(c => !(mod.key === 'finance' && c.key === 'shop-management'))
           .map(c => buildChild(mod.key, c)).filter(Boolean);
         if (children.length === 0) return null;
-        return { key: mod.key, icon: collapsed ? collapsedIcon(mod.icon, mod.shortLabel || mod.label.slice(0, 2)) : mod.icon, label: mod.label, children };
+        return { key: mod.key, icon: collapsed ? collapsedIcon(mod.icon, mod.shortLabel || mod.label.slice(0, 2)) : mod.icon, label: mod.key === 'finance' ? financeLabel : mod.label, children };
       })
       .filter(Boolean);
-  }, [permTick, collapsed]);
+  }, [permTick, collapsed, financePendingTotal]);
 
   // 折叠侧边栏菜单项计算（自定义渲染用）
   interface CollapsedMenuItem {
@@ -1145,6 +1172,13 @@ const MainLayout: React.FC = () => {
     'ecommerce/warehouse-stats': '仓库统计',
     'shop-management': '店铺管理',
     'finance/shop-management': '店铺管理',
+    // 通知弹窗点击直跳的子路由（不在静态菜单里，需显式补中文标题，否则标签页显示英文路径）
+    'shop-management/check': '月末盘点',
+    'shop-management/withdrawal': '提现/充值',
+    'finance/shop-management/check': '月末盘点',
+    'finance/shop-management/withdrawal': '提现/充值',
+    'ecommerce/shop-management/check': '月末盘点',
+    'ecommerce/shop-management/withdrawal': '提现/充值',
   };
 
   const getMenuTitle = (key: string): string => {
@@ -1420,7 +1454,13 @@ const MainLayout: React.FC = () => {
                 onClick={() => { if (item.direct) onMenuClick({ key: item.key, keyPath: [item.key], domEvent: {} as any, item: null as any }); }}
                 >
                   <span style={{ fontSize: 20, color: '#fff', lineHeight: 1 }}>{item.icon}</span>
-                  <span style={{ fontSize: 13, color: 'rgba(255,255,255,0.75)', marginTop: 4, lineHeight: 1 }}>{item.shortLabel}</span>
+                  {/* 折叠态：财务管理简称右上角挂待处理任务红点气泡 */}
+                  <span style={{ fontSize: 13, color: 'rgba(255,255,255,0.75)', marginTop: 4, lineHeight: 1, position: 'relative' }}>
+                    {item.shortLabel}
+                    {item.key === 'finance' && financePendingTotal > 0 && (
+                      <Badge count={financePendingTotal} size="small" color="#ff4d4f" offset={[4, -6]} style={{ position: 'absolute', top: -6, right: -14 }} />
+                    )}
+                  </span>
                 </div>
               );
               if (popoverContent) {

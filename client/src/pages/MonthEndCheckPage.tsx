@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   Card, Table, Button, Space, message, Typography, Modal, Input, InputNumber, DatePicker,
-  Row, Col, Select, Popconfirm, Tag, Image, Checkbox, Upload, Progress, Tooltip, notification,
+  Row, Col, Select, Popconfirm, Tag, Image, Checkbox, Upload, Progress, Tooltip,
 } from 'antd';
 import {
   PlusOutlined, EditOutlined, DeleteOutlined, ReloadOutlined,
@@ -136,6 +136,7 @@ const fmt = (v: number | undefined | null) => {
 
 import { scopeShopRecords, canEditShopData, isShopPersonMe, resolvePersonToUsername } from '../utils/shopScope';
 import { sendPushNotification, showNativeNotification, isNotificationTypeEnabled } from '../utils/pushNotification';
+import { showTaskNotify } from '../utils/taskNotify';
 
 // ===================== 主组件 =====================
 const MonthEndCheckPage: React.FC = () => {
@@ -253,9 +254,7 @@ const MonthEndCheckPage: React.FC = () => {
       // 发布端本人恰为负责人时本地立即弹窗（原生通知不可用则降级页内通知）
       if (isShopPersonMe(owner, shop.person)) {
         const native = showNativeNotification(notifTitle, notifBody(shop.shopName), onClickHandler, `inv-task-${shop.key}`);
-        if (!native) {
-          notification.warning({ key: `inv-task-${shop.key}`, message: notifTitle, description: notifBody(shop.shopName), closeIcon: false, duration: 0, onClick: onClickHandler });
-        }
+        if (!native) showTaskNotify(`inv-task-${shop.key}`, notifTitle, notifBody(shop.shopName), onClickHandler);
       }
       // Web Push 推送（HTTPS 环境下关闭浏览器也能送达；push 按 username 定向，需从显示名反查）
       const uname = resolvePersonToUsername(owner, shop.person || '');

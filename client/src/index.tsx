@@ -1,7 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
-import { ConfigProvider } from 'antd';
+import { ConfigProvider, App as AntdApp } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import dayjs from 'dayjs';
 import 'dayjs/locale/zh-cn';
@@ -201,9 +201,12 @@ root.render(
         Transfer: { borderRadius: 0 },
       },
     }}>
-      <BrowserRouter>
-        <App />
-      </BrowserRouter>
+      {/* antd App 上下文：为静态 notification 提供 stack 折叠配置（任务提醒≥2条自动堆叠），component={false} 不额外包裹 DOM */}
+      <AntdApp notification={{ stack: { threshold: 1 } }} component={false}>
+        <BrowserRouter>
+          <App />
+        </BrowserRouter>
+      </AntdApp>
     </ConfigProvider>
     </ChunkGuard>
   </React.StrictMode>
