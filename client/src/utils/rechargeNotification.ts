@@ -12,6 +12,7 @@
 import { notification } from 'antd';
 import { showNativeNotification, showTimedNotification, isNotificationBlocked } from './pushNotification';
 import { showTaskNotify } from './taskNotify';
+import { getCurrentUserAliases } from './shopScope';
 
 /** 原生通知优先，HTTP/权限受限环境下降级 antd 页内通知（同 key 去重，防止双布局/周期重弹叠加） */
 export function showRechargeNotification(
@@ -45,6 +46,10 @@ export function recoverRechargeNotifications(
   try {
     const records: any[] = JSON.parse(localStorage.getItem(`recharge_record_${owner}`) || '[]');
     if (records.length === 0) return;
+    // 人员字段 historically 存在“存 username”与“存显示名”两种口径（同 shop.person 的坑），
+    // 直接与 username 比较会让部分租户永远匹配不上、审批弹窗静默丢失，改用同一别名集合判定。
+    const myAliases = new Set(getCurrentUserAliases(owner));
+    const isMe = (val?: string) => !!val && myAliases.has(String(val));
     // 已显示过的通知记录（避免重复；跨布局同键共享）
     const paidShownKey = `rech_paid_shown_${owner}`;
     const rejectedShownKey = `rech_rejected_shown_${owner}`;
@@ -83,7 +88,7 @@ export function recoverRechargeNotifications(
       const amountStr = `¥${(r.amount || 0).toFixed(2)}`;
 
       // 财务负责人视角：待审核记录 → 持续通知（关闭后定期重新弹出），点击打开确认支付
-      if (r.status === 'pending' && r.financePerson === currentUser) {
+      if (r.status === 'pending' && isMe(r.financePerson)) {
         if (!isNotificationBlocked(currentUser)) {
           showRechargeNotification(
             'warning',
@@ -97,7 +102,7 @@ export function recoverRechargeNotifications(
       }
 
       // 申请人视角：被驳回记录 → 仅首次弹出一次（不随间隔重复）
-      if (r.status === 'rejected' && r.applicant === currentUser && !rejectedShown.includes(r.key)) {
+      if (r.status === 'rejected' && isMe(r.applicant) && !rejectedShown.includes(r.key)) {
         if (!isNotificationBlocked(currentUser)) {
           showRechargeNotification(
             'warning',
@@ -115,7 +120,7 @@ export function recoverRechargeNotifications(
       }
 
       // 申请人视角：已支付记录 → 5秒自动关闭（仅首次显示）
-      if (r.status === 'paid' && r.applicant === currentUser && !paidShown.includes(r.key)) {
+      if (r.status === 'paid' && isMe(r.applicant) && !paidShown.includes(r.key)) {
         if (!isNotificationBlocked(currentUser)) {
           const native = showTimedNotification(
             '【充值已支付】' + (r.shopName || ''),

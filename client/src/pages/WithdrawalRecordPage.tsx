@@ -16,7 +16,8 @@ import FieldConfigModal from '../components/FieldConfigModal';
 import { safeSetItem } from '../utils/storageQuota';
 import { sendPushNotification, showNativeNotification, isNotificationBlocked, showTimedNotification, isNotificationTypeEnabled } from '../utils/pushNotification';
 import { showRechargeNotification } from '../utils/rechargeNotification';
-import { showTaskNotify } from '../utils/taskNotify';
+import { showTaskNotify, closeTaskNotify } from '../utils/taskNotify';
+import { applyIfChanged, broadcastLocalDataChange } from '../utils/useDatasetSyncReload';
 import { saveDataset } from '../utils/dataStore';
 import { scopeShopRecords, canEditShopData, isShopPersonMe, resolvePersonToUsername } from '../utils/shopScope';
 import { isAccountingMode, writeAutoEntries, removeAutoEntries, loadSubjectOptions } from '../utils/accountingBridge';
@@ -141,6 +142,11 @@ const fmt = (v: number | undefined | null) => {
   return '¥' + v.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
 
+/** 安全解析 localStorage 里的列表值：非法 JSON 或非数组一律当作空表 */
+const readList = <T = any>(raw: string | null): T[] => {
+  try { const v = JSON.parse(raw || '[]'); return Array.isArray(v) ? v : []; } catch { return []; }
+};
+
 // ===================== 主组件 =====================
 const WithdrawalRecordPage: React.FC = () => {
   const owner = useMemo(() => getDataOwner(), []);
@@ -153,13 +159,10 @@ const WithdrawalRecordPage: React.FC = () => {
   const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
   const [searchText, setSearchText] = useState('');
 
-  // 负责人控制：设置后仅负责人和管理员可看全部记录，其他成员仅可见自己创建的记录
-  const [wdManagers, setWdManagers] = useState<string[]>([]);
-  const [managerModalVisible, setManagerModalVisible] = useState(false);
-  const [managerSelectedUsers, setManagerSelectedUsers] = useState<string[]>([]);
-  const managersKey = `withdrawal_recharge_managers_${owner}`;
-  const isAdmin = localStorage.getItem('isSubAccount') !== 'true';
-  const currentUser = localStorage.getItem('username') || '';
+  // 负责人可见范围统一由「店铺管理 → 负责人设置」（shopmgr_managers_）控制，
+  // 本页不再维护独立的 withdrawal_recharge_managers_ 名单：两套名单在不同时刻各自生效时，
+  // 同一条记录会“一会儿在、一会儿不在”，即用户反馈的充值记录列表信息闪现消失。
+  const [mgrPermSig, setMgrPermSig] = useState<string>(() => localStorage.getItem(`shopmgr_managers_${owner}`) || '[]');
 
   // 新增/编辑弹窗
   const [editVisible, setEditVisible] = useState(false);
@@ -213,12 +216,14 @@ const WithdrawalRecordPage: React.FC = () => {
     setRechSearch(empty);
     setRechAppliedSearch(empty);
   }, []);
-  // 负责人可见范围：管理员/未设置负责人/负责人本人 看全部；其他成员仅看自己创建的记录
-  const canViewAll = isAdmin || wdManagers.length === 0 || wdManagers.includes(currentUser);
-  const scopedRecords = useMemo(() => scopeShopRecords(owner, shops, records), [owner, shops, records]);
-  const baseRecords = useMemo(() => (canViewAll ? scopedRecords : scopedRecords.filter(r => r.inputBy === currentUser)), [scopedRecords, canViewAll, currentUser]);
-  const scopedRechRecords = useMemo(() => scopeShopRecords(owner, shops, rechargeRecords), [owner, shops, rechargeRecords]);
-  const baseRechRecords = useMemo(() => (canViewAll ? scopedRechRecords : scopedRechRecords.filter(r => r.applicant === currentUser)), [scopedRechRecords, canViewAll, currentUser]);
+  // 店铺列表尚未落地（同步进行中/刚登进来）时不做店铺维度过滤：
+  // 否则 scopeShopRecords 会把每条记录判为“不属于任何可见店铺”而整表清空，
+  // 下一轮同步拉到店铺后又恢复——正是“表单信息经常消失，过会又显示”的形态。
+  // mgrPermSig 进依赖：负责人名单变动后重新切 scope 结果，不靠店铺/记录引用变化顺带重算。
+  const scopedRecords = useMemo(() => (shops.length === 0 ? records : scopeShopRecords(owner, shops, records)), [owner, shops, records, mgrPermSig]);
+  const scopedRechRecords = useMemo(() => (shops.length === 0 ? rechargeRecords : scopeShopRecords(owner, shops, rechargeRecords)), [owner, shops, rechargeRecords, mgrPermSig]);
+  const baseRecords = scopedRecords;
+  const baseRechRecords = scopedRechRecords;
 
   // 充值记录搜索过滤
   const filteredRechRecords = useMemo(() => {
@@ -335,12 +340,14 @@ const WithdrawalRecordPage: React.FC = () => {
 
   // ===================== 数据加载 =====================
   const reload = useCallback(() => {
-    try { setRecords(JSON.parse(localStorage.getItem(storageKey) || '[]')); } catch { setRecords([]); }
-    try { setShops(JSON.parse(localStorage.getItem(shopKey) || '[]')); } catch { setShops([]); }
-    try { setBankAccounts(JSON.parse(localStorage.getItem(bankKey) || '[]')); } catch { setBankAccounts([]); }
-    try { setRechargeRecords(JSON.parse(localStorage.getItem(rechargeKey) || '[]')); } catch { setRechargeRecords([]); }
-    try { const m = JSON.parse(localStorage.getItem(managersKey) || '[]'); setWdManagers(Array.isArray(m) ? m : []); } catch { setWdManagers([]); }
-  }, [storageKey, shopKey, bankKey, rechargeKey, managersKey]);
+    // applyIfChanged：内容相同时保持原引用。同步轮询/窗口聚焦都会跑 reload，
+    // 若每次都返回新数组，下游依赖 records/shops 的 effect 会被无意义地反复触发。
+    applyIfChanged(setRecords, readList(localStorage.getItem(storageKey)));
+    applyIfChanged(setShops, readList(localStorage.getItem(shopKey)));
+    applyIfChanged(setBankAccounts, readList(localStorage.getItem(bankKey)));
+    applyIfChanged(setRechargeRecords, readList(localStorage.getItem(rechargeKey)));
+    setMgrPermSig(localStorage.getItem(`shopmgr_managers_${owner}`) || '[]');
+  }, [storageKey, shopKey, bankKey, rechargeKey, owner]);
   useEffect(() => { reload(); }, [reload]);
   // 同步落地/窗口重新可见时重载：避免长期挂载页面拿陈旧提现记录整表回写，抹掉别端刚新增的记录
   useEffect(() => {
@@ -421,8 +428,11 @@ const WithdrawalRecordPage: React.FC = () => {
           r.shopName === shopName && dayjs(r.createdAt).isAfter(threeDaysAgo)
         );
         if (hasWithdrawn) {
-          // 已提现 → 终止，不再通知
+          // 已提现 → 终止并撤下已弹的提醒卡片（只停弹不关闭会造成完成后必须人工关闭）
           resolved.push(shopKey);
+          closeTaskNotify(`withdraw-task-${shopKey}`);
+          closeTaskNotify(`withdraw-task-remind-${shopKey}`);
+          closeTaskNotify(`wd-task-${shopKey}`);
         } else {
           // 未提现 → 仅当前用户是负责人时才重新发送本地通知（shop.person 存显示名，需用别名匹配）
           const shop = shops.find(s => s.key === shopKey);
@@ -466,6 +476,9 @@ const WithdrawalRecordPage: React.FC = () => {
     safeSetItem(`${storageKey}_ts`, String(Date.now()));
     saveDataset(storageKey, json);
     setRecords(list);
+    // 同文档保活页与布局层待办复检只认 sync-data-updated：本页写入不触发原生 storage 事件，
+    // 不主动广播则「录完提现后要等满 60 秒周期提醒卡片才撤下」，与「完成即撤」目标不符
+    broadcastLocalDataChange();
   };
 
   const saveRechRecords = (list: RechargeRecord[]) => {
@@ -474,6 +487,7 @@ const WithdrawalRecordPage: React.FC = () => {
     safeSetItem(`${rechargeKey}_ts`, String(Date.now()));
     saveDataset(rechargeKey, json);
     setRechargeRecords(list);
+    broadcastLocalDataChange();
   };
 
   // ========== 提现任务相关 ==========
@@ -689,7 +703,7 @@ const WithdrawalRecordPage: React.FC = () => {
 
     const updated = rechargeRecords.map(r => r.key === payRecord.key ? {
       ...r, status: 'paid' as RechargeStatus, operator: localStorage.getItem('username') || '',
-      accountName: bank?.name || '', bankName: `${bank?.bankName}${bank?.branchName ? '(' + bank.branchName + ')' : ''}`,
+      accountName: bank?.name || '', bankName: bank ? `${bank.bankName}${bank.branchName ? '(' + bank.branchName + ')' : ''}` : '',
       bankAccountNo: bank?.bankAccountNo || '', paidAt: dayjs().format('YYYY-MM-DD HH:mm:ss'), updatedAt: new Date().toLocaleString('zh-CN'),
     } : r);
     saveRechRecords(updated);
@@ -1219,37 +1233,7 @@ const WithdrawalRecordPage: React.FC = () => {
   // 汇总
   const totalAmount = useMemo(() => filteredRecords.reduce((s, r) => s + (r.amount || 0), 0), [filteredRecords]);
 
-  // ========== 负责人设置（仅管理员可配置）==========
-  const allUserOptions = useMemo(() => {
-    try {
-      const users: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
-      const resolveOwner = (u: any): string => {
-        if (!u.isSubAccount || !u.parentAccount) return u.username;
-        const visited = new Set<string>();
-        let cur = u.parentAccount;
-        while (cur && !visited.has(cur)) {
-          visited.add(cur);
-          const parent = users.find((x: any) => x.username === cur);
-          if (!parent || !parent.isSubAccount) return cur;
-          cur = parent.parentAccount || '';
-        }
-        return cur || u.username;
-      };
-      return users
-        .filter((u: any) => resolveOwner(u) === owner || u.username === owner)
-        .map((u: any) => ({ value: u.username, label: `${u.displayName || u.contactPerson || u.name || u.username} (${u.username})` }));
-    } catch { return []; }
-  }, [owner]);
-  const managerDisplayNames = (): string => {
-    if (wdManagers.length === 0) return '未设置（所有人可看全部）';
-    return wdManagers.map(un => getDisplayName(un)).join('、');
-  };
-  const handleSaveManagers = () => {
-    setWdManagers(managerSelectedUsers);
-    safeSetItem(managersKey, JSON.stringify(managerSelectedUsers));
-    setManagerModalVisible(false);
-    message.success('负责人已保存');
-  };
+  // 负责人可见范围统一走「店铺管理 → 负责人设置」（shopScope），本页不再提供独立负责人配置
 
   // 列宽拖拽调整
   const { wrapColumns } = useResizableColumns<WithdrawalRecord>(`colWidths_withdrawal_${owner}`);
@@ -1261,7 +1245,8 @@ const WithdrawalRecordPage: React.FC = () => {
       const branch = b.branchName ? `（${b.branchName}）` : '';
       return {
         value: b.key,
-        label: `${b.name} - ${b.bankName}${branch} ${last4}`,
+        // 银行账户历史数据可能没有 bankName：直接模板拼接会把字面 "undefined" 暴露在下拉里
+        label: `${b.name}${b.bankName ? ` - ${b.bankName}${branch}` : ''}${last4 ? ` ${last4}` : ''}`,
       };
     });
   }, [bankAccounts]);
@@ -1271,7 +1256,8 @@ const WithdrawalRecordPage: React.FC = () => {
     const bank = bankAccounts.find(b => b.key === bankKey);
     if (bank) {
       setFormAccountName(bank.name || '');
-      setFormBankName(`${bank.bankName}${bank.branchName ? '（' + bank.branchName + '）' : ''}`);
+      // 同上：bankName 缺失时写空串而不是字面 "undefined"（一旦落库，列表列把它当真值渲染）
+      setFormBankName([bank.bankName, bank.branchName ? `（${bank.branchName}）` : ''].filter(Boolean).join(''));
       setFormBankAccountNo(bank.bankAccountNo || '');
       // 银行卡负责人：引用银行账户列表中的负责人字段
       setFormBankPerson(bank.person || '');
@@ -1288,7 +1274,7 @@ const WithdrawalRecordPage: React.FC = () => {
       render: (v: string) => <Text strong>{v}</Text> },
     { title: '开户银行', dataIndex: 'bankName', key: 'bankName', width: 220, align: 'left' as const,
       render: (v: string, r: WithdrawalRecord) => {
-        if (!v) return <Text type="secondary">—</Text>;
+        if (!v || v === 'undefined') return <Text type="secondary">—</Text>;
         const color = getBankColor(v);
         const short = getBankShortName(v);
         const matchedBank = bankAccounts.find(b => r.bankAccountNo && b.bankAccountNo === r.bankAccountNo);
@@ -1401,9 +1387,6 @@ const WithdrawalRecordPage: React.FC = () => {
                 setWithdrawTaskVisible(true);
                 setWithdrawTaskSelected([]);
               }}>发起提现任务</Button>
-              {isAdmin && <Tooltip title={`负责人：${managerDisplayNames()}`}>
-                <Button icon={<TeamOutlined />} onClick={() => { setManagerSelectedUsers([...wdManagers]); setManagerModalVisible(true); }}>负责人设置</Button>
-              </Tooltip>}
             </Space>
           </Col>
         </Row>
@@ -1653,9 +1636,6 @@ const WithdrawalRecordPage: React.FC = () => {
               <Button icon={<ReloadOutlined />} onClick={reload}>刷新</Button>
               <Button type="primary" icon={<PlusOutlined />} onClick={() => { setApplyEditKey(null); setApplyShop(''); setApplyAmount(0); setApplyQrcode(''); setApplyFinancePerson(''); setApplyVisible(true); }}>申请充值</Button>
               <Button icon={<SettingOutlined />} onClick={() => setRechFieldConfigVisible(true)}>显示字段</Button>
-              {isAdmin && <Tooltip title={`负责人：${managerDisplayNames()}`}>
-                <Button icon={<TeamOutlined />} onClick={() => { setManagerSelectedUsers([...wdManagers]); setManagerModalVisible(true); }}>负责人设置</Button>
-              </Tooltip>}
             </Space>
           </Col>
         </Row>
@@ -1677,7 +1657,7 @@ const WithdrawalRecordPage: React.FC = () => {
                 accountName: { title: '账户名称', dataIndex: 'accountName', key: 'accountName', width: 100, align: 'center' as const },
                 bankName: { title: '开户银行', dataIndex: 'bankName', key: 'bankName', width: 180, align: 'left' as const,
                   render: (v: string, r: RechargeRecord) => {
-                    if (!v) return <Text type="secondary">—</Text>;
+                    if (!v || v === 'undefined') return <Text type="secondary">—</Text>;
                     const color = getBankColor(v);
                     const short = getBankShortName(v);
                     // 通过银行账号匹配银行账户获取账户类型
@@ -1956,36 +1936,6 @@ const WithdrawalRecordPage: React.FC = () => {
         <div style={{ marginTop: 8, color: '#999', fontSize: 12 }}>
           * 已提现（最近3天有提现记录）的店铺不可重复发起任务
         </div>
-      </Modal>
-
-      {/* ========== 负责人设置弹窗 ========== */}
-      <Modal
-        title={<span><TeamOutlined style={{ marginRight: 8, color: PRIMARY }} />负责人设置 — 提现/充值</span>}
-        open={managerModalVisible}
-        onCancel={() => setManagerModalVisible(false)}
-        onOk={handleSaveManagers}
-        okText="保存"
-        cancelText="取消"
-        width={520}
-        destroyOnClose
-      >
-        <div style={{ marginBottom: 12, padding: '8px 12px', background: '#f6f8fa', border: '1px solid #e3e8ee', borderRadius: 6, fontSize: 12, color: '#5a6d85', lineHeight: 1.8 }}>
-          设置提现/充值记录的查看负责人。设置后仅负责人和管理员可查看所有记录，其他成员只能看到自己创建的记录；未设置时所有人可看全部。
-        </div>
-        <div style={{ marginBottom: 4, fontSize: 12, color: '#5a6d85' }}>选择负责人（可多选）</div>
-        <Select
-          mode="multiple"
-          style={{ width: '100%' }}
-          placeholder="请选择负责人（不选表示所有人可看全部）"
-          value={managerSelectedUsers}
-          onChange={setManagerSelectedUsers}
-          options={allUserOptions}
-          showSearch
-          filterOption={(input, option) => String(option?.label ?? '').toLowerCase().includes(input.toLowerCase())}
-        />
-        {wdManagers.length > 0 && (
-          <div style={{ marginTop: 12, fontSize: 12, color: '#5a6d85' }}>当前负责人：{managerDisplayNames()}</div>
-        )}
       </Modal>
     </div>
   );

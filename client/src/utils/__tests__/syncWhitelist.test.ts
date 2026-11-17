@@ -36,4 +36,14 @@ describe('财务域同步白名单', () => {
     // 盘点任务状态必须同步（随 month_end_check_ 前缀入白名单）：负责人电脑靠拉取该键弹出盘点任务提醒
     expect(isSyncKey('month_end_check_task_status_owner1')).toBe(true);
   });
+
+  it('待办实时通知集内的键必须同时在同步白名单内（否则 ws 通知了也拉不到数据）', () => {
+    // 客户端 isTodoNotifyKey 与服务端 sync.routes 的 TODO_NOTIFY_PREFIXES 成对登记，
+    // 服务端写入后走 WebSocket 广播，在线端收到就做整表增量拉取
+    const TODO_KEYS = [
+      'recharge_record_owner1', 'month_end_check_owner1', 'month_end_check_task_status_owner1',
+      'withdrawal_record_owner1', 'withdrawal_task_status_owner1',
+    ];
+    TODO_KEYS.forEach(k => expect(isSyncKey(k)).toBe(true));
+  });
 });

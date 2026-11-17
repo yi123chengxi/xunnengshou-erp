@@ -1,7 +1,7 @@
 import React from 'react';
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { Skeleton } from 'antd';
-import { pullAllDatasets, pullPermDatasets, isPermSyncKey } from './utils/serverSync';
+import { pullAllDatasets, pullPermDatasets, isPermSyncKey, isTodoNotifyKey } from './utils/serverSync';
 import { syncOwnerFromToken } from './utils/dataOwner';
 import { startNewVersionWatch } from './utils/newVersionWatch';
 import { PRESET_PRINT_TEMPLATES, seedPresetPrintTemplates } from './config/presetPrintTemplates';
@@ -176,17 +176,20 @@ const SyncGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     idle(() => { void import('./pages/Dashboard'); });
   }, [ready]);
 
-  // 权限变更实时生效：其他浏览器/其他电脑改了角色或子账号权限 →
-  // 服务端经 WebSocket 广播 dataset_updated → 这里立即增量拉取并重算菜单（无需刷新，也不等 60 秒轮询）
+  // 权限变更与待办数据实时生效：其他浏览器/其他电脑改了权限，或提交了充值申请/盘点任务/提现记录 →
+  // 服务端经 WebSocket 广播 dataset_updated → 这里立即增量拉取（无需刷新，也不等 30/60 秒轮询）
   React.useEffect(() => {
     let timer: any = null;
     const onRemoteUpdate = (e: Event) => {
       const key = String((e as CustomEvent)?.detail?.key || '');
-      if (!key || !isPermSyncKey(key)) return;
+      const isPerm = isPermSyncKey(key);
+      if (!key || (!isPerm && !isTodoNotifyKey(key))) return;
       if (timer) return; // 600ms 内的多次写入合并为一次拉取
       timer = setTimeout(() => {
         timer = null;
-        void pullPermDatasets();
+        // 权限键走轻量增量；待办键走整表增量，落地后自动派发 sync-data-updated，
+        // 保活页列表与布局层待办弹窗复检随即跟上
+        void (isPerm ? pullPermDatasets() : pullAllDatasets());
       }, 600);
     };
     window.addEventListener(REMOTE_UPDATE_EVENT, onRemoteUpdate);

@@ -152,6 +152,26 @@ function notifyPermDatasetChanged(key: string, user: SyncUser | null): void {
   try { notifyDatasetUpdated(targets, key); } catch { /* ignore */ }
 }
 
+// ============ 待办类数据集变更实时通知 ============
+// 充值申请/盘点任务/提现任务这类「等他人处理」的数据写入成功后，通知该租户全部在线端立即拉取：
+// 负责人端从「等满 30/60 秒轮询」变成秒级收到右下角弹窗，已完成的待办也能秒级自动撤下。
+const TODO_NOTIFY_PREFIXES = ['recharge_record_', 'month_end_check_', 'withdrawal_record_', 'withdrawal_task_status_'];
+
+function todoNotifyTargets(key: string, user: SyncUser | null): string[] {
+  if (!user) return [];
+  if (!TODO_NOTIFY_PREFIXES.some(p => key.startsWith(p))) return [];
+  // 通知主账号即可：sendToUser 对主账号会自动扇出到全部在线子账号
+  const owner = user.owner || user.username;
+  return owner ? [owner] : [];
+}
+
+/** 待办数据落库后的实时通知，与权限通知同构（静默失败，轮询仍作兜底） */
+function notifyTodoDatasetChanged(key: string, user: SyncUser | null): void {
+  const targets = todoNotifyTargets(key, user);
+  if (targets.length === 0) return;
+  try { notifyDatasetUpdated(targets, key); } catch { /* ignore */ }
+}
+
 // 合作镜像键的状态单调保护：双方都携带显式 statusTs（状态变更时刻）且服务端记录的事件更新时，
 // 不允许陈旧副本把状态字段写回旧值；其余字段仍以 incoming 为准。任一侧缺少 statusTs 时不改写原语义，
 // 避免把「未打时间戳的合法状态变更」误判为陈旧而永久卡死。
@@ -306,8 +326,8 @@ router.put('/dataset', async (req: Request, res: Response) => {
         }
       }
     }
-    // 权限类数据集落库成功后通知该租户在线端立即拉取（响应正常结束才算保存成功）
-    res.on('finish', () => { if (res.statusCode < 400) notifyPermDatasetChanged(key, user); });
+    // 权限/待办类数据集落库成功后通知该租户在线端立即拉取（响应正常结束才算保存成功）
+    res.on('finish', () => { if (res.statusCode < 400) { notifyPermDatasetChanged(key, user); notifyTodoDatasetChanged(key, user); } });
     // 账号数据集写入前处理：新建行准入（用户名≥8位 + 全局去重含跨租户）→ 明文密码统一转 bcrypt 哈希
     let registeredRejected: { username: string; reason: string }[] = [];
     if (key === 'registeredUsers') {

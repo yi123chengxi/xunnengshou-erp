@@ -125,6 +125,15 @@ export function isUploadOnlyKey(key: string): boolean {
   return UPLOAD_ONLY_PREFIXES.some(p => key.startsWith(p));
 }
 
+// 待办类数据集（与服务端 sync.routes 的 TODO_NOTIFY_PREFIXES 成对登记）：
+// 充值申请/盘点任务/提现记录写入后，服务端经聊天 WebSocket 广播 dataset_updated，
+// 在线端收到即做一次增量拉取，负责人端的待办弹窗不再等 30/60 秒轮询。
+const TODO_NOTIFY_PREFIXES = ['recharge_record_', 'month_end_check_', 'withdrawal_record_', 'withdrawal_task_status_'];
+
+export function isTodoNotifyKey(key: string): boolean {
+  return TODO_NOTIFY_PREFIXES.some(p => key.startsWith(p));
+}
+
 /**
  * 权限域键：从服务端拉取落地后必须派发权限事件，让已挂载布局的菜单/门控立即重算。
  * 否则另一个浏览器即使拉到了新权限，也要手动刷新才生效（本地写入不触发跨标签 storage 事件）。

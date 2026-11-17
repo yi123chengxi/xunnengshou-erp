@@ -60,7 +60,7 @@ import { loadUserNotices, markUserNoticeRead, markAllUserNoticesRead, clearUserN
 import { recoverRechargeNotifications } from '../utils/rechargeNotification';
 import { isShopPersonMe } from '../utils/shopScope';
 import { showNativeNotification, isNotificationBlocked, isNotificationTypeEnabled } from '../utils/pushNotification';
-import { showTaskNotify, TASK_NOTIFY_RESHOW_EVENT } from '../utils/taskNotify';
+import { showTaskNotify, closeTaskNotify, pruneTaskNotifs, TASK_NOTIFY_RESHOW_EVENT, WITHDRAW_TASK_NOTIF_PREFIXES, INVENTORY_TASK_NOTIF_PREFIXES } from '../utils/taskNotify';
 import { getFinancePendingCounts, isFinancePendingStorageKey, FinancePending } from '../utils/financePending';
 
 const { Header, Sider, Content } = Layout;
@@ -489,10 +489,14 @@ const MainLayout: React.FC = () => {
     if (!owner || !currentUser) return;
     const show = () => recoverRechargeNotifications(owner, currentUser, (path) => navigate(path));
     const initTimer = setTimeout(show, 800);
-    const interval = setInterval(show, 30000);
+    // 10 秒轮询兜底；数据一落地（sync-data-updated）立即复检，
+    // 使申请充值在负责人端接近实时弹出，而不是最多等满一个轮询周期
+    const interval = setInterval(show, 10000);
     const onReshow = () => show();
+    const onSyncUpdate = () => show();
     window.addEventListener(TASK_NOTIFY_RESHOW_EVENT, onReshow);
-    return () => { clearTimeout(initTimer); clearInterval(interval); window.removeEventListener(TASK_NOTIFY_RESHOW_EVENT, onReshow); };
+    window.addEventListener('sync-data-updated', onSyncUpdate);
+    return () => { clearTimeout(initTimer); clearInterval(interval); window.removeEventListener(TASK_NOTIFY_RESHOW_EVENT, onReshow); window.removeEventListener('sync-data-updated', onSyncUpdate); };
   }, [navigate]);
 
   // ===================== 提现任务通知恢复（系统级） =====================
@@ -508,7 +512,10 @@ const MainLayout: React.FC = () => {
       try {
         const taskMap: Record<string, string> = JSON.parse(localStorage.getItem(`withdrawal_task_status_${owner}`) || '{}');
         const shopKeys = Object.keys(taskMap);
-        if (shopKeys.length === 0) return;
+        // keep 收集本轮仍应挂在屏幕上的提醒 key：不再处于任务中的旧卡片一律撤下
+        // （任务被发布端排空/店铺被删/负责人被改走时，原写法只会“停止再弹”，已弹卡片永远残留）
+        const keep = new Set<string>();
+        if (shopKeys.length === 0) { pruneTaskNotifs(WITHDRAW_TASK_NOTIF_PREFIXES, keep); return; }
         const shops: any[] = JSON.parse(localStorage.getItem(`shop_info_${owner}`) || '[]');
         let wdRecords: any[] = [];
         try { wdRecords = JSON.parse(localStorage.getItem(`withdrawal_record_${owner}`) || '[]'); } catch { wdRecords = []; }
@@ -516,9 +523,10 @@ const MainLayout: React.FC = () => {
         shopKeys.forEach(shopKey => {
           const shop = shops.find((s: any) => s.key === shopKey);
           if (!shop || !isShopPersonMe(owner, shop.person)) return; // 仅店铺负责人（shop.person 存显示名，需用别名匹配 username）
-          // 最近 3 天已有该店铺提现记录 → 任务完成，不再提醒
+          // 最近 3 天已有该店铺提现记录 → 任务完成，撤下残留弹窗并不再提醒
           const done = wdRecords.some((r: any) => r.shopName === shop.shopName && dayjs(r.createdAt || r.withdrawalDate).isAfter(threeDaysAgo));
-          if (done) return;
+          if (done) { closeTaskNotify(`wd-task-${shopKey}`); return; }
+          keep.add(`wd-task-${shopKey}`);
           const title = '提现任务提醒';
           const body = `店铺「${shop.shopName}」有提现任务待处理，请及时办理提现`;
           const onClick = () => {
@@ -529,13 +537,17 @@ const MainLayout: React.FC = () => {
           const native = showNativeNotification(title, body, onClick, `wd-task-${shopKey}`);
           if (!native) showTaskNotify(`wd-task-${shopKey}`, title, body, onClick);
         });
+        pruneTaskNotifs(WITHDRAW_TASK_NOTIF_PREFIXES, keep);
       } catch { /* ignore */ }
     };
     const initTimer = setTimeout(check, 1200);
     const interval = setInterval(check, 60000);
     const onReshow = () => check();
+    // 同步落地即复检：别端刚录完提现/盘点，本页卡片应立即撤下，不必等下一轮轮询
+    const onSyncUpdate = () => check();
     window.addEventListener(TASK_NOTIFY_RESHOW_EVENT, onReshow);
-    return () => { clearTimeout(initTimer); clearInterval(interval); window.removeEventListener(TASK_NOTIFY_RESHOW_EVENT, onReshow); };
+    window.addEventListener('sync-data-updated', onSyncUpdate);
+    return () => { clearTimeout(initTimer); clearInterval(interval); window.removeEventListener(TASK_NOTIFY_RESHOW_EVENT, onReshow); window.removeEventListener('sync-data-updated', onSyncUpdate); };
   }, [navigate]);
 
   // ===================== 盘点任务通知恢复（系统级） =====================
@@ -551,7 +563,8 @@ const MainLayout: React.FC = () => {
       try {
         const taskMap: Record<string, { month?: string }> = JSON.parse(localStorage.getItem(`month_end_check_task_status_${owner}`) || '{}');
         const shopKeys = Object.keys(taskMap);
-        if (shopKeys.length === 0) return;
+        const keep = new Set<string>();
+        if (shopKeys.length === 0) { pruneTaskNotifs(INVENTORY_TASK_NOTIF_PREFIXES, keep); return; }
         const shops: any[] = JSON.parse(localStorage.getItem(`shop_info_${owner}`) || '[]');
         let checkRecords: any[] = [];
         try { checkRecords = JSON.parse(localStorage.getItem(`month_end_check_${owner}`) || '[]'); } catch { checkRecords = []; }
@@ -561,7 +574,8 @@ const MainLayout: React.FC = () => {
           if (!shop || !isShopPersonMe(owner, shop.person)) return; // 仅店铺负责人（shop.person 存显示名，需用别名匹配）
           // 该月份已有盘点记录 → 任务完成，移除残留弹窗并不再提醒
           const done = checkRecords.some((r: any) => r.calcMonth === month && (r.shopId === shopKey || r.shopName === shop.shopName));
-          if (done) { notification.destroy(`inv-task-${shopKey}`); return; }
+          if (done) { closeTaskNotify(`inv-task-${shopKey}`); return; }
+          keep.add(`inv-task-${shopKey}`);
           const title = '盘点任务提醒';
           const body = `店铺「${shop.shopName}」有 ${month} 盘点任务待处理，请及时录入盘点记录`;
           const onClick = () => {
@@ -573,13 +587,16 @@ const MainLayout: React.FC = () => {
           const native = showNativeNotification(title, body, onClick, `inv-task-${shopKey}`);
           if (!native) showTaskNotify(`inv-task-${shopKey}`, title, body, onClick);
         });
+        pruneTaskNotifs(INVENTORY_TASK_NOTIF_PREFIXES, keep);
       } catch { /* ignore */ }
     };
     const initTimer = setTimeout(check, 1200);
     const interval = setInterval(check, 60000);
     const onReshow = () => check();
+    const onSyncUpdate = () => check();
     window.addEventListener(TASK_NOTIFY_RESHOW_EVENT, onReshow);
-    return () => { clearTimeout(initTimer); clearInterval(interval); window.removeEventListener(TASK_NOTIFY_RESHOW_EVENT, onReshow); };
+    window.addEventListener('sync-data-updated', onSyncUpdate);
+    return () => { clearTimeout(initTimer); clearInterval(interval); window.removeEventListener(TASK_NOTIFY_RESHOW_EVENT, onReshow); window.removeEventListener('sync-data-updated', onSyncUpdate); };
   }, [navigate]);
 
   // 设置模态框

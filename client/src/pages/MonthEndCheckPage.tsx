@@ -16,6 +16,7 @@ import FieldConfigModal from '../components/FieldConfigModal';
 import { safeSetItem } from '../utils/storageQuota';
 import { saveDataset } from '../utils/dataStore';
 import { reloadAfterPull } from '../utils/serverSync';
+import { applyIfChanged, broadcastLocalDataChange } from '../utils/useDatasetSyncReload';
 
 const { Text } = Typography;
 const PRIMARY = '#1e4a7e';
@@ -283,10 +284,13 @@ const MonthEndCheckPage: React.FC = () => {
 
   // ===================== 数据加载 =====================
   const reload = useCallback(() => {
-    try { setShops(JSON.parse(localStorage.getItem(shopKey) || '[]')); } catch { setShops([]); }
-    try { setRecords(JSON.parse(localStorage.getItem(checkKey) || '[]')); } catch { setRecords([]); }
-    try { setShipRecords(JSON.parse(localStorage.getItem(shipKey) || '[]')); } catch { setShipRecords([]); }
-    try { setReturnRecords(JSON.parse(localStorage.getItem(returnKey) || '[]')); } catch { setReturnRecords([]); }
+    // applyIfChanged：同步轮询/窗口聚焦都会跑 reload，内容未变时保持原引用，
+    // 避免“每次聚焦都产生新数组 → 下游 effect 反复触发 → 陈旧整表回写”抹掉别端新增。
+    const parse = (k: string): any[] => { try { const v = JSON.parse(localStorage.getItem(k) || '[]'); return Array.isArray(v) ? v : []; } catch { return []; } };
+    applyIfChanged(setShops, parse(shopKey));
+    applyIfChanged(setRecords, parse(checkKey));
+    applyIfChanged(setShipRecords, parse(shipKey));
+    applyIfChanged(setReturnRecords, parse(returnKey));
   }, [shopKey, checkKey, shipKey, returnKey]);
   useEffect(() => { reload(); }, [reload]);
   // 同步落地/窗口重新可见时重载：避免长期挂载页面拿陈旧统计整表回写，抹掉别端刚新增的数据
@@ -307,11 +311,13 @@ const MonthEndCheckPage: React.FC = () => {
     const json = JSON.stringify(list);
     safeSetItem(shipKey, json); safeSetItem(`${shipKey}_ts`, String(Date.now()));
     saveDataset(shipKey, json); setShipRecords(list);
+    broadcastLocalDataChange();
   };
   const saveReturnRecords = (list: ReturnRecord[]) => {
     const json = JSON.stringify(list);
     safeSetItem(returnKey, json); safeSetItem(`${returnKey}_ts`, String(Date.now()));
     saveDataset(returnKey, json); setReturnRecords(list);
+    broadcastLocalDataChange();
   };
 
   // ===================== 发货金额 CRUD =====================
@@ -1026,6 +1032,9 @@ const MonthEndCheckPage: React.FC = () => {
     safeSetItem(`${checkKey}_ts`, String(Date.now()));
     saveDataset(checkKey, json);
     setRecords(list);
+    // 同文档内其他保活页不会因 localStorage 写入收到 storage 事件，主动广播一下，
+    // 否则“本端刚录的盘点记录”要手动切回页面才能看到
+    broadcastLocalDataChange();
   };
 
   // ===================== 新增/编辑 =====================
@@ -1035,7 +1044,10 @@ const MonthEndCheckPage: React.FC = () => {
       key: `check-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       shopId: shops[0].key,
       shopName: shops[0].shopName,
-      calcMonth: dayjs().format('YYYY-MM'),
+      // 默认沿用当前筛选月份（包括盘点任务提醒跳转带进来的任务月份）：
+      // 若默认写当前月，新记录会落在筛选条件之外——列表看不到、盘点状况不转绿、弹窗不自动撤下，
+      // 必须重新进入页面清空筛选才能看到刚录的数据
+      calcMonth: filterMonth || dayjs().format('YYYY-MM'),
       currentBalance: 0, pendingAmount: 0, adFunds: 0, deposit: 0,
       chargePerson: shops[0].person || '',
       createdAt: new Date().toLocaleString('zh-CN'), updatedAt: '',
@@ -1205,7 +1217,7 @@ const MonthEndCheckPage: React.FC = () => {
                 allowClear style={{ width: 160 }} prefix={<SearchOutlined />} />
               <Button icon={<ReloadOutlined />} onClick={reload}>刷新</Button>
               <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增记录</Button>
-              <Button icon={<SendOutlined />} onClick={() => { setTaskSelected([]); setTaskVisible(true); }}>发布盘点任务</Button>
+              <Button icon={<SendOutlined />} onClick={() => { reload(); setTaskSelected([]); setTaskVisible(true); }}>发布盘点任务</Button>
               <Tag color="blue">{records.length} 条记录</Tag>
             </Space>
           </Col>

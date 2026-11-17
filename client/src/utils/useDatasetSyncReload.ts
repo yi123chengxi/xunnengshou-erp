@@ -48,3 +48,14 @@ export default useDatasetSyncReload;
 export function applyIfChanged<T>(setter: (updater: (prev: T) => T) => void, next: T): void {
   setter(prev => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
 }
+
+/**
+ * 本机写入后立即广播“数据已变”：与 sync-data-updated 同一语义，
+ * 让其他保活页（同一文档内的不同标签页组件）同步重读本地快照。
+ * 原生 storage 事件在同一文档内不触发，保活页又不重新挂载，
+ * 只靠写入方自己 setState 会留下“刚新增的记录在其他窗口里看不到”的空洞。
+ * 接收侧均使用 applyIfChanged 重载，内容未变时不会触发重渲染，回环成本为零。
+ */
+export function broadcastLocalDataChange(): void {
+  try { window.dispatchEvent(new Event('sync-data-updated')); } catch { /* ignore */ }
+}

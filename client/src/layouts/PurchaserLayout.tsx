@@ -38,7 +38,7 @@ import { safeSetItem } from '../utils/storageQuota';
 import { saveDataset } from '../utils/dataStore';
 import { showNativeNotification, showTimedNotification, isNotificationBlocked, isNotificationTypeEnabled } from '../utils/pushNotification';
 import { recoverRechargeNotifications } from '../utils/rechargeNotification';
-import { showTaskNotify, TASK_NOTIFY_RESHOW_EVENT } from '../utils/taskNotify';
+import { showTaskNotify, closeTaskNotify, pruneTaskNotifs, TASK_NOTIFY_RESHOW_EVENT, WITHDRAW_TASK_NOTIF_PREFIXES, INVENTORY_TASK_NOTIF_PREFIXES } from '../utils/taskNotify';
 import { getFinancePendingCounts, isFinancePendingStorageKey, FinancePending } from '../utils/financePending';
 import { isShopPersonMe } from '../utils/shopScope';
 import { useDevPermSet, isPermAllowed } from '../utils/devPerms';
@@ -709,11 +709,13 @@ const PurchaserLayout: React.FC = () => {
     const showNotifications = () => recoverRechargeNotifications(owner, currentUser);
     // 首次延迟 800ms 后显示
     const initTimer = setTimeout(showNotifications, 800);
-    // 每 30 秒重新检查待审核记录并重新弹出（用户关闭后自动恢复）
-    const interval = setInterval(showNotifications, 30000);
+    // 10 秒轮询兜底；数据一落地（sync-data-updated）立即复检，使申请充值接近实时弹出
+    const interval = setInterval(showNotifications, 10000);
     const onReshow = () => showNotifications();
+    const onSyncUpdate = () => showNotifications();
     window.addEventListener(TASK_NOTIFY_RESHOW_EVENT, onReshow);
-    return () => { clearTimeout(initTimer); clearInterval(interval); window.removeEventListener(TASK_NOTIFY_RESHOW_EVENT, onReshow); };
+    window.addEventListener('sync-data-updated', onSyncUpdate);
+    return () => { clearTimeout(initTimer); clearInterval(interval); window.removeEventListener(TASK_NOTIFY_RESHOW_EVENT, onReshow); window.removeEventListener('sync-data-updated', onSyncUpdate); };
   }, [getDataOwner]);
 
   // ===================== 全局提现任务通知恢复（负责人电脑） =====================
@@ -730,7 +732,9 @@ const PurchaserLayout: React.FC = () => {
       try {
         const taskMap: Record<string, string> = JSON.parse(localStorage.getItem(`withdrawal_task_status_${owner}`) || '{}');
         const shopKeys = Object.keys(taskMap);
-        if (shopKeys.length === 0) return;
+        // keep 收集本轮仍应提醒的 key，不再处于任务中的旧卡片统一撤下（否则完成后必须人工关闭）
+        const keep = new Set<string>();
+        if (shopKeys.length === 0) { pruneTaskNotifs(WITHDRAW_TASK_NOTIF_PREFIXES, keep); return; }
         const shops: any[] = JSON.parse(localStorage.getItem(`shop_info_${owner}`) || '[]');
         let wdRecords: any[] = [];
         try { wdRecords = JSON.parse(localStorage.getItem(`withdrawal_record_${owner}`) || '[]'); } catch { wdRecords = []; }
@@ -740,7 +744,8 @@ const PurchaserLayout: React.FC = () => {
           if (!shop || !isShopPersonMe(owner, shop.person)) return; // 仅店铺负责人（shop.person 存显示名，需用别名匹配 username）
           // 最近 3 天已有该店铺提现记录 → 任务完成，不再提醒
           const done = wdRecords.some((r: any) => r.shopName === shop.shopName && dayjs(r.createdAt || r.withdrawalDate).isAfter(threeDaysAgo));
-          if (done) return;
+          if (done) { closeTaskNotify(`wd-task-${shopKey}`); return; }
+          keep.add(`wd-task-${shopKey}`);
           const title = '提现任务提醒';
           const body = `店铺「${shop.shopName}」有提现任务待处理，请及时办理提现`;
           const onClick = () => {
@@ -751,13 +756,16 @@ const PurchaserLayout: React.FC = () => {
           const native = showNativeNotification(title, body, onClick, `wd-task-${shopKey}`);
           if (!native) showTaskNotify(`wd-task-${shopKey}`, title, body, onClick);
         });
+        pruneTaskNotifs(WITHDRAW_TASK_NOTIF_PREFIXES, keep);
       } catch { /* ignore */ }
     };
     const initTimer = setTimeout(check, 1200);
     const interval = setInterval(check, 60000);
     const onReshow = () => check();
+    const onSyncUpdate = () => check();
     window.addEventListener(TASK_NOTIFY_RESHOW_EVENT, onReshow);
-    return () => { clearTimeout(initTimer); clearInterval(interval); window.removeEventListener(TASK_NOTIFY_RESHOW_EVENT, onReshow); };
+    window.addEventListener('sync-data-updated', onSyncUpdate);
+    return () => { clearTimeout(initTimer); clearInterval(interval); window.removeEventListener(TASK_NOTIFY_RESHOW_EVENT, onReshow); window.removeEventListener('sync-data-updated', onSyncUpdate); };
   }, [getDataOwner]);
 
   // ===================== 全局盘点任务通知恢复（负责人电脑） =====================
@@ -773,7 +781,8 @@ const PurchaserLayout: React.FC = () => {
       try {
         const taskMap: Record<string, { month?: string }> = JSON.parse(localStorage.getItem(`month_end_check_task_status_${owner}`) || '{}');
         const shopKeys = Object.keys(taskMap);
-        if (shopKeys.length === 0) return;
+        const keep = new Set<string>();
+        if (shopKeys.length === 0) { pruneTaskNotifs(INVENTORY_TASK_NOTIF_PREFIXES, keep); return; }
         const shops: any[] = JSON.parse(localStorage.getItem(`shop_info_${owner}`) || '[]');
         let checkRecords: any[] = [];
         try { checkRecords = JSON.parse(localStorage.getItem(`month_end_check_${owner}`) || '[]'); } catch { checkRecords = []; }
@@ -782,7 +791,8 @@ const PurchaserLayout: React.FC = () => {
           const shop = shops.find((s: any) => s.key === shopKey);
           if (!shop || !isShopPersonMe(owner, shop.person)) return; // 仅店铺负责人（shop.person 存显示名，需用别名匹配）
           const done = checkRecords.some((r: any) => r.calcMonth === month && (r.shopId === shopKey || r.shopName === shop.shopName));
-          if (done) { notification.destroy(`inv-task-${shopKey}`); return; }
+          if (done) { closeTaskNotify(`inv-task-${shopKey}`); return; }
+          keep.add(`inv-task-${shopKey}`);
           const title = '盘点任务提醒';
           const body = `店铺「${shop.shopName}」有 ${month} 盘点任务待处理，请及时录入盘点记录`;
           const onClick = () => {
@@ -793,13 +803,16 @@ const PurchaserLayout: React.FC = () => {
           const native = showNativeNotification(title, body, onClick, `inv-task-${shopKey}`);
           if (!native) showTaskNotify(`inv-task-${shopKey}`, title, body, onClick);
         });
+        pruneTaskNotifs(INVENTORY_TASK_NOTIF_PREFIXES, keep);
       } catch { /* ignore */ }
     };
     const initTimer = setTimeout(check, 1200);
     const interval = setInterval(check, 60000);
     const onReshow = () => check();
+    const onSyncUpdate = () => check();
     window.addEventListener(TASK_NOTIFY_RESHOW_EVENT, onReshow);
-    return () => { clearTimeout(initTimer); clearInterval(interval); window.removeEventListener(TASK_NOTIFY_RESHOW_EVENT, onReshow); };
+    window.addEventListener('sync-data-updated', onSyncUpdate);
+    return () => { clearTimeout(initTimer); clearInterval(interval); window.removeEventListener(TASK_NOTIFY_RESHOW_EVENT, onReshow); window.removeEventListener('sync-data-updated', onSyncUpdate); };
   }, [getDataOwner]);
 
   const handleGlobalConfirmPay = () => {
@@ -842,7 +855,7 @@ const PurchaserLayout: React.FC = () => {
       const records: any[] = JSON.parse(localStorage.getItem(rechKey) || '[]');
       const updated = records.map((r: any) => r.key === globalPayRecord.key ? {
         ...r, status: 'paid', operator: localStorage.getItem('username') || '',
-        accountName: bank?.name || '', bankName: `${bank?.bankName}${bank?.branchName ? '(' + bank.branchName + ')' : ''}`,
+        accountName: bank?.name || '', bankName: bank ? `${bank.bankName}${bank.branchName ? '(' + bank.branchName + ')' : ''}` : '',
         bankAccountNo: bank?.bankAccountNo || '', paidAt: dayjs().format('YYYY-MM-DD HH:mm:ss'), updatedAt: new Date().toLocaleString('zh-CN'),
       } : r);
       const jsonStr = JSON.stringify(updated);
@@ -851,6 +864,9 @@ const PurchaserLayout: React.FC = () => {
       saveDataset(rechKey, jsonStr);
       // 触发充值记录页面刷新
       window.dispatchEvent(new CustomEvent('recharge-record-updated'));
+      // 布局层待办/任务弹窗复检只认 sync-data-updated：支付落地后立即广播，
+      // 使该笔待审批卡片秒级撤下，不必等 10 秒充值轮询周期
+      window.dispatchEvent(new Event('sync-data-updated'));
     } catch {}
     setGlobalPayVisible(false);
     notification.destroy(`rech-notify-${globalPayRecord.key}`);
@@ -870,7 +886,7 @@ const PurchaserLayout: React.FC = () => {
   const globalBankOptions = globalBankAccounts.map((b: any) => {
     const last4 = b.bankAccountNo ? '****' + String(b.bankAccountNo).slice(-4) : '';
     const branch = b.branchName ? `（${b.branchName}）` : '';
-    return { value: b.key, label: `${b.name} - ${b.bankName}${branch} ${last4}` };
+    return { value: b.key, label: `${b.name}${b.bankName ? ` - ${b.bankName}${branch}` : ''}${last4 ? ` ${last4}` : ''}` };
   });
 
   // 切换标签页
