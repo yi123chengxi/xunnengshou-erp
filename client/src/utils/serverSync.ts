@@ -1157,6 +1157,21 @@ export async function pullAllDatasets(): Promise<number> {
         let serverRows: any[] = [];
         try { localRows = JSON.parse(localStorage.getItem(key) || '[]'); } catch { localRows = []; }
         try { serverRows = JSON.parse(rec.json); } catch { serverRows = []; }
+        // LS 缓存可能陈旧（大表跳过缓存只写 IndexedDB）：并集的本地行集取 LS/主存
+        // 较新者，否则仅存在于主存的本地新行会被当成不存在，后续服务端副本落地
+        // 整键覆盖时连同 IndexedDB 一起被销毁（新增记录反复横跳直至永久丢失）
+        try {
+          let lsTsN = 0;
+          try {
+            lsTsN = Number(localStorage.getItem(`${key}_ts`) || 0) || 0;
+            if (!lsTsN && localStorage.getItem(key) !== null) lsTsN = 1;
+          } catch { /* ignore */ }
+          const idbFresh = await loadDataset(key);
+          if (idbFresh && typeof idbFresh.json === 'string' && idbFresh.updatedAt > lsTsN) {
+            const idbRows = JSON.parse(idbFresh.json);
+            if (Array.isArray(idbRows) && idbRows.length > 0) localRows = idbRows;
+          }
+        } catch { /* ignore */ }
         if (Array.isArray(localRows) && Array.isArray(serverRows)) {
           const idOfR = (r: any) => (r && (r.key || r.id)) ? String(r.key || r.id) : null;
           const sIds = new Set(serverRows.map(idOfR));

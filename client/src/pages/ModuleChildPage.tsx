@@ -107,7 +107,7 @@ import SalesOutboundStatsPage from './inventory/SalesOutboundStatsPage';
 import { safeSetItem, canCacheDataset, tryCacheDataset } from '../utils/storageQuota';
 import { getDataOwner } from '../utils/brandAuth';
 import { getSessionOwner } from '../utils/dataOwner';
-import { saveDataset, loadDataset } from '../utils/dataStore';
+import { saveDataset, loadDataset, readFreshDataset } from '../utils/dataStore';
 import ReturnRegisterModal from '../components/ReturnRegisterModal';
 import type { ReturnRegisterPayload } from '../components/ReturnRegisterModal';
 import { buildSupplierReturnRow, buildPurchaserReturnBill, writeReturnStockFlows, getOwnCompanyName } from '../utils/returnRegister';
@@ -5607,26 +5607,35 @@ const ModuleChildPage: React.FC = () => {
     // 挂载即激活：主加载 effect 已取数，不重复重载
     if (wasActiveRef.current) return;
     wasActiveRef.current = true;
-    try {
-      const stored = localStorage.getItem(sharedDataKey);
-      if (!stored) return;
-      let parsed = JSON.parse(stored);
-      if (!Array.isArray(parsed)) return;
-      if (moduleKey === 'customer' && childKey === 'bill-detail') parsed = buildBillDetailRows(parsed);
-      // 商品族：切签重载时实际库存按日志自愈
-      if (isProductList) parsed = healActualStockFromLogs(parsed);
-      setDataSource(parsed);
-      loadedIdsRef.current = new Set(parsed.map((r: any) => String(r?.id || r?.key || '')).filter(Boolean));
-    } catch { /* ignore */ }
+    // 取 LS 缓存与 IndexedDB 主存中较新的一份：订单等大表可能长期只写主存，
+    // 直接读陈旧 LS 缓存会把本标签页隐藏期间新增/修改的记录显示回旧状态
+    let cancelled = false;
+    void readFreshDataset(sharedDataKey).then((stored) => {
+      if (cancelled || !stored) return;
+      try {
+        let parsed = JSON.parse(stored);
+        if (!Array.isArray(parsed)) return;
+        if (moduleKey === 'customer' && childKey === 'bill-detail') parsed = buildBillDetailRows(parsed);
+        // 商品族：切签重载时实际库存按日志自愈
+        if (isProductList) parsed = healActualStockFromLogs(parsed);
+        setDataSource(parsed);
+        loadedIdsRef.current = new Set(parsed.map((r: any) => String(r?.id || r?.key || '')).filter(Boolean));
+      } catch { /* ignore */ }
+    }).catch(() => { /* ignore */ });
+    return () => { cancelled = true; };
   }, [location.pathname, mountedPathname, sharedDataKey, moduleKey, childKey]);
 
-  // 服务端同步完成后的轻量级刷新：仅从 localStorage 重新读取，不做 IndexedDB 恢复
+  // 服务端同步完成后的轻量级刷新：仅从本地存储重新读取，不做 IndexedDB 图片恢复
   // 避免 sync-data-updated 事件触发完整加载效果导致数据被服务端旧数据覆盖
   React.useEffect(() => {
     if (syncVersion === 0) return; // 初始化时跳过
+    // 取 LS 缓存与 IndexedDB 主存中较新的一份：订单等大表可能因缓存预算不足长期
+    // 只写主存，直接读陈旧的 LS 缓存会把刚新增的记录从界面抹掉（刷新又从主存
+    // 读回 → 反复横跳）
+    let cancelled = false;
+    void readFreshDataset(sharedDataKey).then((stored) => {
+    if (cancelled || !stored) return;
     try {
-      const stored = localStorage.getItem(sharedDataKey);
-      if (!stored) return;
       let parsed = JSON.parse(stored);
       if (!Array.isArray(parsed)) return;
       // 账单明细：必须从订单管理重建，不能用服务端同步的旧数据覆盖
@@ -5668,6 +5677,8 @@ const ModuleChildPage: React.FC = () => {
       loadedIdsRef.current = new Set(merged.map((r: any) => String(r?.id || r?.key || '')).filter(Boolean));
       try { lastKnownTsRef.current = Number(localStorage.getItem(`${sharedDataKey}_ts`) || 0) || 0; } catch {}
     } catch { /* ignore */ }
+    }).catch(() => { /* ignore */ });
+    return () => { cancelled = true; };
   }, [syncVersion, sharedDataKey, isProductList, getImgKey, moduleKey, childKey, buildBillDetailRows]);
 
   // 数据变更时自动持久化（全部页面统一：safeSetItem + _ts + IndexedDB 兜底）
@@ -5735,7 +5746,18 @@ const ModuleChildPage: React.FC = () => {
         // 内容未变化时跳过写入：避免重复刷新 _ts/重复上传，也避免旧标签页用相同内容空转覆盖
         let cur: string | null = null;
         try { cur = localStorage.getItem(sharedDataKey); } catch { /* ignore */ }
-        if (cur === json) return;
+        if (cur === json) {
+          // LS 缓存一致但 IndexedDB 主存可能仍是旧副本（历史写入跳过缓存只写主存，
+          // 或他处直写 LS 未同步主存）：不回补主存/服务端，删除与修改会在下次
+          // 重载从主存读取时被旧副本复活
+          void loadDataset(sharedDataKey).then((idb) => {
+            if (idb && typeof idb.json === 'string' && idb.json !== json) {
+              saveDataset(sharedDataKey, json);
+              flushDatasetUploadAsync(sharedDataKey, json).catch(() => false);
+            }
+          }).catch(() => { /* ignore */ });
+          return;
+        }
         // 主存迁移（商品清单/订单/账单等大表）：本地缓存预算不够就干脆不写。
         // localStorage 只有 ~5MB 且全站共用，把整表塞进去会把配额吃满，导致其他模块写入报
         //「本地存储空间不足」，并触发 emergencyFreeSpace 按体积误删尚未上传的数据。

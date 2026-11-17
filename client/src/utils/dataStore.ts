@@ -98,6 +98,29 @@ export const loadDatasetsUpdatedAt = (keys: string[]): Promise<Map<string, numbe
   });
 });
 
+/**
+ * 读取数据集的新鲜副本：localStorage 缓存与 IndexedDB 主存按时间戳取较新者。
+ * 大表（订单/清单等）可能因缓存预算不足长期只写 IndexedDB，直接读 localStorage
+ * 会拿到陈旧副本——同步事件据此重建页面数据会把刚新增的记录抹掉（刷新又从
+ * 主存读回 → 显示反复横跳）。主存读取失败/不存在时回退 localStorage。
+ */
+export const readFreshDataset = async (key: string): Promise<string | null> => {
+  let stored: string | null = null;
+  let lsTs = 0;
+  try {
+    stored = localStorage.getItem(key);
+    lsTs = Number(localStorage.getItem(`${key}_ts`) || 0) || 0;
+    if (!lsTs && stored !== null) lsTs = 1;
+  } catch { /* ignore */ }
+  try {
+    const idb = await loadDataset(key);
+    if (idb && typeof idb.json === 'string' && idb.json !== '' && idb.updatedAt > lsTs && (!stored || idb.json !== stored)) {
+      stored = idb.json;
+    }
+  } catch { /* ignore */ }
+  return stored;
+};
+
 /* ---------------- 产品列表共享读写助手 ---------------- */
 
 export const productListKey = (owner: string) => `pageData_basic-data_product-list_${owner}`;
