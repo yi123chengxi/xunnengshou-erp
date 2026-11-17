@@ -125,6 +125,8 @@ jobs:
           fi
           cp ecosystem.config.js pkg/
           cp nginx/factory-management.conf pkg/nginx/
+          # 宝塔面板机器的 80 端口默认站点（IP 直连入口），server-update.sh 会投递到面板 vhost 链路
+          cp nginx/baota-ip-default.conf pkg/nginx/
           cp server-update.sh pkg/
           cp server-setup.sh pkg/
           # 打包结构自检：入口产物必须位于外层，且不得存在嵌套 server/server

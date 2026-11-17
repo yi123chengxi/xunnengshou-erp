@@ -29,8 +29,21 @@ rsync -a --delete "$SRC/client/build/" "$APP/client/build/"
 
 echo "[3/5] 同步配置..."
 cp "$SRC/ecosystem.config.js" "$APP/"
-if [ -f "$SRC/nginx/factory-management.conf" ]; then
+# nginx 站点安装：两套链路都投递，机器上没有哪套就跳过哪套。
+# 关键坑：装了宝塔面板后，nginx 跑的是 /www/server/nginx 且主配置只
+# include /www/server/panel/vhost/nginx/*.conf，完全不读 /etc/nginx/sites-enabled，
+# 于是仅维护 sites-available 会让“CI 全绿但线上 /api 全 404”（面板默认站点接管 80 端口）。
+BT_VHOST=/www/server/panel/vhost/nginx
+BT_BAK=/root/nginx-vhost-backup
+if [ -d /etc/nginx/sites-available ] && [ -f "$SRC/nginx/factory-management.conf" ]; then
   cp "$SRC/nginx/factory-management.conf" /etc/nginx/sites-available/factory-management
+  [ -d /etc/nginx/sites-enabled ] && ln -sf /etc/nginx/sites-available/factory-management /etc/nginx/sites-enabled/factory-management || true
+fi
+if [ -d "$BT_VHOST" ] && [ -f "$SRC/nginx/baota-ip-default.conf" ]; then
+  mkdir -p "$BT_BAK"
+  # 必须补 || true：脚本开了 set -e，首次安装时旧文件不存在会让这一行把整个部署带崩
+  [ -f "$BT_VHOST/0.default.conf" ] && cp -a "$BT_VHOST/0.default.conf" "$BT_BAK/0.default.conf.$(date +%Y%m%d-%H%M%S).bak" || true
+  cp "$SRC/nginx/baota-ip-default.conf" "$BT_VHOST/0.default.conf"
 fi
 if [ -f /tmp/factory-env.bak ]; then cp -a /tmp/factory-env.bak "$APP/server/.env"; rm -f /tmp/factory-env.bak; fi
 mkdir -p "$APP/server/uploads" "$APP/server/downloads" "$APP/server/data" "$APP/logs"
@@ -55,7 +68,36 @@ else
 fi
 
 echo "[5/5] 重载服务..."
-nginx -t && systemctl reload nginx
+# nginx 门控：校验或 reload 失败则回滚宝塔 IP 站点（保留上一份可用配置）并中止本次部署，
+# 不允许“代码已上线但 Web 入口坏掉”的半成功状态。
+# 必须用“读那一份生效配置的那个 nginx 二进制”做校验：宝塔的 nginx 编译 prefix 指向
+# /www/server/nginx/conf，只有它能验到面板 vhost；若误用系统 nginx 验另一份配置，
+# 就会出现“校验通过但站点从未重载”的假成功。
+NGINX_BIN=nginx
+[ -x /www/server/nginx/sbin/nginx ] && NGINX_BIN=/www/server/nginx/sbin/nginx
+reload_nginx() {
+  "$NGINX_BIN" -s reload 2>/dev/null && return 0
+  systemctl reload nginx 2>/dev/null && return 0
+  service nginx reload >/dev/null 2>&1 && return 0
+  return 1
+}
+NGX_ERR=/tmp/nginx-t.err
+NGX_OK=1
+if "$NGINX_BIN" -t 2>"$NGX_ERR"; then
+  reload_nginx || NGX_OK=0
+else
+  NGX_OK=0
+fi
+if [ "$NGX_OK" -ne 1 ]; then
+  LAST_BAK=$(ls -t "$BT_BAK"/0.default.conf.*.bak 2>/dev/null | head -1 || true)
+  if [ -n "$LAST_BAK" ] && [ -d "$BT_VHOST" ]; then
+    cp -a "$LAST_BAK" "$BT_VHOST/0.default.conf"
+    "$NGINX_BIN" -t >/dev/null 2>&1 && reload_nginx || true
+  fi
+  echo "FATAL: nginx 配置校验/重载失败，已回滚站点配置，本次部署中止：" >&2
+  cat "$NGX_ERR" >&2 || true
+  exit 1
+fi
 cd "$APP"
 if pm2 describe factory-management-server >/dev/null 2>&1; then
   pm2 reload ecosystem.config.js
@@ -65,4 +107,17 @@ else
   pm2 startup systemd -u root --hp /root > /tmp/pm2startup.sh 2>&1 && bash /tmp/pm2startup.sh || true
 fi
 pm2 save
+
+# 部署后入口自检：80 端口 IP 入口的 /api 必须可达（存量客户端与旧书签都按 IP 连），
+# 探不到说明面板接管了默认站点，必须让部署失败而不是静默上线
+sleep 3
+API_CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 http://127.0.0.1/api/health || echo 000)
+if [ "$API_CODE" != "200" ]; then
+  echo "FATAL: 入口自检失败 http://127.0.0.1/api/health -> $API_CODE（预期 200）" >&2
+  exit 1
+fi
+echo "ENTRY_OK http://<ip>/api/health -> 200"
+# 域名入口由面板站点维护（不在本脚本投递范围），探测结果只作提醒不作卡点
+DOM_CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 --resolve www.xns114.com:443:127.0.0.1 https://www.xns114.com/api/health || echo 000)
+echo "PROBE https://www.xns114.com/api/health -> $DOM_CODE"
 echo "UPDATE_OK $(date '+%F %T')"
