@@ -14,7 +14,7 @@ import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
 import { safeSetItem } from '../utils/storageQuota';
 import { declareShrink } from '../utils/shrinkRegistry';
-import { flushDatasetUpload, fetchServerDataset } from '../utils/serverSync';
+import { flushDatasetUpload, fetchServerDataset, pullAllDatasets } from '../utils/serverSync';
 import { compressImageFile } from '../utils/imageCompress';
 import { readClipboardImage, imageFileFromPasteEvent, clipboardImageFailureText } from '../utils/clipboard';
 import { getSessionOwner, mergeStrandedTenantDataset } from '../utils/dataOwner';
@@ -1217,6 +1217,16 @@ const ReimbursementPage: React.FC = () => {
           <DatePicker.RangePicker style={{ width: 240 }} value={dateRange as any}
             onChange={v => setDateRange(v as any)} />
           <Button type="primary" icon={<SearchOutlined />} onClick={() => {
+            // 准确优先：查询先等服务器拉取完成（最多 4 秒、弱网回退）再重载本地，
+            // 保证显示包含其他端最新提交的报销单
+            const hideLoading = message.loading('正在同步最新数据…', 0);
+            void (async () => {
+              try {
+                await Promise.race([pullAllDatasets(), new Promise<void>(resolve => setTimeout(resolve, 4000))]);
+              } catch { /* ignore */ }
+              load();
+              hideLoading();
+            })();
             setSearchApplied(searchInput);
             setDateRangeApplied(dateRange && dateRange[0] && dateRange[1] ? [dateRange[0].format('YYYY-MM-DD'), dateRange[1].format('YYYY-MM-DD')] : null);
           }}>查询</Button>

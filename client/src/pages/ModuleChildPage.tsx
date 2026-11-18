@@ -114,7 +114,7 @@ import { buildSupplierReturnRow, buildPurchaserReturnBill, writeReturnStockFlows
 import { appendStockLog, updateProductStock } from '../utils/stockUtils';
 import { loadTenantUsers } from '../utils/tenantUsers';
 import { appendBillLogEntry, readBillLog, billLogColor, resolveOperatorName, diffBillRecords, SUPPLIER_BILL_FIELD_MAP, getCurrentUserDisplayName } from '../utils/billLog';
-import { pullAllDatasets, flushDatasetUploadAsync, ensureDatasetFromServer, reloadAfterPull, appendRowsToRemoteKey, declareShrink, isNeverShrinkKey, fetchServerDataset } from '../utils/serverSync';
+import { pullAllDatasets, flushDatasetUploadAsync, ensureDatasetFromServer, appendRowsToRemoteKey, declareShrink, isNeverShrinkKey, fetchServerDataset } from '../utils/serverSync';
 import { peekRemovedIds } from '../utils/shrinkRegistry';
 import { PRESET_PRINT_TEMPLATES, seedPresetPrintTemplates } from '../config/presetPrintTemplates';
 import { refreshCustomerPurchase, computeCustomerPurchaseCents, computeCustomerReceivedCents, toYuan } from '../utils/paySummary';
@@ -8687,9 +8687,18 @@ const ModuleChildPage: React.FC = () => {
         } catch { /* ignore */ }
       }).catch(() => { /* ignore */ });
     };
-    reloadAfterPull(reloadFromStorage);
-    // 回源并集找回被历史陈旧回写抹掉、服务端仍持有的行（宽限期永不回拉的兜底恢复）
-    unionMissingFromServer(sharedDataKey);
+    // 准确优先（用户明确要求：数据绝对准确、慢一点没关系）：查询先等服务器拉取完成
+    // （把其他端新增行并集进本地）再重载显示，最多等 4 秒，弱网超时回退本地显示；
+    // 随后再回源并集找回永不缩水键本地缺失行
+    const hideLoading = message.loading('正在同步最新数据…', 0);
+    void (async () => {
+      try {
+        await Promise.race([pullAllDatasets(), new Promise<void>(resolve => setTimeout(resolve, 4000))]);
+      } catch { /* 弱网拉取失败回退本地显示 */ }
+      reloadFromStorage();
+      unionMissingFromServer(sharedDataKey);
+      hideLoading();
+    })();
     setAppliedSearchText(searchText);
     setAppliedStatusFilter(statusFilter);
     setAppliedDynamicFilters({ ...dynamicFilterValues });
