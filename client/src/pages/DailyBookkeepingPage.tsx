@@ -759,8 +759,13 @@ const DailyBookkeepingPage: React.FC<{ flush?: boolean }> = ({ flush = false }) 
   const actualNeedPay = (needPay || isIncomeReturn) && !formIsAdvance;
   // 付款账户必选：支出/内部转账/收入退货；普通收入可选
   const payRequired = actualNeedPay && (formType !== '收入' || formIsReturn);
-  // 切换为非收入类型时重置退货标记
-  useEffect(() => { if (formType !== '收入') setFormIsReturn(false); }, [formType]);
+  // 切换为非收入类型时重置退货标记；切换为「支出」以外且非退货时重置本人垫付
+  useEffect(() => {
+    if (formType !== '收入') setFormIsReturn(false);
+    // 「本人垫付」按钮只在 收入退货 或 支出 时显示，其他类型自动清除勾选状态
+    const showAdvance = (formType === '收入' && formIsReturn) || formType === '支出';
+    if (!showAdvance && formIsAdvance) { setFormIsAdvance(false); setFormAdvanceRecv(''); }
+  }, [formType, formIsReturn]);
   const handleSave = () => {
     if (!formDate) { message.warning('请选择记账日期'); return; }
     if (!formType) { message.warning('请选择收支类型'); return; }
@@ -1229,7 +1234,7 @@ const DailyBookkeepingPage: React.FC<{ flush?: boolean }> = ({ flush = false }) 
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <InputNumber className={formIsReturn ? 'return-amount-input' : undefined} style={{ flex: 1 }} min={isReversal ? undefined : 0} precision={2} prefix="¥" placeholder={isReversal ? '冲红金额为负数' : formIsReturn ? '请输入退货金额（保存后记为负数）' : '请输入金额'}
                 value={formAmount} onChange={v => setFormAmount(v === null ? undefined : v)} />
-              {formIsReturn && (
+              {(formIsReturn || formType === '支出') && (
                 <Button
                   style={{
                     display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0,

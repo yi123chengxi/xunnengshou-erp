@@ -103,6 +103,11 @@ export const getSessionOwner = (): string => {
   if (ownerCache && ownerCache.sig === sig) return ownerCache.owner;
   let owner = confirmed;
   if (!owner) owner = readOwnerFromToken(token, me);
+  // 刷新关键路径：serverConfirmedOwner（内存）已重置、/auth/me 尚未返回、令牌又缺少/陈旧 owner 声明时，
+  // 必须回落到登录时持久化的 parentAccount 提示，否则子账号会被判成主账号（owner=自己），
+  // 页面据此读写 reimbursement_<子账号> 等错桶键——表现为「刷新后数据消失，归属校正后又自动出现」。
+  // 与 serverSync.currentOwner 同口径，保证「页面写出的键」与「同步层上传/拉取的键」始终一致。
+  if (!owner && safeGet('isSubAccount') === 'true') owner = safeGet('parentAccount');
   if (!owner) {
     const root = accountRootOf(readRegisteredUsers(), me);
     owner = root || me;

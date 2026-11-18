@@ -62,6 +62,19 @@ describe('dataOwner', () => {
     expect(getSessionOwner()).toBe('other');
   });
 
+  it('刷新启动窗口：令牌无 owner 声明且注册表未拉取时，回落到 localStorage.parentAccount', () => {
+    // 复现「报销数据刷新后丢失、归属校正后又自动出现」根因：
+    // F5 后 serverConfirmedOwner 被重置、/auth/me 未返回、registeredUsers 未拉取，
+    // 子账号若退化成本人就会读写 reimbursement_<子账号> 错桶；parentAccount 兜底可避免。
+    localStorage.clear();
+    localStorage.setItem('username', 'sub1');
+    localStorage.setItem('isSubAccount', 'true');
+    localStorage.setItem('parentAccount', 'boss');
+    localStorage.setItem('token', fakeToken({ username: 'sub1' })); // 无 owner 声明
+    // 故意不写 registeredUsers：accountRootOf 无法解析，只能靠 parentAccount 兜底
+    expect(getSessionOwner()).toBe('boss');
+  });
+
   it('tenantMembersOf 返回主账号名下全部成员（错桶修复遍历来源键用）', () => {
     setSession('boss', { token: fakeToken({ username: 'boss', owner: 'boss' }) });
     const members = tenantMembersOf('boss').sort();

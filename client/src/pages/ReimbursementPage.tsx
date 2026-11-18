@@ -376,6 +376,9 @@ const ReimbursementPage: React.FC = () => {
     setReceivingAccounts(updated);
     setAllRecvAccounts(prev => [...prev, item]);
     safeSetItem(getRecvAccountKey(), JSON.stringify(updated));
+    // 立即上传（与报销单同口径）：只靠 800ms 防抖上传钩子，用户新增后立刻刷新/切页时，
+    // 这条新账户还没到服务端，随后拉取可能用服务端旧副本覆盖本地——表现为「新增的收款账户丢失」
+    flushDatasetUpload(getRecvAccountKey(), JSON.stringify(updated));
     setFormReceivingAccount(item.key);
     setRecvModalVisible(false);
     message.success('已新增收款账户并自动选中');

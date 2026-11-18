@@ -165,12 +165,10 @@ export function localDatasetHasRows(rawJson: string | null): boolean {
 
 /** 当前登录账号的数据归属者（子账号归父账号），与页面 getDataOwner 保持一致 */
 function currentOwner(): string {
-  try {
-    if (localStorage.getItem('isSubAccount') === 'true') {
-      return localStorage.getItem('parentAccount') || localStorage.getItem('username') || '';
-    }
-    return localStorage.getItem('username') || '';
-  } catch { return ''; }
+  // 单一真相源：直接复用 getSessionOwner，避免它与页面 getDataOwner 走不同解析链
+  // （旧实现只读 isSubAccount/parentAccount/username，与页面口径存在启动窗口不一致，
+  //  会使页面写出的错桶键被本层当成「别人的键」跳过拉取/补传，数据永远同步不上）
+  return getSessionOwner();
 }
 
 /** key 的 owner 后缀（pageData_module_child_owner / xxx_owner 的最后一段）；全局 key 返回 null */

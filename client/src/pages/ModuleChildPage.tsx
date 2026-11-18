@@ -5788,9 +5788,11 @@ const ModuleChildPage: React.FC = () => {
         if (writeOk) {
           tryCacheDataset(`${sharedDataKey}_ts`, String(writeTs));
         }
-        // 本地配额写不进（浏览器 5MB 上限）：写入钩子不会触发上传，必须直传服务端，
-        // 避免“本机未落盘 + 他端看不到”的双重丢失；本地显示仍由下方 IndexedDB 兼底
-        if (!writeOk) uploadDatasetWithRetry(sharedDataKey, json);
+        // 立即上传（不依赖 tryCacheDataset 钩子的 800ms 防抖）：新增/编辑/明细变更后用户可能马上刷新，
+        // 防抖窗口内的写入若没赶上上传，刷新时会被服务端旧副本拉回覆盖 → 表现为「刷新后数据丢失」。
+        // 本地配额写不进时（!writeOk）钩子根本不触发，更必须直传；两条路径统一走带重试的即时上传。
+        // flushDatasetUploadAsync 会清掉刚排队的防抖条目，故 writeOk=true 时也只产生一次即时上传，不会重复。
+        uploadDatasetWithRetry(sharedDataKey, json);
         // IndexedDB 作可信存储兜底：localStorage 配额溢出静默失败时，刷新后可从 IndexedDB 恢复
         saveDataset(sharedDataKey, json);
         // 更新加载快照为本次写入内容
@@ -7289,6 +7291,9 @@ const ModuleChildPage: React.FC = () => {
       safeSetItem(bankKey, json);
       saveDataset(bankKey, json);
       safeSetItem(`${bankKey}_ts`, String(Date.now()));
+      // 直接写盘绕过了本页通用持久化 effect，必须自带即时上传（带重试），
+      // 否则只靠 safeSetItem 钩子的 800ms 防抖，窗口内刷新会被服务端旧副本覆盖导致明细丢失
+      uploadDatasetWithRetry(bankKey, json);
     } catch { /* ignore */ }
   }, [getDataOwner, readOrderFromStorage]);
 
@@ -7314,6 +7319,8 @@ const ModuleChildPage: React.FC = () => {
         safeSetItem(bankKey, json);
         saveDataset(bankKey, json);
         safeSetItem(`${bankKey}_ts`, String(Date.now()));
+        // 同上：冲红撤销明细也立即上传，不依赖防抖
+        uploadDatasetWithRetry(bankKey, json);
       }
     } catch { /* ignore */ }
   }, [getDataOwner]);
