@@ -135,7 +135,7 @@ const fmt = (v: number | undefined | null) => {
   return '¥' + v.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
 
-import { scopeShopRecords, canEditShopData, isShopPersonMe, resolvePersonToUsername } from '../utils/shopScope';
+import { scopeShopRecords, scopeShops, canEditShopData, isShopPersonMe, resolvePersonToUsername } from '../utils/shopScope';
 import { sendPushNotification, showNativeNotification, isNotificationTypeEnabled } from '../utils/pushNotification';
 import { showTaskNotify } from '../utils/taskNotify';
 
@@ -157,6 +157,10 @@ const MonthEndCheckPage: React.FC = () => {
   const [filterShop, setFilterShop] = useState<string>('');
   const [filterMonth, setFilterMonth] = useState<string>('');
   const [searchText, setSearchText] = useState('');
+  // 负责人设置（shopmgr_managers_）变更签名：名单改动后重算店铺下拉的可选项，不必等店铺列表引用变化
+  const [mgrPermSig, setMgrPermSig] = useState<string>(() => localStorage.getItem(`shopmgr_managers_${owner}`) || '[]');
+  // 店铺下拉与列表同一口径：有查看权限（主账号/勾选查看/未设置负责人）→ 全部；否则仅本人与本组组员的店铺
+  const scopedShops = useMemo(() => scopeShops(owner, shops), [owner, shops, mgrPermSig]);
 
   // 发货金额搜索
   const [shipSearchShopName, setShipSearchShopName] = useState('');
@@ -291,7 +295,8 @@ const MonthEndCheckPage: React.FC = () => {
     applyIfChanged(setRecords, parse(checkKey));
     applyIfChanged(setShipRecords, parse(shipKey));
     applyIfChanged(setReturnRecords, parse(returnKey));
-  }, [shopKey, checkKey, shipKey, returnKey]);
+    setMgrPermSig(localStorage.getItem(`shopmgr_managers_${owner}`) || '[]');
+  }, [shopKey, checkKey, shipKey, returnKey, owner]);
   useEffect(() => { reload(); }, [reload]);
   // 同步落地/窗口重新可见时重载：避免长期挂载页面拿陈旧统计整表回写，抹掉别端刚新增的数据
   useEffect(() => {
@@ -1210,7 +1215,7 @@ const MonthEndCheckPage: React.FC = () => {
           <Col>
             <Space wrap>
               <Select allowClear placeholder="选择店铺" style={{ width: 150 }} value={filterShop || undefined}
-                onChange={v => setFilterShop(v || '')} options={shops.map(s => ({ value: s.key, label: s.shopName }))} />
+                onChange={v => setFilterShop(v || '')} options={scopedShops.map(s => ({ value: s.key, label: s.shopName }))} />
               <DatePicker picker="month" placeholder="选择月份" value={filterMonth ? dayjs(filterMonth + '-01') : undefined}
                 onChange={v => setFilterMonth(v ? v.format('YYYY-MM') : '')} style={{ width: 130 }} />
               <Input.Search placeholder="搜索" value={searchText} onChange={e => setSearchText(e.target.value)}
@@ -1260,7 +1265,7 @@ const MonthEndCheckPage: React.FC = () => {
               <Col span={8}>
                 <Text style={{ display: 'block', marginBottom: 4 }}>店铺名称 <Text type="danger">*</Text></Text>
                 <Select value={editRecord.shopId} onChange={v => updateField('shopId', v)} style={{ width: '100%' }}
-                  options={shops.map(s => ({ value: s.key, label: s.shopName }))}
+                  options={scopedShops.map(s => ({ value: s.key, label: s.shopName }))}
                   placeholder="选择店铺" />
               </Col>
               <Col span={8}>
@@ -1604,7 +1609,7 @@ const MonthEndCheckPage: React.FC = () => {
             <Row gutter={16} style={{ marginBottom: 12 }}>
               <Col span={8}><Text style={{ display: 'block', marginBottom: 4 }}>店铺名称</Text>
                 <Select value={shipEdit.shopId} onChange={v => updateShipField('shopId', v)} style={{ width: '100%' }}
-                  options={shops.map(s => ({ value: s.key, label: s.shopName }))} placeholder="选择店铺" />
+                  options={scopedShops.map(s => ({ value: s.key, label: s.shopName }))} placeholder="选择店铺" />
               </Col>
               <Col span={8}><Text style={{ display: 'block', marginBottom: 4 }}>负责人</Text>
                 <Input value={shipEdit.chargePerson || getShopPerson(shipEdit.shopId, shipEdit.shopName)} readOnly style={{ background: '#fafafa' }} placeholder="根据店铺自动匹配" />
@@ -1667,7 +1672,7 @@ const MonthEndCheckPage: React.FC = () => {
             <Row gutter={16} style={{ marginBottom: 12 }}>
               <Col span={8}><Text style={{ display: 'block', marginBottom: 4 }}>店铺名称</Text>
                 <Select value={retEdit.shopId} onChange={v => updateRetField('shopId', v)} style={{ width: '100%' }}
-                  options={shops.map(s => ({ value: s.key, label: s.shopName }))} placeholder="选择店铺" />
+                  options={scopedShops.map(s => ({ value: s.key, label: s.shopName }))} placeholder="选择店铺" />
               </Col>
               <Col span={8}><Text style={{ display: 'block', marginBottom: 4 }}>负责人</Text>
                 <Input value={retEdit.chargePerson || getShopPerson(retEdit.shopId, retEdit.shopName)} readOnly style={{ background: '#fafafa' }} placeholder="根据店铺自动匹配" />

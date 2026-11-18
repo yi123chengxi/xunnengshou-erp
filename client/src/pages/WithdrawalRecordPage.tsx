@@ -19,7 +19,7 @@ import { showRechargeNotification } from '../utils/rechargeNotification';
 import { showTaskNotify, closeTaskNotify } from '../utils/taskNotify';
 import { applyIfChanged, broadcastLocalDataChange } from '../utils/useDatasetSyncReload';
 import { saveDataset } from '../utils/dataStore';
-import { scopeShopRecords, canEditShopData, isShopPersonMe, resolvePersonToUsername } from '../utils/shopScope';
+import { scopeShopRecords, canEditShopData, isShopPersonMe, isShopScopeAdmin, resolvePersonToUsername } from '../utils/shopScope';
 import { isAccountingMode, writeAutoEntries, removeAutoEntries, loadSubjectOptions } from '../utils/accountingBridge';
 
 const { Text, Title } = Typography;
@@ -224,6 +224,13 @@ const WithdrawalRecordPage: React.FC = () => {
   const scopedRechRecords = useMemo(() => (shops.length === 0 ? rechargeRecords : scopeShopRecords(owner, shops, rechargeRecords)), [owner, shops, rechargeRecords, mgrPermSig]);
   const baseRecords = scopedRecords;
   const baseRechRecords = scopedRechRecords;
+
+  // 提现/申请充值弹窗的店铺下拉：只列负责人是本人的店铺（比列表的查看权限更严，
+  // 因为这是“替店铺发起资金动作”的录入入口）；主账号豁免，否则管理员无法代录。
+  // person 存的是显示名，必须走 isShopPersonMe 别名集合比对，不能直接等于 username。
+  const myShops = useMemo(() => (
+    isShopScopeAdmin() ? shops : shops.filter(s => isShopPersonMe(owner, s.person))
+  ), [shops, owner, mgrPermSig]);
 
   // 充值记录搜索过滤
   const filteredRechRecords = useMemo(() => {
@@ -1434,7 +1441,7 @@ const WithdrawalRecordPage: React.FC = () => {
                   }
                   value={formShop || undefined}
                   onChange={v => setFormShop(v)}
-                  options={shops.map(s => ({ value: s.key, label: s.shopName }))}
+                  options={myShops.map(s => ({ value: s.key, label: s.shopName }))}
                 />
               </div>
             </Col>
@@ -1735,7 +1742,7 @@ const WithdrawalRecordPage: React.FC = () => {
             <Col span={12}>
               <Text style={{ display: 'block', marginBottom: 4 }}>店铺名称 <Text type="danger">*</Text></Text>
               <Select value={applyShop || undefined} onChange={v => setApplyShop(v)} style={{ width: '100%' }}
-                options={shops.map(s => ({ value: s.key, label: s.shopName }))} placeholder="选择店铺" />
+                options={myShops.map(s => ({ value: s.key, label: s.shopName }))} placeholder="选择店铺" />
             </Col>
             <Col span={12}>
               <Text style={{ display: 'block', marginBottom: 4 }}>店铺编号</Text>

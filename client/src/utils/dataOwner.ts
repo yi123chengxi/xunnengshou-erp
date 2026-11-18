@@ -94,14 +94,22 @@ let ownerCache: { sig: string; owner: string } | null = null;
 /** 本会话经 /auth/me 服务端重算确认的归属（优先级高于本地令牌：
  *  令牌可能是子账号绑定父账号之前签发的陈旧令牌，owner=自己） */
 let serverConfirmedOwner: { username: string; owner: string } | null = null;
+/** 上次经服务端重算确认的归属账号（按用户名持久化，跨刷新/换浏览器保留） */
+const OWNER_ROOT_KEY = 'ownerRoot_';
 export const getSessionOwner = (): string => {
   const me = getSessionUsername();
   if (!me) return '';
   const token = safeGet(TOKEN_KEY);
   const confirmed = serverConfirmedOwner && serverConfirmedOwner.username === me ? serverConfirmedOwner.owner : '';
-  const sig = `${me}|${token}|${confirmed}`;
+  // 上次服务端重算的归属（持久化）：优先级高于 JWT owner 声明，填补刷新后
+  // “serverConfirmedOwner 清零、/auth/me 尚未返回、令牌 owner 又是陈旧本人”的启动窗口——
+  // 否则子账号在该窗口会退化成本人 username，读写 reimbursement_<子账号> 错桶键
+  // （表现为同一条数据跨刷新时反复出现/消失）。ownerCache 每次刷新都是新 JS 上下文里的
+  // null，首调即重算并命中该持久化值，从第一次渲染起就读对桶。
+  const persisted = confirmed || safeGet(OWNER_ROOT_KEY + me);
+  const sig = `${me}|${token}|${persisted}`;
   if (ownerCache && ownerCache.sig === sig) return ownerCache.owner;
-  let owner = confirmed;
+  let owner = persisted;
   if (!owner) owner = readOwnerFromToken(token, me);
   // 刷新关键路径：serverConfirmedOwner（内存）已重置、/auth/me 尚未返回、令牌又缺少/陈旧 owner 声明时，
   // 必须回落到登录时持久化的 parentAccount 提示，否则子账号会被判成主账号（owner=自己），
@@ -168,7 +176,12 @@ export const syncOwnerFromToken = async (): Promise<string> => {
   const fromServer = await fetchOwnerFromServer();
   const fromToken = readOwnerFromToken(safeGet(TOKEN_KEY), me);
   const owner = fromServer || fromToken;
-  if (fromServer) serverConfirmedOwner = { username: me, owner: fromServer };
+  if (fromServer) {
+    serverConfirmedOwner = { username: me, owner: fromServer };
+    // 持久化“上次服务端重算归属”，供下次刷新在 /auth/me 未返回的启动窗口直接命中正确归属，
+    // 消除 owner 临时翻转造成的错桶读写（只落服务端确认值，不落可能陈旧的令牌值）
+    safeSet(OWNER_ROOT_KEY + me, fromServer);
+  }
   if (owner) {
     safeSet('isSubAccount', owner === me ? 'false' : 'true');
     safeSet('parentAccount', owner === me ? '' : owner);

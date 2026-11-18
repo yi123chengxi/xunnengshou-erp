@@ -112,13 +112,16 @@ const SyncGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
 
   const gatedPull = React.useCallback(() => {
     setReady(false);
-    // 上限 2.5s：拉取未完结也先放行渲染（后续落地会广播 sync-data-updated 自动刷新），
-    // 避免弱网/大数据量时登录与刷新长时间停在“加载中”
-    const timer = setTimeout(() => { setReady(true); seedAllPresets(); }, 2500);
-    // 先用令牌校正数据归属账号（子账号归主账号）再拉取：刷新页面时 localStorage 里的
-    // parentAccount 可能是陈旧值/为空，拉错桶会让主账号与负责人看不到子账号提交的单据
+    // 归属账号必须先校正完再放行渲染：刷新启动窗口 serverConfirmedOwner(内存) 被清零、
+    // /auth/me 尚未返回，若 2.5s 兜底抢在校正之前放行，页面会按“退化成本人用户名”的错桶键
+    // 读取——报销/订单列表为空，校正后又“出现”，跨刷新表现为数据反复出现/消失。
+    // syncOwnerFromToken 内部对 /auth/me 有 1.5s 超时，故这段等待是有界的，不会长时间卡“加载中”。
+    let ownerSettled = false;
+    const timer = setTimeout(() => { if (ownerSettled) { setReady(true); seedAllPresets(); } }, 2500);
+    // 先用令牌/服务端校正数据归属账号（子账号归主账号）再拉取，保证拉的是企业主桶
     syncOwnerFromToken()
       .catch(() => '')
+      .then(() => { ownerSettled = true; })
       .then(() => pullAllDatasets())
       .finally(() => { clearTimeout(timer); setReady(true); seedAllPresets(); });
   }, []);
