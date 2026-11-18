@@ -40,7 +40,10 @@ export async function request<T = any>(
   }
   const body = (res.data || {}) as ApiResp<T>
   if (res.statusCode === 404 && path.startsWith('/wx/') && isPreviewMode()) {
-    return PREVIEW_EMPTY as T
+    // 布局预览兜底：只读接口静默回落空态供验收布局；
+    // 写接口必须显式报错——否则假成功会让用户误以为数据已落库（实测：仓库统计新增在未部署时被静默丢弃）
+    if ((options.method || 'GET') === 'GET') return PREVIEW_EMPTY as T
+    throw new Error('该写入接口尚未部署上线，操作未生效（部署后即可用）')
   }
   if (res.statusCode >= 400) {
     throw new Error(body.message || (body as any).error || `请求失败(${res.statusCode})`)
