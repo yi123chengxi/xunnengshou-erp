@@ -674,7 +674,33 @@ router.post('/ws/:kind', verifyJWT, async (req: Request, res: Response) => {
   }
 });
 
-// ============ 上下班打卡 ============
+// ============ 上下班打卡（与 Web AttendancePage 同库同口径：hr_attendance_<owner>） ============
+
+const hmMin = (t: string): number => {
+  const [h, m] = String(t || '0:0').split(':');
+  return parseInt(h, 10) * 60 + parseInt(m, 10);
+};
+/** 工时与 Web calcWorkHours 同公式：(out-in)/60 保留一位小数 */
+function workHoursOf(inT: string | null, outT: string | null): number {
+  if (!inT || !outT) return 0;
+  return Math.max(0, Math.round((hmMin(outT) - hmMin(inT)) / 60 * 10) / 10);
+}
+/** 状态与 Web calcStatus 同口径：默认班次 startTime/endTime + lateThreshold */
+function attendanceStatusOf(inT: string | null, outT: string | null, shift: any): string {
+  if (!inT && !outT) return 'absent';
+  const threshold = Number(shift?.lateThreshold) || 0;
+  if (inT && hmMin(inT) > hmMin(String(shift?.startTime || '08:00')) + threshold) return 'late';
+  if (outT && hmMin(outT) < hmMin(String(shift?.endTime || '17:30')) - threshold) return 'early';
+  return 'normal';
+}
+/** 下发给小程序的精简形状（in/out 语义不变） */
+function toMiniAttendance(rec: any) {
+  if (!rec) return null;
+  return {
+    key: rec.key, username: rec.employeeUsername, name: rec.employeeName,
+    date: rec.date, in: rec.clockIn || '', out: rec.clockOut || '',
+  };
+}
 
 /** GET /api/wx/attendance —— 本人今日打卡记录 */
 router.get('/attendance', verifyJWT, async (req: Request, res: Response) => {
@@ -682,35 +708,47 @@ router.get('/attendance', verifyJWT, async (req: Request, res: Response) => {
     const user = (req as any).user as JWTPayload;
     const owner = await ownerOf(user.username);
     const ymd = localYmd();
-    const rows = await readRows(`attendance_${owner}`);
-    const rec = rows.find((r: any) => r.username === user.username && r.date === ymd) || null;
-    res.json({ code: 200, data: { record: rec, date: ymd } });
+    const rows = await readRows(`hr_attendance_${owner}`);
+    const rec = rows.find((r: any) => r.employeeUsername === user.username && r.date === ymd) || null;
+    res.json({ code: 200, data: { record: toMiniAttendance(rec), date: ymd } });
   } catch (err: any) {
     console.error('[wx] attendance get error:', err.message);
     res.status(500).json({ code: 500, message: '服务器内部错误' });
   }
 });
 
-/** POST /api/wx/attendance {type:'in'|'out'} —— 上班/下班打卡（上班取首次，下班取最新） */
+/** POST /api/wx/attendance {type:'in'|'out'} —— 上班取首次、下班取最新；落库字段与 Web 逐字段同名，source='wechat' */
 router.post('/attendance', verifyJWT, async (req: Request, res: Response) => {
   try {
     const user = (req as any).user as JWTPayload;
     const owner = await ownerOf(user.username);
     const type = req.body.type === 'out' ? 'out' : 'in';
-    const dsKey = `attendance_${owner}`;
+    const dsKey = `hr_attendance_${owner}`;
     const rows = await readRows(dsKey);
     const ymd = localYmd();
     const now = new Date();
-    const hm = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-    let rec = rows.find((r: any) => r.username === user.username && r.date === ymd);
+    const p = (n: number) => String(n).padStart(2, '0');
+    const hm = `${p(now.getHours())}:${p(now.getMinutes())}:${p(now.getSeconds())}`;
+    let rec = rows.find((r: any) => r.employeeUsername === user.username && r.date === ymd);
     if (!rec) {
-      rec = { key: `${user.username}-${ymd}`, username: user.username, name: await displayNameOf(user.username), date: ymd, in: '', out: '' };
+      rec = {
+        key: `${user.username}-${ymd}`, date: ymd,
+        employeeUsername: user.username, employeeName: await displayNameOf(user.username),
+        clockIn: null, clockOut: null, workHours: 0, status: 'normal',
+        source: 'wechat', remark: '',
+      };
       rows.unshift(rec);
     }
-    if (type === 'in') { if (!rec.in) rec.in = hm; }
-    else { rec.out = hm; }
+    if (type === 'in') { if (!rec.clockIn) rec.clockIn = hm; }
+    else { rec.clockOut = hm; }
+    // 班次取默认班（与 Web defaultShift 同口径），微信打卡同样参与迟到/早退判定与工时计算
+    const shifts = await readRows(`hr_shifts_${owner}`);
+    const shift = shifts.find((s: any) => s && s.isDefault) || shifts[0] || null;
+    rec.workHours = workHoursOf(rec.clockIn, rec.clockOut);
+    rec.status = attendanceStatusOf(rec.clockIn, rec.clockOut, shift);
+    rec.source = 'wechat';
     await writeRows(dsKey, rows, owner);
-    res.json({ code: 200, data: { saved: true, record: rec } });
+    res.json({ code: 200, data: { saved: true, record: toMiniAttendance(rec) } });
   } catch (err: any) {
     console.error('[wx] attendance post error:', err.message);
     res.status(500).json({ code: 500, message: '服务器内部错误' });
