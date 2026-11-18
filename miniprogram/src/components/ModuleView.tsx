@@ -12,6 +12,7 @@ import ListView from './ListView'
 import BookkeepingView from './BookkeepingView'
 import WarehouseStatsView from './WarehouseStatsView'
 import NewStyleProgressView from './NewStyleProgressView'
+import ScheduleBoardView from './ScheduleBoardView'
 import MarketView from './MarketView'
 
 // 扫码入口视图：扫码后回调把关键字交给库存查询子菜单
@@ -92,7 +93,7 @@ const ModuleView = ({
       case 'processing-order': return <ListView page="processing-order" headers={['加工单号', '来源生产单号', '款式编码', '需求总数量', '状态']} tick={tick} />
       case 'purchase-requisition': return <ListView page="purchase" tick={tick} />
       case 'workflow-templates': return <ListView page="workflow-templates" headers={['模板名称', '行业', '节点数', '默认']} tick={tick} />
-      case 'production-schedule': return <ListView page="production-schedule" tick={tick} />
+      case 'production-schedule': return <ScheduleBoardView tick={tick} />
       case 'progress': return <NewStyleProgressView tick={tick} />
       case 'shop-management': return <ListView page="shops" tick={tick} />
       case 'warehouse-stats': return <WarehouseStatsView tick={tick} />

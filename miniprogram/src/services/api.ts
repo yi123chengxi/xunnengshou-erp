@@ -95,3 +95,15 @@ export const createWsRecord = (kind: 'stock' | 'pick' | 'urgent' | 'note', body:
 /** 新款进度主表单手机录入（与 Web 新增新款弹窗同字段，服务端派生状态默认值） */
 export const createNewStyle = (body: Record<string, any>) =>
   request<{ saved: boolean; record: any }>('/wx/newstyle', { method: 'POST', data: body })
+
+/** 生产排期看板：生产线×上午/下午/晚上网格（与 Web ScheduleBoard 同键同口径） */
+export interface ScheduleBoardData {
+  date: string
+  lines: string[]
+  shifts: { key: string; label: string; range: string }[]
+  cells: Record<string, { total: number; items: { no: string; qty: number }[] }>
+  dayTotal: number
+}
+
+export const getScheduleBoard = (date: string) =>
+  request<ScheduleBoardData>(`/wx/schedule-board?date=${date}`)

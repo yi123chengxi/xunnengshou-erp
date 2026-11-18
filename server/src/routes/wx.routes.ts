@@ -715,6 +715,43 @@ router.post('/newstyle', verifyJWT, async (req: Request, res: Response) => {
   }
 });
 
+/** GET /api/wx/schedule-board?date= —— 生产排期看板：生产线×三班网格（与 Web ScheduleBoard 同键同口径） */
+router.get('/schedule-board', verifyJWT, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user as JWTPayload;
+    const owner = await ownerOf(user.username);
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.date || '')) ? String(req.query.date) : localYmd();
+    // 生产线集合与 Web 同键；未配置时回退默认三条线（与 ScheduleBoard 初始化同口径）
+    let lines = (await readRows(`production_schedule_lines_${owner}`)).map(String).filter(Boolean);
+    if (!lines.length) lines = ['生产线1', '生产线2', '生产线3'];
+    const shifts = [
+      { key: 'morning', label: '上午', range: '08:00-12:00' },
+      { key: 'afternoon', label: '下午', range: '13:00-17:00' },
+      { key: 'evening', label: '晚上', range: '18:00-22:00' },
+    ];
+    const rows = await readRows(`pageData_production_production-schedule_${owner}`);
+    const day = rows.filter((r: any) => String(r.startDate || '').slice(0, 10) === date);
+    const cells: Record<string, { total: number; items: { no: string; qty: number }[] }> = {};
+    lines.forEach(l => shifts.forEach(s => {
+      const its = day.filter((r: any) => r.line === l && r.shift === s.key);
+      cells[`${l}|${s.key}`] = {
+        total: its.reduce((sum: number, r: any) => sum + (Number(r.planQty) || 0), 0),
+        items: its.map((r: any) => ({ no: String(r.productionOrderId || r.id || ''), qty: Number(r.planQty) || 0 })),
+      };
+    }));
+    res.json({
+      code: 200,
+      data: {
+        date, lines, shifts, cells,
+        dayTotal: day.reduce((s: number, r: any) => s + (Number(r.planQty) || 0), 0),
+      },
+    });
+  } catch (err: any) {
+    console.error('[wx] schedule-board error:', err.message);
+    res.status(500).json({ code: 500, message: '服务器内部错误' });
+  }
+});
+
 // ============ 上下班打卡（与 Web AttendancePage 同库同口径：hr_attendance_<owner>） ============
 
 const hmMin = (t: string): number => {
