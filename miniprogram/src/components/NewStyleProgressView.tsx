@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { View, Text, Input, Picker, Button, Image } from '@tarojs/components'
+import { View, Text, Input, Picker, Button, Image, Checkbox, CheckboxGroup } from '@tarojs/components'
 import Taro from '@tarojs/taro'
 import { createNewStyle } from '../services/api'
 import { chooseAndUploadImage } from '../services/upload'
@@ -25,18 +25,19 @@ const HEADERS: Record<TabKey, string[]> = {
 
 // 何时上架三态（与 Web 新增新款弹窗 Select 同选项）
 const LIST_MODES = ['拍完上架', '到货上架', '只拍不上架']
-// 码段默认全选 35-44（与 Web openAdd 的 PRESET_SIZES.join(',') 同口径）
-const DEFAULT_SIZES = Array.from({ length: 10 }, (_, i) => 35 + i).join(',')
+// 规格预设 33-46 勾选式录入（存储仍为逗号列表，与 Web 码段同载体）；打开表单默认全选
+const PRESET_SIZES = Array.from({ length: 14 }, (_, i) => 33 + i)
 
-// 新增新款表单字段（与 Web 新增新款弹窗 10 个录入项同序同口径）
+// 新增新款表单字段（左标签右输入；规格勾选行插在颜色与制作工艺之间）
 interface Field { key: string; label: string; placeholder: string; kind?: 'number'; required?: boolean }
-const FORM_FIELDS: Field[] = [
+const FIELDS_A: Field[] = [
   { key: 'styleCode', label: '货号', placeholder: '如 NBL-0406', required: true },
   { key: 'brand', label: '品牌', placeholder: '下拉选择或输入新增' },
   { key: 'factory', label: '工厂名称', placeholder: '如 丰鹏' },
   { key: 'costPrice', label: '成本价', placeholder: '0.00', kind: 'number' },
   { key: 'color', label: '颜色', placeholder: '多个颜色用空格分隔' },
-  { key: 'sizeRange', label: '码段', placeholder: '如 35,36,37 或 35-44' },
+]
+const FIELDS_B: Field[] = [
   { key: 'craft', label: '制作工艺', placeholder: '下拉选择或输入新增' },
   { key: 'remark', label: '备注', placeholder: '选填' },
 ]
@@ -50,16 +51,34 @@ const NewStyleProgressView = ({ tick = 0 }: { tick?: number }) => {
   const [tab, setTab] = useState<TabKey>('progress')
   const [formVisible, setFormVisible] = useState(false)
   const [form, setForm] = useState<Record<string, string>>({})
+  const [sizes, setSizes] = useState<number[]>(PRESET_SIZES)
   const [modeIdx, setModeIdx] = useState(0)
   const [image, setImage] = useState('')
   const [busy, setBusy] = useState(false)
   const [reload, setReload] = useState(0)
   const cur = TABS.find(t => t.key === tab) || TABS[0]
 
+  // 左标签右输入的行布局：标签固定宽，输入框自适应填满右侧
+  const labelStyle = { width: 150, flexShrink: 0, fontSize: 26, color: '#5a6d85' }
+  const fieldRow = (f: Field) => (
+    <View key={f.key} style={{ display: 'flex', alignItems: 'center', marginBottom: 20 }}>
+      <Text style={labelStyle}>{f.label}{f.required ? '*' : ''}</Text>
+      <Input
+        className="input"
+        style={{ flex: 1, marginBottom: 0 }}
+        type={f.kind === 'number' ? 'digit' : 'text'}
+        placeholder={f.placeholder}
+        value={form[f.key] || ''}
+        onInput={e => setField(f.key, e.detail.value)}
+      />
+    </View>
+  )
+
   const setField = (key: string, val: string) => setForm(prev => ({ ...prev, [key]: val }))
 
   const openForm = () => {
-    setForm({ sizeRange: DEFAULT_SIZES })
+    setForm({})
+    setSizes([...PRESET_SIZES])
     setModeIdx(0)
     setImage('')
     setFormVisible(v => !v)
@@ -82,7 +101,7 @@ const NewStyleProgressView = ({ tick = 0 }: { tick?: number }) => {
     }
     setBusy(true)
     try {
-      await createNewStyle({ ...form, photoThenList: LIST_MODES[modeIdx], image })
+      await createNewStyle({ ...form, sizeRange: sizes.join(','), photoThenList: LIST_MODES[modeIdx], image })
       Taro.showToast({ title: '新款已登记', icon: 'success' })
       setFormVisible(false)
       setForm({})
@@ -110,25 +129,32 @@ const NewStyleProgressView = ({ tick = 0 }: { tick?: number }) => {
       </View>
       {formVisible && tab === 'progress' && (
         <View className="card">
-          {FORM_FIELDS.map(f => (
-            <Input
-              key={f.key}
-              className="input"
-              type={f.kind === 'number' ? 'digit' : 'text'}
-              placeholder={`${f.label}${f.required ? '*' : ''}：${f.placeholder}`}
-              value={form[f.key] || ''}
-              onInput={e => setField(f.key, e.detail.value)}
-            />
-          ))}
-          <Picker mode="selector" range={LIST_MODES} value={modeIdx} onChange={e => setModeIdx(Number(e.detail.value))}>
-            <View className="row">
-              <Text className="muted">何时上架</Text>
-              <Text style={{ color: '#1677ff' }}>{LIST_MODES[modeIdx]} ▾</Text>
-            </View>
-          </Picker>
-          <View className="row">
-            <Text className="muted">款式图片</Text>
-            <View style={{ display: 'flex', alignItems: 'center' }}>
+          {FIELDS_A.map(fieldRow)}
+          {/* 规格：预设 33-46 每项前置复选框，勾选结果以逗号列表落库 */}
+          <View style={{ display: 'flex', alignItems: 'flex-start', marginBottom: 20 }}>
+            <Text style={{ ...labelStyle, lineHeight: '48px' }}>规格</Text>
+            <CheckboxGroup
+              style={{ flex: 1, display: 'flex', flexWrap: 'wrap' }}
+              onChange={e => setSizes((e.detail.value || []).map(Number))}
+            >
+              {PRESET_SIZES.map(n => (
+                <View key={n} style={{ display: 'flex', alignItems: 'center', width: '25%', padding: '4px 0' }}>
+                  <Checkbox value={String(n)} checked={sizes.includes(n)} />
+                  <Text style={{ fontSize: 26 }}>{n}</Text>
+                </View>
+              ))}
+            </CheckboxGroup>
+          </View>
+          {FIELDS_B.map(fieldRow)}
+          <View style={{ display: 'flex', alignItems: 'center', marginBottom: 20 }}>
+            <Text style={labelStyle}>何时上架</Text>
+            <Picker mode="selector" range={LIST_MODES} value={modeIdx} onChange={e => setModeIdx(Number(e.detail.value))} style={{ flex: 1 }}>
+              <View className="input" style={{ marginBottom: 0, color: '#1677ff' }}>{LIST_MODES[modeIdx]} ▾</View>
+            </Picker>
+          </View>
+          <View style={{ display: 'flex', alignItems: 'center', marginBottom: 20 }}>
+            <Text style={labelStyle}>款式图片</Text>
+            <View style={{ flex: 1, display: 'flex', alignItems: 'center' }}>
               {image ? (
                 <Image src={image} mode="aspectFill" style={{ width: 96, height: 96, borderRadius: 8, marginRight: 12 }} />
               ) : null}
