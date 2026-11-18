@@ -477,6 +477,8 @@ router.get('/market', verifyJWT, async (req: Request, res: Response) => {
         id: r.key || r.id, title: r.title || r.name || r.moldName || '模具租售',
         price: Number(r.price || r.targetPrice) || 0, publisherCompany: coOf(r),
         publishTime: r.publishTime || r.createTime || '', status: r.status || '',
+        image: (Array.isArray(r.images) && r.images[0]) || r.image || '',
+        mode: r.mode || '',
       }));
       res.json({ code: 200, data: { list } });
       return;
@@ -487,6 +489,7 @@ router.get('/market', verifyJWT, async (req: Request, res: Response) => {
       quantity: Number(r.quantity) || 0, targetPrice: Number(r.targetPrice) || 0,
       publisherCompany: coOf(r), publishTime: r.publishTime || '', status: r.status || '',
       quoteCount: Array.isArray(r.quotes) ? r.quotes.length : 0,
+      image: (Array.isArray(r.images) && r.images[0]) || r.image || '',
     }));
     res.json({ code: 200, data: { list } });
   } catch (err: any) {
