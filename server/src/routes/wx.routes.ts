@@ -699,7 +699,7 @@ router.get('/lists/:page', verifyJWT, async (req: Request, res: Response) => {
         tag: r.platform,
         sub: [r.brand, r.person && `负责人:${r.person}`, r.status].filter(Boolean) as string[],
       }));
-    } else if (page === 'warehouseStats') {
+    } else if (page === 'warehouseStats' || page === 'warehouseStock') {
       const rows = await readRows(`ws_stock_${owner}`);
       items = rows.map((r: any) => ({
         key: r.key || r.orderNo || r.productCode, title: pick(r.productCode, r.orderNo, r.key) || '备货记录',
@@ -707,6 +707,85 @@ router.get('/lists/:page', verifyJWT, async (req: Request, res: Response) => {
         sub: [day10(r.date), r.orderNo, r.quantity !== undefined && r.quantity !== null && `数量 ${r.quantity}`,
           r.material, r.person, r.packer].filter(Boolean) as string[],
       }));
+    } else if (page === 'warehousePick') {
+      const rows = await readRows(`ws_pick_${owner}`);
+      items = rows.map((r: any) => ({
+        key: r.key || r.orderNo, title: pick(r.orderNo, r.key) || '配货记录',
+        tag: r.month, amount: Number(r.wage) || 0,
+        sub: [r.quantity !== undefined && r.quantity !== null && `数量 ${r.quantity}`,
+          r.priceRate && `工价 ¥${r.priceRate}`, r.picker && `配货员:${r.picker}`,
+          r.creator, day10(r.createdAt)].filter(Boolean) as string[],
+      }));
+    } else if (page === 'warehouseUrgent') {
+      const rows = await readRows(`ws_urgent_${owner}`);
+      items = rows.map((r: any) => ({
+        key: r.key || r.orderNo || r.productCode, title: pick(r.productCode, r.orderNo, r.key) || '急采记录',
+        tag: r.month, amount: Number(r.wage) || 0,
+        sub: [day10(pick(r.date, r.qcDate)), r.orderNo,
+          r.quantity !== undefined && r.quantity !== null && `数量 ${r.quantity}`,
+          r.inspector && `质检:${r.inspector}`, r.material,
+          r.packer && `打包:${r.packer}`, r.foreignTeam && `外贸组长:${r.foreignTeam}`].filter(Boolean) as string[],
+      }));
+    } else if (page === 'warehouseNote') {
+      const rows = await readRows(`ws_note_${owner}`);
+      items = rows.map((r: any) => ({
+        key: r.key, title: pick(r.note) || '奖惩记录',
+        tag: r.type === 'punishment' ? '罚款' : '奖励', tone: r.type === 'punishment' ? 'red' : 'green',
+        amount: (r.type === 'punishment' ? -1 : 1) * (Number(r.amount) || 0),
+        sub: [r.person, day10(r.date), r.month].filter(Boolean) as string[],
+      }));
+    } else if (page === 'warehouseSalary') {
+      // 工资汇总：与 Web SalaryTab 同口径——按人按月累加备货/急采质检、配货、打包、外贸组长六类工资 + 奖惩净额
+      const m = /^\d{4}-\d{2}$/.test(String(req.query.m || '')) ? String(req.query.m) : localYmd().slice(0, 7);
+      const [stockR, urgentR, pickR, noteR] = await Promise.all([
+        readRows(`ws_stock_${owner}`), readRows(`ws_urgent_${owner}`),
+        readRows(`ws_pick_${owner}`), readRows(`ws_note_${owner}`),
+      ]);
+      const qc: Record<string, { s: number; u: number }> = {};
+      const pack: Record<string, { s: number; u: number }> = {};
+      const pickM: Record<string, number> = {};
+      const team: Record<string, number> = {};
+      const noteM: Record<string, number> = {};
+      stockR.forEach((r: any) => {
+        if (r.month !== m) return;
+        if (r.qcInspector) { const e = qc[r.qcInspector] || (qc[r.qcInspector] = { s: 0, u: 0 }); e.s += Number(r.qcWage) || 0; }
+        if (r.packer) { const e = pack[r.packer] || (pack[r.packer] = { s: 0, u: 0 }); e.s += Number(r.packWage) || 0; }
+        if (r.foreignTeam) team[r.foreignTeam] = (team[r.foreignTeam] || 0) + (Number(r.commission) || 0);
+      });
+      urgentR.forEach((r: any) => {
+        if (r.month !== m) return;
+        if (r.inspector) { const e = qc[r.inspector] || (qc[r.inspector] = { s: 0, u: 0 }); e.u += Number(r.wage) || 0; }
+        if (r.packer) { const e = pack[r.packer] || (pack[r.packer] = { s: 0, u: 0 }); e.u += Number(r.packWage) || 0; }
+        if (r.foreignTeam) team[r.foreignTeam] = (team[r.foreignTeam] || 0) + (Number(r.commission) || 0);
+      });
+      pickR.forEach((r: any) => {
+        if (r.month !== m) return;
+        const k = r.picker || r.creator;
+        if (k) pickM[k] = (pickM[k] || 0) + (Number(r.wage) || 0);
+      });
+      noteR.forEach((n: any) => {
+        if (n.month !== m || !n.person) return;
+        noteM[n.person] = (noteM[n.person] || 0) + ((n.type === 'punishment' ? -1 : 1) * (Number(n.amount) || 0));
+      });
+      const fmt = (v: number) => `¥${v.toFixed(2)}`;
+      const persons = Array.from(new Set([...Object.keys(qc), ...Object.keys(pack), ...Object.keys(pickM), ...Object.keys(team), ...Object.keys(noteM)]));
+      items = persons.map(name => {
+        const stockWage = qc[name]?.s || 0;
+        const urgentWage = qc[name]?.u || 0;
+        const pickWage = pickM[name] || 0;
+        const packS = pack[name]?.s || 0;
+        const packU = pack[name]?.u || 0;
+        const teamWage = team[name] || 0;
+        const noteNet = noteM[name] || 0;
+        const total = stockWage + urgentWage + pickWage + packS + packU + teamWage + noteNet;
+        return {
+          key: name, title: name, tag: m, tone: 'blue', amount: total,
+          sub: [stockWage && `备货质检 ${fmt(stockWage)}`, urgentWage && `急采质检 ${fmt(urgentWage)}`,
+            pickWage && `配货 ${fmt(pickWage)}`, packS && `备货打包 ${fmt(packS)}`,
+            packU && `急采打包 ${fmt(packU)}`, teamWage && `外贸组长 ${fmt(teamWage)}`,
+            noteNet && `奖惩 ${fmt(noteNet)}`].filter(Boolean) as string[],
+        };
+      }).sort((a, b) => (b.amount || 0) - (a.amount || 0));
     } else if (page === 'brands') {
       const [own, auth] = await Promise.all([
         readRows(`brandauth_own_${owner}`), readRows(`brandauth_auth_brandledger_${owner}`),

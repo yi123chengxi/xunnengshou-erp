@@ -78,5 +78,5 @@ export interface ListItem {
   amount?: number
 }
 
-export const getListPage = (page: string, q: string) =>
-  request<{ list: ListItem[]; total: number }>(`/wx/lists/${page}?q=${encodeURIComponent(q)}`)
+export const getListPage = (page: string, q: string, extra = '') =>
+  request<{ list: ListItem[]; total: number }>(`/wx/lists/${page}?q=${encodeURIComponent(q)}${extra ? `&${extra}` : ''}`)

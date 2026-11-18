@@ -9,6 +9,7 @@ import ReimburseForm from './ReimburseForm'
 import AttendanceView from './AttendanceView'
 import LeaveView from './LeaveView'
 import ListView from './ListView'
+import WarehouseStatsView from './WarehouseStatsView'
 import MarketView from './MarketView'
 
 // 扫码入口视图：扫码后回调把关键字交给库存查询子菜单
@@ -72,7 +73,7 @@ const ModuleView = ({
       case 'purchase': return <ListView page="purchase" tick={tick} />
       case 'progress': return <ListView page="progress" tick={tick} />
       case 'shop-management': return <ListView page="shops" tick={tick} />
-      case 'warehouse-stats': return <ListView page="warehouseStats" tick={tick} />
+      case 'warehouse-stats': return <WarehouseStatsView tick={tick} />
       case 'manage': return <ListView page="brands" tick={tick} />
       case 'staff': return <ListView page="staff" tick={tick} />
       case 'customers': return <ListView page="customers" tick={tick} />

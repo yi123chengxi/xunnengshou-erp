@@ -12,7 +12,7 @@ const TONE_CLASS: Record<string, string> = {
  * 用于补齐日常记账/生产订单/采购订单/新款进度/店铺/仓库统计/品牌/员工/客户等子菜单。
  * 搜索为「点击查询后才生效」的双态模式，减少大列表实时过滤开销。
  */
-const ListView = ({ page, tick = 0 }: { page: string; tick?: number }) => {
+const ListView = ({ page, extra = '', tick = 0 }: { page: string; extra?: string; tick?: number }) => {
   const [input, setInput] = useState('')
   const [applied, setApplied] = useState('')
   const [list, setList] = useState<ListItem[]>([])
@@ -21,11 +21,11 @@ const ListView = ({ page, tick = 0 }: { page: string; tick?: number }) => {
 
   useEffect(() => {
     setLoaded(false)
-    getListPage(page, applied)
+    getListPage(page, applied, extra)
       .then(d => { setList(d.list || []); setTotal(d.total || 0) })
       .catch(e => Taro.showToast({ title: e.message, icon: 'none' }))
       .finally(() => setLoaded(true))
-  }, [page, applied, tick])
+  }, [page, applied, extra, tick])
 
   return (
     <View>
