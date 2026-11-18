@@ -54,18 +54,21 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
         {list.map((r: any) => (
           <View key={String(r.id)} style={{ width: '50%', boxSizing: 'border-box', padding: 8 }}>
             <View style={{ background: '#fff', borderRadius: 12, overflow: 'hidden', boxShadow: '0 2px 8px rgba(31,39,51,0.06)', position: 'relative' }}>
-              {r.image ? (
-                <Image src={r.image} mode="aspectFill" style={{ width: '100%', height: 330 }} />
-              ) : (
-                <View style={{ width: '100%', height: 330, background: 'linear-gradient(135deg,#e6f4ff,#f0f5ff)', textAlign: 'center', lineHeight: '330px', fontSize: 72 }}>
-                  {type === 'mold' ? '🧰' : '🛍️'}
-                </View>
-              )}
-              {type === 'mold' && r.mode ? (
-                <Text style={{ position: 'absolute', top: 0, left: 0, color: '#fff', fontSize: 20, lineHeight: '32px', padding: '0 14px', borderRadius: '12px 0 12px 0', background: r.mode === '出租' ? 'linear-gradient(135deg,#1677ff,#69b1ff)' : 'linear-gradient(135deg,#52c41a,#95de64)' }}>
-                  {r.mode}
-                </Text>
-              ) : null}
+              {/* 封面区：padding-top:100% 撑出正方形（H5/weapp 通用，不依赖 aspect-ratio） */}
+              <View style={{ position: 'relative', width: '100%', paddingTop: '100%' }}>
+                {r.image ? (
+                  <Image src={r.image} mode="aspectFill" style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%' }} />
+                ) : (
+                  <View style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', background: 'linear-gradient(135deg,#e6f4ff,#f0f5ff)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 72 }}>
+                    {type === 'mold' ? '🧰' : '🛍️'}
+                  </View>
+                )}
+                {type === 'mold' && r.mode ? (
+                  <Text style={{ position: 'absolute', top: 0, left: 0, color: '#fff', fontSize: 20, lineHeight: '32px', padding: '0 14px', borderRadius: '12px 0 12px 0', background: r.mode === '出租' ? 'linear-gradient(135deg,#1677ff,#69b1ff)' : 'linear-gradient(135deg,#52c41a,#95de64)' }}>
+                    {r.mode}
+                  </Text>
+                ) : null}
+              </View>
               <View style={{ padding: '12px 16px 16px' }}>
                 <View style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <Text className="tag tag-blue" style={{ maxWidth: 200, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
