@@ -939,6 +939,42 @@ router.get('/lists/:page', verifyJWT, async (req: Request, res: Response) => {
         sub: [r.supplier, Array.isArray(r.items) && r.items.length ? `${r.items.length} 项物料` : '',
           day10(pick(r.createTime, r.date, r.createDate)), r.person].filter(Boolean) as string[],
       }));
+    } else if (page === 'processing-order') {
+      // 加工订单（Web 生产管理→加工订单同键）
+      const rows = await readRows(`pageData_production_processing-order_${owner}`);
+      items = rows.map((r: any) => ({
+        key: r.key || r.id, title: pick(r.id, r.key) || '加工单',
+        tag: r.status,
+        row: [pick(r.id, r.key), pick(r.poId, '—'), pick(r.styleCode, r.productCode, '—'),
+          String(r.totalQty ?? ''), pick(r.status, '—')],
+        sub: [r.poId && `来源生产单号 ${r.poId}`, pick(r.styleCode, r.productCode), r.shortName,
+          r.totalQty !== undefined && r.totalQty !== null && `需求总数量 ${r.totalQty}`,
+          r.factoryName, day10(r.createTime), r.operator].filter(Boolean) as string[],
+      }));
+    } else if (page === 'workflow-templates') {
+      // 生产流程模板（与 CustomOrderPage 共用键）
+      const rows = await readRows(`pageData_production_custom-order-templates_${owner}`);
+      items = rows.map((r: any) => ({
+        key: r.key || r.id, title: pick(r.name, r.id) || '流程模板',
+        tag: r.industry,
+        row: [pick(r.name, r.id), pick(r.industry, '—'), String(Array.isArray(r.nodes) ? r.nodes.length : 0),
+          r.isDefault ? '默认' : '—'],
+        sub: [r.industry, Array.isArray(r.nodes) && r.nodes.length ? `${r.nodes.length} 个流程节点` : '',
+          r.isDefault && '系统预设'].filter(Boolean) as string[],
+      }));
+    } else if (page === 'production-schedule') {
+      // 生产排期（状态枚举与 Web 筛选同口径）
+      const stText: Record<string, string> = { pending: '待排产', processing: '生产中', completed: '已完工', warning: '异常' };
+      const rows = await readRows(`pageData_production_production-schedule_${owner}`);
+      items = rows.map((r: any) => ({
+        key: r.key || r.id, title: pick(r.id, r.key) || '生产排期',
+        tag: stText[r.status] || r.status,
+        row: [pick(r.id, r.key), pick(r.productionOrderId, '—'), String(r.planQty ?? ''),
+          stText[r.status] || pick(r.status, '—')],
+        sub: [r.productionOrderId && `生产单 ${r.productionOrderId}`, r.productName, r.customerName,
+          r.line && `生产线 ${r.line}`, r.startDate && `开工 ${day10(r.startDate)}`,
+          r.endDate && `完工 ${day10(r.endDate)}`, r.person].filter(Boolean) as string[],
+      }));
     } else if (page === 'progress') {
       // 主表单：数据完善状态取自商品属性登记表（与 Web 主表同口径）
       const [rows, listingRows] = await Promise.all([

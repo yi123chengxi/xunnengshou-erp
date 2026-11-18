@@ -87,6 +87,12 @@ const ModuleView = ({
       case 'bookkeeping': return <BookkeepingView tick={tick} />
       case 'production': return <ListView page="production" tick={tick} />
       case 'purchase': return <ListView page="purchase" tick={tick} />
+      // 生产管理子菜单（与 Web production 分组同口径）
+      case 'production-order': return <ListView page="production" tick={tick} />
+      case 'processing-order': return <ListView page="processing-order" headers={['加工单号', '来源生产单号', '款式编码', '需求总数量', '状态']} tick={tick} />
+      case 'purchase-requisition': return <ListView page="purchase" tick={tick} />
+      case 'workflow-templates': return <ListView page="workflow-templates" headers={['模板名称', '行业', '节点数', '默认']} tick={tick} />
+      case 'production-schedule': return <ListView page="production-schedule" headers={['排期编号', '关联生产单号', '排产数量', '状态']} tick={tick} />
       case 'progress': return <NewStyleProgressView tick={tick} />
       case 'shop-management': return <ListView page="shops" tick={tick} />
       case 'warehouse-stats': return <WarehouseStatsView tick={tick} />

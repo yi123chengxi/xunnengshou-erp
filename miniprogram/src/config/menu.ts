@@ -22,6 +22,16 @@ export const MODULES: MenuModule[] = [
     ],
   },
   {
+    key: 'production-mgmt', title: '生产管理', icon: '🛠️',
+    children: [
+      { key: 'production-order', title: '生产订单' },
+      { key: 'processing-order', title: '加工订单' },
+      { key: 'purchase-requisition', title: '采购申请单' },
+      { key: 'workflow-templates', title: '生产流程模板' },
+      { key: 'production-schedule', title: '生产排期' },
+    ],
+  },
+  {
     key: 'warehouse', title: '仓库管理', icon: '📦',
     children: [
       { key: 'inventory', title: '库存查询' },
@@ -81,6 +91,8 @@ export const findModule = (key: string): MenuModule | undefined => MODULES.find(
 export const CHILD_ICONS: Record<string, string> = {
   approvals: '✅', reimburse: '🧾', bookkeeping: '📔',
   orders: '📋', production: '🏭', purchase: '📥',
+  'production-order': '🏭', 'processing-order': '⚙️', 'purchase-requisition': '📥',
+  'workflow-templates': '🧭', 'production-schedule': '📅',
   inventory: '📦', scan: '📷',
   finished: '🛒', semi: '📤', mold: '🧰',
   progress: '📈', 'shop-management': '🏪', opportunity: '🛒', 'warehouse-stats': '📊', manage: '🏅',
