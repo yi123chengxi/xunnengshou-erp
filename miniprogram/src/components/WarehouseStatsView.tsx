@@ -30,15 +30,8 @@ const FORM_FIELDS: Record<TabKey, Field[]> = {
     { key: 'picker', label: '配货员（默认本人）' },
   ],
   urgent: [
-    { key: 'date', label: '日期', kind: 'date' },
     { key: 'orderNo', label: '内部单号', required: true },
-    { key: 'productCode', label: '货号' },
     { key: 'quantity', label: '数量', kind: 'number', required: true },
-    { key: 'inspector', label: '质检员（默认本人）' },
-    { key: 'material', label: '材质（匹配工价）' },
-    { key: 'packer', label: '打包员（默认首组）' },
-    { key: 'foreignTeam', label: '外贸组长（默认首组）' },
-    { key: 'remark', label: '备注' },
   ],
   note: [
     { key: 'person', label: '人员', required: true },
@@ -52,6 +45,15 @@ const FORM_FIELDS: Record<TabKey, Field[]> = {
 const curMonth = () => {
   const d = new Date()
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+}
+
+// 横向表格表头（与服务器下发 row 单元格顺序对应）；空数组=卡片模式
+const HEADERS: Record<TabKey, string[]> = {
+  stock: ['内部单号', '数量', '鞋子材质'],
+  pick: ['内部单号', '数量', '计件工资'],
+  urgent: ['内部单号', '数量', '鞋子材质'],
+  note: ['人员', '类型', '金额'],
+  salary: [],
 }
 const todayStr = () => {
   const d = new Date()
@@ -96,7 +98,7 @@ const WarehouseStatsView = ({ tick = 0 }: { tick?: number }) => {
     }
     const body: Record<string, any> = { ...form }
     if (tab === 'note') body.type = noteType === 1 ? 'punishment' : 'reward'
-    if (tab === 'stock') body.image = image
+    if (tab === 'stock' || tab === 'urgent') body.image = image
     setBusy(true)
     try {
       await createWsRecord(tab as 'stock' | 'pick' | 'urgent' | 'note', body)
@@ -160,7 +162,7 @@ const WarehouseStatsView = ({ tick = 0 }: { tick?: number }) => {
               </View>
             </View>
           )}
-          {tab === 'stock' && (
+          {(tab === 'stock' || tab === 'urgent') && (
             <View className="row">
               <Text className="muted">图片</Text>
               <View style={{ display: 'flex', alignItems: 'center' }}>
@@ -201,6 +203,7 @@ const WarehouseStatsView = ({ tick = 0 }: { tick?: number }) => {
       <ListView
         page={cur.page}
         extra={tab === 'salary' ? `m=${encodeURIComponent(month)}` : ''}
+        headers={HEADERS[tab]}
         addLabel={fields.length > 0 ? '新增记录' : undefined}
         onAdd={fields.length > 0 ? () => setFormVisible(v => !v) : undefined}
         tick={tick + reload}

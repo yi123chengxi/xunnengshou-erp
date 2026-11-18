@@ -6,7 +6,7 @@ import { request } from './request'
  * 返回可直接引用的图片 URL；与 Web 图片空间同一份二进制与索引。
  */
 export const chooseAndUploadImage = async (): Promise<string> => {
-  const res = await Taro.chooseImage({ count: 1, sizeType: ['compressed'] })
+  const res = await Taro.chooseImage({ count: 1, sizeType: ['compressed'], sourceType: ['album', 'camera'] })
   const filePath = (res.tempFilePaths || [])[0]
   if (!filePath) throw new Error('未选择图片')
   let dataUrl = ''

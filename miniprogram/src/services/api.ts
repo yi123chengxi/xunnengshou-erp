@@ -76,6 +76,8 @@ export interface ListItem {
   tag?: string
   tone?: string
   amount?: number
+  /** 横向表格行单元格（与列表页 headers 顺序对应） */
+  row?: string[]
 }
 
 export const getListPage = (page: string, q: string, extra = '') =>

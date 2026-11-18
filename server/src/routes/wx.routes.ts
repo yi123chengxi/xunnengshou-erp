@@ -880,6 +880,7 @@ router.get('/lists/:page', verifyJWT, async (req: Request, res: Response) => {
       items = rows.map((r: any) => ({
         key: r.key || r.orderNo || r.productCode, title: pick(r.productCode, r.orderNo, r.key) || '备货记录',
         tag: r.month,
+        row: [pick(r.orderNo, r.key), String(r.quantity ?? ''), pick(r.material, '—')],
         sub: [day10(r.date), r.orderNo, r.quantity !== undefined && r.quantity !== null && `数量 ${r.quantity}`,
           r.material, r.person, r.packer].filter(Boolean) as string[],
       }));
@@ -888,6 +889,7 @@ router.get('/lists/:page', verifyJWT, async (req: Request, res: Response) => {
       items = rows.map((r: any) => ({
         key: r.key || r.orderNo, title: pick(r.orderNo, r.key) || '配货记录',
         tag: r.month, amount: Number(r.wage) || 0,
+        row: [pick(r.orderNo, r.key), String(r.quantity ?? ''), (Number(r.wage) || 0) ? `¥${Number(r.wage).toFixed(2)}` : '—'],
         sub: [r.quantity !== undefined && r.quantity !== null && `数量 ${r.quantity}`,
           r.priceRate && `工价 ¥${r.priceRate}`, r.picker && `配货员:${r.picker}`,
           r.creator, day10(r.createdAt)].filter(Boolean) as string[],
@@ -897,6 +899,7 @@ router.get('/lists/:page', verifyJWT, async (req: Request, res: Response) => {
       items = rows.map((r: any) => ({
         key: r.key || r.orderNo || r.productCode, title: pick(r.productCode, r.orderNo, r.key) || '急采记录',
         tag: r.month, amount: Number(r.wage) || 0,
+        row: [pick(r.orderNo, r.key), String(r.quantity ?? ''), pick(r.material, '—')],
         sub: [day10(pick(r.date, r.qcDate)), r.orderNo,
           r.quantity !== undefined && r.quantity !== null && `数量 ${r.quantity}`,
           r.inspector && `质检:${r.inspector}`, r.material,
@@ -908,6 +911,7 @@ router.get('/lists/:page', verifyJWT, async (req: Request, res: Response) => {
         key: r.key, title: pick(r.note) || '奖惩记录',
         tag: r.type === 'punishment' ? '罚款' : '奖励', tone: r.type === 'punishment' ? 'red' : 'green',
         amount: (r.type === 'punishment' ? -1 : 1) * (Number(r.amount) || 0),
+        row: [pick(r.person), r.type === 'punishment' ? '罚款' : '奖励', String(r.amount ?? '')],
         sub: [r.person, day10(r.date), r.month].filter(Boolean) as string[],
       }));
     } else if (page === 'warehouseSalary') {

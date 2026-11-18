@@ -13,8 +13,8 @@ const TONE_CLASS: Record<string, string> = {
  * 搜索为「点击查询后才生效」的双态模式，减少大列表实时过滤开销。
  */
 const ListView = ({
-  page, extra = '', addLabel, onAdd, tick = 0,
-}: { page: string; extra?: string; addLabel?: string; onAdd?: () => void; tick?: number }) => {
+  page, extra = '', headers, addLabel, onAdd, tick = 0,
+}: { page: string; extra?: string; headers?: string[]; addLabel?: string; onAdd?: () => void; tick?: number }) => {
   const [input, setInput] = useState('')
   const [applied, setApplied] = useState('')
   const [list, setList] = useState<ListItem[]>([])
@@ -34,17 +34,25 @@ const ListView = ({
       <View style={{ display: 'flex', padding: '16px 24px 0', alignItems: 'center' }}>
         <Input
           className="input"
-          style={{ flex: 1 }}
+          style={{ flex: 1, marginBottom: 0, height: 76, boxSizing: 'border-box' }}
           placeholder="搜索关键字"
           value={input}
           onInput={e => setInput(e.detail.value)}
           onConfirm={() => setApplied(input.trim())}
         />
-        <Button size="mini" className="btn-primary" style={{ marginLeft: 12, lineHeight: '56px' }} onClick={() => setApplied(input.trim())}>
+        <Button
+          className="btn-primary"
+          style={{ marginLeft: 12, marginBottom: 0, height: 76, lineHeight: '76px', padding: '0 24px', fontSize: 26, flexShrink: 0, boxSizing: 'border-box' }}
+          onClick={() => setApplied(input.trim())}
+        >
           查询
         </Button>
         {onAdd ? (
-          <Button size="mini" className="btn-primary" style={{ marginLeft: 12, lineHeight: '56px' }} onClick={onAdd}>
+          <Button
+            className="btn-primary"
+            style={{ marginLeft: 12, marginBottom: 0, height: 76, lineHeight: '76px', padding: '0 24px', fontSize: 26, flexShrink: 0, boxSizing: 'border-box' }}
+            onClick={onAdd}
+          >
             {addLabel || '新增'}
           </Button>
         ) : null}
@@ -55,7 +63,31 @@ const ListView = ({
         </View>
       )}
       {loaded && list.length === 0 && <View className="empty">暂无数据</View>}
-      {list.map(it => (
+      {headers && headers.length ? (
+        /* 横向表格模式：顶部字段名行 + 每条记录一行单元格 */
+        <View style={{ margin: '8px 24px 0', background: '#fff', borderRadius: 12, overflow: 'hidden' }}>
+          <View style={{ display: 'flex', background: '#eef1f5', padding: '14px 0' }}>
+            {headers.map((h, i) => (
+              <Text key={h} style={{ flex: i === 0 ? 1.4 : 1, textAlign: 'center', fontSize: 24, color: '#5a6d85', fontWeight: 600 }}>
+                {h}
+              </Text>
+            ))}
+          </View>
+          {list.map(it => (
+            <View key={String(it.key)} style={{ display: 'flex', padding: '18px 0', borderTop: '1px solid #f0f2f5', alignItems: 'center' }}>
+              {(it.row || []).map((c, i) => (
+                <Text
+                  key={i}
+                  style={{ flex: i === 0 ? 1.4 : 1, textAlign: 'center', fontSize: 26, padding: '0 8px', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}
+                >
+                  {c || '—'}
+                </Text>
+              ))}
+            </View>
+          ))}
+        </View>
+      ) : (
+        list.map(it => (
         <View key={String(it.key)} className="card">
           <View className="row">
             <Text style={{ fontWeight: 600, flex: 1, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
@@ -72,7 +104,8 @@ const ListView = ({
             </View>
           ) : null}
         </View>
-      ))}
+        ))
+      )}
     </View>
   )
 }
