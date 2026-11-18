@@ -2867,7 +2867,8 @@ const ModuleChildPage: React.FC = () => {
     // 存量行全量保留（防擦除不变量）：凡不在订单集合中的已有行（手工新增/退货登记/历史行）一律保留在列表顶部。
     // 不能只保留 _manual 行——否则订单键暂缺（未拉取/owner 不一致）时重建会把订单派生行与历史行全部丢弃并上传擦除。
     const orderIds = new Set(orders.map((o: any) => o.id));
-    const preservedRows = existing.filter((r: any) => r && r.id && !orderIds.has(r.id));
+    // 保留判据兼容仅有 key 的历史行（旧判据 r.id 非空会把缺 id 行在每次重建时静默丢弃）
+    const preservedRows = existing.filter((r: any) => r && (r.id || r.key) && !orderIds.has(r.id));
     // 凭证映射一次解析：重建时为缺凭证的账单行补账号+公司编号（第一阶段铺垫，不改匹配逻辑）
     const credMap = buildCompanyCredMap();
     return [...preservedRows, ...orders
@@ -2931,6 +2932,19 @@ const ModuleChildPage: React.FC = () => {
       })];
   }, [getDataOwner]);
 
+  // 重建防擦除救回：落盘里存在但重建结果丢弃的行（缺字段历史行/派生口径变化/任何重建缺陷）
+  // 原样并回重建结果——保证查询/切签/同步重载/事件重建/回写落库任何重建路径都不会
+  // 比落盘少行（表现为「新增账单点查询后消失」）；合法删除已先落盘删除，落盘无该行故不会被救回
+  const rescueDroppedStoredRows = useCallback((rebuilt: Record<string, any>[], storedRows: Record<string, any>[]) => {
+    if (!Array.isArray(storedRows) || storedRows.length === 0) return rebuilt;
+    const ids = new Set(rebuilt.map((r: any) => String(r?.id || r?.key || '')).filter(Boolean));
+    const rescued = storedRows.filter((r: any) => {
+      const id = String(r?.id || r?.key || '');
+      return !!id && !ids.has(id);
+    });
+    return rescued.length > 0 ? [...rebuilt, ...rescued] : rebuilt;
+  }, []);
+
   // 实际库存自愈：stock_change_log 为库存变动唯一真值源（入库/出库/盘点均经 updateProductStock 记日志），
   // 取每商品最新一条 afterStock 校正 actualStock，纠正跨端同步/内存回写带来的陈旧副本（实际库存归 0/跳变根因）
   const healActualStockFromLogs = useCallback((rows: Record<string, any>[]) => {
@@ -2963,10 +2977,15 @@ const ModuleChildPage: React.FC = () => {
       let existing: Record<string, any>[] = [];
       try { existing = JSON.parse(localStorage.getItem(storageKey) || '[]'); } catch { existing = []; }
       if (!Array.isArray(existing)) existing = [];
-      const next = buildBillDetailRows(existing);
-      safeSetItem(storageKey, JSON.stringify(next));
+      const next = rescueDroppedStoredRows(buildBillDetailRows(existing), existing);
+      const json = JSON.stringify(next);
+      safeSetItem(storageKey, json);
+      // 重建落盘同歩主存+服务端（立即上传）：否则 LS 与 IDB/服务端分叉，
+      // 刷新/拉取时被旧副本覆盖回去，表现为「重建后账单消失」
+      saveDataset(storageKey, json);
+      flushDatasetUploadAsync(storageKey, json).catch(() => false);
     } catch { /* ignore */ }
-  }, [buildBillDetailRows]);
+  }, [buildBillDetailRows, rescueDroppedStoredRows]);
 
   // ============ 退货登记（账单明细）：负数退货行 + 镜像同步采购商平台 + 库存出入库联动 ============
   const [returnRegVisible, setReturnRegVisible] = useState(false);
@@ -5138,7 +5157,7 @@ const ModuleChildPage: React.FC = () => {
             if (Array.isArray(parsed)) data = parsed;
           } catch { /* ignore */ }
         }
-        const rebuilt = buildBillDetailRows(data);
+        const rebuilt = rescueDroppedStoredRows(buildBillDetailRows(data), data);
         setDataSource(rebuilt);
       }).catch(() => { /* ignore */ });
     };
@@ -5663,7 +5682,10 @@ const ModuleChildPage: React.FC = () => {
       try {
         let parsed = JSON.parse(stored);
         if (!Array.isArray(parsed)) return;
-        if (moduleKey === 'customer' && childKey === 'bill-detail') parsed = buildBillDetailRows(parsed);
+        if (moduleKey === 'customer' && childKey === 'bill-detail') {
+          const rawRows = parsed;
+          parsed = rescueDroppedStoredRows(buildBillDetailRows(rawRows), rawRows);
+        }
         // 商品族：切签重载时实际库存按日志自愈
         if (isProductList) parsed = healActualStockFromLogs(parsed);
         setDataSource(parsed);
@@ -5711,9 +5733,11 @@ const ModuleChildPage: React.FC = () => {
     try {
       let parsed = JSON.parse(stored);
       if (!Array.isArray(parsed)) return;
-      // 账单明细：必须从订单管理重建，不能用服务端同步的旧数据覆盖
+      // 账单明细：必须从订单管理重建，不能用服务端同步的旧数据覆盖；
+      // 重建丢弃的落盘行一律救回（重建防擦除）
       if (moduleKey === 'customer' && childKey === 'bill-detail') {
-        parsed = buildBillDetailRows(parsed);
+        const rawRows = parsed;
+        parsed = rescueDroppedStoredRows(buildBillDetailRows(rawRows), rawRows);
       }
 
       // 对比当前 dataSource，只有内容确实不同时才更新
@@ -8638,7 +8662,9 @@ const ModuleChildPage: React.FC = () => {
           if (Array.isArray(parsed)) {
             // 账单明细：查询时必须从订单重建（存储可能缺新派生账单行，如刚发货的余额支付订单），
             // 与加载/切签路径同口径，杜绝“点查询看不到新账单”
-            const rebuilt = moduleKey === 'customer' && childKey === 'bill-detail' ? buildBillDetailRows(parsed) : parsed;
+            const rebuilt = moduleKey === 'customer' && childKey === 'bill-detail'
+              ? rescueDroppedStoredRows(buildBillDetailRows(parsed), parsed)
+              : parsed;
             // 商品族：查询时实际库存按日志自愈
             setDataSource(isProductList ? healActualStockFromLogs(rebuilt) : rebuilt);
           }
