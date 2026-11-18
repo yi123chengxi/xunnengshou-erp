@@ -22,6 +22,7 @@ const FORM_FIELDS: Record<TabKey, Field[]> = {
   stock: [
     { key: 'orderNo', label: '内部单号', required: true },
     { key: 'quantity', label: '数量', kind: 'number', required: true },
+    { key: 'qcWage', label: '质检工资（选填，默认按工价算）', kind: 'number' },
   ],
   pick: [
     { key: 'orderNo', label: '内部单号', required: true },
@@ -32,6 +33,7 @@ const FORM_FIELDS: Record<TabKey, Field[]> = {
   urgent: [
     { key: 'orderNo', label: '内部单号', required: true },
     { key: 'quantity', label: '数量', kind: 'number', required: true },
+    { key: 'qcWage', label: '质检工资（选填，默认按工价算）', kind: 'number' },
   ],
   note: [
     { key: 'person', label: '人员', required: true },

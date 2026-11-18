@@ -653,11 +653,14 @@ router.post('/ws/:kind', verifyJWT, async (req: Request, res: Response) => {
         date, month: date.slice(0, 7),
       };
       if (kind === 'stock') {
-        rec.qcWage = qty * rate;
+        // 质检工资：表单手填优先，未填按 数量×材质质检工价 派生（与 Web 同公式）
+        const qcOverride = Number(req.body.qcWage);
+        rec.qcWage = qcOverride > 0 ? qcOverride : qty * rate;
         rec.qcInspector = inspector;
         rec.person = String(req.body.person || '').trim() || name;
       } else {
-        rec.wage = qty * rate;
+        const qcOverride = Number(req.body.qcWage);
+        rec.wage = qcOverride > 0 ? qcOverride : qty * rate;
         rec.qcDate = date;
         rec.inspector = inspector;
         rec.inspectorId = String(req.body.inspectorId || '').trim() || String(grp.inspectorId || '');
