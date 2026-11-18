@@ -8,6 +8,7 @@ import OrdersEmbed from './OrdersEmbed'
 import ReimburseForm from './ReimburseForm'
 import AttendanceView from './AttendanceView'
 import LeaveView from './LeaveView'
+import ListView from './ListView'
 import MarketView from './MarketView'
 
 // 扫码入口视图：扫码后回调把关键字交给库存查询子菜单
@@ -65,6 +66,16 @@ const ModuleView = ({
       case 'scan': return <ScanLauncher onScanned={code => { setScanQ(code); setChild('inventory') }} />
       case 'attendance': return <AttendanceView tick={tick} />
       case 'leave': return <LeaveView tick={tick} />
+      // 以下子菜单与 Web 同页面同源数据，服务端 /wx/lists/:page 映射展示结构
+      case 'bookkeeping': return <ListView page="bookkeeping" tick={tick} />
+      case 'production': return <ListView page="production" tick={tick} />
+      case 'purchase': return <ListView page="purchase" tick={tick} />
+      case 'progress': return <ListView page="progress" tick={tick} />
+      case 'shop-management': return <ListView page="shops" tick={tick} />
+      case 'warehouse-stats': return <ListView page="warehouseStats" tick={tick} />
+      case 'manage': return <ListView page="brands" tick={tick} />
+      case 'staff': return <ListView page="staff" tick={tick} />
+      case 'customers': return <ListView page="customers" tick={tick} />
       case 'opportunity': return <MarketView tick={tick} />
       case 'finished':
       case 'semi':

@@ -617,4 +617,141 @@ router.post('/leaves/:key/audit', verifyJWT, async (req: Request, res: Response)
   }
 });
 
+// ============ 通用列表（只读，与 Web 各页同源同字段口径） ============
+
+interface ListItem { key: string; title: string; sub: string[]; tag?: string; tone?: string; amount?: number }
+
+/** 取第一个非空值作为展示文本 */
+function pick(...vals: any[]): string {
+  for (const v of vals) if (v !== undefined && v !== null && String(v).trim() !== '') return String(v);
+  return '';
+}
+
+/** 状态标签默认配色：完成类绿、待办/逾期类橙、否定类红、其余蓝 */
+function toneOf(tag?: string): string {
+  const t = String(tag || '');
+  if (!t) return 'gray';
+  if (/拒绝|取消|离职|失败|逾期/.test(t)) return 'red';
+  if (/待|未/.test(t)) return 'orange';
+  if (/已|通过|在职|正常|完善/.test(t)) return 'green';
+  return 'blue';
+}
+
+/** 关键字过滤 + 截断（标题/副行/标签参与匹配） */
+function finishList(items: ListItem[], q: string): { list: ListItem[]; total: number } {
+  const kw = q.trim().toLowerCase();
+  const hit = kw
+    ? items.filter(it => `${it.title} ${(it.sub || []).join(' ')} ${it.tag || ''}`.toLowerCase().includes(kw))
+    : items;
+  return { list: hit.slice(0, 100), total: hit.length };
+}
+
+const day10 = (v: any): string => pick(v).slice(0, 10);
+
+/** GET /api/wx/lists/:page?q= —— 空白子菜单补齐：日常记账/生产订单/采购订单/新款进度/店铺/仓库统计/品牌/员工/客户 */
+router.get('/lists/:page', verifyJWT, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user as JWTPayload;
+    const owner = await ownerOf(user.username);
+    const page = String(req.params.page || '');
+    const q = String(req.query.q || '');
+    let items: ListItem[] = [];
+    if (page === 'bookkeeping') {
+      const rows = await readRows(`daily_bookkeeping_${owner}`);
+      items = rows.map((r: any) => ({
+        key: r.key, title: pick(r.category, r.mainCategory, r.bookType) || '记账',
+        tag: r.bookType, tone: r.bookType === '收入' ? 'green' : 'orange',
+        amount: Number(r.amount) || 0,
+        sub: [day10(r.bookDate), r.voucherNo, r.person,
+          r.payAccount && `付:${r.payAccount}`, r.recvAccount && `收:${r.recvAccount}`, r.remark].filter(Boolean) as string[],
+      }));
+    } else if (page === 'production') {
+      const rows = await readRows(`pageData_production_production-order_${owner}`);
+      items = rows.map((r: any) => {
+        const qty = Number(r.planQuantity ?? r.quantity ?? r.productionQty) || 0;
+        return {
+          key: r.key || r.id, title: pick(r.id, r.orderNo, r.key) || '生产订单',
+          tag: r.status,
+          sub: [pick(r.styleCode, r.productCode, r.productName), qty ? `计划数量 ${qty}` : '',
+            r.orderTag, day10(pick(r.createTime, r.date, r.createDate)), r.person].filter(Boolean) as string[],
+        };
+      });
+    } else if (page === 'purchase') {
+      const rows = await readRows(`pageData_production_purchase-requisition_${owner}`);
+      items = rows.map((r: any) => ({
+        key: r.key || r.id, title: pick(r.id, r.docNo, r.key) || '采购申请单',
+        tag: r.status,
+        sub: [r.supplier, Array.isArray(r.items) && r.items.length ? `${r.items.length} 项物料` : '',
+          day10(pick(r.createTime, r.date, r.createDate)), r.person].filter(Boolean) as string[],
+      }));
+    } else if (page === 'progress') {
+      const rows = await readRows(`newstyle_progress_${owner}`);
+      items = rows.map((r: any) => ({
+        key: r.key || r.styleCode, title: pick(r.styleCode, r.key) || '新款',
+        tag: pick(r.dataComplete, r.recvStatus, r.status),
+        sub: [r.brand, r.planListDate && `预计上架 ${r.planListDate}`, r.creator,
+          day10(r.createdAt)].filter(Boolean) as string[],
+      }));
+    } else if (page === 'shops') {
+      const rows = await readRows(`shop_info_${owner}`);
+      items = rows.map((r: any) => ({
+        key: r.key || r.shopName, title: pick(r.shopName, r.name) || '店铺',
+        tag: r.platform,
+        sub: [r.brand, r.person && `负责人:${r.person}`, r.status].filter(Boolean) as string[],
+      }));
+    } else if (page === 'warehouseStats') {
+      const rows = await readRows(`ws_stock_${owner}`);
+      items = rows.map((r: any) => ({
+        key: r.key || r.orderNo || r.productCode, title: pick(r.productCode, r.orderNo, r.key) || '备货记录',
+        tag: r.month,
+        sub: [day10(r.date), r.orderNo, r.quantity !== undefined && r.quantity !== null && `数量 ${r.quantity}`,
+          r.material, r.person, r.packer].filter(Boolean) as string[],
+      }));
+    } else if (page === 'brands') {
+      const [own, auth] = await Promise.all([
+        readRows(`brandauth_own_${owner}`), readRows(`brandauth_auth_brandledger_${owner}`),
+      ]);
+      items = [
+        ...own.map((r: any) => ({
+          key: r.key || r.brandName, title: pick(r.brandName) || '品牌', tag: '自有品牌', tone: 'blue',
+          sub: [r.companyName, r.category].filter(Boolean) as string[],
+        })),
+        ...auth.map((r: any) => ({
+          key: r.key || r.brandName, title: pick(r.brandName) || '品牌', tag: '授权品牌', tone: 'green',
+          sub: [r.companyName, r.category].filter(Boolean) as string[],
+        })),
+      ];
+    } else if (page === 'staff') {
+      // 员工档案与 Web EmployeePage 同口径：accounts 子账号映射员工 + hr_employee_profiles 补充档案
+      const [accounts, profiles] = await Promise.all([
+        readRows(`accounts_${owner}`), readRows(`hr_employee_profiles_${owner}`),
+      ]);
+      const profOf = (u: string) => profiles.find((p: any) => p && p.username === u) || {};
+      items = accounts.filter((a: any) => a && a.accountType === '子账号').map((a: any) => {
+        const p = profOf(a.username);
+        return {
+          key: a.username, title: pick(a.displayName, a.person, a.username),
+          tag: a.status === 'disabled' ? '离职' : '在职', tone: a.status === 'disabled' ? 'gray' : 'green',
+          sub: [a.group, pick(p.position, p.post), pick(p.mobile, p.phone, a.phone), p.bankName].filter(Boolean) as string[],
+        };
+      });
+    } else if (page === 'customers') {
+      const rows = await readRows(`customers_${owner}`);
+      items = rows.map((r: any) => ({
+        key: r.key || r.id || r.name, title: pick(r.name, r.customerName) || '客户',
+        tag: r.level,
+        sub: [r.id, r.contact, r.phone, r.region].filter(Boolean) as string[],
+      }));
+    } else {
+      res.status(404).json({ code: 404, message: '未知列表页' });
+      return;
+    }
+    items = items.map(it => ({ ...it, tone: it.tone || toneOf(it.tag) }));
+    res.json({ code: 200, data: finishList(items, q) });
+  } catch (err: any) {
+    console.error('[wx] lists error:', err.message);
+    res.status(500).json({ code: 500, message: '服务器内部错误' });
+  }
+});
+
 export default router;

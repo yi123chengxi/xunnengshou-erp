@@ -67,3 +67,16 @@ export const createLeave = (body: { type: string; startDate: string; endDate: st
 
 export const auditLeave = (key: string, approved: boolean) =>
   request<{ saved: boolean; record: any }>(`/wx/leaves/${encodeURIComponent(key)}/audit`, { method: 'POST', data: { approved } })
+
+/** 通用列表展示结构（服务端 /wx/lists/:page 按 Web 同口径映射后下发） */
+export interface ListItem {
+  key: string
+  title: string
+  sub: string[]
+  tag?: string
+  tone?: string
+  amount?: number
+}
+
+export const getListPage = (page: string, q: string) =>
+  request<{ list: ListItem[]; total: number }>(`/wx/lists/${page}?q=${encodeURIComponent(q)}`)
