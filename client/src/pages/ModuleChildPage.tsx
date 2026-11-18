@@ -4892,8 +4892,11 @@ const ModuleChildPage: React.FC = () => {
               billLog: diffDetail ? appendBillLogEntry(data[idx].billLog, '编辑账单', undefined, diffDetail) : data[idx].billLog,
             };
             const json = JSON.stringify(data);
-            localStorage.setItem(storageKey, json);
+            safeSetItem(storageKey, json);
+            safeSetItem(`${storageKey}_ts`, String(Date.now()));
             saveDataset(storageKey, json);
+            // 编辑保存立即上传服务端（与新增同口径），不依赖防抖/ effect 时机
+            flushDatasetUploadAsync(storageKey, json).catch(() => false);
           }
         }
       } catch { /* ignore */ }
@@ -4944,6 +4947,20 @@ const ModuleChildPage: React.FC = () => {
       _manual: true,
       billLog: appendBillLogEntry(undefined, '创建账单'),
     };
+    // 新增落盘即直写三store+服务端（与订单管理新增同口径）：不依赖持久化 effect 时机，
+    // 保证新增账单在点击查询前已在 LS/IDB/服务端全部可查
+    try {
+      const sk = `pageData_customer_bill-detail_${getDataOwner()}`;
+      let disk: any[] = [];
+      try { const arr = JSON.parse(localStorage.getItem(sk) || '[]'); if (Array.isArray(arr)) disk = arr; } catch { /* ignore */ }
+      const has = disk.some((r: any) => String(r?.key || '') === String(record.key));
+      const mergedList = has ? disk : [record, ...disk];
+      const j = JSON.stringify(mergedList);
+      safeSetItem(sk, j);
+      safeSetItem(`${sk}_ts`, String(Date.now()));
+      saveDataset(sk, j);
+      flushDatasetUploadAsync(sk, j).catch(() => false);
+    } catch { /* ignore */ }
     setDataSource(prev => [record, ...prev]);
     setBillAddVisible(false);
     setBillAddCheckedRows(new Set()); setBillAddBatchQty(null); setBillAddBatchPrice(null);
@@ -8660,11 +8677,10 @@ const ModuleChildPage: React.FC = () => {
         try {
           const parsed = JSON.parse(stored);
           if (Array.isArray(parsed)) {
-            // 账单明细：查询时必须从订单重建（存储可能缺新派生账单行，如刚发货的余额支付订单），
-            // 与加载/切签路径同口径，杜绝“点查询看不到新账单”
-            const rebuilt = moduleKey === 'customer' && childKey === 'bill-detail'
-              ? rescueDroppedStoredRows(buildBillDetailRows(parsed), parsed)
-              : parsed;
+            // 账单明细查询不再做派生重建（与订单管理同方案）：落盘已含派生行
+            // （发货/订单变更时由 refreshBillDetailStorage 维护），重建是擦除面；
+            // 新派生行由同步重载/事件重建路径带救回地补充
+            const rebuilt = parsed;
             // 商品族：查询时实际库存按日志自愈
             setDataSource(isProductList ? healActualStockFromLogs(rebuilt) : rebuilt);
           }
