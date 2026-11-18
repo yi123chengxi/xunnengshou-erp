@@ -46,6 +46,20 @@ const ModuleView = ({
   const [child, setChild] = useState(() =>
     initialChild && mod?.children.some(c => c.key === initialChild) ? initialChild : (mod?.children[0]?.key || ''))
   const [scanQ, setScanQ] = useState(initialQ || '')
+  // 底部子菜单条须钉在 Tab 栏正上方：Tab 栏实际高度受字号/安全区影响，
+  // 硬编码偏移会在部分端被遮挡，改为挂载后实测 .app-tab-bar 高度再定位
+  const [tabBarH, setTabBarH] = useState(0)
+  useEffect(() => {
+    const t = setTimeout(() => {
+      Taro.createSelectorQuery()
+        .select('.app-tab-bar')
+        .boundingClientRect((rect: any) => {
+          if (rect && rect.height) setTabBarH(rect.height)
+        })
+        .exec()
+    }, 60)
+    return () => clearTimeout(t)
+  }, [])
 
   // 模块页 params 晚于首次挂载到达：惰性初始化器拿不到，须在其后同步一次
   useEffect(() => {
@@ -90,10 +104,10 @@ const ModuleView = ({
     <View style={{ paddingBottom: 340 }}>
       <View style={{ padding: '20px 24px 0', fontWeight: 600, fontSize: 32 }}>{mod.icon} {mod.title}</View>
       {renderChild()}
-      {/* 底部子菜单条：固定在 Tab 栏上方 */}
+      {/* 底部子菜单条：固定在 Tab 栏上方（实测高度定位，未测得前用 96px 兜底） */}
       <View
         style={{
-          position: 'fixed', left: 0, right: 0, bottom: 'calc(96px + env(safe-area-inset-bottom))', zIndex: 190,
+          position: 'fixed', left: 0, right: 0, bottom: tabBarH ? `${tabBarH}px` : 'calc(96px + env(safe-area-inset-bottom))', zIndex: 190,
           background: '#fff', borderTop: '1px solid #ebedf0', boxShadow: '0 -2px 8px rgba(31,39,51,0.05)',
         }}
       >

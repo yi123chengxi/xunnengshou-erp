@@ -12,6 +12,7 @@ const TABS = [
 
 const AppTabBar = ({ current }: { current?: string }) => (
   <View
+    className="app-tab-bar"
     style={{
       position: 'fixed', left: 0, right: 0, bottom: 0, zIndex: 200,
       background: '#fff', borderTop: '1px solid #ebedf0',
