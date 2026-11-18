@@ -35,7 +35,7 @@ const Workbench = () => {
   const todos = summary?.todos
   const pendingTotal = (todos?.reimbPending || 0) + (todos?.payPending || 0) + (todos?.recvPending || 0)
   const goModule = (key: string, child?: string) =>
-    Taro.navigateTo({ url: `/pages/module?key=${key}${child ? `&child=${child}` : ''}` })
+    Taro.navigateTo({ url: `/pages/module/index?key=${key}${child ? `&child=${child}` : ''}` })
 
   // 常用功能宫格：收藏列表驱动（查看更多里 + 号添加），每行 4 个，末尾固定查看更多
   const favGrid: { id: string; icon: string; label: string; onClick: () => void; badge: number }[] =

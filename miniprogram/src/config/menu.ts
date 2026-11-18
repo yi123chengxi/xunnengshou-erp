@@ -37,6 +37,16 @@ export const MODULES: MenuModule[] = [
     ],
   },
   {
+    key: 'ecommerce', title: '电商常用', icon: '🛍️',
+    children: [
+      { key: 'progress', title: '新款进度' },
+      { key: 'shop-management', title: '店铺管理' },
+      { key: 'opportunity', title: '商机市场' },
+      { key: 'warehouse-stats', title: '仓库统计' },
+      { key: 'manage', title: '品牌管理' },
+    ],
+  },
+  {
     key: 'hr', title: '人事管理', icon: '🧑‍💼',
     children: [
       { key: 'attendance', title: '上下班打卡' },
@@ -69,9 +79,10 @@ export const findModule = (key: string): MenuModule | undefined => MODULES.find(
 // 子菜单图标（首页常用功能宫格与查看更多卡片共用）
 export const CHILD_ICONS: Record<string, string> = {
   approvals: '✅', reimburse: '🧾', bookkeeping: '📔',
-  orders: '📋', production: '🏭', purchase: '🛍️',
+  orders: '📋', production: '🏭', purchase: '📥',
   inventory: '📦', scan: '📷',
   finished: '🛒', semi: '📤', mold: '🧰',
+  progress: '📈', 'shop-management': '🏪', opportunity: '🛒', 'warehouse-stats': '📊', manage: '🏅',
   attendance: '⏰', staff: '🧑‍💼',
   customers: '🤝', products: '🏷️',
 }
@@ -91,5 +102,6 @@ export function openMenuChild(moduleKey: string, childKey: string): void {
     Taro.reLaunch({ url: tabPath })
     return
   }
-  Taro.navigateTo({ url: `/pages/module?key=${moduleKey}&child=${childKey}` })
+  // H5 路由按完整页路径匹配，缺 /index 会静默匹配失败（weapp 虽容忍但须统一写全）
+  Taro.navigateTo({ url: `/pages/module/index?key=${moduleKey}&child=${childKey}` })
 }

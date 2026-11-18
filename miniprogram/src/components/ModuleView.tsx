@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { View, Text, ScrollView, Button } from '@tarojs/components'
 import Taro from '@tarojs/taro'
 import { findModule } from '../config/menu'
@@ -43,6 +43,15 @@ const ModuleView = ({
     initialChild && mod?.children.some(c => c.key === initialChild) ? initialChild : (mod?.children[0]?.key || ''))
   const [scanQ, setScanQ] = useState(initialQ || '')
 
+  // 模块页 params 晚于首次挂载到达：惰性初始化器拿不到，须在其后同步一次
+  useEffect(() => {
+    const m = findModule(moduleKey)
+    if (initialChild && m?.children.some(c => c.key === initialChild)) setChild(initialChild)
+    else if (m && !m.children.some(c => c.key === child)) setChild(m.children[0]?.key || '')
+    if (initialQ) setScanQ(initialQ)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [moduleKey, initialChild, initialQ])
+
   if (!mod) return <View className="empty">菜单不存在</View>
 
   const renderChild = () => {
@@ -54,6 +63,7 @@ const ModuleView = ({
       case 'products': return <InventoryEmbed tick={tick} initialQ={scanQ} />
       case 'scan': return <ScanLauncher onScanned={code => { setScanQ(code); setChild('inventory') }} />
       case 'attendance': return <AttendanceView tick={tick} />
+      case 'opportunity': return <MarketView tick={tick} />
       case 'finished':
       case 'semi':
       case 'mold': return <MarketView fixedType={child as 'finished' | 'semi' | 'mold'} tick={tick} />

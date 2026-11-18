@@ -12,7 +12,9 @@ const Module = () => {
   useDidShow(() => setTick(t => t + 1))
   return (
     <View style={{ paddingBottom: 120 }}>
-      <ModuleView moduleKey={params.key} initialChild={params.child} initialQ={params.q} tick={tick} />
+      {params.key
+        ? <ModuleView moduleKey={params.key} initialChild={params.child} initialQ={params.q} tick={tick} />
+        : <View className="empty">加载中…</View>}
       <AppTabBar />
     </View>
   )
