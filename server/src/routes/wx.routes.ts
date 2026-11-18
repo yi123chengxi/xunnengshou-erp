@@ -653,14 +653,11 @@ router.post('/ws/:kind', verifyJWT, async (req: Request, res: Response) => {
         date, month: date.slice(0, 7),
       };
       if (kind === 'stock') {
-        // 质检工资：表单手填优先，未填按 数量×材质质检工价 派生（与 Web 同公式）
-        const qcOverride = Number(req.body.qcWage);
-        rec.qcWage = qcOverride > 0 ? qcOverride : qty * rate;
+        rec.qcWage = qty * rate;
         rec.qcInspector = inspector;
         rec.person = String(req.body.person || '').trim() || name;
       } else {
-        const qcOverride = Number(req.body.qcWage);
-        rec.wage = qcOverride > 0 ? qcOverride : qty * rate;
+        rec.wage = qty * rate;
         rec.qcDate = date;
         rec.inspector = inspector;
         rec.inspectorId = String(req.body.inspectorId || '').trim() || String(grp.inspectorId || '');
@@ -883,7 +880,8 @@ router.get('/lists/:page', verifyJWT, async (req: Request, res: Response) => {
       items = rows.map((r: any) => ({
         key: r.key || r.orderNo || r.productCode, title: pick(r.productCode, r.orderNo, r.key) || '备货记录',
         tag: r.month,
-        row: [pick(r.orderNo, r.key), String(r.quantity ?? ''), pick(r.material, '—')],
+        row: [pick(r.orderNo, r.key), String(r.quantity ?? ''), pick(r.material, '—'),
+          (Number(r.qcWage) || 0) ? `¥${Number(r.qcWage).toFixed(2)}` : '—'],
         sub: [day10(r.date), r.orderNo, r.quantity !== undefined && r.quantity !== null && `数量 ${r.quantity}`,
           r.material, r.person, r.packer].filter(Boolean) as string[],
       }));
@@ -902,7 +900,8 @@ router.get('/lists/:page', verifyJWT, async (req: Request, res: Response) => {
       items = rows.map((r: any) => ({
         key: r.key || r.orderNo || r.productCode, title: pick(r.productCode, r.orderNo, r.key) || '急采记录',
         tag: r.month, amount: Number(r.wage) || 0,
-        row: [pick(r.orderNo, r.key), String(r.quantity ?? ''), pick(r.material, '—')],
+        row: [pick(r.orderNo, r.key), String(r.quantity ?? ''), pick(r.material, '—'),
+          (Number(r.wage) || 0) ? `¥${Number(r.wage).toFixed(2)}` : '—'],
         sub: [day10(pick(r.date, r.qcDate)), r.orderNo,
           r.quantity !== undefined && r.quantity !== null && `数量 ${r.quantity}`,
           r.inspector && `质检:${r.inspector}`, r.material,

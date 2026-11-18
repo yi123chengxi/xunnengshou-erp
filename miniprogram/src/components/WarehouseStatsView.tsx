@@ -22,7 +22,6 @@ const FORM_FIELDS: Record<TabKey, Field[]> = {
   stock: [
     { key: 'orderNo', label: '内部单号', required: true },
     { key: 'quantity', label: '数量', kind: 'number', required: true },
-    { key: 'qcWage', label: '质检工资（选填，默认按工价算）', kind: 'number' },
   ],
   pick: [
     { key: 'orderNo', label: '内部单号', required: true },
@@ -33,7 +32,6 @@ const FORM_FIELDS: Record<TabKey, Field[]> = {
   urgent: [
     { key: 'orderNo', label: '内部单号', required: true },
     { key: 'quantity', label: '数量', kind: 'number', required: true },
-    { key: 'qcWage', label: '质检工资（选填，默认按工价算）', kind: 'number' },
   ],
   note: [
     { key: 'person', label: '人员', required: true },
@@ -51,9 +49,9 @@ const curMonth = () => {
 
 // 横向表格表头（与服务器下发 row 单元格顺序对应）；空数组=卡片模式
 const HEADERS: Record<TabKey, string[]> = {
-  stock: ['内部单号', '数量', '鞋子材质'],
+  stock: ['内部单号', '数量', '鞋子材质', '质检工资'],
   pick: ['内部单号', '数量', '计件工资'],
-  urgent: ['内部单号', '数量', '鞋子材质'],
+  urgent: ['内部单号', '数量', '鞋子材质', '质检工资'],
   note: ['人员', '类型', '金额'],
   salary: [],
 }
