@@ -114,7 +114,8 @@ import { buildSupplierReturnRow, buildPurchaserReturnBill, writeReturnStockFlows
 import { appendStockLog, updateProductStock } from '../utils/stockUtils';
 import { loadTenantUsers } from '../utils/tenantUsers';
 import { appendBillLogEntry, readBillLog, billLogColor, resolveOperatorName, diffBillRecords, SUPPLIER_BILL_FIELD_MAP, getCurrentUserDisplayName } from '../utils/billLog';
-import { pullAllDatasets, flushDatasetUploadAsync, ensureDatasetFromServer, reloadAfterPull, appendRowsToRemoteKey, declareShrink, isNeverShrinkKey } from '../utils/serverSync';
+import { pullAllDatasets, flushDatasetUploadAsync, ensureDatasetFromServer, reloadAfterPull, appendRowsToRemoteKey, declareShrink, isNeverShrinkKey, fetchServerDataset } from '../utils/serverSync';
+import { peekRemovedIds } from '../utils/shrinkRegistry';
 import { PRESET_PRINT_TEMPLATES, seedPresetPrintTemplates } from '../config/presetPrintTemplates';
 import { refreshCustomerPurchase, computeCustomerPurchaseCents, computeCustomerReceivedCents, toYuan } from '../utils/paySummary';
 import { resolveLatestCompanyName, resolveCompanyCred, buildCompanyCredMap, buildCredIndex } from '../utils/nameSync';
@@ -5032,6 +5033,40 @@ const ModuleChildPage: React.FC = () => {
   // 防止旧内存数据整体覆盖导致新增记录被“自动删除”。
   const loadedIdsRef = React.useRef<Set<string>>(new Set());
   const lastKnownTsRef = React.useRef<number>(0);
+  // 本页上次写入的行快照（永不缩水键「未申报缩水保护」基线）
+  const prevWrittenRowsRef = React.useRef<any[] | null>(null);
+
+  // 查询时回源并集找回缺失行：历史陈旧回写曾把本地 _ts 对齐到服务端版本，宽限期判定
+  // 此后永不回拉——服务端永不缩水并集仍持有的行在本地永久不可见。点击查询时主动
+  // fetch 服务端副本，把本地缺失行并回 LS/IDB/状态（仅限永不缩水键，一次 GET 成本）
+  const unionMissingFromServer = useCallback((key: string) => {
+    if (!isNeverShrinkKey(key)) return;
+    void fetchServerDataset(key).then(rec => {
+      if (!rec || !rec.json) return;
+      let serverRows: any[] = [];
+      try { serverRows = JSON.parse(rec.json); } catch { return; }
+      if (!Array.isArray(serverRows) || serverRows.length === 0) return;
+      void readFreshDataset(key).then(stored => {
+        let localRows: any[] = [];
+        try { localRows = JSON.parse(stored || '[]'); } catch { localRows = []; }
+        if (!Array.isArray(localRows)) localRows = [];
+        const ids = new Set(localRows.map((r: any) => String(r?.key || r?.id || '')));
+        const missing = serverRows.filter(r => !ids.has(String(r?.key || r?.id || '')));
+        if (missing.length === 0) return;
+        const merged = [...localRows, ...missing];
+        const json = JSON.stringify(merged);
+        safeSetItem(key, json);
+        safeSetItem(`${key}_ts`, String(rec.updatedAt || Date.now()));
+        saveDataset(key, json);
+        setDataSource(prev => {
+          const pids = new Set(prev.map((r: any) => String(r?.key || r?.id || '')));
+          const add = missing.filter(r => !pids.has(String(r?.key || r?.id || '')));
+          return add.length > 0 ? [...prev, ...add] : prev;
+        });
+        flushDatasetUploadAsync(key, json).catch(() => false);
+      }).catch(() => { /* ignore */ });
+    }).catch(() => { /* ignore */ });
+  }, []);
   // 订单键空写申报：订单不提供删除功能（只能取消），正常业务下不存在“合法清空订单存储”的场景，
   // 因此该闸口默认一律拦截：防瞬时空内存态（未加载/异常重建）经自动持久化清空订单存储导致订单占用数抖动归 0
   // 确实需要落空的极端场景（如多单合并后仅剩一单）需显式置 allowEmptyOrdersPersistRef.current = true 后才允许写入
@@ -5094,16 +5129,18 @@ const ModuleChildPage: React.FC = () => {
     const owner = getDataOwner();
     const orderKey = `pageData_sales_order-manage_${owner}`;
     const rebuildBillRows = () => {
-      try {
-        const stored = localStorage.getItem(sharedDataKey);
+      // 取 LS/IDB 较新者：陈旧 LS 缓存重建会丢仅存主存的新账单行
+      void readFreshDataset(sharedDataKey).then((stored) => {
         let data: Record<string, any>[] = [];
         if (stored) {
-          const parsed = JSON.parse(stored);
-          if (Array.isArray(parsed)) data = parsed;
+          try {
+            const parsed = JSON.parse(stored);
+            if (Array.isArray(parsed)) data = parsed;
+          } catch { /* ignore */ }
         }
         const rebuilt = buildBillDetailRows(data);
         setDataSource(rebuilt);
-      } catch { /* ignore */ }
+      }).catch(() => { /* ignore */ });
     };
     // 跨标签页：storage 事件
     const onOrderStorageChange = (e: StorageEvent) => {
@@ -5765,6 +5802,24 @@ const ModuleChildPage: React.FC = () => {
             lastKnownTsRef.current = lsTsNow;
           }
         } catch { /* ignore */ }
+        // 永不缩水键未申报缩水保护：行数相对本页上次写入减少且无删除申报时，按陈旧重载
+        // 意外擦除处理（查询/重置/事件重建读陈旧 LS 缓存等），把缺失行并回——本地镜像服务端
+        // 并集不变量，阻断「陈旧副本回写主存 → 本地 _ts 与服务端对齐 → 宽限期永不回拉 →
+        // 新增行永久不可见」链路
+        if (isNeverShrinkKey(sharedDataKey)) {
+          if (prevWrittenRowsRef.current === null) {
+            prevWrittenRowsRef.current = outList;
+          } else {
+            const declared = new Set(peekRemovedIds(sharedDataKey) || []);
+            const nextIds = new Set(outList.map((r: any) => String(r?.id || r?.key || '')).filter(Boolean));
+            const missingRows = prevWrittenRowsRef.current.filter((r: any) => {
+              const rid = String(r?.id || r?.key || '');
+              return !!rid && !nextIds.has(rid) && !declared.has(rid);
+            });
+            if (missingRows.length > 0) outList = [...outList, ...missingRows];
+          }
+        }
+        prevWrittenRowsRef.current = outList;
         let json: string;
         if (isProductList) {
           // 主数据不含图片：仅剥离 base64 大图；云端图片 URL（图片空间引用）体积很小，必须保留，换电脑才能显示
@@ -8572,9 +8627,13 @@ const ModuleChildPage: React.FC = () => {
   const handleSearch = useCallback(() => {
     // 刷新数据：从 localStorage 重新读取最新数据，确保查询时拿到最新状态；再异步拉服务端二次重载（跨端新增数据立即可见）
     const reloadFromStorage = () => {
-      try {
-        const stored = localStorage.getItem(sharedDataKey);
-        if (stored) {
+      // 必须取 LS 缓存与 IndexedDB 主存较新者：配额压力下（启动主动清理/缓存预算淘汰）
+      // 订单等大表的 LS 缓存可能陈旧或被删，新增行仅存主存；用陈旧缓存重建 dataSource 会被
+      // 持久化 effect 把缩水列表回写主存/服务端，新增订单被「查询」抹掉且本地 _ts 与
+      // 服务端对齐后宽限期永不回拉
+      void readFreshDataset(sharedDataKey).then((stored) => {
+        if (!stored) return;
+        try {
           const parsed = JSON.parse(stored);
           if (Array.isArray(parsed)) {
             // 账单明细：查询时必须从订单重建（存储可能缺新派生账单行，如刚发货的余额支付订单），
@@ -8583,10 +8642,12 @@ const ModuleChildPage: React.FC = () => {
             // 商品族：查询时实际库存按日志自愈
             setDataSource(isProductList ? healActualStockFromLogs(rebuilt) : rebuilt);
           }
-        }
-      } catch { /* ignore */ }
+        } catch { /* ignore */ }
+      }).catch(() => { /* ignore */ });
     };
     reloadAfterPull(reloadFromStorage);
+    // 回源并集找回被历史陈旧回写抹掉、服务端仍持有的行（宽限期永不回拉的兜底恢复）
+    unionMissingFromServer(sharedDataKey);
     setAppliedSearchText(searchText);
     setAppliedStatusFilter(statusFilter);
     setAppliedDynamicFilters({ ...dynamicFilterValues });
@@ -8598,7 +8659,7 @@ const ModuleChildPage: React.FC = () => {
     setAppliedOrderAddr({ ...orderAddr });
     setJgApplied(Object.fromEntries(Object.entries(jgSearch).map(([k, v]) => [k, splitJgValues(v)])));
     message.success(`查询完成`);
-  }, [searchText, statusFilter, dynamicFilterValues, bankNameFilter, billProductCodes, billStyleCodes, orderPickCodes, orderPickStyles, orderAddr, jgSearch, sharedDataKey, moduleKey, childKey, buildBillDetailRows]);
+  }, [searchText, statusFilter, dynamicFilterValues, bankNameFilter, billProductCodes, billStyleCodes, orderPickCodes, orderPickStyles, orderAddr, jgSearch, sharedDataKey, moduleKey, childKey, buildBillDetailRows, unionMissingFromServer]);
 
   // 导出
   const handleExport = useCallback(() => {
@@ -13755,14 +13816,15 @@ const handleBatchAttrsConfirm = () => {
                     </>);
                   })()}
                   <Button size="small" type="primary" icon={<FilterOutlined />} onClick={() => {
-                                        // 查询时自动刷新表单数据：重读存储后再应用筛选
-                                        try {
-                                          const stored = localStorage.getItem(sharedDataKey);
-                                          if (stored) {
+                                        // 查询时自动刷新表单数据：取 LS/主存较新者重读后再应用筛选
+                                        // （陈旧 LS 缓存重建会把仅存主存的新流水行抹掉）
+                                        void readFreshDataset(sharedDataKey).then((stored) => {
+                                          if (!stored) return;
+                                          try {
                                             const parsed = JSON.parse(stored);
                                             if (Array.isArray(parsed)) setDataSource(parsed);
-                                          }
-                                        } catch { /* ignore */ }
+                                          } catch { /* ignore */ }
+                                        }).catch(() => { /* ignore */ });
                                         setBankFlowApplied(bankFlowSearch);
                                       }}>查询</Button>
                   <Button size="small" icon={<ReloadOutlined />} onClick={() => { setBankFlowSearch(BANK_FLOW_SEARCH_EMPTY); setBankFlowApplied(BANK_FLOW_SEARCH_EMPTY); }}>重置</Button>
