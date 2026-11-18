@@ -58,3 +58,12 @@ export const getAttendance = () => request<{ record: AttendanceRecord | null; da
 
 export const postAttendance = (type: 'in' | 'out') =>
   request<{ saved: boolean; record: AttendanceRecord }>('/wx/attendance', { method: 'POST', data: { type } })
+
+export const getLeaves = (tab: 'mine' | 'pending' | 'all') =>
+  request<{ list: any[] }>(`/wx/leaves?tab=${tab}`)
+
+export const createLeave = (body: { type: string; startDate: string; endDate: string; reason?: string }) =>
+  request<{ saved: boolean; record: any }>('/wx/leaves', { method: 'POST', data: body })
+
+export const auditLeave = (key: string, approved: boolean) =>
+  request<{ saved: boolean; record: any }>(`/wx/leaves/${encodeURIComponent(key)}/audit`, { method: 'POST', data: { approved } })

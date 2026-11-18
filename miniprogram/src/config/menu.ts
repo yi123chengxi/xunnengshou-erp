@@ -50,6 +50,7 @@ export const MODULES: MenuModule[] = [
     key: 'hr', title: '人事管理', icon: '🧑‍💼',
     children: [
       { key: 'attendance', title: '上下班打卡' },
+      { key: 'leave', title: '请假管理' },
       { key: 'staff', title: '员工档案' },
     ],
   },
@@ -83,7 +84,7 @@ export const CHILD_ICONS: Record<string, string> = {
   inventory: '📦', scan: '📷',
   finished: '🛒', semi: '📤', mold: '🧰',
   progress: '📈', 'shop-management': '🏪', opportunity: '🛒', 'warehouse-stats': '📊', manage: '🏅',
-  attendance: '⏰', staff: '🧑‍💼',
+  attendance: '⏰', staff: '🧑‍💼', leave: '📝',
   customers: '🤝', products: '🏷️',
 }
 

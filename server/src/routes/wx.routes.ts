@@ -538,4 +538,80 @@ router.post('/attendance', verifyJWT, async (req: Request, res: Response) => {
   }
 });
 
+// ============ 请假管理（与 Web LeavePage 同口径：hr_leaves_<owner>） ============
+
+/** GET /api/wx/leaves?tab=mine|pending|all */
+router.get('/leaves', verifyJWT, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user as JWTPayload;
+    const owner = await ownerOf(user.username);
+    const tab = String(req.query.tab || 'mine');
+    let rows = await readRows(`hr_leaves_${owner}`);
+    if (tab === 'mine') rows = rows.filter((r: any) => r.employeeUsername === user.username);
+    else if (tab === 'pending') rows = rows.filter((r: any) => r.status === 'pending');
+    res.json({ code: 200, data: { list: rows.slice(0, 100) } });
+  } catch (err: any) {
+    console.error('[wx] leaves get error:', err.message);
+    res.status(500).json({ code: 500, message: '服务器内部错误' });
+  }
+});
+
+/** POST /api/wx/leaves {type, startDate, endDate, reason?} —— 本人请假申请 */
+router.post('/leaves', verifyJWT, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user as JWTPayload;
+    const owner = await ownerOf(user.username);
+    const type = String(req.body.type || '').trim();
+    const startDate = String(req.body.startDate || '');
+    const endDate = String(req.body.endDate || '');
+    if (!type || !/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) {
+      res.status(400).json({ code: 400, message: '请假类型/开始日期/结束日期为必填' });
+      return;
+    }
+    const days = Number(req.body.days) || Math.round((new Date(endDate).getTime() - new Date(startDate).getTime()) / 86400000) + 1;
+    if (!(days > 0)) {
+      res.status(400).json({ code: 400, message: '结束日期不能早于开始日期' });
+      return;
+    }
+    const dsKey = `hr_leaves_${owner}`;
+    const rows = await readRows(dsKey);
+    const rec: any = {
+      key: `leave_${Date.now()}`,
+      employeeUsername: user.username,
+      employeeName: await displayNameOf(user.username),
+      type, startDate, endDate, days,
+      reason: String(req.body.reason || ''),
+      status: 'pending', approvedBy: '', approvedAt: '',
+      createdAt: new Date().toISOString(),
+    };
+    await writeRows(dsKey, [rec, ...rows], owner);
+    res.json({ code: 200, data: { saved: true, record: rec } });
+  } catch (err: any) {
+    console.error('[wx] leave create error:', err.message);
+    res.status(500).json({ code: 500, message: '服务器内部错误' });
+  }
+});
+
+/** POST /api/wx/leaves/:key/audit {approved} —— 审批写入字段与 Web 逐字段同名 */
+router.post('/leaves/:key/audit', verifyJWT, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user as JWTPayload;
+    const owner = await ownerOf(user.username);
+    const approved = req.body.approved === true;
+    const dsKey = `hr_leaves_${owner}`;
+    const rows = await readRows(dsKey);
+    const rec = rows.find((r: any) => String(r.key) === req.params.key);
+    if (!rec) { res.status(404).json({ code: 404, message: '请假单不存在或已删除' }); return; }
+    if (rec.status !== 'pending') { res.status(409).json({ code: 409, message: '该请假单已审批' }); return; }
+    rec.status = approved ? 'approved' : 'rejected';
+    rec.approvedBy = user.username;
+    rec.approvedAt = new Date().toISOString();
+    await writeRows(dsKey, rows, owner);
+    res.json({ code: 200, data: { saved: true, record: rec } });
+  } catch (err: any) {
+    console.error('[wx] leave audit error:', err.message);
+    res.status(500).json({ code: 500, message: '服务器内部错误' });
+  }
+});
+
 export default router;

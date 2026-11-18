@@ -7,6 +7,7 @@ import InventoryEmbed from './InventoryEmbed'
 import OrdersEmbed from './OrdersEmbed'
 import ReimburseForm from './ReimburseForm'
 import AttendanceView from './AttendanceView'
+import LeaveView from './LeaveView'
 import MarketView from './MarketView'
 
 // 扫码入口视图：扫码后回调把关键字交给库存查询子菜单
@@ -63,6 +64,7 @@ const ModuleView = ({
       case 'products': return <InventoryEmbed tick={tick} initialQ={scanQ} />
       case 'scan': return <ScanLauncher onScanned={code => { setScanQ(code); setChild('inventory') }} />
       case 'attendance': return <AttendanceView tick={tick} />
+      case 'leave': return <LeaveView tick={tick} />
       case 'opportunity': return <MarketView tick={tick} />
       case 'finished':
       case 'semi':
