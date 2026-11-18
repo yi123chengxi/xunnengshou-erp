@@ -14,7 +14,7 @@ import dayjs from 'dayjs';
 import useResizableColumns from '../hooks/useResizableColumns';
 import FieldConfigModal from '../components/FieldConfigModal';
 import { safeSetItem } from '../utils/storageQuota';
-import { sendPushNotification, showNativeNotification, isNotificationBlocked, showTimedNotification, isNotificationTypeEnabled } from '../utils/pushNotification';
+import { sendPushNotification, showNativeNotification, isNotificationBlocked, isNotificationTypeEnabled } from '../utils/pushNotification';
 import { showRechargeNotification } from '../utils/rechargeNotification';
 import { showTaskNotify, closeTaskNotify } from '../utils/taskNotify';
 import { applyIfChanged, broadcastLocalDataChange } from '../utils/useDatasetSyncReload';
@@ -720,13 +720,14 @@ const WithdrawalRecordPage: React.FC = () => {
     }
     setPayVisible(false); setPayRecord(null);
     notification.destroy(`rech-notify-${payRecord.key}`);
-    // 通知申请人“已支付”（5秒自动关闭，已屏蔽则跳过）
+    // 通知申请人“已支付”：本方法是财务/操作人点击确认支付，不能在本机弹“已支付”（弹错端），
+    // 申请人端的页内 5 秒自动关闭弹窗由其本机布局层恢复逻辑负责；此处仅向申请人定向 Web Push（关标签页也可达）
     if (payRecord.applicant && !isNotificationBlocked(payRecord.applicant)) {
-      showTimedNotification(
+      sendPushNotification(
+        payRecord.applicant,
         '【充值已支付】' + (payRecord.shopName || ''),
         `${payRecord.shopName} 充值 ${fmt(payRecord.amount)} 已由财务确认支付`,
-        5000,
-        `rech-paid-${payRecord.key}`
+        { recordKey: payRecord.key, url: window.location.origin + '/purchaser/finance/shop-management' }
       );
     }
     message.success(`已确认支付 ${fmt(payRecord.amount)}，银行支出明细已记录，日常记账已生成`);

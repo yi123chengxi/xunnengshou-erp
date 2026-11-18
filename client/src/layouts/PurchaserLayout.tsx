@@ -36,7 +36,7 @@ import { STORAGE_SUBSCRIBE_DISABLED } from '../utils/billingPolicy';
 import { getProvinceOptions, getCityOptions, getDistrictOptions } from '../utils/regions';
 import { safeSetItem } from '../utils/storageQuota';
 import { saveDataset } from '../utils/dataStore';
-import { showNativeNotification, showTimedNotification, isNotificationBlocked, isNotificationTypeEnabled } from '../utils/pushNotification';
+import { showNativeNotification, sendPushNotification, isNotificationBlocked, isNotificationTypeEnabled } from '../utils/pushNotification';
 import { recoverRechargeNotifications } from '../utils/rechargeNotification';
 import { showTaskNotify, closeTaskNotify, pruneTaskNotifs, TASK_NOTIFY_RESHOW_EVENT, WITHDRAW_TASK_NOTIF_PREFIXES, INVENTORY_TASK_NOTIF_PREFIXES } from '../utils/taskNotify';
 import { getFinancePendingCounts, isFinancePendingStorageKey, FinancePending } from '../utils/financePending';
@@ -870,13 +870,14 @@ const PurchaserLayout: React.FC = () => {
     } catch {}
     setGlobalPayVisible(false);
     notification.destroy(`rech-notify-${globalPayRecord.key}`);
-    // 通知申请人“已支付”（5秒自动关闭，已屏蔽则跳过）
+    // 通知申请人“已支付”：此处为采购商端点击确认支付，不能在本机弹“已支付”（弹错端），
+    // 申请人端的页内 5 秒自动关闭弹窗由其本机布局层恢复逻辑负责；此处仅向申请人定向 Web Push（关标签页也可达）
     if (globalPayRecord.applicant && !isNotificationBlocked(globalPayRecord.applicant)) {
-      showTimedNotification(
+      sendPushNotification(
+        globalPayRecord.applicant,
         '【充值已支付】' + (globalPayRecord.shopName || ''),
         `${globalPayRecord.shopName} 充值 ${globalPayFmt(globalPayRecord.amount)} 已由财务确认支付`,
-        5000,
-        `rech-paid-${globalPayRecord.key}`
+        { recordKey: globalPayRecord.key, url: window.location.origin + '/purchaser/finance/shop-management' }
       );
     }
     message.success(`已确认支付 ${globalPayFmt(globalPayRecord.amount)}，银行支出明细已记录`);

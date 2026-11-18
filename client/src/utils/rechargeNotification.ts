@@ -10,7 +10,7 @@
  * rejected/paid 用 localStorage 已显示标记防重（跨布局同键共享，不会双弹）。
  */
 import { notification } from 'antd';
-import { showNativeNotification, showTimedNotification, isNotificationBlocked } from './pushNotification';
+import { showNativeNotification, isNotificationBlocked } from './pushNotification';
 import { showTaskNotify } from './taskNotify';
 import { getCurrentUserAliases } from './shopScope';
 
@@ -119,26 +119,22 @@ export function recoverRechargeNotifications(
         newRejectedShown.push(r.key);
       }
 
-      // 申请人视角：已支付记录 → 5秒自动关闭（仅首次显示）
+      // 申请人视角：已支付记录 → 页内弹窗，5 秒后自动关闭（仅首次显示）
+      // 旧写法优先走原生桌面通知 showTimedNotification：部分系统/权限下原生通知不可见或一闪而过，
+      // 而无论是否真正弹出都会写入 paidShown 去重标记，导致「申请人端根本没弹且不再重试」。
+      // 改用页内 antd 通知（与已验证可靠的待审批卡片同一可见通道），duration 5 秒自动关闭；
+      // 且仅在真正弹出（未被屏蔽）时才登记已显示标记，屏蔽状态下保留下次重试机会。
       if (r.status === 'paid' && isMe(r.applicant) && !paidShown.includes(r.key)) {
         if (!isNotificationBlocked(currentUser)) {
-          const native = showTimedNotification(
-            '【充值已支付】' + (r.shopName || ''),
-            `${r.shopName} 充值 ${amountStr} 已由财务确认支付`,
-            5000,
-            `rech-paid-${r.key}`,
-          );
-          if (!native) {
-            notification.info({
-              key: `rech-paid-${r.key}`,
-              message: '【充值已支付】' + (r.shopName || ''),
-              description: `${r.shopName} 充值 ${amountStr} 已由财务确认支付`,
-              duration: 5,
-              onClick: goWithdrawal,
-            });
-          }
+          notification.info({
+            key: `rech-paid-${r.key}`,
+            message: '【充值已支付】' + (r.shopName || ''),
+            description: `${r.shopName} 充值 ${amountStr} 已由财务确认支付`,
+            duration: 5,
+            onClick: goWithdrawal,
+          });
+          newPaidShown.push(r.key);
         }
-        newPaidShown.push(r.key);
       }
     });
 
