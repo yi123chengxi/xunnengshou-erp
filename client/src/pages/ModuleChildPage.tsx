@@ -106,7 +106,7 @@ import MoldPickerModal from '../components/MoldPickerModal';
 import SalesOutboundStatsPage from './inventory/SalesOutboundStatsPage';
 import { safeSetItem, canCacheDataset, tryCacheDataset } from '../utils/storageQuota';
 import { getDataOwner } from '../utils/brandAuth';
-import { getSessionOwner } from '../utils/dataOwner';
+import { getSessionOwner, mergeStrandedTenantDataset } from '../utils/dataOwner';
 import { saveDataset, loadDataset, readFreshDataset } from '../utils/dataStore';
 import ReturnRegisterModal from '../components/ReturnRegisterModal';
 import type { ReturnRegisterPayload } from '../components/ReturnRegisterModal';
@@ -114,7 +114,7 @@ import { buildSupplierReturnRow, buildPurchaserReturnBill, writeReturnStockFlows
 import { appendStockLog, updateProductStock } from '../utils/stockUtils';
 import { loadTenantUsers } from '../utils/tenantUsers';
 import { appendBillLogEntry, readBillLog, billLogColor, resolveOperatorName, diffBillRecords, SUPPLIER_BILL_FIELD_MAP, getCurrentUserDisplayName } from '../utils/billLog';
-import { pullAllDatasets, flushDatasetUploadAsync, ensureDatasetFromServer, reloadAfterPull, appendRowsToRemoteKey, declareShrink } from '../utils/serverSync';
+import { pullAllDatasets, flushDatasetUploadAsync, ensureDatasetFromServer, reloadAfterPull, appendRowsToRemoteKey, declareShrink, isNeverShrinkKey } from '../utils/serverSync';
 import { PRESET_PRINT_TEMPLATES, seedPresetPrintTemplates } from '../config/presetPrintTemplates';
 import { refreshCustomerPurchase, computeCustomerPurchaseCents, computeCustomerReceivedCents, toYuan } from '../utils/paySummary';
 import { resolveLatestCompanyName, resolveCompanyCred, buildCompanyCredMap, buildCredIndex } from '../utils/nameSync';
@@ -5636,6 +5636,31 @@ const ModuleChildPage: React.FC = () => {
     return () => { cancelled = true; };
   }, [location.pathname, mountedPathname, sharedDataKey, moduleKey, childKey]);
 
+  // 银行账户错桶归并：owner 翻转启动窗口内新增的账户会写进 pageData_finance_bank-account_<子账号>
+  // 错桶，归属校正后该桶不再被读取——表现为「新增账号过会自动删除」。挂载时把同租户错桶
+  // 数据并回主桶（幂等），并同步主存/时间戳/服务端，避免仅落 LS 缓存被 IDB 陈旧副本压过
+  React.useEffect(() => {
+    if (moduleKey !== 'finance' || childKey !== 'bank-account') return;
+    try {
+      const deps = {
+        safeSetItem,
+        declareShrink,
+        flush: (k: string, j: string) => { void uploadDatasetWithRetry(k, j); },
+      };
+      if (mergeStrandedTenantDataset(sharedDataKey, 'pageData_finance_bank-account_', deps)) {
+        const json = localStorage.getItem(sharedDataKey) || '[]';
+        safeSetItem(`${sharedDataKey}_ts`, String(Date.now()));
+        saveDataset(sharedDataKey, json);
+        void uploadDatasetWithRetry(sharedDataKey, json);
+        try {
+          const parsed = JSON.parse(json);
+          if (Array.isArray(parsed)) setDataSource(parsed);
+        } catch { /* ignore */ }
+        message.info('已把此前分散在子账号名下的银行账户并入本企业');
+      }
+    } catch { /* 归并失败不影响正常读取 */ }
+  }, [sharedDataKey, moduleKey, childKey]);
+
   // 服务端同步完成后的轻量级刷新：仅从本地存储重新读取，不做 IndexedDB 图片恢复
   // 避免 sync-data-updated 事件触发完整加载效果导致数据被服务端旧数据覆盖
   React.useEffect(() => {
@@ -9531,6 +9556,10 @@ const ModuleChildPage: React.FC = () => {
         return;
       }
     }
+    // 永不缩水键（银行账户/账单明细等）：合法删除必须在写盘前申报 removedIds（须在所有拦截
+    // 校验之后，避免删除被拦时申报仍随下次上传消费、误删未删行）；未申报的缩水一律按意外擦除保护
+    const delRowId = String(record.key || record.id || '');
+    if (delRowId && isNeverShrinkKey(sharedDataKey)) declareShrink(sharedDataKey, [delRowId]);
     setDataSource(prev => prev.filter(item => item.key !== record.key));
     // 账单明细：删除账单行同时墓碑化关联的存活对账记录（撤回语义），避免采购商平台残留孤儿在途对账
     if (pageConfig?.title === '账单明细') {

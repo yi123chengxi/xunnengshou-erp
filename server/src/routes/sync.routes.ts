@@ -56,7 +56,7 @@ const isMergeAlwaysKey = (key: string): boolean => MERGE_ALWAYS_KEYS.includes(ke
 // 而这类非本账号键不参与本端启动拉取（isKeyForCurrentAccount 过滤），代写端持有的可能是一份陈旧快照；
 // 又因共享键对任何登录用户都下发 meta，陈旧副本会拿到「与服务端一致的 baseTs」→ 走整键替换分支 →
 // 对方刚新增的供应商/采购商卡片被陈旧副本擦掉、刚建立的合作被改回旧状态。表现为列表数量与状态来回跳动。
-const NEVER_SHRINK_PREFIXES = ['purchaser_bills_', 'pageData_customer_bill-detail_', 'pageData_sales_order-manage_', 'purchaser_suppliers_', 'boundPurchasers_', 'accounts_', 'reimbursement_'];
+const NEVER_SHRINK_PREFIXES = ['purchaser_bills_', 'pageData_customer_bill-detail_', 'pageData_sales_order-manage_', 'purchaser_suppliers_', 'boundPurchasers_', 'accounts_', 'reimbursement_', 'pageData_finance_bank-account_'];
 // reimbursement_ 前缀同时覆盖报销单 / 报销付款批次 / 报销负责人三个键。
 // 报销页只在挂载时从本地快照读一次，而 knownTs 每 60 秒被 /meta 轮询对齐到服务端最新版本——
 // 于是「打开后一直挂着的旧标签/另一台电脑」再点一次删除/审核/新增，就会带着这份陈旧列表走
@@ -65,6 +65,10 @@ const NEVER_SHRINK_PREFIXES = ['purchaser_bills_', 'pageData_customer_bill-detai
 // accounts_<主账号> 为账号列表：多个浏览器共同维护同一份名单，任何一端拿着陈旧名单整键上传
 // 都会把另一端刚建的账号擦掉（表现为「新增的子账号在别的浏览器没有」）。
 // 行内有 key/id，可按 removedIds 精确删除；未申报的缩水一律并集保留。
+// pageData_finance_bank-account_ 为银行账户列表：弱网下端内内容拉取失败但 /sync/meta 已把
+// knownTs 对齐到服务端最新版本时，陈旧副本会带「baseTs=服务端版本」走整键替换分支，
+// 把另一端刚新增的账户整份擦掉（表现为「新增账号过会自动删除」）；纳入永不缩水后
+// 陈旧 PUT 一律并集，合法删除由客户端删除操作随 body 申报 removedIds。
 const isNeverShrinkKey = (key: string): boolean => NEVER_SHRINK_PREFIXES.some(p => key.startsWith(p));
 // 带「已处理」墓碑语义的跨租户键（采购商已付款待登记收件箱）：采购商追加行、供应商打 handled 墓碑，
 // 供应商端已处理的行不得被采购商端的陈旧副本（离线期间缓存的 handled=false）复活。

@@ -14,7 +14,7 @@ import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
 import { safeSetItem } from '../utils/storageQuota';
 import { declareShrink } from '../utils/shrinkRegistry';
-import { flushDatasetUpload } from '../utils/serverSync';
+import { flushDatasetUpload, fetchServerDataset } from '../utils/serverSync';
 import { compressImageFile } from '../utils/imageCompress';
 import { readClipboardImage, imageFileFromPasteEvent, clipboardImageFailureText } from '../utils/clipboard';
 import { getSessionOwner, mergeStrandedTenantDataset } from '../utils/dataOwner';
@@ -255,6 +255,30 @@ const ReimbursementPage: React.FC = () => {
   const storageKey = `reimbursement_${getDataOwner()}`;
   const paymentKey = `reimbursement_payments_${getDataOwner()}`;
 
+  // 本地空基自愈：弱网落地失败/配额清理/错桶残留可能让本地主桶短暂为空，而服务端
+  // 永不缩水并集仍持有全部行——空基时主动回源按行并集补回（本地独有行也回传愈合），
+  // 消除「刷新瞬间清空、过一会又自动恢复」的闪烁
+  const reconcileFromServer = useCallback((key: string, setter: (rows: any[]) => void) => {
+    void fetchServerDataset(key).then(rec => {
+      if (!rec || !rec.json) return;
+      let serverRows: any[] = [];
+      try { serverRows = JSON.parse(rec.json); } catch { return; }
+      if (!Array.isArray(serverRows) || serverRows.length === 0) return;
+      let localRows: any[] = [];
+      try { localRows = JSON.parse(localStorage.getItem(key) || '[]'); } catch { localRows = []; }
+      if (!Array.isArray(localRows)) localRows = [];
+      const ids = new Set(localRows.map((r: any) => String(r?.key || r?.id || '')));
+      const missing = serverRows.filter(r => !ids.has(String(r?.key || r?.id || '')));
+      if (missing.length === 0) return;
+      const merged = [...localRows, ...missing];
+      const json = JSON.stringify(merged);
+      safeSetItem(key, json);
+      safeSetItem(`${key}_ts`, String(rec.updatedAt || Date.now()));
+      setter(merged);
+      flushDatasetUpload(key, json);
+    }).catch(() => { /* 回源失败不影响本地读取 */ });
+  }, []);
+
   const load = useCallback(() => {
     // 历史错桶归并：早期子账号被当成主账号时，报销单会写进 reimbursement_<子账号>，
     // 企业里其他人永远拉不到那个键。这里把本企业成员的错桶数据并回主桶（幂等，只跑一次），
@@ -266,8 +290,16 @@ const ReimbursementPage: React.FC = () => {
       }
       mergeStrandedTenantDataset(`reimbursement_payments_${getDataOwner()}`, 'reimbursement_payments_', deps);
     } catch { /* 归并失败不影响正常读取 */ }
-    try { setRecords(JSON.parse(localStorage.getItem(`reimbursement_${getDataOwner()}`) || '[]')); } catch { setRecords([]); }
-    try { setPayments(JSON.parse(localStorage.getItem(`reimbursement_payments_${getDataOwner()}`) || '[]')); } catch { setPayments([]); }
+    let recs: any[] = [];
+    try { recs = JSON.parse(localStorage.getItem(`reimbursement_${getDataOwner()}`) || '[]'); } catch { recs = []; }
+    if (!Array.isArray(recs)) recs = [];
+    setRecords(recs);
+    let pays: any[] = [];
+    try { pays = JSON.parse(localStorage.getItem(`reimbursement_payments_${getDataOwner()}`) || '[]'); } catch { pays = []; }
+    if (!Array.isArray(pays)) pays = [];
+    setPayments(pays);
+    if (recs.length === 0) reconcileFromServer(`reimbursement_${getDataOwner()}`, setRecords);
+    if (pays.length === 0) reconcileFromServer(`reimbursement_payments_${getDataOwner()}`, setPayments);
     // 加载负责人设置
     try {
       const mgrs = JSON.parse(localStorage.getItem(`reimbursement_managers_${getDataOwner()}`) || '{}');

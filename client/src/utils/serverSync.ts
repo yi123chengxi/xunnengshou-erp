@@ -111,8 +111,9 @@ const SALVAGE_UNION_PREFIXES = ['purchaser_bills_', 'pageData_customer_bill-deta
 // 服务端「永不缩水」键（与 server/src/routes/sync.routes.ts 的 NEVER_SHRINK_PREFIXES 同构）：
 // 这些键的权威副本只增不减，拉取时不得整键覆盖本地——否则「本地新增但尚未上传成功」的行
 // 会被服务端旧版本抹掉（报销新增后过一会自动消失的另一半原因）。
-const NEVER_SHRINK_PREFIXES = ['purchaser_bills_', 'pageData_customer_bill-detail_', 'pageData_sales_order-manage_', 'purchaser_suppliers_', 'boundPurchasers_', 'accounts_', 'reimbursement_'];
-const isNeverShrinkKey = (key: string): boolean => NEVER_SHRINK_PREFIXES.some(p => key.startsWith(p));
+const NEVER_SHRINK_PREFIXES = ['purchaser_bills_', 'pageData_customer_bill-detail_', 'pageData_sales_order-manage_', 'purchaser_suppliers_', 'boundPurchasers_', 'accounts_', 'reimbursement_', 'pageData_finance_bank-account_'];
+// 导出供页面在删除点申报 removedIds（永不缩水键的合法删除必须显式申报，否则被服务端并集复活）
+export const isNeverShrinkKey = (key: string): boolean => NEVER_SHRINK_PREFIXES.some(p => key.startsWith(p));
 
 export function isSyncKey(key: string): boolean {
   if (!key || key.endsWith('_ts')) return false;
