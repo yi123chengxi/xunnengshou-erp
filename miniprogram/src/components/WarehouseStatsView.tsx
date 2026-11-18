@@ -206,6 +206,7 @@ const WarehouseStatsView = ({ tick = 0 }: { tick?: number }) => {
         extra={tab === 'salary' ? `m=${encodeURIComponent(month)}` : ''}
         headers={HEADERS[tab]}
         quick={tab === 'stock' || tab === 'pick' || tab === 'urgent'}
+        quickDate={tab === 'pick' ? 'last' : 'first'}
         addLabel={fields.length > 0 ? '新增记录' : undefined}
         onAdd={fields.length > 0 ? () => setFormVisible(v => !v) : undefined}
         tick={tick + reload}

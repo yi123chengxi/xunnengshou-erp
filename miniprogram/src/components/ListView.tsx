@@ -17,14 +17,21 @@ const QUICK_RANGES = [
 /** 汇总行单元格取值：¥ 金额解析为数字，其余按数字解析 */
 const moneyOf = (c: string | undefined): number => Number(String(c || '').replace(/[¥,]/g, '')) || 0
 
+/** 本地日期串 YYYY-MM-DD（偏移天数） */
+const localDay = (offset = 0): string => {
+  const d = new Date(Date.now() + offset * 86400000)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}
+
 /**
  * 通用列表视图：服务端 /wx/lists/:page 按 Web 同页面口径映射后下发展示结构，
  * 用于补齐日常记账/生产订单/采购订单/新款进度/店铺/仓库统计/品牌/员工/客户等子菜单。
  * 搜索为「点击查询后才生效」的双态模式，减少大列表实时过滤开销。
  */
 const ListView = ({
-  page, extra = '', headers, addLabel, onAdd, tick = 0, quick = false,
-}: { page: string; extra?: string; headers?: string[]; addLabel?: string; onAdd?: () => void; tick?: number; quick?: boolean }) => {
+  page, extra = '', headers, addLabel, onAdd, tick = 0, quick = false, quickDate,
+}: { page: string; extra?: string; headers?: string[]; addLabel?: string; onAdd?: () => void; tick?: number; quick?: boolean; quickDate?: 'first' | 'last' }) => {
   const [input, setInput] = useState('')
   const [applied, setApplied] = useState('')
   const [range, setRange] = useState('')
@@ -37,10 +44,31 @@ const ListView = ({
     setLoaded(false)
     const extraFull = [extra, range ? `range=${range}` : ''].filter(Boolean).join('&')
     getListPage(page, applied, extraFull)
-      .then(d => { setList(d.list || []); setTotal(d.total || 0); setSums(d.sums || []) })
+      .then(d => {
+        let list = d.list || []
+        let total = d.total || 0
+        const serverSums = d.sums || []
+        // 服务端未部署 range/sums 时客户端兜底：按 sub 中日期位置过滤，汇总由 computedSums 客户端求和
+        if (range && quickDate && !serverSums.length) {
+          const today = localDay()
+          const ym = today.slice(0, 7)
+          list = list.filter(it => {
+            // sub 经 filter(Boolean) 会位移，按日期正则定位（备货/急采取首个、配货取末个）
+            const dates = (it.sub || []).filter(s => /^\d{4}-\d{2}-\d{2}/.test(String(s)))
+            const ds = String(quickDate === 'first' ? dates[0] : dates[dates.length - 1] || '').slice(0, 10)
+            if (range === 'today') return ds === today
+            if (range === 'yesterday') return ds === localDay(-1)
+            return ds.slice(0, 7) === ym
+          })
+          total = list.length
+        }
+        setList(list)
+        setTotal(total)
+        setSums(serverSums)
+      })
       .catch(e => Taro.showToast({ title: e.message, icon: 'none' }))
       .finally(() => setLoaded(true))
-  }, [page, applied, extra, range, tick])
+  }, [page, applied, extra, range, tick, quickDate])
 
   // 汇总行：优先服务端 sums（部署后按筛选范围下发）；未部署时按当前列表行客户端兜底求和，保证汇总行始终可见
   const computedSums = useMemo(() => {
@@ -85,9 +113,9 @@ const ListView = ({
           </View>
         ) : null}
       </View>
-      {/* 计数+快速筛选行：靠左对齐；quick 页签恒显示，点击筛选后不隐藏 */}
+      {/* 计数+快速筛选+汇总同行：靠左对齐；quick 页签恒显示，点击筛选后不隐藏 */}
       {(quick || (loaded && total > 0)) && (
-        <View style={{ display: 'flex', alignItems: 'center', padding: '8px 24px 0' }}>
+        <View style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', padding: '8px 24px 0' }}>
           <Text className="muted" style={{ fontSize: 22 }}>
             共 {total} 条{total > 100 ? '，仅显示前 100 条' : ''}
           </Text>
@@ -104,22 +132,20 @@ const ListView = ({
               {r.label}
             </View>
           ))}
+          {/* 汇总值与筛选键同行显示：无底色，金额红字 */}
+          {quick && computedSums.length > 0 && (headers || []).map((h, i) =>
+            (h === '数量' || h.includes('工资')) && computedSums[i] ? (
+              <Text key={h} style={{ marginLeft: 16, fontSize: 22, color: '#5a6d85' }}>
+                {h} <Text style={{ color: '#ff4d4f', fontWeight: 700, fontSize: 24 }}>{computedSums[i]}</Text>
+              </Text>
+            ) : null,
+          )}
         </View>
       )}
       {loaded && list.length === 0 && <View className="empty">暂无数据</View>}
       {headers && headers.length ? (
         /* 横向表格模式：顶部字段名行 + 每条记录一行单元格 */
         <View style={{ margin: '8px 24px 0', background: '#fff', borderRadius: 12, overflow: 'hidden' }}>
-          {quick && computedSums.length > 0 && (
-            /* 汇总行：与列对齐，置于表头上方，展示数量/工资合计 */
-            <View style={{ display: 'flex', background: '#e6f4ff', padding: '10px 0' }}>
-              {computedSums.map((c, i) => (
-                <Text key={i} style={{ flex: i === 0 ? 1.4 : 1, textAlign: 'center', fontSize: 24, color: '#1677ff', fontWeight: 700 }}>
-                  {c || ''}
-                </Text>
-              ))}
-            </View>
-          )}
           <View style={{ display: 'flex', background: '#eef1f5', padding: '14px 0' }}>
             {headers.map((h, i) => (
               <Text key={h} style={{ flex: i === 0 ? 1.4 : 1, textAlign: 'center', fontSize: 24, color: '#5a6d85', fontWeight: 600 }}>
