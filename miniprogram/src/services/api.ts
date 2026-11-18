@@ -92,6 +92,10 @@ export const createBookkeeping = (body: {
 export const createWsRecord = (kind: 'stock' | 'pick' | 'urgent' | 'note', body: Record<string, any>) =>
   request<{ saved: boolean; record: any }>(`/wx/ws/${kind}`, { method: 'POST', data: body })
 
+/** 材质下拉候选：工价表材质 ∪ 已有记录材质去重（与 Web 材质下拉同源） */
+export const getWsMaterials = (kind: 'stock' | 'urgent') =>
+  request<{ materials: string[] }>(`/wx/ws-materials/${kind}`)
+
 /** 新款进度主表单手机录入（与 Web 新增新款弹窗同字段，服务端派生状态默认值） */
 export const createNewStyle = (body: Record<string, any>) =>
   request<{ saved: boolean; record: any }>('/wx/newstyle', { method: 'POST', data: body })

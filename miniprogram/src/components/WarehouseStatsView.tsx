@@ -1,7 +1,7 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { View, Text, Input, Picker, Button, Image } from '@tarojs/components'
 import Taro from '@tarojs/taro'
-import { createWsRecord } from '../services/api'
+import { createWsRecord, getWsMaterials } from '../services/api'
 import { chooseAndUploadImage } from '../services/upload'
 import ListView from './ListView'
 
@@ -15,13 +15,14 @@ const TABS = [
 
 type TabKey = (typeof TABS)[number]['key']
 
-interface Field { key: string; label: string; kind?: 'date' | 'number'; required?: boolean }
+interface Field { key: string; label: string; kind?: 'date' | 'number' | 'material'; required?: boolean }
 
 // 各页签新增表单字段（落库派生由服务端按 Web 同口径完成）
 const FORM_FIELDS: Record<TabKey, Field[]> = {
   stock: [
     { key: 'orderNo', label: '内部单号', required: true },
     { key: 'quantity', label: '数量', kind: 'number', required: true },
+    { key: 'material', label: '鞋子材质', kind: 'material' },
   ],
   pick: [
     { key: 'orderNo', label: '内部单号', required: true },
@@ -32,6 +33,7 @@ const FORM_FIELDS: Record<TabKey, Field[]> = {
   urgent: [
     { key: 'orderNo', label: '内部单号', required: true },
     { key: 'quantity', label: '数量', kind: 'number', required: true },
+    { key: 'material', label: '鞋子材质', kind: 'material' },
   ],
   note: [
     { key: 'person', label: '人员', required: true },
@@ -74,8 +76,17 @@ const WarehouseStatsView = ({ tick = 0 }: { tick?: number }) => {
   const [noteType, setNoteType] = useState(0)
   const [busy, setBusy] = useState(false)
   const [reload, setReload] = useState(0)
+  const [materials, setMaterials] = useState<string[]>([])
   const cur = TABS.find(t => t.key === tab) || TABS[0]
   const fields = FORM_FIELDS[tab]
+
+  // 材质下拉候选：打开备货/急采新增窗时拉取（工价表 ∪ 已有记录去重，与 Web 同源）
+  useEffect(() => {
+    if (!formVisible || (tab !== 'stock' && tab !== 'urgent')) return
+    getWsMaterials(tab)
+      .then(d => setMaterials(d.materials || []))
+      .catch(() => setMaterials([]))
+  }, [formVisible, tab])
 
   const setField = (key: string, val: string) => setForm(prev => ({ ...prev, [key]: val }))
 
@@ -184,6 +195,20 @@ const WarehouseStatsView = ({ tick = 0 }: { tick?: number }) => {
                 <View className="row">
                   <Text className="muted">{f.label}</Text>
                   <Text style={{ color: '#1677ff' }}>{form[f.key] || todayStr()} ▾</Text>
+                </View>
+              </Picker>
+            ) : f.kind === 'material' ? (
+              /* 鞋子材质：点击下拉选择，候选与网页版材质字段同源 */
+              <Picker
+                key={f.key}
+                mode="selector"
+                range={materials.length ? materials : ['暂无材质，请先在网页版工价管理新增']}
+                value={Math.max(0, materials.indexOf(form[f.key] || ''))}
+                onChange={e => setField(f.key, materials[Number(e.detail.value)] || '')}
+              >
+                <View className="row">
+                  <Text className="muted">{f.label}</Text>
+                  <Text style={{ color: form[f.key] ? '#333' : '#1677ff' }}>{form[f.key] || '选择材质'} ▾</Text>
                 </View>
               </Picker>
             ) : (

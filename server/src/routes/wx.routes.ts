@@ -715,6 +715,26 @@ router.post('/newstyle', verifyJWT, async (req: Request, res: Response) => {
   }
 });
 
+/** GET /api/wx/ws-materials/:kind —— 材质下拉候选：工价表材质 ∪ 已有记录材质去重（与 Web 材质下拉同源） */
+router.get('/ws-materials/:kind', verifyJWT, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user as JWTPayload;
+    const owner = await ownerOf(user.username);
+    const kind = String(req.params.kind || '');
+    const wageKey = kind === 'urgent' ? `ws_urgentWage_${owner}` : `ws_wage_${owner}`;
+    const recKey = kind === 'urgent' ? `ws_urgent_${owner}` : `ws_stock_${owner}`;
+    const [wages, recs] = await Promise.all([readRows(wageKey), readRows(recKey)]);
+    const materials = Array.from(new Set([
+      ...wages.map((r: any) => String(r.material || '').trim()),
+      ...recs.map((r: any) => String(r.material || '').trim()),
+    ].filter(Boolean)));
+    res.json({ code: 200, data: { materials } });
+  } catch (err: any) {
+    console.error('[wx] ws-materials error:', err.message);
+    res.status(500).json({ code: 500, message: '服务器内部错误' });
+  }
+});
+
 /** GET /api/wx/schedule-board?date= —— 生产排期看板：生产线×三班网格（与 Web ScheduleBoard 同键同口径） */
 router.get('/schedule-board', verifyJWT, async (req: Request, res: Response) => {
   try {
