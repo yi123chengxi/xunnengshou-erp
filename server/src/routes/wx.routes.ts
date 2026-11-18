@@ -648,7 +648,8 @@ router.post('/ws/:kind', verifyJWT, async (req: Request, res: Response) => {
         priceRate: rate, packWage: qty * packRate, commission: qty * teamRate,
         packer, foreignTeam,
         remark: String(req.body.remark || '').trim(),
-        image: '', creator: name, lastEditor: name, lastEditTime: new Date().toISOString(),
+        image: String(req.body.image || '').trim(),
+        creator: name, lastEditor: name, lastEditTime: new Date().toISOString(),
         date, month: date.slice(0, 7),
       };
       if (kind === 'stock') {

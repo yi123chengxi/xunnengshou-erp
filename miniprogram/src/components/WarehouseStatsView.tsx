@@ -1,7 +1,8 @@
 import { useState } from 'react'
-import { View, Text, Input, Picker, Button } from '@tarojs/components'
+import { View, Text, Input, Picker, Button, Image } from '@tarojs/components'
 import Taro from '@tarojs/taro'
 import { createWsRecord } from '../services/api'
+import { chooseAndUploadImage } from '../services/upload'
 import ListView from './ListView'
 
 const TABS = [
@@ -19,15 +20,8 @@ interface Field { key: string; label: string; kind?: 'date' | 'number'; required
 // 各页签新增表单字段（落库派生由服务端按 Web 同口径完成）
 const FORM_FIELDS: Record<TabKey, Field[]> = {
   stock: [
-    { key: 'date', label: '日期', kind: 'date' },
     { key: 'orderNo', label: '内部单号', required: true },
-    { key: 'productCode', label: '货号' },
     { key: 'quantity', label: '数量', kind: 'number', required: true },
-    { key: 'inspector', label: '质检员（默认本人）' },
-    { key: 'material', label: '材质（匹配工价）' },
-    { key: 'packer', label: '打包员（默认首组）' },
-    { key: 'foreignTeam', label: '外贸组长（默认首组）' },
-    { key: 'remark', label: '备注' },
   ],
   pick: [
     { key: 'orderNo', label: '内部单号', required: true },
@@ -74,6 +68,7 @@ const WarehouseStatsView = ({ tick = 0 }: { tick?: number }) => {
   const [month, setMonth] = useState(curMonth())
   const [formVisible, setFormVisible] = useState(false)
   const [form, setForm] = useState<Record<string, string>>({})
+  const [image, setImage] = useState('')
   const [noteType, setNoteType] = useState(0)
   const [busy, setBusy] = useState(false)
   const [reload, setReload] = useState(0)
@@ -81,6 +76,15 @@ const WarehouseStatsView = ({ tick = 0 }: { tick?: number }) => {
   const fields = FORM_FIELDS[tab]
 
   const setField = (key: string, val: string) => setForm(prev => ({ ...prev, [key]: val }))
+
+  const pickImage = async () => {
+    try {
+      const url = await chooseAndUploadImage()
+      setImage(url)
+    } catch (e: any) {
+      Taro.showToast({ title: e.message || '上传失败', icon: 'none' })
+    }
+  }
 
   const submit = async () => {
     if (busy) return
@@ -92,12 +96,14 @@ const WarehouseStatsView = ({ tick = 0 }: { tick?: number }) => {
     }
     const body: Record<string, any> = { ...form }
     if (tab === 'note') body.type = noteType === 1 ? 'punishment' : 'reward'
+    if (tab === 'stock') body.image = image
     setBusy(true)
     try {
       await createWsRecord(tab as 'stock' | 'pick' | 'urgent' | 'note', body)
       Taro.showToast({ title: '已新增', icon: 'success' })
       setFormVisible(false)
       setForm({})
+      setImage('')
       setReload(v => v + 1)
     } catch (e: any) {
       Taro.showToast({ title: e.message || '新增失败', icon: 'none' })
@@ -113,7 +119,7 @@ const WarehouseStatsView = ({ tick = 0 }: { tick?: number }) => {
           <View
             key={t.key}
             className={`segment-item ${tab === t.key ? 'active' : ''}`}
-            onClick={() => { setTab(t.key); setFormVisible(false); setForm({}) }}
+            onClick={() => { setTab(t.key); setFormVisible(false); setForm({}); setImage('') }}
           >
             {t.label}
           </View>
@@ -151,6 +157,22 @@ const WarehouseStatsView = ({ tick = 0 }: { tick?: number }) => {
                 >
                   罚款
                 </Text>
+              </View>
+            </View>
+          )}
+          {tab === 'stock' && (
+            <View className="row">
+              <Text className="muted">图片</Text>
+              <View style={{ display: 'flex', alignItems: 'center' }}>
+                {image ? (
+                  <Image src={image} mode="aspectFill" style={{ width: 96, height: 96, borderRadius: 8, marginRight: 12 }} />
+                ) : null}
+                <Button size="mini" className="btn-primary" style={{ lineHeight: '56px', marginRight: 12 }} onClick={pickImage}>
+                  {image ? '换图' : '选图上传'}
+                </Button>
+                {image ? (
+                  <Text className="muted" style={{ fontSize: 24 }} onClick={() => setImage('')}>清除</Text>
+                ) : null}
               </View>
             </View>
           )}
