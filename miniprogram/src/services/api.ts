@@ -80,3 +80,8 @@ export interface ListItem {
 
 export const getListPage = (page: string, q: string, extra = '') =>
   request<{ list: ListItem[]; total: number }>(`/wx/lists/${page}?q=${encodeURIComponent(q)}${extra ? `&${extra}` : ''}`)
+
+export const createBookkeeping = (body: {
+  bookDate: string; bookType: '收入' | '支出'; mainCategory: string;
+  subCategory?: string; amount: number; account?: string; remark?: string;
+}) => request<{ saved: boolean; record: any }>('/wx/bookkeeping', { method: 'POST', data: body })

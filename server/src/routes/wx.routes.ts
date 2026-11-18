@@ -407,6 +407,68 @@ router.post('/reimbursements', verifyJWT, async (req: Request, res: Response) =>
   }
 });
 
+// ============ 日常记账（手机填单，与 Web DailyBookkeepingPage 同口径） ============
+
+const BOOK_INCOME_MAINS = ['主营业务收入', '其他业务收入', '营业外收入'];
+const BOOK_EXPENSE_MAINS = ['销售费用', '管理费用', '财务费用'];
+
+/** POST /api/wx/bookkeeping {bookDate, bookType, mainCategory, subCategory?, amount, account?, remark?} */
+router.post('/bookkeeping', verifyJWT, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user as JWTPayload;
+    const owner = await ownerOf(user.username);
+    const bookType = req.body.bookType === '收入' ? '收入' : req.body.bookType === '支出' ? '支出' : '';
+    const bookDate = String(req.body.bookDate || '');
+    const mainCategory = String(req.body.mainCategory || '').trim();
+    const subCategory = String(req.body.subCategory || '').trim();
+    const amountRaw = Number(req.body.amount);
+    const account = String(req.body.account || '').trim();
+    const remark = String(req.body.remark || '').trim();
+    if (!bookType || !/^\d{4}-\d{2}-\d{2}$/.test(bookDate) || !mainCategory || !(amountRaw > 0)) {
+      res.status(400).json({ code: 400, message: '记账日期/收支类型/主分类/金额(>0)为必填' });
+      return;
+    }
+    if (bookType === '收入' ? !BOOK_INCOME_MAINS.includes(mainCategory) : !BOOK_EXPENSE_MAINS.includes(mainCategory)) {
+      res.status(400).json({ code: 400, message: '主分类与收支类型不匹配' });
+      return;
+    }
+    // 已期末结转月份禁止新增（与 Web 端 closedMonths 守卫同口径）
+    const closed = await readMap(`ledger_period_amounts_${owner}`);
+    if (closed[bookDate.slice(0, 7)] !== undefined) {
+      res.status(409).json({ code: 409, message: `${bookDate.slice(0, 7)} 已期末结转，禁止新增记账` });
+      return;
+    }
+    const dsKey = `daily_bookkeeping_${owner}`;
+    const rows = await readRows(dsKey);
+    // 凭证号与 Web generateVoucherNo 同格式：PZ-YYYYMMDD-当日序号三位
+    const prefix = `PZ-${bookDate.replace(/-/g, '')}`;
+    const seq = rows.filter((r: any) => String(r.voucherNo || '').startsWith(prefix)).length + 1;
+    // 收入侧子分类含「退货」记负数金额 + isReturn（与 Web 退货模式落库同口径）
+    const isReturn = bookType === '收入' && subCategory.includes('退货');
+    const rec: any = {
+      key: `bk-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      voucherNo: `${prefix}-${String(seq).padStart(3, '0')}`,
+      bookDate, bookType,
+      category: subCategory ? `${mainCategory}-${subCategory}` : mainCategory,
+      amount: isReturn ? -Math.abs(amountRaw) : amountRaw,
+      ...(isReturn ? { isReturn: true } : {}),
+      person: await displayNameOf(user.username),
+      payAccount: bookType === '支出' ? account : '',
+      recvAccount: bookType === '收入' ? account : '',
+      payBank: '', recvBank: '',
+      department: '',
+      remark,
+      createdAt: new Date().toISOString(),
+      source: 'wechat',
+    };
+    await writeRows(dsKey, [rec, ...rows], owner);
+    res.json({ code: 200, data: { saved: true, record: rec } });
+  } catch (err: any) {
+    console.error('[wx] bookkeeping create error:', err.message);
+    res.status(500).json({ code: 500, message: '服务器内部错误' });
+  }
+});
+
 // ============ 查询（库存 / 订单） ============
 
 /** GET /api/wx/inventory?q= —— 商品列表模糊查询（款号/简称/编码） */

@@ -9,6 +9,7 @@ import ReimburseForm from './ReimburseForm'
 import AttendanceView from './AttendanceView'
 import LeaveView from './LeaveView'
 import ListView from './ListView'
+import BookkeepingView from './BookkeepingView'
 import WarehouseStatsView from './WarehouseStatsView'
 import MarketView from './MarketView'
 
@@ -68,7 +69,7 @@ const ModuleView = ({
       case 'attendance': return <AttendanceView tick={tick} />
       case 'leave': return <LeaveView tick={tick} />
       // 以下子菜单与 Web 同页面同源数据，服务端 /wx/lists/:page 映射展示结构
-      case 'bookkeeping': return <ListView page="bookkeeping" tick={tick} />
+      case 'bookkeeping': return <BookkeepingView tick={tick} />
       case 'production': return <ListView page="production" tick={tick} />
       case 'purchase': return <ListView page="purchase" tick={tick} />
       case 'progress': return <ListView page="progress" tick={tick} />
