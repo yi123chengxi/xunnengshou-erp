@@ -109,11 +109,15 @@ fi
 pm2 save
 
 # 部署后入口自检：80 端口 IP 入口的 /api 必须可达（存量客户端与旧书签都按 IP 连），
-# 探不到说明面板接管了默认站点，必须让部署失败而不是静默上线
+# 探不到说明面板接管了默认站点，必须让部署失败而不是静默上线。
+# 探针必须带 Host: localhost：宝塔自带 phpfpm_status.conf 里有 listen 80 +
+# server_name 127.0.0.1 的精确匹配站点，curl 默认 Host=127.0.0.1 会命中它并返回 404，
+# 造成「入口其实是好的、自检却误报失败」。Host: localhost 匹配不到任何精确站点，
+# 才会落到本脚本投递的 0.default.conf（server_name _）代理链路上。
 sleep 3
-API_CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 http://127.0.0.1/api/health || echo 000)
+API_CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -H 'Host: localhost' http://127.0.0.1/api/health || echo 000)
 if [ "$API_CODE" != "200" ]; then
-  echo "FATAL: 入口自检失败 http://127.0.0.1/api/health -> $API_CODE（预期 200）" >&2
+  echo "FATAL: 入口自检失败 http://127.0.0.1/api/health (Host: localhost) -> $API_CODE（预期 200）" >&2
   exit 1
 fi
 echo "ENTRY_OK http://<ip>/api/health -> 200"
