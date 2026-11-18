@@ -899,12 +899,51 @@ router.get('/lists/:page', verifyJWT, async (req: Request, res: Response) => {
           day10(pick(r.createTime, r.date, r.createDate)), r.person].filter(Boolean) as string[],
       }));
     } else if (page === 'progress') {
-      const rows = await readRows(`newstyle_progress_${owner}`);
+      // 主表单：数据完善状态取自商品属性登记表（与 Web 主表同口径）
+      const [rows, listingRows] = await Promise.all([
+        readRows(`newstyle_progress_${owner}`), readRows(`newstyle_listing_${owner}`),
+      ]);
+      const completeOf = (code: string): string => {
+        const l = listingRows.find((x: any) => x.styleCode === code);
+        return l ? (l.dataComplete === '资料已完善' ? '已完善' : '未完善') : '未登记';
+      };
+      items = rows.map((r: any) => {
+        const code = pick(r.styleCode, r.key);
+        return {
+          key: r.key || r.styleCode, title: code || '新款',
+          tag: pick(r.dataComplete, r.recvStatus, r.status),
+          row: [code, pick(r.brand, '—'), completeOf(code), pick(r.creator, '—')],
+          sub: [r.brand, r.planListDate && `预计上架 ${r.planListDate}`, r.creator,
+            day10(r.createdAt)].filter(Boolean) as string[],
+        };
+      });
+    } else if (page === 'newstylePhoto') {
+      // 回传图片
+      const rows = await readRows(`newstyle_photo_${owner}`);
       items = rows.map((r: any) => ({
-        key: r.key || r.styleCode, title: pick(r.styleCode, r.key) || '新款',
-        tag: pick(r.dataComplete, r.recvStatus, r.status),
-        sub: [r.brand, r.planListDate && `预计上架 ${r.planListDate}`, r.creator,
-          day10(r.createdAt)].filter(Boolean) as string[],
+        key: r.key || r.styleCode, title: pick(r.styleCode, r.key) || '回传图片',
+        tag: r.recvStatus, tone: r.recvStatus === '已收到' ? 'blue' : 'gray',
+        row: [pick(r.styleCode, r.key), pick(r.recvStatus, '未收到'), pick(r.planListDate, '—'), pick(r.creator, '—')],
+        sub: [r.recvStatus, r.planListDate && `预计上架 ${r.planListDate}`, r.creator, day10(r.createdAt)].filter(Boolean) as string[],
+      }));
+    } else if (page === 'newstyleArrival') {
+      // 到货款式
+      const rows = await readRows(`newstyle_arrival_${owner}`);
+      items = rows.map((r: any) => ({
+        key: r.key || r.styleCode, title: pick(r.styleCode, r.key) || '到货款式',
+        tag: r.arrivalStatus, tone: r.arrivalStatus === '已到货' ? 'green' : 'orange',
+        row: [pick(r.styleCode, r.key), pick(r.date, '—'), pick(r.arrivalStatus, '未到货'), pick(r.creator, '—')],
+        sub: [day10(r.date), r.arrivalStatus, r.overdueDate && `上架超时 ${r.overdueDate}`, r.creator].filter(Boolean) as string[],
+      }));
+    } else if (page === 'newstyleListing') {
+      // 商品属性
+      const rows = await readRows(`newstyle_listing_${owner}`);
+      items = rows.map((r: any) => ({
+        key: r.key || r.styleCode, title: pick(r.styleCode, r.key) || '商品属性',
+        tag: r.dataComplete, tone: r.dataComplete === '资料已完善' ? 'green' : 'orange',
+        row: [pick(r.styleCode, r.key), r.dataComplete === '资料已完善' ? '已完善' : '未完善',
+          Array.isArray(r.platforms) && r.platforms.length ? r.platforms.join('/') : '—', pick(r.creator, '—')],
+        sub: [r.dataComplete, Array.isArray(r.platforms) && r.platforms.length ? `上架平台 ${r.platforms.join('/')}` : '', r.creator, day10(r.date)].filter(Boolean) as string[],
       }));
     } else if (page === 'shops') {
       const rows = await readRows(`shop_info_${owner}`);

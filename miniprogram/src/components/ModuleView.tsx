@@ -11,6 +11,7 @@ import LeaveView from './LeaveView'
 import ListView from './ListView'
 import BookkeepingView from './BookkeepingView'
 import WarehouseStatsView from './WarehouseStatsView'
+import NewStyleProgressView from './NewStyleProgressView'
 import MarketView from './MarketView'
 
 // 扫码入口视图：扫码后回调把关键字交给库存查询子菜单
@@ -86,7 +87,7 @@ const ModuleView = ({
       case 'bookkeeping': return <BookkeepingView tick={tick} />
       case 'production': return <ListView page="production" tick={tick} />
       case 'purchase': return <ListView page="purchase" tick={tick} />
-      case 'progress': return <ListView page="progress" tick={tick} />
+      case 'progress': return <NewStyleProgressView tick={tick} />
       case 'shop-management': return <ListView page="shops" tick={tick} />
       case 'warehouse-stats': return <WarehouseStatsView tick={tick} />
       case 'manage': return <ListView page="brands" tick={tick} />
