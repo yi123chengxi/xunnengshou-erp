@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { View, Text, Input } from '@tarojs/components'
 import Taro from '@tarojs/taro'
 import { getListPage, ListItem } from '../services/api'
@@ -13,6 +13,9 @@ const QUICK_RANGES = [
   { key: 'yesterday', label: '昨日' },
   { key: 'month', label: '本月' },
 ]
+
+/** 汇总行单元格取值：¥ 金额解析为数字，其余按数字解析 */
+const moneyOf = (c: string | undefined): number => Number(String(c || '').replace(/[¥,]/g, '')) || 0
 
 /**
  * 通用列表视图：服务端 /wx/lists/:page 按 Web 同页面口径映射后下发展示结构，
@@ -38,6 +41,20 @@ const ListView = ({
       .catch(e => Taro.showToast({ title: e.message, icon: 'none' }))
       .finally(() => setLoaded(true))
   }, [page, applied, extra, range, tick])
+
+  // 汇总行：优先服务端 sums（部署后按筛选范围下发）；未部署时按当前列表行客户端兜底求和，保证汇总行始终可见
+  const computedSums = useMemo(() => {
+    if (!quick || !headers || !headers.length) return [] as string[]
+    if (sums && sums.length) return sums
+    return headers.map((h, i) => {
+      if (h === '数量') return String(list.reduce((s, it) => s + (Number((it.row || [])[i]) || 0), 0))
+      if (h.includes('工资')) {
+        const t = list.reduce((s, it) => s + moneyOf((it.row || [])[i]), 0)
+        return t > 0 ? `¥${t.toFixed(2)}` : '—'
+      }
+      return ''
+    })
+  }, [quick, headers, list, sums])
 
   return (
     <View>
@@ -68,9 +85,10 @@ const ListView = ({
           </View>
         ) : null}
       </View>
-      {loaded && (total > 0 || quick) && (
+      {/* 计数+快速筛选行：靠左对齐；quick 页签恒显示，点击筛选后不隐藏 */}
+      {(quick || (loaded && total > 0)) && (
         <View style={{ display: 'flex', alignItems: 'center', padding: '8px 24px 0' }}>
-          <Text className="muted" style={{ fontSize: 22, flex: 1 }}>
+          <Text className="muted" style={{ fontSize: 22 }}>
             共 {total} 条{total > 100 ? '，仅显示前 100 条' : ''}
           </Text>
           {quick && QUICK_RANGES.map(r => (
@@ -92,10 +110,10 @@ const ListView = ({
       {headers && headers.length ? (
         /* 横向表格模式：顶部字段名行 + 每条记录一行单元格 */
         <View style={{ margin: '8px 24px 0', background: '#fff', borderRadius: 12, overflow: 'hidden' }}>
-          {quick && sums.length > 0 && (
+          {quick && computedSums.length > 0 && (
             /* 汇总行：与列对齐，置于表头上方，展示数量/工资合计 */
             <View style={{ display: 'flex', background: '#e6f4ff', padding: '10px 0' }}>
-              {sums.map((c, i) => (
+              {computedSums.map((c, i) => (
                 <Text key={i} style={{ flex: i === 0 ? 1.4 : 1, textAlign: 'center', fontSize: 24, color: '#1677ff', fontWeight: 700 }}>
                   {c || ''}
                 </Text>
