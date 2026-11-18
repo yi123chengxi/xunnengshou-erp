@@ -42,7 +42,7 @@ const ListView = ({
         />
         <Button
           className="btn-primary"
-          style={{ marginLeft: 12, marginBottom: 0, height: 76, lineHeight: '76px', padding: '0 24px', fontSize: 26, flexShrink: 0, boxSizing: 'border-box' }}
+          style={{ marginLeft: 12, marginBottom: 0, width: 'auto', height: 76, lineHeight: '76px', padding: '0 24px', fontSize: 26, flexShrink: 0, boxSizing: 'border-box' }}
           onClick={() => setApplied(input.trim())}
         >
           查询
@@ -50,7 +50,7 @@ const ListView = ({
         {onAdd ? (
           <Button
             className="btn-primary"
-            style={{ marginLeft: 12, marginBottom: 0, height: 76, lineHeight: '76px', padding: '0 24px', fontSize: 26, flexShrink: 0, boxSizing: 'border-box' }}
+            style={{ marginLeft: 12, marginBottom: 0, width: 'auto', height: 76, lineHeight: '76px', padding: '0 24px', fontSize: 26, flexShrink: 0, boxSizing: 'border-box' }}
             onClick={onAdd}
           >
             {addLabel || '新增'}
