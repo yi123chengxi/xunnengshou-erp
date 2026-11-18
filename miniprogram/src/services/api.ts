@@ -91,3 +91,7 @@ export const createBookkeeping = (body: {
 /** 仓库统计手机录入：备货/配货/急采/奖惩（服务端按 Web 同口径派生工资） */
 export const createWsRecord = (kind: 'stock' | 'pick' | 'urgent' | 'note', body: Record<string, any>) =>
   request<{ saved: boolean; record: any }>(`/wx/ws/${kind}`, { method: 'POST', data: body })
+
+/** 新款进度主表单手机录入（与 Web 新增新款弹窗同字段，服务端派生状态默认值） */
+export const createNewStyle = (body: Record<string, any>) =>
+  request<{ saved: boolean; record: any }>('/wx/newstyle', { method: 'POST', data: body })

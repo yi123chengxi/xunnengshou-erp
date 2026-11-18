@@ -674,6 +674,47 @@ router.post('/ws/:kind', verifyJWT, async (req: Request, res: Response) => {
   }
 });
 
+/** POST /api/wx/newstyle —— 新款进度主表单手机录入（与 Web 新增新款弹窗同字段同派生口径） */
+router.post('/newstyle', verifyJWT, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user as JWTPayload;
+    const owner = await ownerOf(user.username);
+    const name = await displayNameOf(user.username);
+    const styleCode = String(req.body.styleCode || '').trim();
+    if (!styleCode) {
+      res.status(400).json({ code: 400, message: '货号为必填' });
+      return;
+    }
+    const dsKey = `newstyle_progress_${owner}`;
+    const rows = await readRows(dsKey);
+    // 派生字段与 Web handleSave 新增分支同口径：状态类默认值 + 创建日今天 + 创建人当前用户
+    const rec: any = {
+      key: `ns-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      styleCode,
+      image: String(req.body.image || ''),
+      costPrice: Number(req.body.costPrice) || 0,
+      craft: String(req.body.craft || '').trim(),
+      color: String(req.body.color || '').trim(),
+      sizeRange: String(req.body.sizeRange || '').trim(),
+      factory: String(req.body.factory || '').trim(),
+      brand: String(req.body.brand || '').trim(),
+      photoThenList: String(req.body.photoThenList || '').trim(),
+      photoPlace: '', jstImported: false,
+      createdAt: localYmd(),
+      photoRecvDate: '', photoRecvStatus: '未收到', photoPlanDate: '',
+      arrivalStatus: '未到货', arrivalDate: '', returnDate: '',
+      platforms: [], listPlanDate: '', listDoneDate: '',
+      remark: String(req.body.remark || '').trim(),
+      creator: name,
+    };
+    await writeRows(dsKey, [rec, ...rows], owner);
+    res.json({ code: 200, data: { saved: true, record: rec } });
+  } catch (err: any) {
+    console.error('[wx] newstyle create error:', err.message);
+    res.status(500).json({ code: 500, message: '服务器内部错误' });
+  }
+});
+
 // ============ 上下班打卡（与 Web AttendancePage 同库同口径：hr_attendance_<owner>） ============
 
 const hmMin = (t: string): number => {
