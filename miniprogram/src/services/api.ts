@@ -81,7 +81,7 @@ export interface ListItem {
 }
 
 export const getListPage = (page: string, q: string, extra = '') =>
-  request<{ list: ListItem[]; total: number }>(`/wx/lists/${page}?q=${encodeURIComponent(q)}${extra ? `&${extra}` : ''}`)
+  request<{ list: ListItem[]; total: number; sums?: string[] }>(`/wx/lists/${page}?q=${encodeURIComponent(q)}${extra ? `&${extra}` : ''}`)
 
 export const createBookkeeping = (body: {
   bookDate: string; bookType: '收入' | '支出'; mainCategory: string;

@@ -910,6 +910,16 @@ router.get('/lists/:page', verifyJWT, async (req: Request, res: Response) => {
     const owner = await ownerOf(user.username);
     const page = String(req.params.page || '');
     const q = String(req.query.q || '');
+    // 快速筛选（今日/昨日/本月）：备货/配货/急采按记录日期过滤并下发汇总行
+    const range = String(req.query.range || '');
+    let sums: string[] | null = null;
+    const inRange = (dateStr: string): boolean => {
+      if (range === 'today') return dateStr === localYmd();
+      if (range === 'yesterday') return dateStr === localYmd(new Date(Date.now() - 86400000));
+      if (range === 'month') return dateStr.slice(0, 7) === localYmd().slice(0, 7);
+      return true;
+    };
+    const money = (v: number): string => (v > 0 ? `¥${v.toFixed(2)}` : '—');
     let items: ListItem[] = [];
     if (page === 'bookkeeping') {
       const rows = await readRows(`daily_bookkeeping_${owner}`);
@@ -1030,7 +1040,9 @@ router.get('/lists/:page', verifyJWT, async (req: Request, res: Response) => {
         sub: [r.brand, r.person && `负责人:${r.person}`, r.status].filter(Boolean) as string[],
       }));
     } else if (page === 'warehouseStats' || page === 'warehouseStock') {
-      const rows = await readRows(`ws_stock_${owner}`);
+      const rows = (await readRows(`ws_stock_${owner}`)).filter((r: any) => inRange(day10(r.date)));
+      sums = ['', String(rows.reduce((s: number, r: any) => s + (Number(r.quantity) || 0), 0)), '',
+        money(rows.reduce((s: number, r: any) => s + (Number(r.qcWage) || 0), 0))];
       items = rows.map((r: any) => ({
         key: r.key || r.orderNo || r.productCode, title: pick(r.productCode, r.orderNo, r.key) || '备货记录',
         tag: r.month,
@@ -1040,7 +1052,9 @@ router.get('/lists/:page', verifyJWT, async (req: Request, res: Response) => {
           r.material, r.person, r.packer].filter(Boolean) as string[],
       }));
     } else if (page === 'warehousePick') {
-      const rows = await readRows(`ws_pick_${owner}`);
+      const rows = (await readRows(`ws_pick_${owner}`)).filter((r: any) => inRange(day10(r.createdAt)));
+      sums = ['', String(rows.reduce((s: number, r: any) => s + (Number(r.quantity) || 0), 0)),
+        money(rows.reduce((s: number, r: any) => s + (Number(r.wage) || 0), 0))];
       items = rows.map((r: any) => ({
         key: r.key || r.orderNo, title: pick(r.orderNo, r.key) || '配货记录',
         tag: r.month, amount: Number(r.wage) || 0,
@@ -1050,7 +1064,9 @@ router.get('/lists/:page', verifyJWT, async (req: Request, res: Response) => {
           r.creator, day10(r.createdAt)].filter(Boolean) as string[],
       }));
     } else if (page === 'warehouseUrgent') {
-      const rows = await readRows(`ws_urgent_${owner}`);
+      const rows = (await readRows(`ws_urgent_${owner}`)).filter((r: any) => inRange(day10(pick(r.date, r.qcDate))));
+      sums = ['', String(rows.reduce((s: number, r: any) => s + (Number(r.quantity) || 0), 0)), '',
+        money(rows.reduce((s: number, r: any) => s + (Number(r.wage) || 0), 0))];
       items = rows.map((r: any) => ({
         key: r.key || r.orderNo || r.productCode, title: pick(r.productCode, r.orderNo, r.key) || '急采记录',
         tag: r.month, amount: Number(r.wage) || 0,
@@ -1162,7 +1178,9 @@ router.get('/lists/:page', verifyJWT, async (req: Request, res: Response) => {
       return;
     }
     items = items.map(it => ({ ...it, tone: it.tone || toneOf(it.tag) }));
-    res.json({ code: 200, data: finishList(items, q) });
+    const data: { list: ListItem[]; total: number; sums?: string[] } = finishList(items, q);
+    if (sums) data.sums = sums;
+    res.json({ code: 200, data });
   } catch (err: any) {
     console.error('[wx] lists error:', err.message);
     res.status(500).json({ code: 500, message: '服务器内部错误' });
