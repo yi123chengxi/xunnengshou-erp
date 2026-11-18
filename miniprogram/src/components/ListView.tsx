@@ -12,7 +12,9 @@ const TONE_CLASS: Record<string, string> = {
  * 用于补齐日常记账/生产订单/采购订单/新款进度/店铺/仓库统计/品牌/员工/客户等子菜单。
  * 搜索为「点击查询后才生效」的双态模式，减少大列表实时过滤开销。
  */
-const ListView = ({ page, extra = '', tick = 0 }: { page: string; extra?: string; tick?: number }) => {
+const ListView = ({
+  page, extra = '', addLabel, onAdd, tick = 0,
+}: { page: string; extra?: string; addLabel?: string; onAdd?: () => void; tick?: number }) => {
   const [input, setInput] = useState('')
   const [applied, setApplied] = useState('')
   const [list, setList] = useState<ListItem[]>([])
@@ -41,6 +43,11 @@ const ListView = ({ page, extra = '', tick = 0 }: { page: string; extra?: string
         <Button size="mini" className="btn-primary" style={{ marginLeft: 12, lineHeight: '56px' }} onClick={() => setApplied(input.trim())}>
           查询
         </Button>
+        {onAdd ? (
+          <Button size="mini" className="btn-primary" style={{ marginLeft: 12, lineHeight: '56px' }} onClick={onAdd}>
+            {addLabel || '新增'}
+          </Button>
+        ) : null}
       </View>
       {loaded && total > 0 && (
         <View className="muted" style={{ padding: '8px 24px 0', fontSize: 22 }}>

@@ -85,3 +85,7 @@ export const createBookkeeping = (body: {
   bookDate: string; bookType: '收入' | '支出'; mainCategory: string;
   subCategory?: string; amount: number; account?: string; remark?: string;
 }) => request<{ saved: boolean; record: any }>('/wx/bookkeeping', { method: 'POST', data: body })
+
+/** 仓库统计手机录入：备货/配货/急采/奖惩（服务端按 Web 同口径派生工资） */
+export const createWsRecord = (kind: 'stock' | 'pick' | 'urgent' | 'note', body: Record<string, any>) =>
+  request<{ saved: boolean; record: any }>(`/wx/ws/${kind}`, { method: 'POST', data: body })

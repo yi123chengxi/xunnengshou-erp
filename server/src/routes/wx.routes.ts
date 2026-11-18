@@ -560,6 +560,119 @@ router.get('/market', verifyJWT, async (req: Request, res: Response) => {
   }
 });
 
+// ============ 仓库统计手机录入（与 Web WarehouseStatsPage 同口径） ============
+
+/** POST /api/wx/ws/:kind —— kind=stock|pick|urgent|note；工资派生与 Web 保存同公式（数量×材质工价） */
+router.post('/ws/:kind', verifyJWT, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user as JWTPayload;
+    const owner = await ownerOf(user.username);
+    const kind = String(req.params.kind || '');
+    const name = await displayNameOf(user.username);
+    const ymd = localYmd();
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const dateOf = (v: any): string => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : ymd);
+    if (kind === 'note') {
+      const type = req.body.type === 'punishment' ? 'punishment' : 'reward';
+      const note = String(req.body.note || '').trim();
+      const person = String(req.body.person || '').trim();
+      const amount = Number(req.body.amount);
+      if (!note || !person || !(amount > 0)) {
+        res.status(400).json({ code: 400, message: '备注内容/人员/金额(>0)为必填' });
+        return;
+      }
+      const date = dateOf(req.body.date);
+      const dsKey = `ws_note_${owner}`;
+      const rows = await readRows(dsKey);
+      const rec: any = { key: `NT-${suffix}`, note, person, amount, date, month: date.slice(0, 7), type };
+      await writeRows(dsKey, [rec, ...rows], owner);
+      res.json({ code: 200, data: { saved: true, record: rec } });
+      return;
+    }
+    if (kind === 'pick') {
+      const orderNo = String(req.body.orderNo || '').trim();
+      const qty = Number(req.body.quantity);
+      if (!orderNo || !(qty > 0)) {
+        res.status(400).json({ code: 400, message: '内部单号/数量(>0)为必填' });
+        return;
+      }
+      const dsKey = `ws_pick_${owner}`;
+      const rows = await readRows(dsKey);
+      // 配货统一工价：与 Web 同口径取工价表第一条
+      const rates = await readRows(`ws_pickWage_${owner}`);
+      const unifiedRate = Number(rates[0]?.rate) || 0;
+      const month = /^\d{4}-\d{2}$/.test(String(req.body.month || '')) ? String(req.body.month) : ymd.slice(0, 7);
+      const rec: any = {
+        key: `PK-${suffix}`, orderNo, quantity: qty,
+        priceRate: unifiedRate, wage: qty * unifiedRate, material: '', image: '',
+        createdAt: ymd, creator: name,
+        picker: String(req.body.picker || '').trim() || name,
+        month,
+      };
+      await writeRows(dsKey, [rec, ...rows], owner);
+      res.json({ code: 200, data: { saved: true, record: rec } });
+      return;
+    }
+    if (kind === 'stock' || kind === 'urgent') {
+      const orderNo = String(req.body.orderNo || '').trim();
+      const qty = Number(req.body.quantity);
+      if (!orderNo || !(qty > 0)) {
+        res.status(400).json({ code: 400, message: '内部单号/数量(>0)为必填' });
+        return;
+      }
+      const dsKey = kind === 'stock' ? `ws_stock_${owner}` : `ws_urgent_${owner}`;
+      const rows = await readRows(dsKey);
+      // 急采内部单号查重（与 Web 新增守卫同口径）
+      if (kind === 'urgent' && rows.some((r: any) => String(r.orderNo || '') === orderNo)) {
+        res.status(409).json({ code: 409, message: `内部单号 ${orderNo} 已存在，不能重复新增` });
+        return;
+      }
+      const date = dateOf(req.body.date);
+      const material = String(req.body.material || '').trim();
+      const rates = await readRows(kind === 'stock' ? `ws_wage_${owner}` : `ws_urgentWage_${owner}`);
+      const rateRow = rates.find((r: any) => String(r.material || '') === material);
+      const rate = Number(rateRow?.rate) || 0;
+      const packRate = Number(rateRow?.packRate) || 0;
+      const teamRate = Number(rateRow?.teamRate) || 0;
+      // 人员默认：质检员默认当前用户，打包员/外贸组长取首条分组（与 Web 新建默认同口径）
+      const groups = await readRows(`ws_group_${owner}`);
+      const g0 = groups[0] || {};
+      const inspector = String(req.body.inspector || '').trim() || name;
+      const packer = String(req.body.packer || '').trim() || String(g0.packer || '');
+      const foreignTeam = String(req.body.foreignTeam || '').trim() || String(g0.foreignTeam || '');
+      const grp = groups.find((g: any) => g && g.inspector === inspector) || {};
+      const rec: any = {
+        key: `${kind === 'stock' ? 'WS' : 'UG'}-${suffix}`,
+        orderNo, quantity: qty, material,
+        productCode: String(req.body.productCode || '').trim(),
+        priceRate: rate, packWage: qty * packRate, commission: qty * teamRate,
+        packer, foreignTeam,
+        remark: String(req.body.remark || '').trim(),
+        image: '', creator: name, lastEditor: name, lastEditTime: new Date().toISOString(),
+        date, month: date.slice(0, 7),
+      };
+      if (kind === 'stock') {
+        rec.qcWage = qty * rate;
+        rec.qcInspector = inspector;
+        rec.person = String(req.body.person || '').trim() || name;
+      } else {
+        rec.wage = qty * rate;
+        rec.qcDate = date;
+        rec.inspector = inspector;
+        rec.inspectorId = String(req.body.inspectorId || '').trim() || String(grp.inspectorId || '');
+        rec.isDuplicate = false;
+      }
+      await writeRows(dsKey, [rec, ...rows], owner);
+      res.json({ code: 200, data: { saved: true, record: rec } });
+      return;
+    }
+    res.status(404).json({ code: 404, message: '未知录入类型' });
+  } catch (err: any) {
+    console.error('[wx] ws create error:', err.message);
+    res.status(500).json({ code: 500, message: '服务器内部错误' });
+  }
+});
+
 // ============ 上下班打卡 ============
 
 /** GET /api/wx/attendance —— 本人今日打卡记录 */
