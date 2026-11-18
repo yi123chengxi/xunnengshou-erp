@@ -1,5 +1,6 @@
 // 小程序主菜单配置（与 Web 端主菜单同语义的精简移动映射）
 // 规则：点击主菜单 → 进入第一个子菜单；底部子菜单条切换同模块其他子菜单
+import Taro from '@tarojs/taro'
 export interface MenuChild { key: string; title: string }
 export interface MenuModule { key: string; title: string; icon: string; children: MenuChild[] }
 
@@ -64,3 +65,31 @@ export const TAB_MODULE_PATHS: Record<string, string> = {
 }
 
 export const findModule = (key: string): MenuModule | undefined => MODULES.find(m => m.key === key)
+
+// 子菜单图标（首页常用功能宫格与查看更多卡片共用）
+export const CHILD_ICONS: Record<string, string> = {
+  approvals: '✅', reimburse: '🧾', bookkeeping: '📔',
+  orders: '📋', production: '🏭', purchase: '🛍️',
+  inventory: '📦', scan: '📷',
+  finished: '🛒', semi: '📤', mold: '🧰',
+  attendance: '⏰', staff: '🧑‍💼',
+  customers: '🤝', products: '🏷️',
+}
+
+/** 收藏 id（module:child）→ 子菜单标题 */
+export const childTitle = (id: string): string => {
+  const [mk, ck] = id.split(':')
+  const m = findModule(mk)
+  return m?.children.find(c => c.key === ck)?.title || ck
+}
+
+/** 打开某主菜单下的子菜单：若恰为该模块默认子菜单且模块有固定 Tab，则直跳 Tab 页 */
+export function openMenuChild(moduleKey: string, childKey: string): void {
+  const mod = findModule(moduleKey)
+  const tabPath = TAB_MODULE_PATHS[moduleKey]
+  if (tabPath && mod && mod.children[0]?.key === childKey) {
+    Taro.reLaunch({ url: tabPath })
+    return
+  }
+  Taro.navigateTo({ url: `/pages/module?key=${moduleKey}&child=${childKey}` })
+}

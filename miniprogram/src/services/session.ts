@@ -38,3 +38,15 @@ export const clearSession = (): void => {
     Taro.removeStorageSync(BIND_TOKEN_KEY)
   } catch { /* ignore */ }
 }
+
+// 布局预览模式：/wx/me 不可用（后端未部署）时置位，数据接口 404 静默回落空数据
+const PREVIEW_KEY = 'wx_preview_mode'
+export const isPreviewMode = (): boolean => {
+  try { return Taro.getStorageSync(PREVIEW_KEY) === '1' } catch { return false }
+}
+export const setPreviewMode = (): void => {
+  try { Taro.setStorageSync(PREVIEW_KEY, '1') } catch { /* ignore */ }
+}
+export const clearPreviewMode = (): void => {
+  try { Taro.removeStorageSync(PREVIEW_KEY) } catch { /* ignore */ }
+}

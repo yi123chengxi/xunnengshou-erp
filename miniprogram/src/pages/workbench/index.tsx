@@ -3,6 +3,9 @@ import { View, Text } from '@tarojs/components'
 import Taro, { useDidShow } from '@tarojs/taro'
 import { getSummary, SummaryData } from '../../services/api'
 import { getUser, getToken } from '../../services/session'
+import { isPreviewMode } from '../../services/auth'
+import { getFavs } from '../../services/favorites'
+import { CHILD_ICONS, childTitle, openMenuChild } from '../../config/menu'
 import AppTabBar from '../../components/AppTabBar'
 
 const fmtMoney = (n: number) => `¥${(n || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
@@ -23,7 +26,10 @@ const Workbench = () => {
         setSummary(d)
         setUpdatedAt(new Date().toLocaleTimeString('zh-CN', { hour12: false }))
       })
-      .catch(e => Taro.showToast({ title: e.message, icon: 'none' }))
+      .catch(e => {
+        // 布局预览模式（后端 /api/wx 未部署）不弹报错，仅展示结构
+        if (!isPreviewMode()) Taro.showToast({ title: e.message, icon: 'none' })
+      })
   })
 
   const todos = summary?.todos
@@ -31,17 +37,27 @@ const Workbench = () => {
   const goModule = (key: string, child?: string) =>
     Taro.navigateTo({ url: `/pages/module?key=${key}${child ? `&child=${child}` : ''}` })
 
-  const grid = [
-    { icon: '✅', label: '审批中心', onClick: () => Taro.reLaunch({ url: '/pages/finance/index' }), badge: pendingTotal },
-    { icon: '📦', label: '库存查询', onClick: () => goModule('warehouse', 'inventory') },
-    { icon: '📷', label: '扫码查货', onClick: () => goModule('warehouse', 'scan') },
-    { icon: '📋', label: '订单查询', onClick: () => Taro.reLaunch({ url: '/pages/order/index' }) },
-    { icon: '🛒', label: '商机市场', onClick: () => Taro.reLaunch({ url: '/pages/market/index' }) },
-    { icon: '➕', label: '查看更多', onClick: () => Taro.navigateTo({ url: '/pages/more/index' }) },
-  ]
+  // 常用功能宫格：收藏列表驱动（查看更多里 + 号添加），每行 4 个，末尾固定查看更多
+  const favGrid: { id: string; icon: string; label: string; onClick: () => void; badge: number }[] =
+    getFavs().map(id => {
+      const [mk, ck] = id.split(':')
+      return {
+        id,
+        icon: CHILD_ICONS[ck] || '📌',
+        label: childTitle(id),
+        onClick: () => openMenuChild(mk, ck),
+        badge: ck === 'approvals' ? pendingTotal : 0,
+      }
+    })
+  favGrid.push({ id: 'more', icon: '➕', label: '查看更多', onClick: () => Taro.navigateTo({ url: '/pages/more/index' }), badge: 0 })
 
   return (
     <View style={{ paddingBottom: 140 }}>
+      {isPreviewMode() && (
+        <View style={{ background: '#fff7e6', color: '#fa8c16', fontSize: 22, textAlign: 'center', padding: '8px 0' }}>
+          布局预览模式：数据接口待部署后自动接入真实数据
+        </View>
+      )}
       <View style={{ background: 'linear-gradient(135deg,#1677ff,#4096ff)', padding: '32px 32px 48px', color: '#fff' }}>
         <View style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <Text style={{ fontSize: 34, fontWeight: 600 }}>{user?.company_name || user?.name || user?.username || ''}</Text>
@@ -91,12 +107,12 @@ const Workbench = () => {
           </View>
         </View>
         <View className="grid">
-          {grid.map(g => (
-            <View key={g.label} className="grid-item" onClick={g.onClick} style={{ position: 'relative', width: '33.33%' }}>
+          {favGrid.map(g => (
+            <View key={g.id} className="grid-item" onClick={g.onClick} style={{ position: 'relative', width: '25%' }}>
               <Text className="grid-icon">{g.icon}</Text>
-              {!!(g as any).badge && (
-                <Text style={{ position: 'absolute', top: 8, right: 40, background: '#f5222d', color: '#fff', borderRadius: 20, fontSize: 18, padding: '0 10px' }}>
-                  {(g as any).badge}
+              {!!g.badge && (
+                <Text style={{ position: 'absolute', top: 8, right: 26, background: '#f5222d', color: '#fff', borderRadius: 20, fontSize: 18, padding: '0 10px' }}>
+                  {g.badge}
                 </Text>
               )}
               <View className="grid-label">{g.label}</View>
