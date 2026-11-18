@@ -92,7 +92,7 @@ const ModuleView = ({
       case 'processing-order': return <ListView page="processing-order" headers={['加工单号', '来源生产单号', '款式编码', '需求总数量', '状态']} tick={tick} />
       case 'purchase-requisition': return <ListView page="purchase" tick={tick} />
       case 'workflow-templates': return <ListView page="workflow-templates" headers={['模板名称', '行业', '节点数', '默认']} tick={tick} />
-      case 'production-schedule': return <ListView page="production-schedule" headers={['排期编号', '关联生产单号', '排产数量', '状态']} tick={tick} />
+      case 'production-schedule': return <ListView page="production-schedule" tick={tick} />
       case 'progress': return <NewStyleProgressView tick={tick} />
       case 'shop-management': return <ListView page="shops" tick={tick} />
       case 'warehouse-stats': return <WarehouseStatsView tick={tick} />
