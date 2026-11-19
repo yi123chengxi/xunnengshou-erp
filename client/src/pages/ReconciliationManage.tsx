@@ -5,7 +5,7 @@ import {
   Popconfirm, Badge, Tooltip, Tabs, Steps, Divider, Alert, Result,
   InputNumber, DatePicker, Timeline, Popover, Checkbox, Upload, Image, Switch,
 } from 'antd';
-import { reloadAfterPull } from '../utils/serverSync';
+import { reloadAfterPull, fetchServerDataset } from '../utils/serverSync';
 import {
   SearchOutlined,
   ReloadOutlined,
@@ -452,7 +452,7 @@ const ReconciliationManage: React.FC = () => {
   const [feedbackReasons, setFeedbackReasons] = useState<string[]>([]);
   const [feedbackNote, setFeedbackNote] = useState('');
   const [feedbackImage, setFeedbackImage] = useState('');
-  const [, setFeedbackTick] = useState(0);
+  const [feedbackTick, setFeedbackTick] = useState(0);
   const [mismatchVisible, setMismatchVisible] = useState(false);
   const [mismatchRecord, setMismatchRecord] = useState<ReconRecord | null>(null);
   const [mismatchReasons, setMismatchReasons] = useState<string[]>([]);
@@ -548,6 +548,37 @@ const ReconciliationManage: React.FC = () => {
     window.addEventListener('sync-data-updated', onUpd);
     return () => window.removeEventListener('sync-data-updated', onUpd);
   }, [isPurchaser, realTimeSync]);
+
+  // 服务端自愈：本地副本缩水且 _ts 与服务端版本对齐后，拉取宽限期判定「本地非空且版本不旧」
+  // 永远跳过回拉——同一库刷新后忽而 16 条忽而 2 条忽而 47 条的根因。挂载/查询时主动拉服务端
+  // 副本按 key 并回缺失行：存活行入列表，墓碑行入墓碑表并把列表内对应存活版本压掉
+  const healReconFromServer = useCallback(async (): Promise<number> => {
+    try {
+      const role = isPurchaser ? 'purchaser' : 'supplier';
+      const owner = getOwner();
+      const rec = await fetchServerDataset(reconDbKey(role, owner));
+      if (!rec || typeof rec.json !== 'string') return 0;
+      const serverRows: any[] = JSON.parse(rec.json || '[]');
+      if (!Array.isArray(serverRows) || serverRows.length === 0) return 0;
+      const local = loadRoleAll(role, owner);
+      const localKeys = new Set(local.map((r: any) => r && r.key).filter(Boolean));
+      const missing = serverRows.filter((r: any) => r && r.key && !localKeys.has(r.key));
+      if (missing.length === 0) return 0;
+      upsertRecords(missing); // 按 key 合并写回 LS（墓碑优先，不会复活已完成记录）
+      const missingTombs = new Map<string, any>();
+      missing.forEach((r: any) => { if (r.delisted === true) { missingTombs.set(r.key, r); tombsRef.current.set(r.key, r); } });
+      setDataSource(prev => {
+        const have = new Set(prev.map(p => p.key));
+        const next = prev.filter(p => !missingTombs.has(p.key));
+        const add = missing.filter((r: any) => r.delisted !== true && !have.has(r.key) && !tombsRef.current.has(r.key));
+        return (add.length > 0 || next.length !== prev.length) ? [...next, ...add] : prev;
+      });
+      return missing.length;
+    } catch { return 0; /* 离线/服务端不可用时静默降级为本机副本 */ }
+  }, [isPurchaser, getOwner]);
+
+  // 挂载即自愈：刷新后首屏就与服务端对齐，不再出现「有时 16 条有时 2 条」
+  useEffect(() => { void healReconFromServer(); }, [healReconFromServer]);
   const [activeTab, setActiveTab] = useState<string>('all');
   const [searchText, setSearchText] = useState('');
   const [typeFilter, setTypeFilter] = useState<string>('');
@@ -633,6 +664,9 @@ const ReconciliationManage: React.FC = () => {
     return Array.from(set).map(n => ({ value: n }));
   }, [roleData, cpNameOf]);
 
+  // 异常单据口径：对方反馈字段有信息（对方提交过反馈/不符原因），与「对方反馈」列计数同源
+  const hasFeedbackInfo = useCallback((r: ReconRecord) => loadFeedbackThread(feedbackThreadId(r)).length > 0, []);
+
   // ==================== 统计 ====================
   const stats = useMemo(() => {
     const total = roleData.length;
@@ -652,19 +686,19 @@ const ReconciliationManage: React.FC = () => {
     if (activeTab === 'customer') data = data.filter(r => (r.initiator || 'supplier') === 'purchaser');
     if (activeTab === 'supplier') data = data.filter(r => (r.initiator || 'supplier') !== 'purchaser');
     if (activeTab === 'pending') data = data.filter(r => r.reconResult === 'pending');
-    if (activeTab === 'abnormal') data = data.filter(r => r.reconResult === 'detail_diff' || r.reconResult === 'amount_diff');
+    if (activeTab === 'abnormal') data = data.filter(r => hasFeedbackInfo(r));
 
     return data.filter(item => {
+      // 单据编号独立搜索框：仅按单据编号匹配（对方名称由独立搜索框负责）
       const matchSearch = !searchText ||
-        item.docNo.toLowerCase().includes(searchText.toLowerCase()) ||
-        item.counterparty.includes(searchText);
+        item.docNo.toLowerCase().includes(searchText.toLowerCase());
       const matchType = !typeFilter || (typeFilter === 'customer' ? (item.initiator || 'supplier') === 'purchaser' : (item.initiator || 'supplier') !== 'purchaser');
       const matchResult = !resultFilter || item.reconResult === resultFilter;
       const cpKw = cpFilter.trim();
       const matchCp = !cpKw || cpNameOf(item).includes(cpKw);
       return matchSearch && matchType && matchResult && matchCp;
     });
-  }, [roleData, activeTab, searchText, typeFilter, resultFilter, cpFilter, cpNameOf, isPurchaser]);
+  }, [roleData, activeTab, searchText, typeFilter, resultFilter, cpFilter, cpNameOf, isPurchaser, hasFeedbackInfo, feedbackTick]);
 
   // 采购商平台：按单据编号自动匹配采购账单，核对明细与总金额（款式编码汇总核对数量）
   useEffect(() => {
@@ -1893,7 +1927,7 @@ const ReconciliationManage: React.FC = () => {
             { key: 'customer', label: <Space><UserOutlined />{isPurchaser ? '我方对账' : '客户对账'} ({roleData.filter(r => (r.initiator || 'supplier') === 'purchaser').length})</Space> },
             { key: 'supplier', label: <Space><ShopOutlined />供应商对账 ({roleData.filter(r => (r.initiator || 'supplier') !== 'purchaser').length})</Space> },
             { key: 'pending', label: <Space><ClockCircleOutlined />待入账 ({stats.pending})</Space> },
-            { key: 'abnormal', label: <Space><WarningOutlined />异常单据 ({stats.detailDiff + stats.amountDiff})</Space> },
+            { key: 'abnormal', label: <Space><WarningOutlined />异常单据 ({roleData.filter(r => hasFeedbackInfo(r)).length})</Space> },
           ]}
         />
       </Card>
@@ -1901,9 +1935,10 @@ const ReconciliationManage: React.FC = () => {
       {/* 搜索筛选 */}
       <Card style={{ marginBottom: 16 }} bodyStyle={{ padding: '16px 24px' }}>
         <Row gutter={[16, 12]} align="middle">
-          <Col xs={24} sm={6}>
+          <Col xs={12} sm={3}>
+            {/* 单据编号独立搜索框（宽度减半）：不再与对方名称合并搜索 */}
             <Input
-              placeholder="搜索单据编号/对方名称"
+              placeholder="搜索单据编号"
               prefix={<SearchOutlined style={{ color: '#bfbfbf' }} />}
               value={searchText}
               onChange={e => setSearchText(e.target.value)}
@@ -1922,7 +1957,7 @@ const ReconciliationManage: React.FC = () => {
               style={{ width: '100%' }}
             />
           </Col>
-          <Col xs={12} sm={4}>
+          <Col xs={12} sm={3}>
             <Select
               placeholder="对账类型"
               value={typeFilter || undefined}
@@ -1934,7 +1969,7 @@ const ReconciliationManage: React.FC = () => {
               <Option value="supplier">供应商对账</Option>
             </Select>
           </Col>
-          <Col xs={12} sm={4}>
+          <Col xs={12} sm={3}>
             <Select
               placeholder="对账结果"
               value={resultFilter || undefined}
@@ -1948,8 +1983,9 @@ const ReconciliationManage: React.FC = () => {
               <Option value="pending">{resultLabel.pending}</Option>
             </Select>
           </Col>
-          <Col xs={24} sm={4}>
-            <Space>
+          <Col xs={24} sm={11}>
+            {/* 自动对账/实时同步/导出报表移至查询、重置按键右侧（原独立一行工具条） */}
+            <Space wrap>
               <Button type="primary" icon={<SearchOutlined />} onClick={() => {
                 // 查询时自动刷新表单数据（重读对账记录共享存储）+ 拉服务端兼顾跨端新增
                 const rl = () => {
@@ -1957,12 +1993,10 @@ const ReconciliationManage: React.FC = () => {
                   setDataSource(loadRoleRecords(isPurchaser ? 'purchaser' : 'supplier', getOwner()) as ReconRecord[]);
                 };
                 reloadAfterPull(rl);
+                // 本地副本缩水且版本对齐时拉取会跳过回拉：主动拉服务端副本并回缺失行后再重载
+                void healReconFromServer().then(() => rl());
               }}>查询</Button>
               <Button icon={<ReloadOutlined />} onClick={handleReset}>重置</Button>
-            </Space>
-          </Col>
-          <Col xs={0} sm={6} style={{ textAlign: 'right' }}>
-            <Space>
               <Tooltip title="功能说明：开启后，对账结果完全一致（金额一致且明细全部一致）的单据将自动完成对账，并在双方账单写明“自动核对（金额与明细完全一致）”；关闭后仍需人工确认入账/确认对账。">
                 <Space size={4} style={{ marginRight: 4, cursor: 'pointer' }}>
                   <Text style={{ fontSize: 13 }}>自动对账</Text>
