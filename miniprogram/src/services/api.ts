@@ -49,8 +49,8 @@ export const getInventory = (q: string) =>
 export const getOrders = (q: string) =>
   request<{ list: any[]; total: number }>(`/wx/orders?q=${encodeURIComponent(q)}`)
 
-export const getMarket = (type: 'finished' | 'semi' | 'mold') =>
-  request<{ list: any[] }>(`/wx/market?type=${type}`)
+export const getMarket = (type: 'finished' | 'semi' | 'mold', q = '') =>
+  request<{ list: any[] }>(`/wx/market?type=${type}&q=${encodeURIComponent(q)}`)
 
 export interface AttendanceRecord { key: string; username: string; name?: string; date: string; in: string; out: string }
 

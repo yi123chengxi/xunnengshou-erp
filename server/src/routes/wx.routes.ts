@@ -531,11 +531,16 @@ async function companyMap(): Promise<Record<string, string>> {
 router.get('/market', verifyJWT, async (req: Request, res: Response) => {
   try {
     const type = String(req.query.type || 'finished');
+    const q = String(req.query.q || '').trim().toLowerCase();
     const companies = await companyMap();
     const coOf = (r: any) => r.publisherCompany || companies[r.publisherUsername] || r.publisherUsername || '';
     if (type === 'mold') {
       const rows = await readRows('market_mold_listings');
-      const list = rows.slice(0, 50).map((r: any) => ({
+      // 模具搜索口径与 Web MoldMarketTab 同：标题/模具编号/名称/规格
+      const hit = q
+        ? rows.filter((r: any) => `${r.title || r.name || r.moldName || ''} ${r.moldCode || ''} ${r.moldName || ''} ${r.spec || ''}`.toLowerCase().includes(q))
+        : rows;
+      const list = hit.slice(0, 50).map((r: any) => ({
         id: r.key || r.id, title: r.title || r.name || r.moldName || '模具租售',
         price: Number(r.price || r.targetPrice) || 0, publisherCompany: coOf(r),
         publishTime: r.publishTime || r.createTime || '', status: r.status || '',
@@ -546,7 +551,11 @@ router.get('/market', verifyJWT, async (req: Request, res: Response) => {
       return;
     }
     const rows = (await readRows('market_publish_orders')).filter((r: any) => r.type === type && r.delisted !== true && r.status !== '已中标');
-    const list = rows.slice(0, 50).map((r: any) => ({
+    // 成品/发包搜索口径与 Web MarketPage 同：单号/款号/简称/发布公司
+    const hit = q
+      ? rows.filter((r: any) => `${r.id || r.key || ''} ${r.styleCode || ''} ${r.shortName || ''} ${coOf(r)}`.toLowerCase().includes(q))
+      : rows;
+    const list = hit.slice(0, 50).map((r: any) => ({
       id: r.id || r.key, styleCode: r.styleCode || '', shortName: r.shortName || '',
       quantity: Number(r.quantity) || 0, targetPrice: Number(r.targetPrice) || 0,
       publisherCompany: coOf(r), publishTime: r.publishTime || '', status: r.status || '',

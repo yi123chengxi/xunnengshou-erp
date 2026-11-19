@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
-import { View, Text, Image } from '@tarojs/components'
+import { View, Text, Image, Input } from '@tarojs/components'
 import Taro from '@tarojs/taro'
 import { getMarket } from '../services/api'
+import { computeSubjectFeatures, subjectSimilarity } from '../services/imageSimilarity'
 
 const SEGMENTS = [
   { key: 'semi', label: '发包市场' },
@@ -23,6 +24,11 @@ const statusTag = (status: string) => {
 // 报价/询价数仅发包市场显示；模具卡左上角租/售角标
 const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: number }) => {
   const [type, setType] = useState<MarketType>(fixedType || 'finished')
+  const [input, setInput] = useState('')
+  const [applied, setApplied] = useState('')
+  const [refUrl, setRefUrl] = useState('')
+  const [scores, setScores] = useState<Record<string, number>>({})
+  const [computing, setComputing] = useState(false)
   const [list, setList] = useState<any[]>([])
   const [loaded, setLoaded] = useState(false)
 
@@ -32,14 +38,73 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
 
   useEffect(() => {
     setLoaded(false)
-    getMarket(type)
+    getMarket(type, applied)
       .then(d => setList(d.list))
       .catch(e => Taro.showToast({ title: e.message, icon: 'none' }))
       .finally(() => setLoaded(true))
-  }, [type, tick])
+  }, [type, applied, tick])
+
+  // 图片搜索：参考图变化时对当前列表逐张计算相似度（与 Web 同算法），按得分降序
+  useEffect(() => {
+    if (!refUrl) { setScores({}); return }
+    let cancelled = false
+    setComputing(true)
+    ;(async () => {
+      const ref = await computeSubjectFeatures(refUrl)
+      if (cancelled) return
+      if (!ref.hist.length) { setComputing(false); return }
+      const sc: Record<string, number> = {}
+      for (const it of list) {
+        if (cancelled) return
+        const f = await computeSubjectFeatures(it.image || '')
+        sc[String(it.id)] = f.hist.length ? subjectSimilarity(ref, f) : 0
+      }
+      if (!cancelled) { setScores(sc); setComputing(false) }
+    })()
+    return () => { cancelled = true }
+  }, [refUrl, list])
+
+  const pickImageSearch = async () => {
+    try {
+      const res = await Taro.chooseImage({ count: 1, sizeType: ['compressed'], sourceType: ['album', 'camera'] })
+      const p = (res.tempFilePaths || [])[0]
+      if (p) setRefUrl(p)
+    } catch { /* 用户取消 */ }
+  }
+
+  const shown = refUrl && Object.keys(scores).length
+    ? [...list].sort((a, b) => (scores[String(b.id)] || 0) - (scores[String(a.id)] || 0))
+    : list
+  const btnStyle = { marginLeft: 12, width: 'auto', height: 76, lineHeight: '76px', padding: '0 24px', fontSize: 26, flexShrink: 0, boxSizing: 'border-box', borderRadius: 12 } as const
 
   return (
     <View>
+      {/* 顶部搜索：关键字与网页版同口径 + 图片搜索 */}
+      <View style={{ display: 'flex', padding: '16px 24px 0', alignItems: 'center' }}>
+        <Input
+          className="input"
+          style={{ flex: 1, marginBottom: 0, height: 76, boxSizing: 'border-box' }}
+          placeholder="搜索单号/款号/简称/公司"
+          value={input}
+          onInput={e => setInput(e.detail.value)}
+          onConfirm={() => setApplied(input.trim())}
+        />
+        <View className="btn-primary" style={btnStyle} onClick={() => setApplied(input.trim())}>
+          搜索
+        </View>
+        <View className="btn-primary" style={btnStyle} onClick={pickImageSearch}>
+          📷
+        </View>
+      </View>
+      {refUrl ? (
+        <View style={{ display: 'flex', alignItems: 'center', padding: '8px 24px 0' }}>
+          <Image src={refUrl} mode="aspectFill" style={{ width: 72, height: 72, borderRadius: 8 }} />
+          <Text className="muted" style={{ marginLeft: 12, fontSize: 22 }}>
+            {computing ? '相似度计算中…' : '已按图片相似度排序'}
+          </Text>
+          <Text style={{ marginLeft: 12, fontSize: 22, color: '#ff4d4f' }} onClick={() => setRefUrl('')}>清除</Text>
+        </View>
+      ) : null}
       {!fixedType && (
         <View className="segment" style={{ margin: '16px 24px 0' }}>
           {SEGMENTS.map(s => (
@@ -51,7 +116,7 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
       )}
       {loaded && list.length === 0 && <View className="empty">暂无上架信息</View>}
       <View style={{ display: 'flex', flexWrap: 'wrap', padding: '8px 16px 0' }}>
-        {list.map((r: any) => (
+        {shown.map((r: any) => (
           <View key={String(r.id)} style={{ width: '50%', boxSizing: 'border-box', padding: 8 }}>
             <View style={{ background: '#fff', borderRadius: 12, overflow: 'hidden', boxShadow: '0 2px 8px rgba(31,39,51,0.06)', position: 'relative' }}>
               {/* 封面区：padding-top:100% 撑出正方形（H5/weapp 通用，不依赖 aspect-ratio） */}
@@ -66,6 +131,18 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
                 {type === 'mold' && r.mode ? (
                   <Text style={{ position: 'absolute', top: 0, left: 0, color: '#fff', fontSize: 20, lineHeight: '32px', padding: '0 14px', borderRadius: '12px 0 12px 0', background: r.mode === '出租' ? 'linear-gradient(135deg,#1677ff,#69b1ff)' : 'linear-gradient(135deg,#52c41a,#95de64)' }}>
                     {r.mode}
+                  </Text>
+                ) : null}
+                {/* 图片搜索相似度角标（与 Web 分档同口径） */}
+                {refUrl && scores[String(r.id)] !== undefined ? (
+                  <Text
+                    style={{
+                      position: 'absolute', top: 0, right: 0, color: '#fff', fontSize: 20, lineHeight: '32px',
+                      padding: '0 14px', borderRadius: '0 12px 0 12px',
+                      background: scores[String(r.id)] > 0.8 ? '#52c41a' : scores[String(r.id)] > 0.6 ? '#faad14' : '#bfbfbf',
+                    }}
+                  >
+                    {Math.round(scores[String(r.id)] * 100)}%
                   </Text>
                 ) : null}
               </View>
