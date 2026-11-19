@@ -545,7 +545,7 @@ router.get('/market', verifyJWT, async (req: Request, res: Response) => {
         price: Number(r.price || r.targetPrice) || 0, publisherCompany: coOf(r),
         publishTime: r.publishTime || r.createTime || '', status: r.status || '',
         image: (Array.isArray(r.images) && r.images[0]) || r.image || '',
-        mode: r.mode || '',
+        mode: r.mode || '', moldCode: r.moldCode || '', spec: r.spec || '',
       }));
       res.json({ code: 200, data: { list } });
       return;

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { View, Text, Image, Input } from '@tarojs/components'
 import Taro from '@tarojs/taro'
 import { getMarket } from '../services/api'
@@ -44,6 +44,18 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
       .finally(() => setLoaded(true))
   }, [type, applied, tick])
 
+  // 关键字兜底过滤：与网页版同口径字段；服务端已部署 q 时双重过滤结果一致
+  const filtered = useMemo(() => {
+    const kw = applied.trim().toLowerCase()
+    if (!kw) return list
+    return list.filter((r: any) => {
+      const hay = type === 'mold'
+        ? `${r.title || ''} ${r.moldCode || ''} ${r.spec || ''}`
+        : `${r.id || ''} ${r.styleCode || ''} ${r.shortName || ''} ${r.publisherCompany || ''}`
+      return hay.toLowerCase().includes(kw)
+    })
+  }, [list, applied, type])
+
   // 图片搜索：参考图变化时对当前列表逐张计算相似度（与 Web 同算法），按得分降序
   useEffect(() => {
     if (!refUrl) { setScores({}); return }
@@ -54,7 +66,7 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
       if (cancelled) return
       if (!ref.hist.length) { setComputing(false); return }
       const sc: Record<string, number> = {}
-      for (const it of list) {
+      for (const it of filtered) {
         if (cancelled) return
         const f = await computeSubjectFeatures(it.image || '')
         sc[String(it.id)] = f.hist.length ? subjectSimilarity(ref, f) : 0
@@ -62,7 +74,7 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
       if (!cancelled) { setScores(sc); setComputing(false) }
     })()
     return () => { cancelled = true }
-  }, [refUrl, list])
+  }, [refUrl, filtered])
 
   const pickImageSearch = async () => {
     try {
@@ -73,8 +85,8 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
   }
 
   const shown = refUrl && Object.keys(scores).length
-    ? [...list].sort((a, b) => (scores[String(b.id)] || 0) - (scores[String(a.id)] || 0))
-    : list
+    ? [...filtered].sort((a, b) => (scores[String(b.id)] || 0) - (scores[String(a.id)] || 0))
+    : filtered
   const btnStyle = { marginLeft: 12, width: 'auto', height: 76, lineHeight: '76px', padding: '0 24px', fontSize: 26, flexShrink: 0, boxSizing: 'border-box', borderRadius: 12 } as const
 
   return (
@@ -114,7 +126,7 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
           ))}
         </View>
       )}
-      {loaded && list.length === 0 && <View className="empty">暂无上架信息</View>}
+      {loaded && filtered.length === 0 && <View className="empty">暂无上架信息</View>}
       <View style={{ display: 'flex', flexWrap: 'wrap', padding: '8px 16px 0' }}>
         {shown.map((r: any) => (
           <View key={String(r.id)} style={{ width: '50%', boxSizing: 'border-box', padding: 8 }}>
