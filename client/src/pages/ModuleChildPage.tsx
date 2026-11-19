@@ -13358,10 +13358,14 @@ const handleBatchAttrsConfirm = () => {
     // 生产完成联动：关联销售订单（生产排期→已审核，即已审核待发货）自动进入打单拣货待发货；
     // 同步回写采购商推送订单为已推送待发货；不执行生产计划，仅节点联动
     if (u.status === 'COMPLETED') {
-      // 完工数量回写：完工数量=计划数量（计划明细汇总），同步至列表“完工数量”列与工作流卡片
-      const doneTotal = poPlanQty(record);
+      // 完工数量回写：优先取完成弹窗确认的入库明细汇总，无则回退计划明细汇总；同步至列表“完工数量”列与工作流卡片
+      const inbound: any[] | null = Array.isArray((u as any).inboundItems) && (u as any).inboundItems.length > 0 ? (u as any).inboundItems : null;
+      const doneTotal = inbound
+        ? inbound.reduce((s: number, x: any) => s + (Number(x.qty) || 0), 0)
+        : poPlanQty(record);
       next.completedQuantity = doneTotal;
       next.doneQty = doneTotal;
+      if (inbound) next.inboundItems = inbound;
       const listDone = dataSource.map((r: any) => (r.key === record.key ? next : r));
       setDataSource(listDone);
       pushRecordToPage(key, listDone);
@@ -13375,7 +13379,9 @@ const handleBatchAttrsConfirm = () => {
           const dateIn = new Date().toISOString().slice(0, 10);
           planItems.forEach((it: any, idx: number) => {
             const code = String(it.productCode || '').trim();
-            const qty = Number(it.productionQty ?? it.quantity) || 0;
+            // 入库数量：完成弹窗确认值优先（按商品编码匹配），无则回退计划明细数量
+            const planQty = Number(it.productionQty ?? it.quantity) || 0;
+            const qty = inbound ? (Number(inbound.find((x: any) => x.productCode === code)?.qty) || 0) : planQty;
             if (!code || qty <= 0) return;
             let before = 0;
             try { const pl: any[] = JSON.parse(localStorage.getItem(`pageData_basic-data_product-list_${owner}`) || '[]'); before = Number(pl.find((p: any) => p.productCode === code)?.actualStock) || 0; } catch { /* ignore */ }

@@ -74,6 +74,10 @@ export type CustomOrder = {
   records: ProgressRecord[];
   createdAt: string;
   updatedAt: string;
+  /** 生产订单卡片视图注入：计划明细（完成订单入库数量弹窗的默认值来源） */
+  planItems?: any[];
+  /** 完成订单时确认的入库明细（由完工弹窗回写，生产入库联动消费） */
+  inboundItems?: Array<{ productCode: string; productName: string; planQty: number; qty: number }>;
 };
 
 export type WorkflowTemplate = {
@@ -761,9 +765,12 @@ const NodeModal: React.FC<{
   nodeImages: string[];
   setNodeImages: React.Dispatch<React.SetStateAction<string[]>>;
   onClose: () => void;
-  onSave: (advance: 'next' | 'complete' | null) => void;
+  onSave: (advance: 'next' | 'complete' | null, inbound?: Array<{ productCode: string; productName: string; planQty: number; qty: number }>) => void;
 }> = ({ nodeModal, getNodes, getRecordsForStep, quickNotes, nodeNote, setNodeNote, nodeImages, setNodeImages, onClose, onSave }) => {
   const fileRef = useRef<HTMLInputElement>(null);
+  // 完成订单入库数量确认弹窗（仅最后一个节点入口）
+  const [completeOpen, setCompleteOpen] = useState(false);
+  const [inboundRows, setInboundRows] = useState<Array<{ productCode: string; productName: string; planQty: number; qty: number }>>([]);
 
   if (!nodeModal) return null;
   const { order, stepIndex } = nodeModal;
@@ -788,6 +795,7 @@ const NodeModal: React.FC<{
   }
 
   return (
+    <>
     <Modal
       title={
         <Space>
@@ -809,9 +817,19 @@ const NodeModal: React.FC<{
               推进到下一步
             </Button>
           )}
-          <Button type="primary" danger icon={<CheckCircleOutlined />} onClick={() => onSave('complete')}>
-            {isLastStep ? '完成订单' : '标记完成'}
-          </Button>
+          {/* 完成入口仅保留在最后一个节点：中间节点不再提供「标记完成」；点击先弹入库数量确认 */}
+          {isLastStep && (
+            <Button type="primary" danger icon={<CheckCircleOutlined />} onClick={() => {
+              setInboundRows((Array.isArray(order.planItems) ? order.planItems : []).map((it: any) => {
+                const code = String(it.productCode || '').trim();
+                const pq = Number(it.productionQty ?? it.quantity) || 0;
+                return { productCode: code, productName: String(it.productName || it.name || code || '-'), planQty: pq, qty: pq };
+              }).filter((r: { productCode: string }) => r.productCode));
+              setCompleteOpen(true);
+            }}>
+              完成订单
+            </Button>
+          )}
         </Space>
       }
       width={520}
@@ -920,6 +938,62 @@ const NodeModal: React.FC<{
         </div>
       </div>
     </Modal>
+
+    {/* 完成订单确认：入库数量默认取计划明细数量，可逐行修改 */}
+    <Modal
+      title={<span><CheckCircleOutlined style={{ color: '#ff4d4f', marginRight: 8 }} />完成订单 · 入库数量确认</span>}
+      open={completeOpen}
+      onCancel={() => setCompleteOpen(false)}
+      width={560}
+      okText="确认完成"
+      okButtonProps={{ danger: true }}
+      cancelText="取消"
+      onOk={() => {
+        const rows = inboundRows;
+        setCompleteOpen(false);
+        onSave('complete', rows.length > 0 ? rows : undefined);
+      }}
+    >
+      {inboundRows.length > 0 ? (
+        <>
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 10 }}
+            message="入库数量默认取计划明细中的数量，可逐行修改；完成后将按此数量流转生产入库统计并增加商品实际库存。"
+          />
+          <div style={{ display: 'flex', gap: 8, fontSize: 12, color: '#999', marginBottom: 6 }}>
+            <span style={{ flex: 2 }}>商品编码</span>
+            <span style={{ flex: 3 }}>商品名称</span>
+            <span style={{ width: 70, textAlign: 'right' }}>计划数量</span>
+            <span style={{ width: 90, textAlign: 'right' }}>入库数量</span>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 260, overflowY: 'auto' }}>
+            {inboundRows.map((r, i) => (
+              <div key={`${r.productCode}_${i}`} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12 }}>
+                <span style={{ flex: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.productCode}</span>
+                <span style={{ flex: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.productName}</span>
+                <span style={{ width: 70, textAlign: 'right', color: '#666' }}>{r.planQty}</span>
+                <InputNumber
+                  size="small"
+                  min={0}
+                  controls={false}
+                  style={{ width: 90 }}
+                  value={r.qty}
+                  onChange={v => setInboundRows(prev => prev.map((x, j) => (j === i ? { ...x, qty: Number(v) || 0 } : x)))}
+                />
+              </div>
+            ))}
+          </div>
+          <div style={{ textAlign: 'right', fontSize: 12, color: '#666', marginTop: 10 }}>
+            入库总数：<Text strong>{inboundRows.reduce((s, r) => s + (Number(r.qty) || 0), 0)}</Text>
+          </div>
+        </>
+      ) : (
+        <Alert type="warning" showIcon message="该订单没有计划明细，确认后将以入库数量 0 标记完成。" />
+      )}
+    </Modal>
+    </>
   );
 };
 
@@ -990,8 +1064,8 @@ export const WorkflowOrderCard: React.FC<{
     setNodeModal({ order: ord, stepIndex });
   }
 
-  // 保存记录 / 推进到下一步 / 完成订单（推进时自动清除卡点节点）
-  function saveNodeAdvance(advance: 'next' | 'complete' | null) {
+  // 保存记录 / 推进到下一步 / 完成订单（推进时自动清除卡点节点；完成时携带确认后的入库明细）
+  function saveNodeAdvance(advance: 'next' | 'complete' | null, inbound?: CustomOrder['inboundItems']) {
     if (!nodeModal) return;
     const ord = nodeModal.order;
     const nodes = getNodes(ord);
@@ -1030,6 +1104,7 @@ export const WorkflowOrderCard: React.FC<{
       currentStep: nextStep,
       status: nextStatus,
       customNodes: nextNodes,
+      inboundItems: advance === 'complete' ? inbound : undefined,
       updatedAt: dayjs().format('YYYY-MM-DD HH:mm:ss'),
     });
     setNodeModal(null);

@@ -58,6 +58,8 @@ export function poToWfOrder(record: any, data: PoWfData): WfOrder {
     currentStep,
     status: wfStatus as WfOrder['status'],
     records: Array.isArray(wf.records) ? wf.records : [],
+    // 计划明细透传给卡片（完成订单入库数量弹窗的默认值来源）
+    planItems: Array.isArray(record.planItems) ? record.planItems : undefined,
     createdAt: wf.createdAt || record.createTime || new Date().toISOString(),
     updatedAt: wf.updatedAt || new Date().toISOString(),
   };
