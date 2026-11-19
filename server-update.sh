@@ -47,6 +47,8 @@ if [ -d "$BT_VHOST" ] && [ -f "$SRC/nginx/baota-ip-default.conf" ]; then
 fi
 if [ -f /tmp/factory-env.bak ]; then cp -a /tmp/factory-env.bak "$APP/server/.env"; rm -f /tmp/factory-env.bak; fi
 mkdir -p "$APP/server/uploads" "$APP/server/downloads" "$APP/server/data" "$APP/logs"
+# 图片静态直出权限保险：nginx 运行用户与 node 写入用户不同时，历史文件可能不可读致线上 403
+chmod -R a+rX "$APP/server/uploads" 2>/dev/null || true
 
 echo "[4/5] 更新后端运行时依赖..."
 cd "$APP/server"

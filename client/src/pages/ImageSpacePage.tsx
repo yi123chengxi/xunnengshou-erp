@@ -6,14 +6,14 @@ import {
 import {
   CloudUploadOutlined, CopyOutlined, DeleteOutlined, EditOutlined, LinkOutlined, PictureOutlined,
   ReloadOutlined, SearchOutlined, TagsOutlined, ArrowRightOutlined, DatabaseOutlined, CheckCircleOutlined,
-  ExclamationCircleOutlined,
+  ExclamationCircleOutlined, ToolOutlined,
 } from '@ant-design/icons';
 import { copyText } from '../utils/clipboard';
 import {
   absoluteImageUrl, deleteImage, getImageDetail, imageRefLink, listImages, listImageTags,
-  prepareImageFile, updateImage, uploadImage, ImageAsset, ImageRef, PreparedImage,
+  prepareImageFile, updateImage, uploadImage, repairImage, ImageAsset, ImageRef, PreparedImage,
 } from '../utils/imageSpace';
-import { migrateLocalImages, scanLocalImages, LocalImageCandidate } from '../utils/imageMigration';
+import { migrateLocalImages, scanLocalImages, readCandidateDataUrl, LocalImageCandidate } from '../utils/imageMigration';
 import { sessionDataOwner } from '../utils/storageQuota';
 
 const PRIMARY = '#1e4a7e';
@@ -75,8 +75,18 @@ const ImageSpacePage: React.FC = () => {
   const [migrating, setMigrating] = useState(false);
   const [migrateDone, setMigrateDone] = useState(0);
 
+  // 坏图检测与修复：服务端二进制缺失/不可读时 img onError 记入 brokenKeys，
+  // 用本机原图（迁移不删原图）按原 ID 补传恢复
+  const [brokenKeys, setBrokenKeys] = useState<Set<string>>(new Set());
+  const [repairing, setRepairing] = useState(false);
+  const [repairTick, setRepairTick] = useState(0);
+  const markBroken = useCallback((k: string) => {
+    setBrokenKeys(prev => (prev.has(k) ? prev : new Set(prev).add(k)));
+  }, []);
+
   const load = useCallback(async () => {
     setLoading(true);
+    setBrokenKeys(new Set());
     try {
       const res = await listImages({ scope, q: appliedKeyword, tag: tag || undefined, limit: 500 });
       setItems(res.items || []);
@@ -352,6 +362,43 @@ const ImageSpacePage: React.FC = () => {
     }
   }, [detail, editingName, load]);
 
+    // 修复云端缺失/不可读的二进制：本机候选原图按名称匹配后按原 ID 补传（URL 不变，引用不受影响）
+    const runRepair = useCallback(async () => {
+      const targets = items.filter(a => brokenKeys.has(assetKey(a)) && canDelete(a));
+      if (targets.length === 0) { message.warning('没有可修复的图片（仅能修复本账号上传且本机仍有原图的图片）'); return; }
+      setRepairing(true);
+      let ok = 0;
+      const failed: string[] = [];
+      const progressKey = 'image-repair';
+      message.loading({ content: `正在修复 0/${targets.length}`, key: progressKey, duration: 0 });
+      try {
+        const cands = await scanLocalImages();
+        const baseOf = (c: LocalImageCandidate) => (c.label.includes('·') ? c.label.slice(c.label.indexOf('·') + 1).trim() : c.label);
+        for (let i = 0; i < targets.length; i++) {
+          const asset = targets[i];
+          const hit = cands.find(c => {
+            const b = baseOf(c);
+            return !!b && (b === asset.name || asset.name.startsWith(b) || b.startsWith(asset.name));
+          });
+          if (!hit) { failed.push(asset.name); continue; }
+          try {
+            const raw = await readCandidateDataUrl(hit);
+            if (!raw.startsWith('data:image')) { failed.push(asset.name); continue; }
+            await repairImage(asset.id, raw);
+            ok++;
+          } catch { failed.push(asset.name); }
+          message.loading({ content: `正在修复 ${i + 1}/${targets.length}`, key: progressKey, duration: 0 });
+        }
+      } finally {
+        message.destroy(progressKey);
+        setRepairing(false);
+        setRepairTick(t => t + 1); // 缓存 buster：修复后强制 img 重新拉取同 URL
+        void load();
+      }
+      if (ok > 0) message.success(`已修复 ${ok} 张图片${failed.length > 0 ? `；${failed.length} 张本机无原图未能修复（请在原上传电脑重试或重新上传）` : ''}`);
+      else message.warning('未能修复：本机未找到匹配的原图，请在最初上传/迁移这些图片的电脑上打开本页重试，或直接重新上传');
+    }, [items, brokenKeys, canDelete, load]);
+  
   const totalSize = useMemo(() => items.reduce((s, x) => s + (Number(x.size) || 0), 0), [items]);
 
   return (
@@ -398,6 +445,11 @@ const ImageSpacePage: React.FC = () => {
             </Tooltip>
           )}
           <Button icon={<CloudUploadOutlined />} type="primary" onClick={() => setUploadVisible(true)}>上传图片</Button>
+          {brokenKeys.size > 0 && (
+            <Tooltip title="检测到服务端图片文件加载失败；本机仍有原图的可用一键补传恢复">
+              <Button icon={<ToolOutlined />} loading={repairing} onClick={() => void runRepair()}>修复缺失图片（{brokenKeys.size}）</Button>
+            </Tooltip>
+          )}
           <Button icon={<ReloadOutlined />} onClick={() => { void load(); void loadTags(); }}>刷新</Button>
         </div>
       </Card>
@@ -436,6 +488,15 @@ const ImageSpacePage: React.FC = () => {
       )}
 
       <Spin spinning={loading}>
+        {brokenKeys.size > 0 && items.length > 0 && (
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginBottom: 12 }}
+            message={`有 ${brokenKeys.size} 张图片的服务端文件加载失败（缺失或不可读），元信息仍在、数据未丢`}
+            description="点击右上方「修复缺失图片」可用本机原图一键补传恢复；本机没有原图的请在最初上传/迁移的电脑上重试或重新上传。"
+          />
+        )}
         {items.length === 0 && !loading ? (
           <Card style={{ borderRadius: 8 }}>
             <Empty description={appliedKeyword || tag ? '没有符合条件的图片' : '图片空间还是空的，上传第一张图片吧'}>
@@ -458,10 +519,10 @@ const ImageSpacePage: React.FC = () => {
                 cover={
                   <div style={{ position: 'relative', height: 132, background: '#f5f6f8', cursor: 'pointer' }} onClick={() => openDetail(asset.id)}>
                     <img
-                      src={absoluteImageUrl(asset.thumbUrl || asset.url)}
+                      src={`${absoluteImageUrl(asset.thumbUrl || asset.url)}${repairTick > 0 ? `${absoluteImageUrl(asset.thumbUrl || asset.url).includes('?') ? '&' : '?'}r=${repairTick}` : ''}`}
                       alt={asset.name}
                       style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
-                      onError={e => { (e.currentTarget as HTMLImageElement).style.opacity = '0.15'; }}
+                      onError={e => { (e.currentTarget as HTMLImageElement).style.opacity = '0.15'; markBroken(k); }}
                     />
                     {/* 批量勾选复选框：仅本账号上传的图片可删（全平台视图会混排其他租户图片） */}
                     <div

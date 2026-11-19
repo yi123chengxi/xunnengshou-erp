@@ -173,6 +173,45 @@ export async function scanLocalImages(): Promise<LocalImageCandidate[]> {
   return Array.from(uniq.values()).sort((a, b) => b.size - a.size);
 }
 
+/** 读取一个本机候选图片的 base64（修复云端缺失图时用）；取不到返回空串 */
+export async function readCandidateDataUrl(c: LocalImageCandidate): Promise<string> {
+  const sk = String(c?.storageKey || '');
+  if (!sk) return '';
+  // BOM/款式旧共享库
+  if (sk.startsWith('bom:')) {
+    const raw = await getLegacyImage(sk.slice(4)).catch(() => '');
+    return raw || '';
+  }
+  // 「数据集键#记录键#字段」形态（付款截图/模具图）
+  if (sk.includes('#')) {
+    const idx1 = sk.indexOf('#');
+    const idx2 = sk.indexOf('#', idx1 + 1);
+    const key = sk.slice(0, idx1);
+    const recKey = sk.slice(idx1 + 1, idx2);
+    const fieldPart = sk.slice(idx2 + 1);
+    const list = readArray(key) || [];
+    const rec = list.find((r: any) => String(r?.key || r?.id || '') === recKey);
+    if (!rec || typeof rec !== 'object') return '';
+    // 模具图：字段段为裸下标 → images[idx]
+    if (/^\d+$/.test(fieldPart)) {
+      const arr = (rec as any).images;
+      return Array.isArray(arr) ? String(arr[Number(fieldPart)] || '') : '';
+    }
+    const m = /^(.+)\[(\d+)\]$/.exec(fieldPart);
+    if (m) {
+      const arr = (rec as any)[m[1]];
+      return Array.isArray(arr) ? String(arr[Number(m[2])] || '') : '';
+    }
+    const v = (rec as any)[fieldPart];
+    return typeof v === 'string' ? v : '';
+  }
+  // 独立图片键（产品图缩略图键 / 发包订单图键）：LS 优先，IndexedDB 兜底
+  let raw = '';
+  try { raw = localStorage.getItem(sk) || ''; } catch { raw = ''; }
+  if (!raw.startsWith('data:')) raw = (await getFullImage(sk)) || '';
+  return raw;
+}
+
 /** 迁移进度回调：done=已处理张数，total=待处理张数 */
 export type MigrateProgress = (done: number, total: number) => void;
 

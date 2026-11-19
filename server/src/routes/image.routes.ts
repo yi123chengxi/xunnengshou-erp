@@ -121,9 +121,10 @@ async function saveBinary(owner: string, id: string, suffix: string, dataUrl: un
   const parsed = parseDataUrl(dataUrl);
   if (!parsed) return null;
   const dir = path.join(UPLOAD_ROOT, ownerDir(owner));
-  await fs.promises.mkdir(dir, { recursive: true });
+  // 显式模式位：nginx 静态直出用户与 node 写入用户不同时，默认 umask 可能产出不可读文件致线上 403
+  await fs.promises.mkdir(dir, { recursive: true, mode: 0o755 });
   const file = `${id}${suffix}.${ALLOWED_MIME[parsed.mime]}`;
-  await fs.promises.writeFile(path.join(dir, file), parsed.buf);
+  await fs.promises.writeFile(path.join(dir, file), parsed.buf, { mode: 0o644 });
   return {
     url: `/uploads/images/${ownerDir(owner)}/${file}`,
     size: parsed.buf.length,
@@ -336,6 +337,49 @@ router.post('/', async (req: Request, res: Response) => {
     res.json({ code: 0, data: asset });
   } catch (err: any) {
     res.status(500).json({ code: 500, message: err.message || '图片上传失败' });
+  }
+});
+
+/** 把二进制写回索引已有 URL 路径（修复用）；路径穿越与越权目录一律拒绝 */
+async function rewriteBinaryAt(url: string, owner: string, dataUrl: unknown): Promise<{ size: number; mime: string } | null> {
+  const parsed = parseDataUrl(dataUrl);
+  if (!parsed) return null;
+  const prefix = `/uploads/images/${ownerDir(owner)}/`;
+  if (!url || !url.startsWith(prefix)) return null;
+  const target = path.resolve(UPLOAD_ROOT, url.slice('/uploads/images/'.length));
+  if (!target.startsWith(path.resolve(UPLOAD_ROOT) + path.sep)) return null;
+  await fs.promises.mkdir(path.dirname(target), { recursive: true, mode: 0o755 });
+  await fs.promises.writeFile(target, parsed.buf, { mode: 0o644 });
+  return { size: parsed.buf.length, mime: parsed.mime };
+}
+
+/** POST /api/images/:id/repair —— 按原 ID 补登记二进制：云端文件缺失/不可读时，
+ * 客户端用本机原图按索引 URL 原路补传恢复（URL 不变，业务引用不受影响） */
+router.post('/:id/repair', async (req: Request, res: Response) => {
+  try {
+    const user = currentSyncUser(req) as SyncUser;
+    const owner = user.owner || user.username;
+    const { dataUrl, thumbDataUrl } = req.body || {};
+    let updated: ImageAsset | undefined;
+    await withOwnerLock(owner, async () => {
+      const list = await readIndex(owner);
+      const found = list.find(a => a.id === req.params.id);
+      if (!found) return;
+      const full = await rewriteBinaryAt(found.url, owner, dataUrl);
+      if (!full) return;
+      if (found.thumbUrl && found.thumbUrl !== found.url) {
+        await rewriteBinaryAt(found.thumbUrl, owner, thumbDataUrl || dataUrl).catch(() => null);
+      }
+      found.size = full.size;
+      found.mime = full.mime;
+      found.updatedAt = Date.now();
+      await writeIndex(owner, list);
+      updated = found;
+    });
+    if (!updated) { res.status(404).json({ code: 404, message: '图片不存在或二进制校验失败' }); return; }
+    res.json({ code: 0, data: updated });
+  } catch (err: any) {
+    res.status(500).json({ code: 500, message: err.message || '图片修复失败' });
   }
 });
 

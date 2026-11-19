@@ -94,6 +94,14 @@ async function call<T>(path: string, init: RequestInit = {}, timeoutMs = 60000):
   }
 }
 
+/** 修复：按原 ID 补登记二进制（URL 不变）；云端文件缺失/不可读时用本机原图恢复 */
+export async function repairImage(id: string, dataUrl: string, thumbDataUrl?: string): Promise<ImageAsset> {
+  return call<ImageAsset>(`/${encodeURIComponent(id)}/repair`, {
+    method: 'POST',
+    body: JSON.stringify({ dataUrl, thumbDataUrl: thumbDataUrl || undefined }),
+  });
+}
+
 /** 相对地址补全为绝对地址；data:/http(s): 原样返回 */
 export function absoluteImageUrl(url: string | undefined | null): string {
   if (!url) return '';

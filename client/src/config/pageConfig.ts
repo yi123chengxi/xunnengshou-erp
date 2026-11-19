@@ -499,6 +499,7 @@ export const customerPages: Record<string, ChildPageConfig> = {
         { label: '待对账', value: '待对账' },
         { label: '已发起对账', value: '已发起对账' },
         { label: '确认无误', value: '确认无误' },
+        { label: '对账完成', value: '对账完成' },
       ], label: '对账结果' },
     ],
     mockData: [],
