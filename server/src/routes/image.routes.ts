@@ -20,10 +20,41 @@ import { requireSyncAuth, currentSyncUser, SyncUser } from '../middleware/syncGu
 
 const router = Router();
 router.use(express.json({ limit: '60mb' }));
+
+/** 二进制同源兜底直出：生产域名站点由面板维护，可能缺 /uploads 静态别名（图片全 404），
+ * 客户端 absoluteImageUrl 把 /uploads/images/* 统一改写到 /api/images/file/*，
+ * 由 node 经 /api 反代链路同源直出（/api 在所有 vhost 都可达，与 /api/health 同链路）；
+ * 读路径与写路径同用 UPLOAD_ROOT，天然自洽，不依赖任何 nginx 静态配置。
+ * 置于 requireSyncAuth 之前：二进制本就与 nginx alias 同款公开读（账号目录名含哈希不可猜）。 */
+router.use('/file', (req: Request, res: Response) => {
+  let rel = '';
+  try {
+    rel = decodeURIComponent(String(req.url || '').replace(/^\//, '').split('?')[0]);
+  } catch { rel = ''; }
+  const target = path.resolve(UPLOAD_ROOT, rel);
+  if (!rel || !target.startsWith(path.resolve(UPLOAD_ROOT) + path.sep)) {
+    res.status(404).json({ code: 404, message: '图片文件不存在' });
+    return;
+  }
+  res.set('Cache-Control', 'public, max-age=86400');
+  res.sendFile(target, (err) => {
+    if (err && !res.headersSent) res.status(404).json({ code: 404, message: '图片文件不存在' });
+  });
+});
+
 router.use(requireSyncAuth);
 
 /** 编译后 __dirname = server/dist/routes，与 app.ts 的 ../uploads 对齐到 server/uploads */
 const UPLOAD_ROOT = path.join(__dirname, '../../uploads/images');
+
+// 启动权限自愈：显式打开 uploads 链路读权限（chmod 不受 umask 影响），
+// 防 umask 077 机器上历史目录/文件停留在 700/600 致 nginx 静态直出 403
+fs.promises.mkdir(UPLOAD_ROOT, { recursive: true, mode: 0o755 })
+  .then(async () => {
+    await fs.promises.chmod(path.dirname(UPLOAD_ROOT), 0o755).catch(() => undefined);
+    await fs.promises.chmod(UPLOAD_ROOT, 0o755).catch(() => undefined);
+  })
+  .catch(() => undefined);
 /** 单张图片上限（base64 解码后字节） */
 const MAX_BYTES = 8 * 1024 * 1024;
 const MAX_NAME_LEN = 120;
@@ -123,8 +154,11 @@ async function saveBinary(owner: string, id: string, suffix: string, dataUrl: un
   const dir = path.join(UPLOAD_ROOT, ownerDir(owner));
   // 显式模式位：nginx 静态直出用户与 node 写入用户不同时，默认 umask 可能产出不可读文件致线上 403
   await fs.promises.mkdir(dir, { recursive: true, mode: 0o755 });
+  // mkdir/writeFile 的 mode 参数会被 umask 掩码（umask 077 时落成 700/600），chmod 不受影响，补一刀保险
+  await fs.promises.chmod(dir, 0o755).catch(() => undefined);
   const file = `${id}${suffix}.${ALLOWED_MIME[parsed.mime]}`;
   await fs.promises.writeFile(path.join(dir, file), parsed.buf, { mode: 0o644 });
+  await fs.promises.chmod(path.join(dir, file), 0o644).catch(() => undefined);
   return {
     url: `/uploads/images/${ownerDir(owner)}/${file}`,
     size: parsed.buf.length,
@@ -349,7 +383,9 @@ async function rewriteBinaryAt(url: string, owner: string, dataUrl: unknown): Pr
   const target = path.resolve(UPLOAD_ROOT, url.slice('/uploads/images/'.length));
   if (!target.startsWith(path.resolve(UPLOAD_ROOT) + path.sep)) return null;
   await fs.promises.mkdir(path.dirname(target), { recursive: true, mode: 0o755 });
+  await fs.promises.chmod(path.dirname(target), 0o755).catch(() => undefined);
   await fs.promises.writeFile(target, parsed.buf, { mode: 0o644 });
+  await fs.promises.chmod(target, 0o644).catch(() => undefined);
   return { size: parsed.buf.length, mime: parsed.mime };
 }
 
