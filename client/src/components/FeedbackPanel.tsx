@@ -9,6 +9,7 @@ import {
 } from '@ant-design/icons';
 import { compressImageFile } from '../utils/imageCompress';
 import { saveDataset } from '../utils/dataStore';
+import { flushDatasetUploadAsync } from '../utils/serverSync';
 import { getDataOwner } from '../utils/brandAuth';
 
 /** 开发者处理结果（与开发者后台 DevFeedbackPage 写入的 handled 字段同构） */
@@ -175,14 +176,20 @@ const FeedbackPanel: React.FC = () => {
       category: category || '',
       createdAt: new Date().toLocaleString('zh-CN'),
     };
+    const json = JSON.stringify(entry);
     try {
-      localStorage.setItem(entry.key, JSON.stringify(entry));
-      saveDataset(entry.key, JSON.stringify(entry));
+      localStorage.setItem(entry.key, json);
+      saveDataset(entry.key, json);
     } catch { message.error('反馈保存失败（存储空间不足），请减少截图后重试'); return; }
     message.success('反馈已提交，感谢您的支持！');
     reset();
     reloadRecords();
     setExpandedKey(entry.key); // 提交后自动展开该条记录，便于确认
+    // 立即上传并等待服务端确认（不再只靠 800ms 防抖钩子）：提交后立刻关页/断网也不丢；
+    // 未确认时已入持久化补传队列，联网后自动重传，开发者后台稍后仍能看到
+    void flushDatasetUploadAsync(entry.key, json).then(ok => {
+      if (!ok) console.warn('[feedback] 反馈未即时上传成功，已进入补传队列', entry.key);
+    });
   };
 
   return (

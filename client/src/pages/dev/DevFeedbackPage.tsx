@@ -5,6 +5,7 @@ import ImageSlot from '../../components/ImageSlot';
 import useResizableColumns from '../../hooks/useResizableColumns';
 import { getDevIdentity } from '../../utils/devStore';
 import { saveDataset } from '../../utils/dataStore';
+import { pullAllDatasets, flushDatasetUploadAsync } from '../../utils/serverSync';
 import { FEEDBACK_KEY_PREFIX, FeedbackEntry, FeedbackHandleInfo, loadFeedbackRecords } from '../../components/FeedbackPanel';
 import { addUserNotice } from '../../utils/userNotice';
 
@@ -57,10 +58,29 @@ const DevFeedbackPage: React.FC = () => {
 
   useEffect(() => {
     load();
+    // 打开页面即从服务端拉取最新反馈（dev-login 已签发令牌，dev_ 共享键登录即可读），
+    // 避免页面先于拉取渲染时只显示本机旧副本；落地后 sync-data-updated 会触发重载
+    void pullAllDatasets().catch(() => { /* 离线时静默降级为本机副本 */ });
     const onStorage = (e: StorageEvent) => { if (e.key && e.key.startsWith(FEEDBACK_KEY_PREFIX)) load(); };
+    // 同步轮询落地新反馈后自动刷新列表（此前只监听跨标签 storage，同标签拉取落地不会触发）
+    const onSync = () => load();
     window.addEventListener('storage', onStorage);
-    return () => window.removeEventListener('storage', onStorage);
+    window.addEventListener('sync-data-updated', onSync);
+    return () => {
+      window.removeEventListener('storage', onStorage);
+      window.removeEventListener('sync-data-updated', onSync);
+    };
   }, []);
+
+  // 刷新按钮：准确优先——先等服务器拉取完成再重载（最多 4 秒，弱网回退本机副本）
+  const handleRefresh = () => {
+    const hide = message.loading('正在同步最新反馈…', 0);
+    void (async () => {
+      try { await Promise.race([pullAllDatasets(), new Promise<void>(resolve => setTimeout(resolve, 4000))]); } catch { /* ignore */ }
+      load();
+      hide();
+    })();
+  };
 
   const openHandle = (r: FeedbackRow) => {
     setHandleTarget(r);
@@ -82,8 +102,11 @@ const DevFeedbackPage: React.FC = () => {
     try {
       const raw = JSON.parse(localStorage.getItem(handleTarget.key) || '{}');
       const next = { ...raw, handled: info };
-      localStorage.setItem(handleTarget.key, JSON.stringify(next));
-      saveDataset(handleTarget.key, JSON.stringify(next));
+      const json = JSON.stringify(next);
+      localStorage.setItem(handleTarget.key, json);
+      saveDataset(handleTarget.key, json);
+      // 处理结果立即上传（不再只靠 800ms 防抖钩子），提交端尽快看到处理回复
+      void flushDatasetUploadAsync(handleTarget.key, json);
     } catch { message.error('保存失败（存储空间不足），请减少截图后重试'); return; }
     // 回复提醒：写入反馈提交账号的站内通知（顶栏铃铛消息中心，跨浏览器同步）
     addUserNotice(handleTarget.username, {
@@ -156,7 +179,7 @@ const DevFeedbackPage: React.FC = () => {
     <div style={{ padding: 12 }}>
       <Card size="small" style={{ borderRadius: 10 }}
         title={<span style={{ fontSize: 15 }}><FormOutlined style={{ marginRight: 8, color: '#1677ff' }} />意见反馈</span>}
-        extra={<Space><Text type="secondary" style={{ fontSize: 12 }}>共 {rows.length} 条</Text><Button size="small" icon={<ReloadOutlined />} onClick={load}>刷新</Button></Space>}>
+        extra={<Space><Text type="secondary" style={{ fontSize: 12 }}>共 {rows.length} 条</Text><Button size="small" icon={<ReloadOutlined />} onClick={handleRefresh}>刷新</Button></Space>}>
         <Text type="secondary" style={{ fontSize: 12 }}>各租户首页「意见反馈」面板提交的内容与截图，按条汇总、提交时间倒序展示；图片点击可放大（同组可左右切换）；列宽可拖拽表头右边缘调整。</Text>
         <Table size="small" bordered rowKey="key" columns={wrapColumns(columns)} dataSource={rows} scroll={{ x: 2090 }} style={{ marginTop: 10 }}
           pagination={{ pageSize: 20, showTotal: (t: number) => `共 ${t} 条` }} />

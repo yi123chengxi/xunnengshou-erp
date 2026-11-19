@@ -3,7 +3,7 @@ import { Card, Typography, Form, Input, Button, message, Alert } from 'antd';
 import { LockOutlined, UserOutlined, ToolOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import Logo from '../components/Logo';
-import { loadDevSubAccounts } from '../utils/devStore';
+import { API_BASE } from '../utils/apiBase';
 
 const { Title, Text } = Typography;
 
@@ -22,35 +22,34 @@ const DevLogin: React.FC = () => {
       const username = form.getFieldValue('username');
       const password = form.getFieldValue('password');
 
-      // 主开发者凭据校验（内部身份标识仍用 'dev'，与存量子账号 parentDev 数据兼容）
-      setTimeout(() => {
-        if (username === 'yichengxi1@qq.com' && password === 'Yi109342668') {
-          message.success('开发者登录成功！');
-          localStorage.setItem('devLoggedIn', 'true');
-          localStorage.setItem('devUser', 'dev');
-          localStorage.setItem('devUserName', '主开发者');
-          localStorage.removeItem('devIsSub');
-          localStorage.setItem('devParent', 'dev');
-          navigate('/xunnengs/customers/all');
-        } else {
-          // 开发者子账号登录（系统设置-账号管理中创建）
-          const sub = loadDevSubAccounts().find(s => s.username === username && s.password === password);
-          if (sub && sub.status === 'normal') {
-            message.success(`登录成功，欢迎 ${sub.displayName}`);
-            localStorage.setItem('devLoggedIn', 'true');
-            localStorage.setItem('devUser', sub.username);
-            localStorage.setItem('devUserName', sub.displayName);
-            localStorage.setItem('devIsSub', 'true');
-            localStorage.setItem('devParent', sub.parentDev || 'dev');
-            navigate('/xunnengs/customers/all');
-          } else if (sub) {
-            message.error('该子账号已被禁用，请联系主开发者');
-          } else {
-            message.error('开发者账号或密码错误');
-          }
+      // 服务端真实校验并签发 JWT：此前纯前端校验不写 token，开发者后台浏览器对 /api/sync 是匿名会话，
+      // meta 只下发公开键，dev_feedback_*（共享键，需登录）永远拉不到——子账号提交的反馈在开发者后台看不到
+      try {
+        const res = await fetch(`${API_BASE}/auth/dev-login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password }),
+        });
+        const data = await res.json().catch(() => null);
+        if (!res.ok || !data || data.code !== 200 || !data.data?.token) {
+          message.error((data && data.message) || '开发者账号或密码错误');
+          setLoading(false);
+          return;
         }
-        setLoading(false);
-      }, 1000);
+        const u = data.data.user || {};
+        // 保存同步令牌：后续 /sync/meta 与数据集拉取携此令牌，dev_ 共享键（意见反馈等）方可读写
+        localStorage.setItem('token', data.data.token);
+        localStorage.setItem('devLoggedIn', 'true');
+        localStorage.setItem('devUser', u.username || 'dev');
+        localStorage.setItem('devUserName', u.displayName || u.username || '主开发者');
+        if (u.isSub) localStorage.setItem('devIsSub', 'true'); else localStorage.removeItem('devIsSub');
+        localStorage.setItem('devParent', u.parentDev || 'dev');
+        message.success(u.isSub ? `登录成功，欢迎 ${u.displayName || u.username}` : '开发者登录成功！');
+        navigate('/xunnengs/customers/all');
+      } catch {
+        message.error('无法连接服务器，请检查网络后重试');
+      }
+      setLoading(false);
     } catch (error) {
       message.error('请检查登录信息');
     }

@@ -127,7 +127,10 @@ const SyncGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   }, []);
 
   React.useEffect(() => {
-    const logged = !!localStorage.getItem('username');
+    // 开发者后台会话（devLoggedIn，无业务 username）也要周期拉取：
+    // dev-login 已签发 JWT，dev_ 共享键（意见反馈等）登录后即可从服务端拉取；
+    // 此前闸门只认 username，纯开发者后台浏览器永不轮询，子账号新提交的反馈看不到
+    const logged = !!localStorage.getItem('username') || localStorage.getItem('devLoggedIn') === 'true';
     if (logged) {
       if (!startedRef.current) { startedRef.current = true; gatedPull(); }
       if (!intervalRef.current) {
@@ -149,7 +152,7 @@ const SyncGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   React.useEffect(() => {
     let lastPullTs = 0;
     const onWake = () => {
-      if (!localStorage.getItem('username')) return;
+      if (!localStorage.getItem('username') && localStorage.getItem('devLoggedIn') !== 'true') return;
       const now = Date.now();
       if (now - lastPullTs < 30000) return; // 30秒冷却
       lastPullTs = now;

@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
+import crypto from 'crypto';
 import dotenv from 'dotenv';
 import { store } from '../database/store';
 import { getJwtSecret } from '../utils/jwtSecret';
@@ -145,8 +146,64 @@ export async function verifyCredentials(
   return { ok: false, status: 401, message: '用户名或密码错误' };
 }
 
+// ============ 开发者后台登录 ============
+// 背景：开发者后台登录此前是纯前端校验，不签发 JWT——开发者后台浏览器对 /api/sync 而言是匿名会话，
+// /sync/meta 只下发公开键，dev_feedback_*（共享键，需登录）永远拉不到，
+// 表现为「子账号提交的意见反馈在开发者后台看不到」。此处提供服务端校验 + 令牌签发，
+// 使开发者后台具备与业务登录同级的同步读写能力（dev_ 共享键登录即可读写）。
+
+/** 主开发者凭据：环境变量优先，默认值与客户端 DevLogin 历史内置凭据一致 */
+const DEV_ADMIN_USER = String(process.env.DEV_ADMIN_USER || 'yichengxi1@qq.com');
+const DEV_ADMIN_PASS = String(process.env.DEV_ADMIN_PASS || 'Yi109342668');
+
+/** 定长安全比较：避免凭据校验的计时侧信道 */
+function safeEqual(a: string, b: string): boolean {
+  const ba = Buffer.from(String(a || ''));
+  const bb = Buffer.from(String(b || ''));
+  if (ba.length !== bb.length) return false;
+  try { return crypto.timingSafeEqual(ba, bb); } catch { return false; }
+}
+
 // ============ 路由 ============
 const router = Router();
+
+/**
+ * POST /api/auth/dev-login
+ * 开发者后台登录：主开发者凭据（环境变量）或开发者子账号（dev_sub_accounts 数据集），
+ * 校验通过签发 JWT（username=dev 或子账号名，role='dev'，owner=归属主开发者）
+ */
+router.post('/dev-login', async (req: Request, res: Response) => {
+  try {
+    const { username, password } = req.body || {};
+    const u = String(username || '').trim();
+    const p = String(password || '');
+    if (!u || !p) { res.status(400).json({ code: 400, message: '账号和密码不能为空' }); return; }
+    if (safeEqual(u, DEV_ADMIN_USER) && safeEqual(p, DEV_ADMIN_PASS)) {
+      const token = signToken('dev', 'dev', 'dev');
+      res.json({ code: 200, data: { token, user: { username: 'dev', displayName: '主开发者', isSub: false, parentDev: 'dev' } }, message: '登录成功' });
+      return;
+    }
+    // 开发者子账号：dev_sub_accounts 为 dev_ 前缀共享数据集（开发者后台「账号管理」写入并经同步落库）
+    let subs: any[] = [];
+    try {
+      const row = await store.getDataset('dev_sub_accounts');
+      const parsed = row ? JSON.parse(row.dataset_json || '[]') : [];
+      subs = Array.isArray(parsed) ? parsed : [];
+    } catch { subs = []; }
+    const sub = subs.find((s: any) => s && s.username === u);
+    if (sub && sub.status === 'normal' && safeEqual(p, String(sub.password || ''))) {
+      const parentDev = String(sub.parentDev || 'dev');
+      const token = signToken(sub.username, 'dev', parentDev);
+      res.json({ code: 200, data: { token, user: { username: sub.username, displayName: sub.displayName || sub.username, isSub: true, parentDev } }, message: '登录成功' });
+      return;
+    }
+    if (sub) { res.status(403).json({ code: 403, message: '该子账号已被禁用，请联系主开发者' }); return; }
+    res.status(401).json({ code: 401, message: '开发者账号或密码错误' });
+  } catch (err: any) {
+    console.error('[auth] dev-login error:', err.message);
+    res.status(500).json({ code: 500, message: '服务器内部错误' });
+  }
+});
 
 /**
  * POST /api/auth/login
