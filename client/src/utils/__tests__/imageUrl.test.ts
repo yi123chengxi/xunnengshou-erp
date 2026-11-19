@@ -22,6 +22,12 @@ describe('absoluteImageUrl', () => {
     expect(out2).not.toContain('.jpg');
   });
 
+  it('裸域/www 视同同站：跨形态会话存下的绝对 URL 也改写回通道', () => {
+    const out = absoluteImageUrl('http://www.localhost/uploads/images/u_9/img_z.jpg');
+    expect(out).toContain('/api/images/file/u_9/img_z');
+    expect(out).not.toContain('.jpg');
+  });
+
   it('跨域绝对地址原样返回', () => {
     expect(absoluteImageUrl('https://cdn.other.com/a.jpg')).toBe('https://cdn.other.com/a.jpg');
   });

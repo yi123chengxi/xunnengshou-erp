@@ -603,7 +603,7 @@ const PayScreenshotUpload: React.FC<{
             dataUrl: compressed, thumbDataUrl: compressed, width: 0, height: 0,
             name: ref.recordName || '付款截图', tags: ['付款截图'], ref: { ...ref, field: ref.field || 'payScreenshot' },
           });
-          onChange?.(absoluteImageUrl(asset.url));
+          onChange?.(asset.url);
           return;
         } catch { /* 落云失败→退回本地 */ }
       }
@@ -10767,7 +10767,7 @@ const ModuleChildPage: React.FC = () => {
               recordKey: first.key, recordName: first.label || first.key, field: 'image',
             },
           });
-          const url = absoluteImageUrl(asset.url);
+          const url = asset.url;
           for (let i = 1; i < targets.length; i++) {
             void registerImageRef(asset.id, {
               module: moduleKey, moduleLabel,

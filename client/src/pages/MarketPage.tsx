@@ -375,7 +375,7 @@ const subjectSimilarity = (ref: SubjectFeatures, cur: SubjectFeatures): number =
 
 // 图片解析：优先产品自带 image（URL），回退发布者图片存储键 prodImg_<owner>_<productKey>
 const imgOf = (owner: string, p: any): string => {
-  if (p && p.image) return String(p.image);
+  if (p && p.image) return absoluteImageUrl(String(p.image));
   try { return localStorage.getItem(`prodImg_${owner}_${p && p.key}`) || ''; } catch { return ''; }
 };
 

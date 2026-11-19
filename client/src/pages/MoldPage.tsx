@@ -9,6 +9,7 @@ import {
   SettingOutlined, UndoOutlined, EyeOutlined,
 } from '@ant-design/icons';
 import { compressImageFile } from '../utils/imageCompress';
+import { absoluteImageUrl } from '../utils/imageSpace';
 import { readClipboardImage, imageFileFromPasteEvent, clipboardImageFailureText } from '../utils/clipboard';
 import { safeSetItem } from '../utils/storageQuota';
 import useResizableColumns from '../hooks/useResizableColumns';
@@ -255,7 +256,7 @@ const MoldPage: React.FC = () => {
     {
       title: '主图', dataIndex: 'images', key: 'image', width: 80, align: 'center',
       render: (imgs: string[] | undefined) => imgs && imgs.length > 0
-        ? <AntdImage src={imgs[0]} width={50} height={50} style={{ objectFit: 'cover', borderRadius: 4 }} />
+        ? <AntdImage src={absoluteImageUrl(imgs[0])} width={50} height={50} style={{ objectFit: 'cover', borderRadius: 4 }} />
         : <span style={{ color: '#ccc' }}>无图</span>,
     },
     { title: '模具编号', dataIndex: 'moldCode', key: 'moldCode', width: 150, align: 'center',
@@ -422,7 +423,7 @@ const MoldPage: React.FC = () => {
                 tabIndex={0} onPaste={handleImagePaste}>
                 {moldImages.map((img, idx) => (
                   <div key={idx} style={{ position: 'relative', width: 72, height: 72 }}>
-                    <AntdImage src={img} width={72} height={72} style={{ objectFit: 'cover', borderRadius: 6, border: '1px solid #eee' }} />
+                    <AntdImage src={absoluteImageUrl(img)} width={72} height={72} style={{ objectFit: 'cover', borderRadius: 6, border: '1px solid #eee' }} />
                     <Button size="small" type="text" danger icon={<DeleteOutlined />}
                       style={{ position: 'absolute', top: -8, right: -8, background: '#fff', borderRadius: '50%', boxShadow: '0 1px 4px rgba(0,0,0,.2)', width: 22, height: 22, padding: 0 }}
                       onClick={() => setMoldImages(prev => prev.filter((_, i) => i !== idx))} />
@@ -458,7 +459,7 @@ const MoldPage: React.FC = () => {
                   <Row gutter={[8, 8]}>
                     {detailRecord.images.map((img, idx) => (
                       <Col key={idx}>
-                        <AntdImage src={img} width={120} height={120} style={{ objectFit: 'cover', borderRadius: 8 }} />
+                        <AntdImage src={absoluteImageUrl(img)} width={120} height={120} style={{ objectFit: 'cover', borderRadius: 8 }} />
                       </Col>
                     ))}
                   </Row>

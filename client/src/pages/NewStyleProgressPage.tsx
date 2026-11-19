@@ -622,7 +622,7 @@ const PhotoTab: React.FC<{ photos: PhotoRec[]; save: (l: PhotoRec[]) => void; st
             <Descriptions.Item label="数据状态" span={2}>{detailListing.dataComplete === '资料已完善' ? <Tag color="green">已完善</Tag> : <Tag color="orange">未完善</Tag>}</Descriptions.Item>
             {(detailListing.images?.length || detailListing.image) && (
               <Descriptions.Item label="图片" span={2}>
-                <Space wrap>{(detailListing.images?.length ? detailListing.images : (detailListing.image ? [detailListing.image] : [])).map((img, i) => <AntdImage key={i} src={img} width={60} height={60} style={{ objectFit: 'cover', borderRadius: 4 }} />)}</Space>
+                <Space wrap>{(detailListing.images?.length ? detailListing.images : (detailListing.image ? [detailListing.image] : [])).map((img, i) => <AntdImage key={i} src={absoluteImageUrl(img)} width={60} height={60} style={{ objectFit: 'cover', borderRadius: 4 }} />)}</Space>
               </Descriptions.Item>
             )}
           </Descriptions>

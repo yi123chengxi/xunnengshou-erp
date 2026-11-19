@@ -324,7 +324,7 @@ const MoldMarketTab: React.FC<{ onContact?: (username: string, subject: string) 
           recordKey: 'mold-listing-image', recordName: file.name || '模具图', field: 'images',
         },
       });
-      return absoluteImageUrl(asset.url);
+      return asset.url;
     } catch {
       return await compressImageFile(input);
     }

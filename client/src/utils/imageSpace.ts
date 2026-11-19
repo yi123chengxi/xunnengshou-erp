@@ -115,8 +115,12 @@ export function absoluteImageUrl(url: string | undefined | null): string {
     try { const u = new URL(path); host = u.host; pathname = u.pathname; } catch { return url; }
     let sameHost = false;
     try {
-      if (typeof window !== 'undefined' && window.location && host === window.location.host) sameHost = true;
-      if (!sameHost && host === new URL(API_ORIGIN).host) sameHost = true;
+      // 裸域与 www 视同同站：历史记录可能存任一形态会话产出的绝对 URL，
+      // 不归一会让跨形态绝对地址逃过改写、尾缀扩展名再被 vhost 正则劫持
+      const normHost = (h: string) => h.replace(/^www\./i, '');
+      const nh = normHost(host);
+      if (typeof window !== 'undefined' && window.location && nh === normHost(window.location.host)) sameHost = true;
+      if (!sameHost && nh === normHost(new URL(API_ORIGIN).host)) sameHost = true;
     } catch { /* ignore */ }
     if (!sameHost) return url;
     path = pathname;
