@@ -108,9 +108,11 @@ export function absoluteImageUrl(url: string | undefined | null): string {
   if (/^(data:|blob:|https?:)/i.test(url)) return url;
   // 二进制统一走 /api 反代链路（node 同源直出 /api/images/file/*）：
   // 生产域名站点由面板维护，可能缺 /uploads 静态别名致图片全 404；
-  // /api 链路在所有 vhost 都可达（与 /api/health 同源），读写同根自洽
+  // 且面板 vhost 有图片扩展名正则拦截 location（.jpg/.png 结尾一律劫持致 404），
+  // 故同源通道路径不带扩展名，由服务端按后缀逐个尝试命中
   if (url.startsWith('/uploads/images/')) {
-    return `${API_BASE}/images/file/${url.slice('/uploads/images/'.length)}`;
+    const rel = url.slice('/uploads/images/'.length).replace(/\.[a-z0-9]+$/i, '');
+    return `${API_BASE}/images/file/${rel}`;
   }
   return `${API_ORIGIN}${url.startsWith('/') ? '' : '/'}${url}`;
 }

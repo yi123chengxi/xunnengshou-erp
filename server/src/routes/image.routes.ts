@@ -25,21 +25,30 @@ router.use(express.json({ limit: '60mb' }));
  * 客户端 absoluteImageUrl 把 /uploads/images/* 统一改写到 /api/images/file/*，
  * 由 node 经 /api 反代链路同源直出（/api 在所有 vhost 都可达，与 /api/health 同链路）；
  * 读路径与写路径同用 UPLOAD_ROOT，天然自洽，不依赖任何 nginx 静态配置。
+ * 路径约定不带扩展名：面板 vhost 存在图片扩展名正则拦截 location（.jpg/.png 结尾一律
+ * 劫持到站点根致 404），服务端按二进制后缀逐个尝试命中。
  * 置于 requireSyncAuth 之前：二进制本就与 nginx alias 同款公开读（账号目录名含哈希不可猜）。 */
 router.use('/file', (req: Request, res: Response) => {
   let rel = '';
   try {
     rel = decodeURIComponent(String(req.url || '').replace(/^\//, '').split('?')[0]);
   } catch { rel = ''; }
-  const target = path.resolve(UPLOAD_ROOT, rel);
-  if (!rel || !target.startsWith(path.resolve(UPLOAD_ROOT) + path.sep)) {
+  const base = path.resolve(UPLOAD_ROOT, rel);
+  if (!rel || !base.startsWith(path.resolve(UPLOAD_ROOT) + path.sep)) {
     res.status(404).json({ code: 404, message: '图片文件不存在' });
     return;
   }
-  res.set('Cache-Control', 'public, max-age=86400');
-  res.sendFile(target, (err) => {
-    if (err && !res.headersSent) res.status(404).json({ code: 404, message: '图片文件不存在' });
-  });
+  for (const ext of ['jpg', 'png', 'webp', 'gif']) {
+    const target = `${base}.${ext}`;
+    if (fs.existsSync(target)) {
+      res.set('Cache-Control', 'public, max-age=86400');
+      res.sendFile(target, (err) => {
+        if (err && !res.headersSent) res.status(404).json({ code: 404, message: '图片文件不存在' });
+      });
+      return;
+    }
+  }
+  res.status(404).json({ code: 404, message: '图片文件不存在' });
 });
 
 router.use(requireSyncAuth);

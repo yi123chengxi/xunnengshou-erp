@@ -6,10 +6,11 @@
 import { absoluteImageUrl } from '../imageSpace';
 
 describe('absoluteImageUrl', () => {
-  it('把 /uploads/images/ 前缀改写到 /api/images/file/ 同源通道', () => {
+  it('把 /uploads/images/ 前缀改写到 /api/images/file/ 同源通道（去扩展名防 vhost 正则劫持）', () => {
     const out = absoluteImageUrl('/uploads/images/u_1234abcd/img_x.jpg');
-    expect(out).toContain('/api/images/file/u_1234abcd/img_x.jpg');
+    expect(out).toContain('/api/images/file/u_1234abcd/img_x');
     expect(out).not.toContain('/uploads/');
+    expect(out).not.toContain('.jpg');
   });
 
   it('data:/blob:/http(s): 原样返回', () => {
