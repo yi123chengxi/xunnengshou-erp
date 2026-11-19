@@ -1173,10 +1173,10 @@ const GeneralLedgerPage: React.FC<{ simple?: boolean }> = ({ simple = false }) =
         }
         case 'ar': {
           // 与客户基础信息口径一致：应收欠款取 customer_pay_summary 快照（采购−已收），记录字段为陈旧遗留
-          try { ensureCustomerSummaryBuilt(owner, {}); const m = loadCustomerSummary(owner); return Object.values(m).reduce((s: number, e: any) => s + toYuan((e?.purchaseTotal || 0) - (e?.receivedTotal || 0)), 0); } catch { return 0; }
+          try { void ensureCustomerSummaryBuilt(owner, {}); const m = loadCustomerSummary(owner); return Object.values(m).reduce((s: number, e: any) => s + toYuan((e?.purchaseTotal || 0) - (e?.receivedTotal || 0)), 0); } catch { return 0; }
         }
         case 'ap': {
-          try { ensureSupplierSummaryBuilt(owner); const m = loadSupplierSummary(owner); return Object.values(m).reduce((s: number, e: any) => s + toYuan((e?.purchaseTotal || 0) - (e?.paidTotal || 0)), 0); } catch { return 0; }
+          try { void ensureSupplierSummaryBuilt(owner); const m = loadSupplierSummary(owner); return Object.values(m).reduce((s: number, e: any) => s + toYuan((e?.purchaseTotal || 0) - (e?.paidTotal || 0)), 0); } catch { return 0; }
         }
         case 'salary': {
           try { const ss: any[] = JSON.parse(localStorage.getItem(`hr_salary_${owner}`) || '[]'); return (Array.isArray(ss) ? ss : []).filter(r => r.month === monthStr).reduce((s, r) => s + (Number(r.netPay) || 0), 0); } catch { return 0; }

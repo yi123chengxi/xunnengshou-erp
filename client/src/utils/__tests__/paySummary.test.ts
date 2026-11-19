@@ -46,17 +46,17 @@ describe('金额基础函数', () => {
 });
 
 describe('computePurchaseCents 采购总额', () => {
-  it('账单行合计为准（含负数退货行），同主体旧名行也归入', () => {
+  it('账单行合计为准（含负数退货行），同主体旧名行也归入', async () => {
     put(K_BILLS, [
       { customerName: '甲公司新名', totalAmount: 1000.5 },
       { customerName: '甲公司旧名', totalAmount: -200.25 },
     ]);
     put(K_ORDERS, [{ customerName: '甲公司新名', orderStatus: '已完成', payMethod: '余额支付', productAmount: 9999 }]);
-    const per = computePurchaseCents(OWNER, new Set(['甲公司新名']));
-    expect(per.get('甲公司新名')).toBe(80025);
+    const per = await computePurchaseCents(OWNER, new Set(['甲公司新名']));
+    expect(per?.get('甲公司新名')).toBe(80025);
   });
 
-  it('采购总额只看账单明细：无账单行客户不回退订单表（批次2口径回归）', () => {
+  it('采购总额只看账单明细：无账单行客户不回退订单表（批次2口径回归）', async () => {
     put(K_BILLS, []);
     put(K_ORDERS, [
       { customerName: '乙公司', orderStatus: '待付款', payMethod: '余额支付', productAmount: 500 },
@@ -64,61 +64,61 @@ describe('computePurchaseCents 采购总额', () => {
       { customerName: '乙公司', orderStatus: '已完成', payMethod: '微信支付', productAmount: 700 },
       { customerName: '乙公司', orderStatus: '已发货', payMethod: '余额支付', productAmount: 25.5 },
     ]);
-    expect(computePurchaseCents(OWNER, new Set(['乙公司'])).get('乙公司')).toBeUndefined();
-    expect(computeCustomerPurchaseCents(OWNER, '乙公司')).toBe(0);
+    expect((await computePurchaseCents(OWNER, new Set(['乙公司'])))?.get('乙公司')).toBeUndefined();
+    expect(await computeCustomerPurchaseCents(OWNER, '乙公司')).toBe(0);
   });
 
-  it('同一客户有账单行时，只看账单行金额，订单金额不叠加', () => {
+  it('同一客户有账单行时，只看账单行金额，订单金额不叠加', async () => {
     put(K_BILLS, [{ customerName: '乙公司', totalAmount: 100 }]);
     put(K_ORDERS, [{ customerName: '乙公司', orderStatus: '已发货', payMethod: '余额支付', productAmount: 9999 }]);
-    expect(computeCustomerPurchaseCents(OWNER, '乙公司')).toBe(10000);
+    expect(await computeCustomerPurchaseCents(OWNER, '乙公司')).toBe(10000);
   });
 
-  it('目标集合内含两个账单行的客户各自独立汇总，互不串账', () => {
+  it('目标集合内含两个账单行的客户各自独立汇总，互不串账', async () => {
     put(K_BILLS, [
       { customerName: '甲公司新名', totalAmount: 100 },
       { customerName: '乙公司', totalAmount: 200 },
       { customerName: '丙公司', totalAmount: 300 },
     ]);
-    const per = computePurchaseCents(OWNER, new Set(['甲公司新名', '乙公司']));
-    expect(per.get('甲公司新名')).toBe(10000);
-    expect(per.get('乙公司')).toBe(20000);
-    expect(per.has('丙公司')).toBe(false);
+    const per = await computePurchaseCents(OWNER, new Set(['甲公司新名', '乙公司']));
+    expect(per?.get('甲公司新名')).toBe(10000);
+    expect(per?.get('乙公司')).toBe(20000);
+    expect(per?.has('丙公司')).toBe(false);
   });
 
-  it('改名前后名称同时出现在目标集时只保留一个条目，金额不翻倍（批次3回归）', () => {
+  it('改名前后名称同时出现在目标集时只保留一个条目，金额不翻倍（批次3回归）', async () => {
     put(K_BILLS, [
       { customerName: '甲公司旧名', totalAmount: 60 },
       { customerName: '甲公司新名', totalAmount: 40 },
     ]);
-    const per = computePurchaseCents(OWNER, new Set(['甲公司旧名', '甲公司新名']));
-    expect(per.size).toBe(1);
-    expect(per.get('甲公司新名')).toBe(10000);
-    expect(Array.from(per.values())).toEqual([10000]);
+    const per = await computePurchaseCents(OWNER, new Set(['甲公司旧名', '甲公司新名']));
+    expect(per?.size).toBe(1);
+    expect(per?.get('甲公司新名')).toBe(10000);
+    expect(Array.from(per?.values() || [])).toEqual([10000]);
   });
 
-  it('单客户取数与快照重算严格同源', () => {
+  it('单客户取数与快照重算严格同源', async () => {
     put(K_BILLS, [{ customerName: '甲公司新名', totalAmount: 800.25 }]);
-    refreshCustomerPurchase(OWNER, ['甲公司新名']);
+    await refreshCustomerPurchase(OWNER, ['甲公司新名']);
     const snap = loadCustomerSummary(OWNER)['甲公司新名'];
     expect(snap.purchaseTotal).toBe(80025);
-    expect(computeCustomerPurchaseCents(OWNER, '甲公司新名')).toBe(snap.purchaseTotal);
+    expect(await computeCustomerPurchaseCents(OWNER, '甲公司新名')).toBe(snap.purchaseTotal);
   });
 
-  it('重复重算幂等，不会逐次累加', () => {
+  it('重复重算幂等，不会逐次累加', async () => {
     put(K_BILLS, [{ customerName: '甲公司新名', totalAmount: 100 }]);
-    refreshCustomerPurchase(OWNER, ['甲公司新名']);
-    refreshCustomerPurchase(OWNER, ['甲公司新名']);
+    await refreshCustomerPurchase(OWNER, ['甲公司新名']);
+    await refreshCustomerPurchase(OWNER, ['甲公司新名']);
     expect(loadCustomerSummary(OWNER)['甲公司新名'].purchaseTotal).toBe(10000);
   });
 
-  it('空白名称被忽略，不产生垃圾条目', () => {
+  it('空白名称被忽略，不产生垃圾条目', async () => {
     put(K_BILLS, [{ customerName: '', totalAmount: 100 }]);
-    refreshCustomerPurchase(OWNER, ['', '   ']);
+    await refreshCustomerPurchase(OWNER, ['', '   ']);
     expect(Object.keys(loadCustomerSummary(OWNER)).length).toBe(0);
   });
 
-  it('客户公司含子账号：账单行凭证存子/孙账号也计入同一主体（生产全为0回归）', () => {
+  it('客户公司含子账号：账单行凭证存子/孙账号也计入同一主体（生产全为0回归）', async () => {
     localStorage.setItem('registeredUsers', JSON.stringify([
       { username: 'm1', companyName: '甲公司新名', companyShortName: '甲公司', companyNo: 'N1' },
       { username: 's1', isSubAccount: true, parentAccount: 'm1', companyName: '甲公司新名' },
@@ -130,12 +130,12 @@ describe('computePurchaseCents 采购总额', () => {
       { customerName: '甲公司旧名', totalAmount: 25 },
       { customerName: '甲公司新名', customerUsername: 's2', totalAmount: 12.5 },
     ]);
-    refreshCustomerPurchase(OWNER, ['甲公司新名']);
+    await refreshCustomerPurchase(OWNER, ['甲公司新名']);
     expect(loadCustomerSummary(OWNER)['甲公司新名'].purchaseTotal).toBe(18750);
-    expect(computeCustomerPurchaseCents(OWNER, '甲公司新名')).toBe(18750);
+    expect(await computeCustomerPurchaseCents(OWNER, '甲公司新名')).toBe(18750);
   });
 
-  it('同名多个独立账号时行凭证被补到另一账号，名称身份键兜底仍计入', () => {
+  it('同名多个独立账号时行凭证被补到另一账号，名称身份键兜底仍计入', async () => {
     localStorage.setItem('registeredUsers', JSON.stringify([
       { username: 'a1', companyName: '星尚鞋业', companyNo: 'A1N' },
       { username: 'a2', companyName: '星尚鞋业', companyNo: 'A2N' },
@@ -145,7 +145,15 @@ describe('computePurchaseCents 采购总额', () => {
       { customerName: '星尚鞋业', customerUsername: 'a2', totalAmount: 80 },
       { customerName: '星尚鞋业', totalAmount: 20 },
     ]);
-    expect(computeCustomerPurchaseCents(OWNER, '星尚鞋业')).toBe(10000);
+    expect(await computeCustomerPurchaseCents(OWNER, '星尚鞋业')).toBe(10000);
+  });
+
+  it('源表本地完全缺失时重算不得把快照覆写为 0（跳动根因防线）', async () => {
+    put(K_SUMMARY, { '甲公司新名': { purchaseTotal: 80025, receivedTotal: 0, receivedCount: 0, updatedAt: '' } });
+    // K_BILLS 未写入：readFreshRows present=false → refresh 直接返回，快照保持原值
+    await refreshCustomerPurchase(OWNER, ['甲公司新名']);
+    expect(loadCustomerSummary(OWNER)['甲公司新名'].purchaseTotal).toBe(80025);
+    expect(await verifyCustomerPurchase(OWNER, ['甲公司新名'])).toEqual([]);
   });
 });
 
@@ -191,22 +199,22 @@ describe('已收货款与收款明细判定', () => {
 });
 
 describe('快照校验与批量修复（巡检自愈）', () => {
-  it('快照与源表一致时校验返回空名单，不得反复重写', () => {
+  it('快照与源表一致时校验返回空名单，不得反复重写', async () => {
     put(K_BILLS, [{ customerName: '甲公司新名', totalAmount: 100 }]);
     put(K_RECEIPTS, [{ customerName: '甲公司新名', amount: 30 }]);
-    refreshCustomerPurchase(OWNER, ['甲公司新名']);
+    await refreshCustomerPurchase(OWNER, ['甲公司新名']);
     refreshCustomerReceived(OWNER, ['甲公司新名'], {});
     const names = ['甲公司新名'];
-    expect(verifyCustomerPurchase(OWNER, names)).toEqual([]);
+    expect(await verifyCustomerPurchase(OWNER, names)).toEqual([]);
     expect(verifyCustomerSummary(OWNER, names, {})).toEqual([]);
   });
 
-  it('快照漂移后被修复回源表口径', () => {
+  it('快照漂移后被修复回源表口径', async () => {
     put(K_BILLS, [{ customerName: '甲公司新名', totalAmount: 100 }]);
     put(K_RECEIPTS, []);
     put(K_SUMMARY, { '甲公司新名': { purchaseTotal: 1, receivedTotal: 999, receivedCount: 3, updatedAt: '' } });
     const names = ['甲公司新名'];
-    expect(verifyCustomerPurchase(OWNER, names)).toEqual(names);
+    expect(await verifyCustomerPurchase(OWNER, names)).toEqual(names);
     expect(verifyCustomerSummary(OWNER, names, {})).toEqual(names);
     const e = loadCustomerSummary(OWNER)['甲公司新名'];
     expect(e.purchaseTotal).toBe(10000);
@@ -214,7 +222,7 @@ describe('快照校验与批量修复（巡检自愈）', () => {
     expect(e.receivedCount).toBe(0);
   });
 
-  it('批量修复返回名单且第二次为幂等空操作', () => {
+  it('批量修复返回名单且第二次为幂等空操作', async () => {
     put(K_BILLS, [
       { customerName: '甲公司新名', totalAmount: 100 },
       { customerName: '乙公司', totalAmount: 200 },
@@ -222,7 +230,7 @@ describe('快照校验与批量修复（巡检自愈）', () => {
     put(K_RECEIPTS, [{ customerName: '乙公司', amount: 50 }]);
     put(K_SUMMARY, {});
     const names = ['甲公司新名', '乙公司'];
-    const fixed = repairCustomerSummaryBulk(OWNER, names, {});
+    const fixed = await repairCustomerSummaryBulk(OWNER, names, {});
     // 不依赖中文排序顺序，只断言「两个客户均被列入修复名单」
     expect(fixed).toHaveLength(2);
     expect(fixed).toContain('甲公司新名');
@@ -231,11 +239,11 @@ describe('快照校验与批量修复（巡检自愈）', () => {
     expect(s['甲公司新名'].purchaseTotal).toBe(10000);
     expect(s['乙公司'].purchaseTotal).toBe(20000);
     expect(s['乙公司'].receivedTotal).toBe(5000);
-    expect(repairCustomerSummaryBulk(OWNER, names, {})).toEqual([]);
+    expect(await repairCustomerSummaryBulk(OWNER, names, {})).toEqual([]);
   });
 
-  it('空目标名单不触发任何写入', () => {
-    expect(repairCustomerSummaryBulk(OWNER, [], {})).toEqual([]);
+  it('空目标名单不触发任何写入', async () => {
+    expect(await repairCustomerSummaryBulk(OWNER, [], {})).toEqual([]);
     expect(localStorage.getItem(K_SUMMARY)).toBeNull();
   });
 });
@@ -261,7 +269,7 @@ describe('刷新调度器合并（防逐事件全表扫描）', () => {
 });
 
 describe('供应商侧快照同源', () => {
-  it('采购金额与已付货款分别聚合，校验一致后不再重写', () => {
+  it('采购金额与已付货款分别聚合，校验一致后不再重写', async () => {
     put(K_SUP_BILLS, [
       { supplier: '乙供应商', totalAmount: 1200.34, supplierNo: 'S1' },
       { supplier: '乙供应商', totalAmount: 0.66, supplierNo: 'S1' },
@@ -272,13 +280,13 @@ describe('供应商侧快照同源', () => {
       { supplierName: '乙供应商', amountCents: 25000 },
     ]);
     const names = ['乙供应商'];
-    refreshSupplierPurchase(OWNER, names);
+    await refreshSupplierPurchase(OWNER, names);
     refreshSupplierPaid(OWNER, names);
     const e = loadSupplierSummary(OWNER)['乙供应商'];
     expect(e.purchaseTotal).toBe(120100);
     expect(e.paidTotal).toBe(75000);
     expect(e.paidCount).toBe(2);
-    expect(verifySupplierSummary(OWNER, names)).toEqual([]);
+    expect(await verifySupplierSummary(OWNER, names)).toEqual([]);
   });
 
   it('付款明细按身份键归一，改名前的付款仍可查到', () => {

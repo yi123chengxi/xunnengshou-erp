@@ -8,6 +8,7 @@
 
 import { buildCredIndex } from './nameSync';
 import type { CredIndex } from './nameSync';
+import { readFreshDataset } from './dataStore';
 
 export interface SupplierSummaryEntry { purchaseTotal: number; paidTotal: number; paidCount: number; updatedAt: string; }
 export interface CustomerSummaryEntry { purchaseTotal: number; receivedTotal: number; receivedCount: number; updatedAt: string; }
@@ -25,6 +26,28 @@ const readJson = (key: string, fallback: any): any => {
   } catch { return fallback; }
 };
 const writeJson = (key: string, val: any) => { try { localStorage.setItem(key, JSON.stringify(val)); } catch { /* ignore */ } };
+
+/**
+ * 源表新鲜读（LS 与 IndexedDB 主存取较新者）：账单明细/采购账单等大表的主存是 IndexedDB，
+ * localStorage 只是尽力缓存（预算淘汰/配额清理后会缺失或陈旧）。旧实现同步直读 LS，
+ * 缓存缺失时算出 0 快照覆写正确值——采购总额「一会 0 一会正确」跳动的根因。
+ * present=false 表示该键本地完全不存在（新设备未拉取/缓存被淘汰），调用方不得据此覆写快照。
+ */
+const readFreshRows = async (key: string): Promise<{ rows: any[]; present: boolean }> => {
+  try {
+    const fresh = await readFreshDataset(key);
+    if (fresh !== null && fresh !== undefined) {
+      const v = JSON.parse(fresh);
+      return { rows: Array.isArray(v) ? v : [], present: true };
+    }
+  } catch { /* 主存读取失败回退 LS */ }
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw === null) return { rows: [], present: false };
+    const v = JSON.parse(raw);
+    return { rows: Array.isArray(v) ? v : [], present: true };
+  } catch { return { rows: [], present: true }; }
+};
 
 export const supplierSummaryKey = (owner: string) => `supplier_pay_summary_${owner}`;
 export const supplierPaymentsKey = (owner: string) => `supplier_payments_${owner}`;
@@ -77,11 +100,13 @@ const ensureSup = (m: SummaryMap<SupplierSummaryEntry>, name: string): SupplierS
 const payCents = (p: any): number => Number(p?.amountCents ?? toCents(p?.amount)) || 0;
 
 // 供应商「采购金额」按主体身份键聚合（账号 > 编号 > 折叠名）：对方供应商改名后历史账单仍计入同一主体
-const computeSupPurchaseCents = (owner: string, targets: Set<string>): Map<string, number> => {
+// 返回 null = 账单源表本地完全缺失（大表缓存被淘汰/未拉取），调用方禁止用 0 覆写快照
+const computeSupPurchaseCents = async (owner: string, targets: Set<string>): Promise<Map<string, number> | null> => {
   const per = new Map<string, number>();
   const { idx, targetFor } = buildTargetIndex(targets);
-  const bills: any[] = readJson(billsKey(owner), []) || [];
-  bills.forEach(b => {
+  const src = await readFreshRows(billsKey(owner));
+  if (!src.present) return null;
+  src.rows.forEach(b => {
     const t = matchTarget(idx, targetFor, { username: b?.supplierUsername, no: b?.supplierNo, name: b?.supplier });
     if (!t) return;
     per.set(t, (per.get(t) || 0) + toCents(b?.totalAmount));
@@ -105,12 +130,14 @@ const computeSupPaidCents = (owner: string, targets: Set<string>): Map<string, {
 };
 
 // 单对象重算：指定供应商的「采购金额」（只遍历账单表一次，仅累加目标供应商）
-export const refreshSupplierPurchase = (owner: string, names: string[]) => {
+export const refreshSupplierPurchase = async (owner: string, names: string[]): Promise<void> => {
   const targets = new Set(names.map(trimName).filter(Boolean));
   if (!targets.size) return;
+  const per = await computeSupPurchaseCents(owner, targets);
+  if (!per) return; // 源表缺失窗口不得把快照覆写为 0（跳动根因防线）
   const summary = loadSupplierSummary(owner);
   targets.forEach(n => { ensureSup(summary, n).purchaseTotal = 0; });
-  computeSupPurchaseCents(owner, targets).forEach((cents, n) => { ensureSup(summary, n).purchaseTotal += cents; });
+  per.forEach((cents, n) => { ensureSup(summary, n).purchaseTotal += cents; });
   targets.forEach(n => { ensureSup(summary, n).updatedAt = nowIso(); });
   writeJson(supplierSummaryKey(owner), summary);
 };
@@ -127,44 +154,47 @@ export const refreshSupplierPaid = (owner: string, names: string[]) => {
 };
 
 // 一次性迁移构建（仅快照键缺失时执行一次）：从账单+台账全量聚合
-export const ensureSupplierSummaryBuilt = (owner: string) => {
+export const ensureSupplierSummaryBuilt = async (owner: string): Promise<void> => {
   if (localStorage.getItem(supplierSummaryKey(owner)) !== null) return;
+  const billsSrc = await readFreshRows(billsKey(owner));
+  if (!billsSrc.present) return; // 源表未落地/被淘汰：不建空快照，等拉取落地后由触发点补建
   const summary: SummaryMap<SupplierSummaryEntry> = {};
   const names = new Set<string>();
-  const bills: any[] = readJson(billsKey(owner), []) || [];
-  bills.forEach(b => { const n = trimName(b?.supplier); if (n) names.add(n); });
+  billsSrc.rows.forEach(b => { const n = trimName(b?.supplier); if (n) names.add(n); });
   const pays: any[] = readJson(supplierPaymentsKey(owner), []) || [];
   pays.forEach(p => { const n = trimName(p?.supplierName); if (n) names.add(n); });
-  computeSupPurchaseCents(owner, names).forEach((cents, n) => { ensureSup(summary, n).purchaseTotal += cents; });
+  const purchase = await computeSupPurchaseCents(owner, names);
+  if (!purchase) return;
+  purchase.forEach((cents, n) => { ensureSup(summary, n).purchaseTotal += cents; });
   computeSupPaidCents(owner, names).forEach((v, n) => { const e = ensureSup(summary, n); e.paidTotal = v.cents; e.paidCount = v.count; });
   Object.values(summary).forEach(e => { e.updatedAt = nowIso(); });
   writeJson(supplierSummaryKey(owner), summary);
 };
 
 // 修复：指定供应商两口径全重算（手动重算/巡检自愈共用）
-export const repairSupplierSummary = (owner: string, names: string[]) => {
-  refreshSupplierPurchase(owner, names);
+export const repairSupplierSummary = async (owner: string, names: string[]): Promise<void> => {
+  await refreshSupplierPurchase(owner, names);
   refreshSupplierPaid(owner, names);
 };
 
 // 校验快照与台账/账单是否一致（已付货款 + 采购金额双口径），不一致自动修复，返回修复名单（巡检/加载校验用）
 // 预期值与 refresh 同源（同用身份键聚合），否则校验永远判不一致而反复重写
-export const verifySupplierSummary = (owner: string, names: string[]): string[] => {
+export const verifySupplierSummary = async (owner: string, names: string[]): Promise<string[]> => {
   const summary = loadSupplierSummary(owner);
   const targets = new Set(names.map(trimName).filter(Boolean));
   if (!targets.size) return [];
   const pays = computeSupPaidCents(owner, targets);
-  const purchase = computeSupPurchaseCents(owner, targets);
+  const purchase = await computeSupPurchaseCents(owner, targets);
   const fixed: string[] = [];
-  targets.forEach(n => {
+  for (const n of Array.from(targets)) {
     const e = summary[n];
     // 条目整体缺失：两口径全重算修复
-    if (!e) { repairSupplierSummary(owner, [n]); fixed.push(n); return; }
+    if (!e) { await repairSupplierSummary(owner, [n]); fixed.push(n); continue; }
     const pv = pays.get(n) || { cents: 0, count: 0 };
-    const pu = purchase.get(n) || 0;
     if (e.paidTotal !== pv.cents || e.paidCount !== pv.count) { refreshSupplierPaid(owner, [n]); fixed.push(n); }
-    if (e.purchaseTotal !== pu) { refreshSupplierPurchase(owner, [n]); fixed.push(n); }
-  });
+    // 源表缺失（null）时跳过采购口径比对，避免把快照误判漂移后覆写为 0
+    if (purchase && e.purchaseTotal !== (purchase.get(n) || 0)) { await refreshSupplierPurchase(owner, [n]); fixed.push(n); }
+  }
   return fixed;
 };
 
@@ -179,7 +209,7 @@ export const recordSupplierPayment = (input: SupplierPaymentInput): { ok: boolea
   if (!trimName(input.supplierName)) return { ok: false, msg: '供应商缺失' };
   if (!trimName(input.bankAccount)) return { ok: false, msg: '请选择付款银行账户' };
   // 快照键缺失时先做一次性迁移构建，避免增量写入创建 purchaseTotal=0 的空条目
-  ensureSupplierSummaryBuilt(input.owner);
+  void ensureSupplierSummaryBuilt(input.owner);
   const payKey = supplierPaymentsKey(input.owner);
   const sumKey = supplierSummaryKey(input.owner);
   const bk = bankKey(input.owner);
@@ -260,11 +290,14 @@ export { billDetailKey as customerBillDetailKey, ordersKey as customerOrdersKey,
 // 含手工新增行与负数退货行；匹配走主体身份键，对方改名后历史行仍归同一主体。
 // 账单未生成的订单不再回退计入采购总额：其在途金额由「订单占用」单独表达，
 // 否则未发货余额支付订单会在剩余额度公式里被“采购总额 + 订单占用”双重扣减。
-export const computePurchaseCents = (owner: string, targets: Set<string>): Map<string, number> => {
+export const computePurchaseCents = async (owner: string, targets: Set<string>): Promise<Map<string, number> | null> => {
   const per = new Map<string, number>();
   const { idx, targetFor } = buildTargetIndex(targets);
-  const bills: any[] = readJson(billDetailKey(owner), []) || [];
-  bills.forEach(b => {
+  const src = await readFreshRows(billDetailKey(owner));
+  // 账单明细源表本地完全缺失（大表缓存被淘汰/新设备未拉取）：返回 null，
+  // 调用方不得把快照覆写为 0——采购总额「一会 0 一会正确」跳动的根因防线
+  if (!src.present) return null;
+  src.rows.forEach(b => {
     const t = matchTarget(idx, targetFor, { username: b?.customerUsername, no: b?.customerNo, name: b?.customerName });
     if (!t) return;
     per.set(t, (per.get(t) || 0) + toCents(b?.totalAmount));
@@ -304,10 +337,11 @@ export const makeReceiptMatcher = (custName: string, custId?: string, idNameMap:
 };
 
 // 单客户取数（供「剩余额度」等跨页复用，杜绝另写一套近似公式造成口径漂移）
-export const computeCustomerPurchaseCents = (owner: string, name: string): number => {
+export const computeCustomerPurchaseCents = async (owner: string, name: string): Promise<number> => {
   const n = trimName(name);
   if (!n) return 0;
-  return computePurchaseCents(owner, new Set([n])).get(n) || 0;
+  const per = await computePurchaseCents(owner, new Set([n]));
+  return per ? (per.get(n) || 0) : 0;
 };
 export const computeCustomerReceivedCents = (owner: string, name: string, idNameMap: Record<string, string> = {}): number => {
   const n = trimName(name);
@@ -316,12 +350,14 @@ export const computeCustomerReceivedCents = (owner: string, name: string, idName
 };
 
 // 单对象重算：指定客户的「采购总额」（只遍历账单明细表一次）
-export const refreshCustomerPurchase = (owner: string, names: string[]) => {
+export const refreshCustomerPurchase = async (owner: string, names: string[]): Promise<void> => {
   const targets = new Set(names.map(trimName).filter(Boolean));
   if (!targets.size) return;
+  const per = await computePurchaseCents(owner, targets);
+  if (!per) return; // 源表缺失窗口不得把快照覆写为 0（跳动根因防线）
   const summary = loadCustomerSummary(owner);
   targets.forEach(n => { ensureCus(summary, n).purchaseTotal = 0; });
-  computePurchaseCents(owner, targets).forEach((cents, n) => { ensureCus(summary, n).purchaseTotal += cents; });
+  per.forEach((cents, n) => { ensureCus(summary, n).purchaseTotal += cents; });
   targets.forEach(n => { ensureCus(summary, n).updatedAt = nowIso(); });
   writeJson(customerSummaryKey(owner), summary);
 };
@@ -340,17 +376,18 @@ export const refreshCustomerReceived = (owner: string, names: string[], idNameMa
 // 批量修复（挂载全量自愈用）：源表只各扫一遍、快照只写一次。
 // 旧实现 verifyCustomerPurchase/verifyCustomerSummary 对每个不一致客户单独 refresh，
 // 实际成本是「1 + 不一致客户数」次全表扫描 + 同等次数整键写盘，客户多时页面挂载明显卡顿。
-export const repairCustomerSummaryBulk = (owner: string, names: string[], idNameMap: Record<string, string>): string[] => {
+export const repairCustomerSummaryBulk = async (owner: string, names: string[], idNameMap: Record<string, string>): Promise<string[]> => {
   const targets = new Set(names.map(trimName).filter(Boolean));
   if (!targets.size) return [];
   const summary = loadCustomerSummary(owner);
-  const purchase = computePurchaseCents(owner, targets);
+  const purchase = await computePurchaseCents(owner, targets);
   const received = computeReceivedCents(owner, targets, idNameMap);
   const fixed: string[] = [];
   let dirty = false;
   targets.forEach(n => {
     const e = summary[n];
-    const p = purchase.get(n) || 0;
+    // 源表缺失（null）：采购口径保留快照现值，绝不用 0 覆写；已收口径仍按台账校正
+    const p = purchase ? (purchase.get(n) || 0) : (e ? e.purchaseTotal : 0);
     const r = received.get(n) || { cents: 0, count: 0 };
     if (!e || e.purchaseTotal !== p || e.receivedTotal !== r.cents || e.receivedCount !== r.count) {
       const t = ensureCus(summary, n);
@@ -376,18 +413,21 @@ export const scheduleCustomerRefresh = (owner: string, names: string[], onDone: 
     schedTimer = 0;
     const o = schedOwner; const list = Array.from(schedNames);
     schedNames = new Set(); schedOwner = '';
-    if (o && list.length) { try { refreshCustomerPurchase(o, list); } catch { /* ignore */ } }
-    try { onDone(); } catch { /* ignore */ }
+    void (async () => {
+      if (o && list.length) { try { await refreshCustomerPurchase(o, list); } catch { /* ignore */ } }
+      try { onDone(); } catch { /* ignore */ }
+    })();
   }, delayMs);
 };
 
 // 一次性迁移构建（客户快照）：idNameMap = 客户ID→名称（直接客户+合作采购商）
-export const ensureCustomerSummaryBuilt = (owner: string, idNameMap: Record<string, string>) => {
+export const ensureCustomerSummaryBuilt = async (owner: string, idNameMap: Record<string, string>): Promise<void> => {
   if (localStorage.getItem(customerSummaryKey(owner)) !== null) return;
+  const billsSrc = await readFreshRows(billDetailKey(owner));
+  if (!billsSrc.present) return; // 源表未落地/被淘汰：不建空快照，等拉取落地后由触发点补建
   const summary: SummaryMap<CustomerSummaryEntry> = {};
   const names = new Set<string>();
-  const bills: any[] = readJson(billDetailKey(owner), []) || [];
-  bills.forEach(b => { const n = trimName(b?.customerName); if (n) names.add(n); });
+  billsSrc.rows.forEach(b => { const n = trimName(b?.customerName); if (n) names.add(n); });
   const orders: any[] = readJson(ordersKey(owner), []) || [];
   orders.forEach(o => { const n = trimName(o?.customerName); if (n) names.add(n); });
   const recs: any[] = readJson(receiptsKey(owner), []) || [];
@@ -395,7 +435,9 @@ export const ensureCustomerSummaryBuilt = (owner: string, idNameMap: Record<stri
     const n = trimName(r?.customerId ? idNameMap[r.customerId] : r?.customerName);
     if (n) names.add(n);
   });
-  computePurchaseCents(owner, names).forEach((cents, n) => { ensureCus(summary, n).purchaseTotal += cents; });
+  const purchase = await computePurchaseCents(owner, names);
+  if (!purchase) return;
+  purchase.forEach((cents, n) => { ensureCus(summary, n).purchaseTotal += cents; });
   computeReceivedCents(owner, names, idNameMap).forEach((v, n) => { const e = ensureCus(summary, n); e.receivedTotal = v.cents; e.receivedCount = v.count; });
   Object.values(summary).forEach(e => { e.updatedAt = nowIso(); });
   writeJson(customerSummaryKey(owner), summary);
@@ -427,18 +469,19 @@ export const verifyCustomerSummary = (owner: string, names: string[], idNameMap:
 };
 
 // 校验客户采购总额快照与账单明细，不一致自动修复，返回修复名单（巡检用）
-export const verifyCustomerPurchase = (owner: string, names: string[]): string[] => {
+export const verifyCustomerPurchase = async (owner: string, names: string[]): Promise<string[]> => {
   const summary = loadCustomerSummary(owner);
   const fixed: string[] = [];
   const targets = new Set(names.map(trimName).filter(Boolean));
-  const expected = computePurchaseCents(owner, targets);
-  names.forEach(raw => {
+  const expected = await computePurchaseCents(owner, targets);
+  if (!expected) return []; // 源表缺失窗口不做漂移判定，避免误修复为 0
+  for (const raw of names) {
     const n = trimName(raw);
-    if (!n) return;
+    if (!n) continue;
     const e = summary[n];
     const total = expected.get(n) || 0;
-    if (!e || e.purchaseTotal !== total) { refreshCustomerPurchase(owner, [n]); fixed.push(n); }
-  });
+    if (!e || e.purchaseTotal !== total) { await refreshCustomerPurchase(owner, [n]); fixed.push(n); }
+  }
   return fixed;
 };
 

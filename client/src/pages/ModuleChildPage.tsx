@@ -117,7 +117,7 @@ import { appendBillLogEntry, readBillLog, billLogColor, resolveOperatorName, dif
 import { pullAllDatasets, flushDatasetUploadAsync, ensureDatasetFromServer, appendRowsToRemoteKey, declareShrink, isNeverShrinkKey, fetchServerDataset } from '../utils/serverSync';
 import { peekRemovedIds } from '../utils/shrinkRegistry';
 import { PRESET_PRINT_TEMPLATES, seedPresetPrintTemplates } from '../config/presetPrintTemplates';
-import { refreshCustomerPurchase, computeCustomerPurchaseCents, computeCustomerReceivedCents, toYuan } from '../utils/paySummary';
+import { refreshCustomerPurchase, computeCustomerReceivedCents, toYuan, loadCustomerSummary } from '../utils/paySummary';
 import { resolveLatestCompanyName, resolveCompanyCred, buildCompanyCredMap, buildCredIndex } from '../utils/nameSync';
 import { normBillDay } from '../utils/billDate';
 import { loadAllCustomersFromStorage } from './CustomerInfo';
@@ -1045,7 +1045,18 @@ const ModuleChildPage: React.FC = () => {
       try {
         const idNameMap: Record<string, string> = {};
         allCustomers.forEach((r: any) => { if (r && r.id && r.name) idNameMap[String(r.id)] = String(r.name); });
-        totalPurchase = toYuan(computeCustomerPurchaseCents(owner, customerName));
+        // 采购总额读快照（与客户列表列同源 O(1)）：快照由新鲜读重算维护，
+        // 不在此处同步直读源表（大表 LS 缓存缺失窗口会算出 0 使额度虚高）；
+        // 名称未命中时按主体身份键回退一次
+        const cn = String(customerName || '').trim();
+        const sumMap = loadCustomerSummary(owner);
+        let entry: any = sumMap[cn];
+        if (!entry) {
+          const cidSum = buildCredIndex();
+          const kSum = cidSum.identityOfName(cn);
+          if (kSum) { const hit = Object.keys(sumMap).find(nm => cidSum.identityOfName(nm) === kSum); if (hit) entry = sumMap[hit]; }
+        }
+        totalPurchase = toYuan(entry?.purchaseTotal || 0);
         receivedPayment = toYuan(computeCustomerReceivedCents(owner, customerName, idNameMap));
       } catch { /* ignore */ }
       return Math.round((credit - (totalPurchase - receivedPayment)) * 100) / 100;
@@ -2851,19 +2862,23 @@ const ModuleChildPage: React.FC = () => {
   }, []);
 
   // ============ 账单明细（客户管理）：基于订单生成账单行 ============
-  const buildBillDetailRows = useCallback((existing: Record<string, any>[]) => {
+  const buildBillDetailRows = useCallback((existing: Record<string, any>[], inject?: { orders?: Record<string, any>[]; outboundOrderIds?: Set<string> }) => {
     const owner = getDataOwner();
-    let orders: Record<string, any>[] = [];
-    try { orders = JSON.parse(localStorage.getItem(`pageData_sales_order-manage_${owner}`) || '[]'); } catch { /* ignore */ }
-    if (!Array.isArray(orders)) orders = [];
+    let orders: Record<string, any>[] = inject?.orders || [];
+    if (!inject?.orders) {
+      try { orders = JSON.parse(localStorage.getItem(`pageData_sales_order-manage_${owner}`) || '[]'); } catch { /* ignore */ }
+      if (!Array.isArray(orders)) orders = [];
+    }
     const existMap = new Map(existing.map(r => [r.id, r]));
     // 发货凭证：已有出库单的订单视同已发货（部分发货路径仅生成出库单未改状态），
     // 保证余额支付订单发货后账单明细必然生成账单行
-    const outboundOrderIds = new Set<string>();
-    try {
-      const so: any[] = JSON.parse(localStorage.getItem(`sales_outbound_${owner}`) || '[]');
-      (Array.isArray(so) ? so : []).forEach((s: any) => { if (s?.orderId) outboundOrderIds.add(String(s.orderId)); });
-    } catch { /* ignore */ }
+    const outboundOrderIds = inject?.outboundOrderIds || new Set<string>();
+    if (!inject?.outboundOrderIds) {
+      try {
+        const so: any[] = JSON.parse(localStorage.getItem(`sales_outbound_${owner}`) || '[]');
+        (Array.isArray(so) ? so : []).forEach((s: any) => { if (s?.orderId) outboundOrderIds.add(String(s.orderId)); });
+      } catch { /* ignore */ }
+    }
     // 存量行全量保留（防擦除不变量）：凡不在订单集合中的已有行（手工新增/退货登记/历史行）一律保留在列表顶部。
     // 不能只保留 _manual 行——否则订单键暂缺（未拉取/owner 不一致）时重建会把订单派生行与历史行全部丢弃并上传擦除。
     const orderIds = new Set(orders.map((o: any) => o.id));
@@ -2932,6 +2947,23 @@ const ModuleChildPage: React.FC = () => {
       })];
   }, [getDataOwner]);
 
+  // 新鲜读重建：订单/出库单源表以 IndexedDB 为主存，同步直读 LS 在缓存被淘汰后丢行
+  // → 重建缩水 → 采购总额源表被擦 → 快照归 0 跳动；写路径重建一律走本函数
+  const buildBillDetailRowsFresh = useCallback(async (existing: Record<string, any>[]) => {
+    const owner = getDataOwner();
+    let orders: Record<string, any>[] = [];
+    const outboundOrderIds = new Set<string>();
+    try {
+      const oRaw = await readFreshDataset(`pageData_sales_order-manage_${owner}`);
+      if (oRaw) { const p = JSON.parse(oRaw); if (Array.isArray(p)) orders = p; }
+    } catch { /* ignore */ }
+    try {
+      const sRaw = await readFreshDataset(`sales_outbound_${owner}`);
+      if (sRaw) { const p = JSON.parse(sRaw); (Array.isArray(p) ? p : []).forEach((s: any) => { if (s?.orderId) outboundOrderIds.add(String(s.orderId)); }); } 
+    } catch { /* ignore */ }
+    return buildBillDetailRows(existing, { orders, outboundOrderIds });
+  }, [buildBillDetailRows, getDataOwner]);
+
   // 重建防擦除救回：落盘里存在但重建结果丢弃的行（缺字段历史行/派生口径变化/任何重建缺陷）
   // 原样并回重建结果——保证查询/切签/同步重载/事件重建/回写落库任何重建路径都不会
   // 比落盘少行（表现为「新增账单点查询后消失」）；合法删除已先落盘删除，落盘无该行故不会被救回
@@ -2972,20 +3004,33 @@ const ModuleChildPage: React.FC = () => {
 
   // 发货后重建账单明细落库：仅已发货/已完成订单生成「订单」来源账单，立即持久化（取消手工新增后账单唯一来源）
   const refreshBillDetailStorage = useCallback((owner: string) => {
-    try {
-      const storageKey = `pageData_customer_bill-detail_${owner}`;
-      let existing: Record<string, any>[] = [];
-      try { existing = JSON.parse(localStorage.getItem(storageKey) || '[]'); } catch { existing = []; }
-      if (!Array.isArray(existing)) existing = [];
-      const next = rescueDroppedStoredRows(buildBillDetailRows(existing), existing);
-      const json = JSON.stringify(next);
-      safeSetItem(storageKey, json);
-      // 重建落盘同歩主存+服务端（立即上传）：否则 LS 与 IDB/服务端分叉，
-      // 刷新/拉取时被旧副本覆盖回去，表现为「重建后账单消失」
-      saveDataset(storageKey, json);
-      flushDatasetUploadAsync(storageKey, json).catch(() => false);
-    } catch { /* ignore */ }
-  }, [buildBillDetailRows, rescueDroppedStoredRows]);
+    void (async () => {
+      try {
+        const storageKey = `pageData_customer_bill-detail_${owner}`;
+        let existing: Record<string, any>[] = [];
+        try {
+          // 落盘副本新鲜读（LS 与 IDB 取较新者）：同步直读 LS 在缓存缺失时拿到空副本，
+          // 救回无米下锅 → 空副本写回 LS+IDB 并上传 → 采购总额源表被擦
+          const storedFresh = await readFreshDataset(storageKey);
+          existing = JSON.parse(storedFresh !== null && storedFresh !== undefined ? storedFresh : (localStorage.getItem(storageKey) || '[]'));
+        } catch { existing = []; }
+        if (!Array.isArray(existing)) existing = [];
+        const next = rescueDroppedStoredRows(await buildBillDetailRowsFresh(existing), existing);
+        // 缩水拒写：重建结果比新鲜落盘少行（源表缺失等异常窗口）时拒绝写盘，
+        // 杜绝空/部分副本擦除 LS+IDB 与服务端（采购总额跳动的擦除面根治）
+        if (next.length < existing.length) {
+          console.warn('[bill-detail] 重建缩水被拒写', next.length, '<', existing.length);
+          return;
+        }
+        const json = JSON.stringify(next);
+        safeSetItem(storageKey, json);
+        // 重建落盘同步主存+服务端（立即上传）：否则 LS 与 IDB/服务端分叉，
+        // 刷新/拉取时被旧副本覆盖回去，表现为「重建后账单消失」
+        saveDataset(storageKey, json);
+        flushDatasetUploadAsync(storageKey, json).catch(() => false);
+      } catch { /* ignore */ }
+    })();
+  }, [buildBillDetailRowsFresh, rescueDroppedStoredRows]);
 
   // ============ 退货登记（账单明细）：负数退货行 + 镜像同步采购商平台 + 库存出入库联动 ============
   const [returnRegVisible, setReturnRegVisible] = useState(false);
@@ -5166,7 +5211,7 @@ const ModuleChildPage: React.FC = () => {
     const orderKey = `pageData_sales_order-manage_${owner}`;
     const rebuildBillRows = () => {
       // 取 LS/IDB 较新者：陈旧 LS 缓存重建会丢仅存主存的新账单行
-      void readFreshDataset(sharedDataKey).then((stored) => {
+      void readFreshDataset(sharedDataKey).then(async (stored) => {
         let data: Record<string, any>[] = [];
         if (stored) {
           try {
@@ -5174,7 +5219,8 @@ const ModuleChildPage: React.FC = () => {
             if (Array.isArray(parsed)) data = parsed;
           } catch { /* ignore */ }
         }
-        const rebuilt = rescueDroppedStoredRows(buildBillDetailRows(data), data);
+        // 重建源表（订单/出库单）新鲜读：LS 缓存缺失时同步直读会丢派生行致采购总额源表缩水
+        const rebuilt = rescueDroppedStoredRows(await buildBillDetailRowsFresh(data), data);
         setDataSource(rebuilt);
       }).catch(() => { /* ignore */ });
     };
@@ -5196,7 +5242,7 @@ const ModuleChildPage: React.FC = () => {
       window.removeEventListener('storage', onOrderStorageChange);
       window.removeEventListener('order-data-updated', onOrderDataUpdated as EventListener);
     };
-  }, [moduleKey, childKey, getDataOwner, sharedDataKey, buildBillDetailRows]);
+  }, [moduleKey, childKey, getDataOwner, sharedDataKey, buildBillDetailRows, buildBillDetailRowsFresh]);
 
   // 定时 IndexedDB 恢复：如果产品页数据为空，定期从 IndexedDB 尝试恢复
   React.useEffect(() => {
@@ -5694,14 +5740,14 @@ const ModuleChildPage: React.FC = () => {
     // 取 LS 缓存与 IndexedDB 主存中较新的一份：订单等大表可能长期只写主存，
     // 直接读陈旧 LS 缓存会把本标签页隐藏期间新增/修改的记录显示回旧状态
     let cancelled = false;
-    void readFreshDataset(sharedDataKey).then((stored) => {
+    void readFreshDataset(sharedDataKey).then(async (stored) => {
       if (cancelled || !stored) return;
       try {
         let parsed = JSON.parse(stored);
         if (!Array.isArray(parsed)) return;
         if (moduleKey === 'customer' && childKey === 'bill-detail') {
           const rawRows = parsed;
-          parsed = rescueDroppedStoredRows(buildBillDetailRows(rawRows), rawRows);
+          parsed = rescueDroppedStoredRows(await buildBillDetailRowsFresh(rawRows), rawRows);
         }
         // 商品族：切签重载时实际库存按日志自愈
         if (isProductList) parsed = healActualStockFromLogs(parsed);
@@ -5710,7 +5756,7 @@ const ModuleChildPage: React.FC = () => {
       } catch { /* ignore */ }
     }).catch(() => { /* ignore */ });
     return () => { cancelled = true; };
-  }, [location.pathname, mountedPathname, sharedDataKey, moduleKey, childKey]);
+  }, [location.pathname, mountedPathname, sharedDataKey, moduleKey, childKey, buildBillDetailRowsFresh]);
 
   // 银行账户错桶归并：owner 翻转启动窗口内新增的账户会写进 pageData_finance_bank-account_<子账号>
   // 错桶，归属校正后该桶不再被读取——表现为「新增账号过会自动删除」。挂载时把同租户错桶
@@ -5745,7 +5791,7 @@ const ModuleChildPage: React.FC = () => {
     // 只写主存，直接读陈旧的 LS 缓存会把刚新增的记录从界面抹掉（刷新又从主存
     // 读回 → 反复横跳）
     let cancelled = false;
-    void readFreshDataset(sharedDataKey).then((stored) => {
+    void readFreshDataset(sharedDataKey).then(async (stored) => {
     if (cancelled || !stored) return;
     try {
       let parsed = JSON.parse(stored);
@@ -5754,7 +5800,7 @@ const ModuleChildPage: React.FC = () => {
       // 重建丢弃的落盘行一律救回（重建防擦除）
       if (moduleKey === 'customer' && childKey === 'bill-detail') {
         const rawRows = parsed;
-        parsed = rescueDroppedStoredRows(buildBillDetailRows(rawRows), rawRows);
+        parsed = rescueDroppedStoredRows(await buildBillDetailRowsFresh(rawRows), rawRows);
       }
 
       // 对比当前 dataSource，只有内容确实不同时才更新
@@ -5793,7 +5839,7 @@ const ModuleChildPage: React.FC = () => {
     } catch { /* ignore */ }
     }).catch(() => { /* ignore */ });
     return () => { cancelled = true; };
-  }, [syncVersion, sharedDataKey, isProductList, getImgKey, moduleKey, childKey, buildBillDetailRows]);
+  }, [syncVersion, sharedDataKey, isProductList, getImgKey, moduleKey, childKey, buildBillDetailRows, buildBillDetailRowsFresh]);
 
   // 数据变更时自动持久化（全部页面统一：safeSetItem + _ts + IndexedDB 兜底）
   const dataSourceRef = React.useRef(dataSource);

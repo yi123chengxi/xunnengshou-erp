@@ -1088,14 +1088,16 @@ const CustomerInfo: React.FC = () => {
     customers.forEach(c => { m[c.id] = c.name; });
     boundPurchasers.forEach(bp => { if (bp.id) m[bp.id] = bp.purchaserName; });
     idNameMapRef.current = m;
-    ensureCustomerSummaryBuilt(getDataOwner(), m);
-    // 挂载即全量自愈：按本地订单/收款台账一次性校正全部客户快照（源表只扫一遍、快照只写一次），
-    // 立即修复历史跨端同步遗留的 0 污染快照（空闲巡检逐个轮转太慢，用户会先看到跳动）
-    try {
-      const names = Array.from(new Set([...Object.values(m), ...Object.keys(loadCustomerSummary(getDataOwner()))]));
-      if (names.length) repairCustomerSummaryBulk(getDataOwner(), names, m);
-    } catch { /* ignore */ }
-    setCustSummary(loadCustomerSummary(getDataOwner()));
+    // 挂载即全量自愈（新鲜读：LS 与 IDB 主存取较新者）：源表缓存缺失窗口不再算 0 覆写快照，
+    // 立即修复历史遗留的 0 污染快照（空闲巡检逐个轮转太慢，用户会先看到跳动）
+    void (async () => {
+      try {
+        await ensureCustomerSummaryBuilt(getDataOwner(), m);
+        const names = Array.from(new Set([...Object.values(m), ...Object.keys(loadCustomerSummary(getDataOwner()))]));
+        if (names.length) await repairCustomerSummaryBulk(getDataOwner(), names, m);
+      } catch { /* ignore */ }
+      setCustSummary(loadCustomerSummary(getDataOwner()));
+    })();
   }, [customers, boundPurchasers]);
   useEffect(() => {
     custNamesRef.current = Array.from(new Set([...Object.values(idNameMapRef.current), ...Object.keys(custSummary)]));
@@ -1105,9 +1107,11 @@ const CustomerInfo: React.FC = () => {
     const stopPatrol = startIdlePatrol({
       getNames: () => custNamesRef.current,
       verify: (name) => {
-        const f1 = verifyCustomerPurchase(getDataOwner(), [name]);
-        const f2 = verifyCustomerSummary(getDataOwner(), [name], idNameMapRef.current);
-        if (f1.length || f2.length) setCustSummary(loadCustomerSummary(getDataOwner()));
+        void (async () => {
+          const f1 = await verifyCustomerPurchase(getDataOwner(), [name]);
+          const f2 = verifyCustomerSummary(getDataOwner(), [name], idNameMapRef.current);
+          if (f1.length || f2.length) setCustSummary(loadCustomerSummary(getDataOwner()));
+        })();
       },
     });
     return stopPatrol;

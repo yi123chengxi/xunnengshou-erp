@@ -41,6 +41,7 @@ import { appendBillLogEntry } from '../utils/billLog';
 import { compressImageFile } from '../utils/imageCompress';
 import { resolveLatestCompanyName } from '../utils/nameSync';
 import { reconDbKey, loadRoleAll, loadRoleRecords, upsertRecords, migrateLegacyReconRecords } from '../utils/reconStore';
+import { readFreshDataset } from '../utils/dataStore';
 import { buildSupplierReturnRow, buildPurchaserReturnBill } from '../utils/returnRegister';
 
 const { Title, Text, Paragraph } = Typography;
@@ -240,15 +241,41 @@ const ReconciliationManage: React.FC = () => {
   // 待入账标签随视角：供应商平台未入账方为采购商（对方）；采购商平台未入账方为采购商自己（本方）
   const resultLabel: Record<ReconResult, string> = { ...reconResultLabel, pending: isPurchaser ? '本方未入账' : '对方未入账' };
 
+  // 注册账号表新鲜读：registeredUsers 是数百 KB 大键，localStorage 仅是缓存，被预算淘汰后
+  // 同步直读拿到空表 → 我方公司名为空 → 角色过滤（本行是否属于本公司）大面积失配，
+  // 列表条数随缓存有无跳动（67/16/2 跳动的剩余根因）。改 LS 与 IDB 主存取较新者 + 变更事件重载
+  const [registryUsers, setRegistryUsers] = useState<any[]>(() => {
+    try { const u = JSON.parse(localStorage.getItem('registeredUsers') || '[]'); return Array.isArray(u) ? u : []; } catch { return []; }
+  });
+  useEffect(() => {
+    let alive = true;
+    const loadRegistry = () => {
+      void (async () => {
+        try {
+          const fresh = await readFreshDataset('registeredUsers');
+          if (!alive) return;
+          const parsed = JSON.parse(fresh || '[]');
+          if (Array.isArray(parsed)) setRegistryUsers(parsed);
+        } catch { /* ignore */ }
+      })();
+    };
+    loadRegistry();
+    const onStorage = (e: StorageEvent) => { if (e.key === 'registeredUsers') loadRegistry(); };
+    window.addEventListener('storage', onStorage);
+    window.addEventListener('sync-data-updated', loadRegistry);
+    return () => {
+      alive = false;
+      window.removeEventListener('storage', onStorage);
+      window.removeEventListener('sync-data-updated', loadRegistry);
+    };
+  }, []);
+
   // 当前登录账号名称（对账操作人，回写采购账单的采购商对账人字段）
   const operatorName = useMemo(() => {
     const uname = localStorage.getItem('username') || '';
-    try {
-      const users = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
-      const u = users.find((x: any) => x.username === uname);
-      return u?.contactPerson || u?.companyName || uname;
-    } catch { return uname; }
-  }, []);
+    const u = registryUsers.find((x: any) => x.username === uname);
+    return u?.contactPerson || u?.companyName || uname;
+  }, [registryUsers]);
 
   const getOwner = useCallback(() => {
     const u = localStorage.getItem('username') || '';
@@ -259,13 +286,10 @@ const ReconciliationManage: React.FC = () => {
   // 供应商对账人取值规则：优先记录上供方发起/对账人姓名；系统自动发起或存量缺失时回退供应商法人→主账号姓名
   const resolveSupplierPerson = useCallback((r: any): string => {
     if (r?.supplierReconPerson) return String(r.supplierReconPerson);
-    try {
-      const users = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
-      const u = users.find((x: any) => (r?.supplierUsername && x.username === r.supplierUsername) || (r?.supplierName && x.companyName === r.supplierName));
-      if (u) return u.legalPerson || u.contactPerson || '';
-    } catch { /* ignore */ }
+    const u = registryUsers.find((x: any) => (r?.supplierUsername && x.username === r.supplierUsername) || (r?.supplierName && x.companyName === r.supplierName));
+    if (u) return u.legalPerson || u.contactPerson || '';
     return '';
-  }, []);
+  }, [registryUsers]);
 
   // 实时同步开关（按平台+账号存储）：关闭时本方为响应方的对账记录仅本地保留，
   // 待本方对账完成或提交账目不符反馈后再同步给对方
@@ -626,24 +650,25 @@ const ReconciliationManage: React.FC = () => {
   // 当前账号可见的对账记录：以凭证（账号 → 公司编号）优先，名称（含改名链归一）兜底。
   // 改名/重复账号/快照滞后时不会再出现「供应商发来的对账单搜不到」
   const myProfile = useMemo(() => {
-    try {
-      const users = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
-      const owner = getOwner();
-      const u = users.find((x: any) => x.username === owner);
-      return { username: owner, name: String(u?.companyName || '').trim(), no: String(u?.companyNo || '').trim() };
-    } catch { return { username: getOwner(), name: '', no: '' }; }
-  }, [getOwner]);
+    const owner = getOwner();
+    const u = registryUsers.find((x: any) => x.username === owner);
+    return { username: owner, name: String(u?.companyName || '').trim(), no: String(u?.companyNo || '').trim() };
+  }, [getOwner, registryUsers]);
   const myCompanyName = myProfile.name;
   const latestNameOf = useCallback((n?: string) => resolveLatestCompanyName(String(n || ''), ''), []);
 
   const isMineAsSupplier = useCallback((r: ReconRecord) => {
+    // 注册表不可用窗口（大键缓存被淘汰）：分平台库键本身已蕴含角色归属
+    // （recon_db_supplier_<owner> 内每行必以本公司为供方），此时不再按名称过滤以免大面积失配跳动
+    if (!myProfile.name && !myProfile.no) return true;
     if (r.supplierUsername && r.supplierUsername === myProfile.username) return true;
     if (myProfile.name && !!r.supplierName && latestNameOf(r.supplierName) === latestNameOf(myProfile.name)) return true;
     if (!r.supplierUsername && myProfile.name && !!r.counterparty && latestNameOf(r.counterparty) === latestNameOf(myProfile.name)) return true;
     return false;
-  }, [myProfile.username, myProfile.name, latestNameOf]);
+  }, [myProfile.username, myProfile.name, myProfile.no, latestNameOf]);
 
   const isMineAsPurchaser = useCallback((r: ReconRecord) => {
+    if (!myProfile.name && !myProfile.no) return true; // 同上：库键归属即角色归属
     if (r.customerUsername && r.customerUsername === myProfile.username) return true;
     if (r.customerNo && myProfile.no && String(r.customerNo).trim() === myProfile.no) return true;
     if (myProfile.name && !!r.customerName && latestNameOf(r.customerName) === latestNameOf(myProfile.name)) return true;

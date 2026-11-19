@@ -585,8 +585,10 @@ const PurchaserSupplierList: React.FC = () => {
 
   // ========== 采购金额/已付货款/应付欠款：快照加载 + 事件自愈 + 空闲分片巡检 ==========
   const reloadPaySummary = useCallback(() => {
-    ensureSupplierSummaryBuilt(getDataOwner());
-    setPaySummary(loadSupplierSummary(getDataOwner()));
+    void (async () => {
+      await ensureSupplierSummaryBuilt(getDataOwner());
+      setPaySummary(loadSupplierSummary(getDataOwner()));
+    })();
   }, []);
   const reloadBankAccounts = useCallback(() => {
     try { setBankAccounts(JSON.parse(localStorage.getItem(`pageData_finance_bank-account_${getDataOwner()}`) || '[]')); } catch { setBankAccounts([]); }
@@ -599,10 +601,12 @@ const PurchaserSupplierList: React.FC = () => {
   useEffect(() => {
     const names = dataSource.map(s => s.supplierName).filter(Boolean);
     if (!names.length) return;
-    try {
-      const fixed = verifySupplierSummary(getDataOwner(), names);
-      if (fixed.length) reloadPaySummary();
-    } catch { /* ignore */ }
+    void (async () => {
+      try {
+        const fixed = await verifySupplierSummary(getDataOwner(), names);
+        if (fixed.length) reloadPaySummary();
+      } catch { /* ignore */ }
+    })();
   }, [dataSource, reloadPaySummary]);
 
   // 供应商认证状态批量查询（按 supplierUsername 查）
@@ -631,8 +635,10 @@ const PurchaserSupplierList: React.FC = () => {
     const stopPatrol = startIdlePatrol({
       getNames: () => supplierNamesRef.current,
       verify: (name) => {
-        const fixed = verifySupplierSummary(getDataOwner(), [name]);
-        if (fixed.length) reloadPaySummary();
+        void (async () => {
+          const fixed = await verifySupplierSummary(getDataOwner(), [name]);
+          if (fixed.length) reloadPaySummary();
+        })();
       },
     });
     return () => {
@@ -2490,7 +2496,7 @@ const PurchaserSupplierList: React.FC = () => {
         open={payDetailVisible}
         onCancel={() => setPayDetailVisible(false)}
         footer={[
-          <Button key="repair" icon={<ReloadOutlined />} onClick={() => { repairSupplierSummary(getDataOwner(), [payDetailSupplier]); reloadPaySummary(); message.success('已按台账与采购账单重算完成'); }}>重算</Button>,
+          <Button key="repair" icon={<ReloadOutlined />} onClick={() => { void (async () => { await repairSupplierSummary(getDataOwner(), [payDetailSupplier]); reloadPaySummary(); message.success('已按台账与采购账单重算完成'); })(); }}>重算</Button>,
           <Button key="close" type="primary" onClick={() => setPayDetailVisible(false)}>关闭</Button>,
         ]}
         width={760}
