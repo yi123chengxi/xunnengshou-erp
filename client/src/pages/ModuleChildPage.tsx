@@ -13249,7 +13249,7 @@ const handleBatchAttrsConfirm = () => {
           <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>新增</Button>
         </Tooltip>
       )}
-      {pageConfig?.title !== '订单管理' && pageConfig?.title !== '打单拣货' && pageConfig?.title !== '银行账户' && fnOk('batch') && (
+      {pageConfig?.title !== '订单管理' && pageConfig?.title !== '打单拣货' && pageConfig?.title !== '银行账户' && pageConfig?.title !== '账单明细' && fnOk('batch') && (
         <Dropdown menu={{ items: batchActionItems, onClick: handleBatchAction }} placement="bottomRight">
           <Button icon={<MoreOutlined />}>批量操作</Button>
         </Dropdown>
