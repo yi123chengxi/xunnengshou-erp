@@ -880,7 +880,7 @@ const ModuleChildPage: React.FC = () => {
   const [orderReservedProduct, setOrderReservedProduct] = useState<any>(null);
   const [orderReservedVisible, setOrderReservedVisible] = useState(false);
   // 动态筛选器值（用于产品列表页面的配置化筛选）
-  const [dynamicFilterValues, setDynamicFilterValues] = useState<Record<string, string>>({});
+  const [dynamicFilterValues, setDynamicFilterValues] = useState<Record<string, any>>({});
   // 银行账户开户银行筛选
   const [bankNameFilter, setBankNameFilter] = useState<string>('');
   // 已应用的筛选条件（点击查询后才生效）
@@ -921,7 +921,7 @@ const ModuleChildPage: React.FC = () => {
     setBillRangeQuick(k);
     setBillRange([from.format('YYYY-MM-DD'), to.format('YYYY-MM-DD')]);
   }, []);
-  const [appliedDynamicFilters, setAppliedDynamicFilters] = useState<Record<string, string>>({});
+  const [appliedDynamicFilters, setAppliedDynamicFilters] = useState<Record<string, any>>({});
   // 生产订单：是否显示已完工订单（默认隐藏已完工/归档订单，勾选后查看）
   const [poShowCompleted, setPoShowCompleted] = useState(false);
   const [appliedBankNameFilter, setAppliedBankNameFilter] = useState<string>('');
@@ -2888,7 +2888,12 @@ const ModuleChildPage: React.FC = () => {
     const credMap = buildCompanyCredMap();
     return [...preservedRows, ...orders
       .filter((o: any) => o && o.id && (o.orderStatus === '已发货' || o.orderStatus === '已完成' || outboundOrderIds.has(String(o.id))) && (o.payMethod === '余额支付' || String(o.orderTags || '').includes('余额支付') || String(o.orderTag || '').includes('余额支付')))
-      .sort((a: any, b: any) => String(b.createTime || '').localeCompare(String(a.createTime || '')))
+      .sort((a: any, b: any) => {
+        // 出库时间倒序（与展示层同口径）：取账单行出库日期同源链 prev.outboundDate → payTime → createTime
+        const ka = normBillDay(existMap.get(a.id)?.outboundDate || a.payTime || a.createTime);
+        const kb = normBillDay(existMap.get(b.id)?.outboundDate || b.payTime || b.createTime);
+        return kb.localeCompare(ka) || String(b.createTime || '').localeCompare(String(a.createTime || ''));
+      })
       .map((o: any) => {
         const prev = existMap.get(o.id);
         // 客户编辑保护：重建时保留编辑弹窗人工改过的客户（按改名链折叠后仍不同源才视为人工改客户），
@@ -6176,7 +6181,15 @@ const ModuleChildPage: React.FC = () => {
               '账单来源': 'billSource',
             };
             const field = fieldMap[f.label];
-            if (field && item[field] !== val) return false;
+            if (field) {
+              // 对账结果空值/未对账在列上显示为「待对账」标签，筛选与列同口径归一
+              const cur = item[field];
+              const norm = (field === 'reconResult' && (cur === '' || cur == null || cur === '未对账')) ? '待对账' : cur;
+              if (Array.isArray(val)) {
+                // 多选：组内 OR（命中任一所选状态即保留）
+                if (val.length > 0 && !val.includes(norm)) return false;
+              } else if (norm !== val) return false;
+            }
           }
         }
         // 银行账户页面：开户银行筛选
@@ -6315,6 +6328,13 @@ const ModuleChildPage: React.FC = () => {
         }
         return true;
       });
+    }
+    // 账单明细：按出库时间先后排序，时间最近的排在最前面（outboundDate 倒序，同日按创建时间倒序兜底）
+    if (pageConfig?.title === '账单明细') {
+      const day = (r: any) => String(r.outboundDate || r.date || '').replace(/\//g, '-').slice(0, 10);
+      return list.slice().sort((a, b) =>
+        day(b).localeCompare(day(a)) ||
+        String(b.createdAt || b.createTime || '').localeCompare(String(a.createdAt || a.createTime || '')));
     }
     // 打单拣货：按审核时间（派生视图取订单注入拣货的时间 pickTime）排序，最近审核的排在最前面
     if (pageConfig?.title === '打单拣货') {
@@ -14441,14 +14461,23 @@ const handleBatchAttrsConfirm = () => {
                     );
                   })()
                 ) : f.type === 'select' ? (
-                  <Select
-                    placeholder={f.label}
-                    value={dynamicFilterValues[f.label] || undefined}
-                    onChange={val => setDynamicFilterValues(prev => ({ ...prev, [f.label]: val || '' }))}
-                    allowClear
-                    style={{ width: '100%' }}
-                    options={f.options}
-                  />
+                  (() => {
+                    // 账单明细：对账结果/订单状态/账单来源改多选（一次选多个状态，组内 OR）
+                    const multi = pageConfig?.title === '账单明细' && (f.label === '对账结果' || f.label === '订单状态' || f.label === '账单来源');
+                    const rawV = dynamicFilterValues[f.label];
+                    return (
+                      <Select
+                        mode={multi ? 'multiple' : undefined}
+                        placeholder={f.label}
+                        value={multi ? (Array.isArray(rawV) ? rawV : (rawV ? [rawV] : [])) : (rawV || undefined)}
+                        onChange={val => setDynamicFilterValues(prev => ({ ...prev, [f.label]: multi ? (val || []) : (val || '') }))}
+                        allowClear
+                        maxTagCount={multi ? 'responsive' : undefined}
+                        style={{ width: '100%' }}
+                        options={(f.options || []).filter(o => (multi ? o.value !== '' : true))}
+                      />
+                    );
+                  })()
                 ) : null}
               </Col>
             ))

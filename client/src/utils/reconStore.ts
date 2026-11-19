@@ -62,6 +62,50 @@ export const loadRoleAll = (role: 'supplier' | 'purchaser', username: string): a
 export const loadRoleRecords = (role: 'supplier' | 'purchaser', username: string): any[] =>
   loadRoleAll(role, username).filter((r: any) => r && !r.delisted);
 
+/** 去重键：单据编号 + 双方公司名（归一）。同号不同对手方不算重复，避免误并手动录入 */
+export const reconDupKey = (r: any): string => {
+  if (!r) return '';
+  const sup = String(r.supplierName || (String(r.initiator || '') === 'purchaser' ? r.counterparty : '') || '').trim().toLowerCase();
+  const cus = String(r.customerName || (String(r.initiator || '') === 'supplier' ? r.counterparty : '') || '').trim().toLowerCase();
+  return [String(r.docNo || '').trim().toLowerCase(), sup, cus].join('|');
+};
+
+/** 重复候选的完整度评分：优先保留关联信息/对账状态更全的一条 */
+const dupScore = (r: any): number =>
+  (r && r.matchedBillKey ? 8 : 0) +
+  (r && Array.isArray(r.details) && r.details.length > 0 ? 4 : 0) +
+  (r && r.reconResult && r.reconResult !== 'pending' ? 2 : 0) +
+  (r && r.confirmedAt ? 1 : 0);
+
+/**
+ * 存活记录去重：按 reconDupKey 分组，保留评分最高的一条（同分保留数组靠前者），
+ * 其余转为墓碑（delisted）返回。服务端并集只增不删，历史重复副本只能靠墓碑传播
+ * 在全端同步隐藏；墓碑优先合并保证旧端存活版本不会复活重复行。
+ */
+export const dedupeLiveRecords = (rows: any[]): { kept: any[]; tombs: any[] } => {
+  const kept: any[] = [];
+  const tombs: any[] = [];
+  if (!Array.isArray(rows)) return { kept, tombs };
+  const groups = new Map<string, { idx: number; row: any }[]>();
+  rows.forEach((r: any, idx: number) => {
+    if (!r || !r.key || r.delisted === true) return;
+    const k = reconDupKey(r);
+    const g = groups.get(k);
+    if (g) g.push({ idx, row: r }); else groups.set(k, [{ idx, row: r }]);
+  });
+  const dropped = new Set<string>();
+  groups.forEach(g => {
+    if (g.length < 2) return;
+    const sorted = [...g].sort((a, b) => (dupScore(b.row) - dupScore(a.row)) || (a.idx - b.idx));
+    sorted.slice(1).forEach(e => {
+      dropped.add(e.row.key);
+      tombs.push({ ...e.row, delisted: true, delistedAt: new Date().toISOString(), dedupOf: sorted[0].row.key });
+    });
+  });
+  rows.forEach((r: any) => { if (r && r.key && !dropped.has(r.key)) kept.push(r); });
+  return { kept, tombs };
+};
+
 /**
  * 把记录写入其归属的分平台库（供应商侧 + 采购商侧同时落库，保证双端可见）。
  * 墓碑优先：库内已有同 key 墓碑时，存活版本不得复活它。

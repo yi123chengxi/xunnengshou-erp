@@ -235,7 +235,7 @@ function canUploadKey(key: string): boolean {
 
 // ============ 服务器可用性探测（15s 缓存，超时 1.5s）============
 let serverState: { ok: boolean; at: number } = { ok: false, at: 0 };
-async function serverAvailable(): Promise<boolean> {
+export async function serverAvailable(): Promise<boolean> {
   const now = Date.now();
   if (now - serverState.at < 15000) return serverState.ok;
   try {

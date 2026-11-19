@@ -497,6 +497,7 @@ export const customerPages: Record<string, ChildPageConfig> = {
       { type: 'select', options: [
         { label: '全部对账结果', value: '' },
         { label: '待对账', value: '待对账' },
+        { label: '已发起对账', value: '已发起对账' },
         { label: '确认无误', value: '确认无误' },
       ], label: '对账结果' },
     ],

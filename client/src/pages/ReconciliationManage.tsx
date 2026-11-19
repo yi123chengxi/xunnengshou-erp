@@ -5,7 +5,7 @@ import {
   Popconfirm, Badge, Tooltip, Tabs, Steps, Divider, Alert, Result,
   InputNumber, DatePicker, Timeline, Popover, Checkbox, Upload, Image, Switch,
 } from 'antd';
-import { reloadAfterPull, fetchServerDataset } from '../utils/serverSync';
+import { reloadAfterPull, fetchServerDataset, serverAvailable } from '../utils/serverSync';
 import {
   SearchOutlined,
   ReloadOutlined,
@@ -40,8 +40,9 @@ import type { ColumnsType } from 'antd/es/table';
 import { appendBillLogEntry } from '../utils/billLog';
 import { compressImageFile } from '../utils/imageCompress';
 import { resolveLatestCompanyName } from '../utils/nameSync';
-import { reconDbKey, loadRoleAll, loadRoleRecords, upsertRecords, migrateLegacyReconRecords } from '../utils/reconStore';
-import { readFreshDataset } from '../utils/dataStore';
+import { reconDbKey, loadRoleAll, loadRoleRecords, upsertRecords, migrateLegacyReconRecords, dedupeLiveRecords } from '../utils/reconStore';
+import { readFreshDataset, saveDataset } from '../utils/dataStore';
+import { safeSetItem } from '../utils/storageQuota';
 import { buildSupplierReturnRow, buildPurchaserReturnBill } from '../utils/returnRegister';
 
 const { Title, Text, Paragraph } = Typography;
@@ -251,6 +252,20 @@ const ReconciliationManage: React.FC = () => {
     let alive = true;
     const loadRegistry = () => {
       void (async () => {
+        // 服务端为主：先请求服务端真实账号表（dataset 接口即该表的服务端数据库通道）；
+        // 成功回写 IndexedDB + localStorage 作缓存；失败才回退离线缓存（LS/IDB 取较新者）
+        try {
+          const rec = await fetchServerDataset('registeredUsers');
+          if (!alive) return;
+          if (rec && typeof rec.json === 'string') {
+            const parsed = JSON.parse(rec.json || '[]');
+            if (Array.isArray(parsed)) {
+              setRegistryUsers(parsed);
+              try { saveDataset('registeredUsers', rec.json); safeSetItem('registeredUsers', rec.json); } catch { /* ignore */ }
+              return;
+            }
+          }
+        } catch { /* ignore */ }
         try {
           const fresh = await readFreshDataset('registeredUsers');
           if (!alive) return;
@@ -555,6 +570,9 @@ const ReconciliationManage: React.FC = () => {
         const arr = loadRoleAll(role, owner0);
         if (!Array.isArray(arr)) return;
         arr.forEach((r: any) => { if (r && r.delisted && r.key) tombsRef.current.set(r.key, r); });
+        // 并集带入的重复副本就地去重：多余存活副本转墓碑回写，防列表再显重复
+        const dup = dedupeLiveRecords(arr);
+        if (dup.tombs.length > 0) { dup.tombs.forEach((t: any) => tombsRef.current.set(t.key, t)); upsertRecords(dup.tombs); }
         const gatedLocal = (r: ReconRecord) => (isPurchaser ? (r.initiator || 'supplier') === 'supplier' : r.initiator === 'purchaser') && !realTimeSync && !releasedSyncKeys.current.has(r.key) && !!syncedReconRef.current[r.key];
         setDataSource(prev => {
           // 墓碑 key 的存活版本视为复活残留，不入列表（持久化 effect 会重新压回墓碑）
@@ -573,36 +591,59 @@ const ReconciliationManage: React.FC = () => {
     return () => window.removeEventListener('sync-data-updated', onUpd);
   }, [isPurchaser, realTimeSync]);
 
-  // 服务端自愈：本地副本缩水且 _ts 与服务端版本对齐后，拉取宽限期判定「本地非空且版本不旧」
-  // 永远跳过回拉——同一库刷新后忽而 16 条忽而 2 条忽而 47 条的根因。挂载/查询时主动拉服务端
-  // 副本按 key 并回缺失行：存活行入列表，墓碑行入墓碑表并把列表内对应存活版本压掉
-  const healReconFromServer = useCallback(async (): Promise<number> => {
-    try {
-      const role = isPurchaser ? 'purchaser' : 'supplier';
-      const owner = getOwner();
-      const rec = await fetchServerDataset(reconDbKey(role, owner));
-      if (!rec || typeof rec.json !== 'string') return 0;
-      const serverRows: any[] = JSON.parse(rec.json || '[]');
-      if (!Array.isArray(serverRows) || serverRows.length === 0) return 0;
-      const local = loadRoleAll(role, owner);
-      const localKeys = new Set(local.map((r: any) => r && r.key).filter(Boolean));
-      const missing = serverRows.filter((r: any) => r && r.key && !localKeys.has(r.key));
-      if (missing.length === 0) return 0;
-      upsertRecords(missing); // 按 key 合并写回 LS（墓碑优先，不会复活已完成记录）
-      const missingTombs = new Map<string, any>();
-      missing.forEach((r: any) => { if (r.delisted === true) { missingTombs.set(r.key, r); tombsRef.current.set(r.key, r); } });
-      setDataSource(prev => {
-        const have = new Set(prev.map(p => p.key));
-        const next = prev.filter(p => !missingTombs.has(p.key));
-        const add = missing.filter((r: any) => r.delisted !== true && !have.has(r.key) && !tombsRef.current.has(r.key));
-        return (add.length > 0 || next.length !== prev.length) ? [...next, ...add] : prev;
+  // 服务端为主：列表基准 = 服务端 recon_db 副本（去重后）；本地 localStorage/IndexedDB 仅作缓存。
+  // 服务端不可达 → 回退离线缓存并在顶部提示；成功则把服务端副本回写本地缓存。
+  // 去重：同单号+双方名称的存活记录只保留最完整的一条，其余转墓碑——服务端并集只增不删，
+  // 历史重复副本只能靠墓碑传播在全端同步隐藏；墓碑优先合并杜绝旧端复活
+  const [offlineCache, setOfflineCache] = useState(false);
+  const loadReconServerFirst = useCallback(async (): Promise<'server' | 'cache'> => {
+    const role = isPurchaser ? 'purchaser' : 'supplier';
+    const owner = getOwner();
+    // 先探可达性：区分「服务端不可达（回退离线缓存+横幅）」与「可达但键不存在（新账号，服务端基准=空）」
+    let reachable = false;
+    try { reachable = await serverAvailable(); } catch { reachable = false; }
+    let serverRows: any[] | null = null;
+    if (reachable) {
+      try {
+        const rec = await fetchServerDataset(reconDbKey(role, owner));
+        const parsed = rec && typeof rec.json === 'string' ? JSON.parse(rec.json || '[]') : [];
+        serverRows = Array.isArray(parsed) ? parsed : [];
+      } catch { serverRows = null; }
+    }
+    const localAll = loadRoleAll(role, owner);
+    // 服务端为主：同 key 以服务端版本为准（双端字段级并集最全）；
+    // 本地独有存活行（待上传的新写入）补入避免瞬隐；服务端不可达 → 本地缓存为基准
+    let base: any[];
+    if (serverRows !== null) {
+      const serverKeys = new Set(serverRows.map((r: any) => r && r.key).filter(Boolean));
+      base = [...serverRows, ...localAll.filter((r: any) => r && r.key && !serverKeys.has(r.key))];
+    } else {
+      base = localAll;
+    }
+    const dup = dedupeLiveRecords(base);
+    if (dup.tombs.length > 0) {
+      dup.tombs.forEach((t: any) => tombsRef.current.set(t.key, t));
+      upsertRecords(dup.tombs); // 墓碑回写本地立即生效 + 防抖上传传播服务端并集全端隐藏
+    }
+    if (serverRows !== null && serverRows.length > 0) upsertRecords(serverRows); // 服务端副本 → 本地缓存（按 key 合并、墓碑优先）
+    setOfflineCache(serverRows === null);
+    setDataSource(prev => {
+      // 实时同步关闭时本方未释放的本地记录不得因服务端基准而丢失
+      const gatedLocal = (r: ReconRecord) => (isPurchaser ? (r.initiator || 'supplier') === 'supplier' : r.initiator === 'purchaser') && !realTimeSync && !releasedSyncKeys.current.has(r.key) && !!syncedReconRef.current[r.key];
+      const live = base.filter((r: any) => r && r.key && r.delisted !== true && !tombsRef.current.has(r.key));
+      const byKey = new Map(live.map((r: any) => [r.key, r]));
+      const out = live.map((r: any) => {
+        const local = prev.find(p => p.key === r.key);
+        return local && gatedLocal(local) ? local : r;
       });
-      return missing.length;
-    } catch { return 0; /* 离线/服务端不可用时静默降级为本机副本 */ }
-  }, [isPurchaser, getOwner]);
+      prev.forEach(p => { if (!byKey.has(p.key) && gatedLocal(p)) out.push(p); });
+      return out;
+    });
+    return serverRows !== null ? 'server' : 'cache';
+  }, [isPurchaser, getOwner, realTimeSync]);
 
-  // 挂载即自愈：刷新后首屏就与服务端对齐，不再出现「有时 16 条有时 2 条」
-  useEffect(() => { void healReconFromServer(); }, [healReconFromServer]);
+  // 挂载即服务端为主加载：首屏与服务端库对齐，不再由本地缓存拼合
+  useEffect(() => { void loadReconServerFirst(); }, [loadReconServerFirst]);
   const [activeTab, setActiveTab] = useState<string>('all');
   const [searchText, setSearchText] = useState('');
   const [typeFilter, setTypeFilter] = useState<string>('');
@@ -1937,6 +1978,15 @@ const ReconciliationManage: React.FC = () => {
         </Col>
       </Row>
 
+      {/* 离线缓存提示：服务端为主加载回退本地缓存时展示 */}
+      {offlineCache && (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="服务器连接失败，当前显示离线缓存（数据可能不完整或不是最新）；网络恢复后将自动切回服务端数据。"
+        />
+      )}
       {/* 分类 Tab */}
       <Card style={{ marginBottom: 16 }} bodyStyle={{ padding: '0 24px' }}>
         <Tabs
@@ -2018,8 +2068,8 @@ const ReconciliationManage: React.FC = () => {
                   setDataSource(loadRoleRecords(isPurchaser ? 'purchaser' : 'supplier', getOwner()) as ReconRecord[]);
                 };
                 reloadAfterPull(rl);
-                // 本地副本缩水且版本对齐时拉取会跳过回拉：主动拉服务端副本并回缺失行后再重载
-                void healReconFromServer().then(() => rl());
+                // 查询 = 服务端为主加载：优先请求服务端对账库作列表基准（含去重），失败回退离线缓存
+                void loadReconServerFirst();
               }}>查询</Button>
               <Button icon={<ReloadOutlined />} onClick={handleReset}>重置</Button>
               <Tooltip title="功能说明：开启后，对账结果完全一致（金额一致且明细全部一致）的单据将自动完成对账，并在双方账单写明“自动核对（金额与明细完全一致）”；关闭后仍需人工确认入账/确认对账。">
