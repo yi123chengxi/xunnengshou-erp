@@ -631,12 +631,12 @@ const PayScreenshotUpload: React.FC<{
     <div onPaste={handlePaste} tabIndex={0} style={{ outline: 'none' }}>
       {value ? (
         <div style={{ position: 'relative', display: 'inline-block' }}>
-          <img src={value} alt="付款截图" style={{ width: 96, height: 96, objectFit: 'cover', borderRadius: 6, border: '1px solid #d9d9d9', cursor: 'pointer' }}
+          <img src={absoluteImageUrl(value)} alt="付款截图" style={{ width: 96, height: 96, objectFit: 'cover', borderRadius: 6, border: '1px solid #d9d9d9', cursor: 'pointer' }}
             onClick={() => setPreviewVisible(true)} />
           <CloseCircleOutlined
             style={{ position: 'absolute', top: -6, right: -6, color: '#ff4d4f', fontSize: 16, cursor: 'pointer', background: '#fff', borderRadius: '50%' }}
             onClick={(e) => { e.stopPropagation(); onChange?.(''); }} />
-          <Image src={value} style={{ display: 'none' }} preview={{ visible: previewVisible, onVisibleChange: setPreviewVisible, src: value }} />
+          <Image src={absoluteImageUrl(value)} style={{ display: 'none' }} preview={{ visible: previewVisible, onVisibleChange: setPreviewVisible, src: absoluteImageUrl(value) }} />
         </div>
       ) : (
         <div
@@ -10012,7 +10012,7 @@ const ModuleChildPage: React.FC = () => {
       spec: { title: '规格', dataIndex: 'spec', width: 60, render: (v: string, r: any) => v || getProductField(r.key, 'spec') || '—' },
       image: { title: '图片', dataIndex: 'image', width: 60, render: (v: string, r: any) => {
         const val = v || getProductField(r.key, 'image');
-        return val ? <img src={val} alt="" style={{ width: 32, height: 32, objectFit: 'contain', borderRadius: 4 }} /> : '—';
+        return val ? <img src={absoluteImageUrl(val)} alt="" style={{ width: 32, height: 32, objectFit: 'contain', borderRadius: 4 }} /> : '—';
       } },
       supplierName: { title: '供应商名称', dataIndex: 'supplierName', width: 100, render: (v: string, r: any) => v || getProductField(r.key, 'supplierName') || '—' },
       level: type !== 'process' ? { title: '层级', dataIndex: 'level', width: 60, align: 'center' as const, render: (v: any) => v ? <Tag color="blue">{v}</Tag> : '—' } : null,
@@ -11742,7 +11742,7 @@ const handleBatchAttrsConfirm = () => {
         baseCol.render = (val: string) => {
           if (!val) return <Text type="secondary" style={{ fontSize: 12 }}>—</Text>;
           return (
-            <Image src={val} alt="付款截图" style={{ width: 48, height: 48, objectFit: 'cover', borderRadius: 4, cursor: 'pointer' }}
+            <Image src={absoluteImageUrl(val)} alt="付款截图" style={{ width: 48, height: 48, objectFit: 'cover', borderRadius: 4, cursor: 'pointer' }}
               preview={{ mask: <EyeOutlined style={{ fontSize: 16, color: '#fff' }} /> }} />
           );
         };

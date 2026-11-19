@@ -1805,7 +1805,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
           }
         }}
       >
-        {value ? <img src={value} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : (
+        {value ? <img src={absoluteImageUrl(value)} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : (
           <div style={{ color: '#999', fontSize: 11, textAlign: 'center' }}><PlusOutlined style={{ fontSize: 16 }} /><div>点击/粘贴</div></div>
         )}
       </div>

@@ -14,6 +14,7 @@ import dayjs from 'dayjs';
 import * as XLSX from 'xlsx-js-style';
 import { safeSetItem } from '../utils/storageQuota';
 import { compressImageFile } from '../utils/imageCompress';
+import { absoluteImageUrl } from '../utils/imageSpace';
 import { getCurrentUserDisplayName } from '../utils/billLog';
 import { loadNonExclusiveBrands, isBrandMatch } from '../utils/listingStats';
 import { loadTenantUsers, tenantUserDisplayName } from '../utils/tenantUsers';
@@ -225,7 +226,7 @@ const ImgSlot: React.FC<{ value: string; onChange: (v: string) => void; size?: n
     <Space direction="vertical" size={4} align="start">
       {value ? (
         <div style={{ position: 'relative', width: size, height: size }}>
-          <AntdImage src={value} width={size} height={size} style={{ objectFit: 'cover', borderRadius: 6, border: '1px solid #eee' }} />
+          <AntdImage src={absoluteImageUrl(value)} width={size} height={size} style={{ objectFit: 'cover', borderRadius: 6, border: '1px solid #eee' }} />
           <Button size="small" danger type="text" style={{ position: 'absolute', top: -8, right: -8 }} icon={<DeleteOutlined />} onClick={() => onChange('')} />
         </div>
       ) : (

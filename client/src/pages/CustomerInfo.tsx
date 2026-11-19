@@ -47,6 +47,7 @@ import type { CustomerSummaryEntry } from '../utils/paySummary';
 import { createOccupiedAmountResolver, getOrderOccupiedList, useOrderOccupiedVersion } from '../utils/orderOccupied';
 import { canFn, usePermTick } from '../utils/perm';
 import { compressImageFile } from '../utils/imageCompress';
+import { absoluteImageUrl } from '../utils/imageSpace';
 import { getCurrentUserDisplayName } from '../utils/billLog';
 import { buildInviteLink } from '../utils/cooperationInvite';
 import { createInviteRecord, findUnusedInviteForCustomer, findInviteRecord, buildCustomerInviteLink } from '../utils/inviteRegistry';
@@ -245,12 +246,12 @@ const ReceiptVoucherUpload: React.FC<{ value?: string; onChange?: (v: string) =>
     <div onPaste={handlePaste} tabIndex={0} style={{ outline: 'none' }}>
       {value ? (
         <div style={{ position: 'relative', display: 'inline-block' }}>
-          <img src={value} alt="付款凭证" style={{ width: 96, height: 96, objectFit: 'cover', borderRadius: 6, border: '1px solid #d9d9d9', cursor: 'pointer' }}
+          <img src={absoluteImageUrl(value)} alt="付款凭证" style={{ width: 96, height: 96, objectFit: 'cover', borderRadius: 6, border: '1px solid #d9d9d9', cursor: 'pointer' }}
             onClick={() => setPreviewVisible(true)} />
           <CloseCircleOutlined
             style={{ position: 'absolute', top: -6, right: -6, color: '#ff4d4f', fontSize: 16, cursor: 'pointer', background: '#fff', borderRadius: '50%' }}
             onClick={(e) => { e.stopPropagation(); onChange?.(''); }} />
-          <Image src={value} style={{ display: 'none' }} preview={{ visible: previewVisible, onVisibleChange: setPreviewVisible, src: value }} />
+          <Image src={absoluteImageUrl(value)} style={{ display: 'none' }} preview={{ visible: previewVisible, onVisibleChange: setPreviewVisible, src: absoluteImageUrl(value) }} />
         </div>
       ) : (
         <div

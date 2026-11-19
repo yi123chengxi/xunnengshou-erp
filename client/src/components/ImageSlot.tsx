@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Button, Upload, message, Image as AntdImage } from 'antd';
 import { PlusOutlined, DeleteOutlined, SnippetsOutlined } from '@ant-design/icons';
 import { compressImageFile } from '../utils/imageCompress';
+import { absoluteImageUrl } from '../utils/imageSpace';
 import { readClipboardImage, clipboardImageFailureText } from '../utils/clipboard';
 
 /**
@@ -48,7 +49,7 @@ const ImageSlot: React.FC<{ value?: string; onChange?: (v: string) => void; size
       style={{ display: 'inline-block', outline: 'none', borderRadius: 6 }}>
       {value ? (
         <div style={{ position: 'relative', width: size, height: size }}>
-          <AntdImage src={value} width={size} height={size} style={{ objectFit: 'cover', borderRadius: 6, border: '1px solid #eee' }}
+          <AntdImage src={absoluteImageUrl(value)} width={size} height={size} style={{ objectFit: 'cover', borderRadius: 6, border: '1px solid #eee' }}
             preview={{ visible: prev, onVisibleChange: setPrev }} />
           <Button size="small" type="text" danger icon={<DeleteOutlined />}
             style={{ position: 'absolute', top: -8, right: -8, background: '#fff', borderRadius: '50%', boxShadow: '0 1px 4px rgba(0,0,0,.2)' }}

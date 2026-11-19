@@ -102,19 +102,34 @@ export async function repairImage(id: string, dataUrl: string, thumbDataUrl?: st
   });
 }
 
-/** 相对地址补全为绝对地址；data:/http(s): 原样返回 */
+/** 相对地址补全为绝对地址；data:/blob:/跨域原样返回；
+ * 同源绝对地址（历史记录里存过的绝对 URL，含带图片扩展名的形态）剥掉 origin 后
+ * 统一改写回不带扩展名的同源通道，防生产面板 vhost 图片扩展名正则拦截 location 把 .jpg/.png 结尾劫持致 404 */
 export function absoluteImageUrl(url: string | undefined | null): string {
   if (!url) return '';
-  if (/^(data:|blob:|https?:)/i.test(url)) return url;
-  // 二进制统一走 /api 反代链路（node 同源直出 /api/images/file/*）：
-  // 生产域名站点由面板维护，可能缺 /uploads 静态别名致图片全 404；
-  // 且面板 vhost 有图片扩展名正则拦截 location（.jpg/.png 结尾一律劫持致 404），
-  // 故同源通道路径不带扩展名，由服务端按后缀逐个尝试命中
-  if (url.startsWith('/uploads/images/')) {
-    const rel = url.slice('/uploads/images/'.length).replace(/\.[a-z0-9]+$/i, '');
+  if (/^(data:|blob:)/i.test(url)) return url;
+  let path = url;
+  if (/^https?:/i.test(path)) {
+    let host = '';
+    let pathname = '';
+    try { const u = new URL(path); host = u.host; pathname = u.pathname; } catch { return url; }
+    let sameHost = false;
+    try {
+      if (typeof window !== 'undefined' && window.location && host === window.location.host) sameHost = true;
+      if (!sameHost && host === new URL(API_ORIGIN).host) sameHost = true;
+    } catch { /* ignore */ }
+    if (!sameHost) return url;
+    path = pathname;
+  }
+  let apiFilePrefix = '/api/images/file/';
+  try { apiFilePrefix = `${new URL(API_BASE).pathname.replace(/\/$/, '')}/images/file/`; } catch { /* ignore */ }
+  if (path.startsWith('/uploads/images/') || path.startsWith(apiFilePrefix)) {
+    const rel = (path.startsWith('/uploads/images/')
+      ? path.slice('/uploads/images/'.length)
+      : path.slice(apiFilePrefix.length)).replace(/\.[a-z0-9]+$/i, '');
     return `${API_BASE}/images/file/${rel}`;
   }
-  return `${API_ORIGIN}${url.startsWith('/') ? '' : '/'}${url}`;
+  return `${API_ORIGIN}${path.startsWith('/') ? '' : '/'}${path}`;
 }
 
 /** 是否为本机旧版图片（base64 / 本地键名），用于兼容历史数据渲染 */
