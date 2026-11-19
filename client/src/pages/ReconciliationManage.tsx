@@ -40,7 +40,7 @@ import type { ColumnsType } from 'antd/es/table';
 import { appendBillLogEntry } from '../utils/billLog';
 import { compressImageFile } from '../utils/imageCompress';
 import { resolveLatestCompanyName } from '../utils/nameSync';
-import { reconDbKey, loadRoleAll, loadRoleRecords, upsertRecords, migrateLegacyReconRecords, dedupeLiveRecords } from '../utils/reconStore';
+import { reconDbKey, loadRoleAll, loadRoleRecords, upsertRecords, migrateLegacyReconRecords, dedupeLiveRecords, setRegistryCache } from '../utils/reconStore';
 import { readFreshDataset, saveDataset } from '../utils/dataStore';
 import { safeSetItem } from '../utils/storageQuota';
 import { buildSupplierReturnRow, buildPurchaserReturnBill } from '../utils/returnRegister';
@@ -261,6 +261,7 @@ const ReconciliationManage: React.FC = () => {
             const parsed = JSON.parse(rec.json || '[]');
             if (Array.isArray(parsed)) {
               setRegistryUsers(parsed);
+              setRegistryCache(parsed); // 回灌 reconStore 会话缓存：LS 大键被淘汰时 upsertRecords 归属解析兜底
               try { saveDataset('registeredUsers', rec.json); safeSetItem('registeredUsers', rec.json); } catch { /* ignore */ }
               return;
             }
@@ -270,7 +271,7 @@ const ReconciliationManage: React.FC = () => {
           const fresh = await readFreshDataset('registeredUsers');
           if (!alive) return;
           const parsed = JSON.parse(fresh || '[]');
-          if (Array.isArray(parsed)) setRegistryUsers(parsed);
+          if (Array.isArray(parsed)) { setRegistryUsers(parsed); setRegistryCache(parsed); }
         } catch { /* ignore */ }
       })();
     };
@@ -582,7 +583,7 @@ const ReconciliationManage: React.FC = () => {
             const local = prev.find(p => p.key === r.key);
             return local && gatedLocal(local) ? local : r;
           });
-          prev.forEach(p => { if (!byKey.has(p.key) && gatedLocal(p)) out.push(p); });
+          prev.forEach(p => { if (!byKey.has(p.key) && !tombsRef.current.has(p.key)) out.push(p); });
           return out;
         });
       } catch { /* ignore */ }

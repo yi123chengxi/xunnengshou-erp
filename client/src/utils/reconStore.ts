@@ -18,11 +18,18 @@
 export const reconDbKey = (role: 'supplier' | 'purchaser', username: string): string =>
   `recon_db_${role}_${String(username || '').trim()}`;
 
+/** 注册表会话缓存：registeredUsers 是数百 KB 大键，LS 缓存被淘汰时 upsertRecords 的
+ * 归属解析会静默失败（服务端并回的记录写不进分平台库 → 本地副本永久缩水），
+ * 由页面服务端优先加载成功后回灌本缓存兜底 */
+let registryCache: any[] | null = null;
+export const setRegistryCache = (users: any[]): void => { registryCache = Array.isArray(users) ? users : null; };
+
 const readUsers = (): any[] => {
   try {
     const u = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
-    return Array.isArray(u) ? u : [];
-  } catch { return []; }
+    if (Array.isArray(u) && u.length > 0) return u;
+  } catch { /* ignore */ }
+  return registryCache || [];
 };
 
 /** 按公司全称/简称/编号反查注册账号 */
