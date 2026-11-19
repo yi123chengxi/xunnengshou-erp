@@ -977,14 +977,22 @@ const v18Keys = allPermKeys().filter(k => PERM_V18_DEFAULT_KEYS.includes(k));
         <Card bodyStyle={{ padding: '16px 20px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div>
-              <Tooltip title={infra?.db?.driver === 'mysql' && !infra?.db?.diskTotalConfigured ? '数据库盘总量未配置环境变量 DB_DISK_TOTAL_GB，按缺省 20GB 计算' : '数据库占用为表空间（数据+索引）聚合；剩余 = 盘总量 - 占用'}>
+              <Tooltip title={infra?.db?.source === 'disk-report'
+                ? '数据库服务器磁盘 df 实测值（数据库机 cron 每分钟上报一次，与 df -h 同源）；表空间数据量在副行单独列示'
+                : (infra?.db?.driver === 'mysql' && !infra?.db?.diskTotalConfigured
+                  ? '数据库盘总量未配置环境变量 DB_DISK_TOTAL_GB，按缺省 20GB 计算；且未收到数据库机实测上报，占用仅为表空间聚合'
+                  : '数据库占用为表空间（数据+索引）聚合；剩余 = 盘总量 - 占用；未收到数据库机实测上报')}>
                 <Text type="secondary">数据库剩余</Text>
               </Tooltip>
               <div style={{ fontSize: 24, fontWeight: 'bold', color: '#2f54eb' }}>
                 {infra?.db ? formatStorageSize(infra.db.freeBytes / 1024) : '—'}
               </div>
               <Text type="secondary" style={{ fontSize: 12 }}>
-                {infra?.db ? `占用 ${formatStorageSize(infra.db.usedBytes / 1024)} · 盘总 ${formatStorageSize(infra.db.totalBytes / 1024)}` : '取数失败'}
+                {infra?.db
+                  ? (infra.db.source === 'disk-report'
+                    ? `已用 ${formatStorageSize(infra.db.usedBytes / 1024)} · 盘总 ${formatStorageSize(infra.db.totalBytes / 1024)} · 表数据 ${formatStorageSize((infra.db.tableBytes || 0) / 1024)} · 实测于 ${Math.max(0, Math.round((Date.now() - Number(infra.db.reportedAt || 0)) / 60000))} 分钟前`
+                    : `占用 ${formatStorageSize(infra.db.usedBytes / 1024)} · 盘总 ${formatStorageSize(infra.db.totalBytes / 1024)}`)
+                  : '取数失败'}
               </Text>
             </div>
             <DatabaseOutlined style={{ fontSize: 32, color: '#2f54eb', opacity: 0.3 }} />
