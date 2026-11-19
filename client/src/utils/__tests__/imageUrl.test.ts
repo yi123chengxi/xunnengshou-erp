@@ -22,6 +22,15 @@ describe('absoluteImageUrl', () => {
     expect(out2).not.toContain('.jpg');
   });
 
+  it('http+IP 形态存下的绝对 URL 也改写回当前同源通道（消除 Mixed Content 阻断）', () => {
+    const out = absoluteImageUrl('http://120.27.143.175/uploads/images/u_7/img_m.jpg');
+    expect(out).toContain('/api/images/file/u_7/img_m');
+    expect(out).not.toContain('.jpg');
+    expect(out).not.toContain('120.27.143.175');
+    const out2 = absoluteImageUrl('http://120.27.143.175/api/images/file/u_7/img_m');
+    expect(out2).toContain('/api/images/file/u_7/img_m');
+  });
+
   it('裸域/www 视同同站：跨形态会话存下的绝对 URL 也改写回通道', () => {
     const out = absoluteImageUrl('http://www.localhost/uploads/images/u_9/img_z.jpg');
     expect(out).toContain('/api/images/file/u_9/img_z');

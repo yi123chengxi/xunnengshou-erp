@@ -108,31 +108,36 @@ export async function repairImage(id: string, dataUrl: string, thumbDataUrl?: st
 export function absoluteImageUrl(url: string | undefined | null): string {
   if (!url) return '';
   if (/^(data:|blob:)/i.test(url)) return url;
+  let apiFilePrefix = '/api/images/file/';
+  try { apiFilePrefix = `${new URL(API_BASE).pathname.replace(/\/$/, '')}/images/file/`; } catch { /* ignore */ }
+  const rewriteBinary = (p: string): string | null => {
+    if (!p.startsWith('/uploads/images/') && !p.startsWith(apiFilePrefix)) return null;
+    const rel = (p.startsWith('/uploads/images/')
+      ? p.slice('/uploads/images/'.length)
+      : p.slice(apiFilePrefix.length)).replace(/\.[a-z0-9]+$/i, '');
+    return `${API_BASE}/images/file/${rel}`;
+  };
   let path = url;
+  let host = '';
   if (/^https?:/i.test(path)) {
-    let host = '';
-    let pathname = '';
-    try { const u = new URL(path); host = u.host; pathname = u.pathname; } catch { return url; }
+    try { const u = new URL(path); host = u.host; path = u.pathname; } catch { return url; }
+    // 应用自有二进制路径：无论存自哪种会话形态（IP/裸域/www、http/https）一律改写回当前同源通道——
+    // 同时消除 https 页面加载 http IP 地址的 Mixed Content 阻断与尾缀扩展名被 vhost 正则劫持两类故障
+    const hit = rewriteBinary(path);
+    if (hit) return hit;
+    // 其余同源绝对地址：裸域与 www 视同同站，剥 origin 后按当前域重建（顺带 http→https 升级）
+    const normHost = (h: string) => h.replace(/^www\./i, '');
     let sameHost = false;
     try {
-      // 裸域与 www 视同同站：历史记录可能存任一形态会话产出的绝对 URL，
-      // 不归一会让跨形态绝对地址逃过改写、尾缀扩展名再被 vhost 正则劫持
-      const normHost = (h: string) => h.replace(/^www\./i, '');
       const nh = normHost(host);
       if (typeof window !== 'undefined' && window.location && nh === normHost(window.location.host)) sameHost = true;
       if (!sameHost && nh === normHost(new URL(API_ORIGIN).host)) sameHost = true;
     } catch { /* ignore */ }
     if (!sameHost) return url;
-    path = pathname;
+    return `${API_ORIGIN}${path.startsWith('/') ? '' : '/'}${path}`;
   }
-  let apiFilePrefix = '/api/images/file/';
-  try { apiFilePrefix = `${new URL(API_BASE).pathname.replace(/\/$/, '')}/images/file/`; } catch { /* ignore */ }
-  if (path.startsWith('/uploads/images/') || path.startsWith(apiFilePrefix)) {
-    const rel = (path.startsWith('/uploads/images/')
-      ? path.slice('/uploads/images/'.length)
-      : path.slice(apiFilePrefix.length)).replace(/\.[a-z0-9]+$/i, '');
-    return `${API_BASE}/images/file/${rel}`;
-  }
+  const hit = rewriteBinary(path);
+  if (hit) return hit;
   return `${API_ORIGIN}${path.startsWith('/') ? '' : '/'}${path}`;
 }
 
