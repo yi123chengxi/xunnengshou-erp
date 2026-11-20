@@ -115,6 +115,45 @@ export const sendChatMessage = (body: { to: string; content: string; msg_type?: 
 export const markChatRead = (to: string) =>
   request<{ saved: boolean }>('/wx/chat/read', { method: 'POST', data: { to } })
 
+/** 会话列表（我的消息）：与 Web ChatPage 左列同源，含对方展示信息与各自未读数 */
+export interface ConvItem {
+  convId: string
+  other: ChatPeer
+  lastMessage: string
+  lastMessageType: string
+  lastTime: number
+  subject: string
+  unread: number
+}
+
+export const getChatConversations = () =>
+  request<{ list: ConvItem[] }>('/wx/chat/conversations')
+
+export const getChatUnread = () =>
+  request<{ count: number }>('/wx/chat/unread')
+
+/** 企业信息（与网页版右上角「企业信息」弹窗基本信息同口径） */
+export interface CompanyProfile {
+  username: string
+  role: string
+  name: string
+  companyName: string
+  legalPerson: string
+  companyNo: string
+  orderPrefix: string
+  taxpayerCode: string
+  contactPerson: string
+  phone: string
+  address: string
+  email: string
+  registerDate: string
+  status: string
+  trialEndDate: string
+  authorizedUntil: string
+}
+
+export const getProfile = () => request<{ profile: CompanyProfile }>('/wx/profile')
+
 /** 银行账户（服务端 /wx/bank-accounts 只读下发，不含密码类字段） */
 export interface BankAccount {
   key: string

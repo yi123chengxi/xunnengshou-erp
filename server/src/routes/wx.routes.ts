@@ -5,7 +5,7 @@ import { store } from '../database/store';
 import { verifyJWT, verifyCredentials, issueToken, JWTPayload } from './auth.routes';
 import { getJwtSecret } from '../utils/jwtSecret';
 import { resolveCompanyRoot } from '../services/storageUsage';
-import { makeConvId, getHistory as chatHistory, saveMessage as chatSaveMessage, markConvRead as chatMarkRead } from '../ws/chat-store';
+import { makeConvId, getHistory as chatHistory, saveMessage as chatSaveMessage, markConvRead as chatMarkRead, getConversations as chatConvs, getUnreadCount as chatUnread } from '../ws/chat-store';
 import { isUserOnline, pushSavedToRecipient } from '../ws/chat-ws';
 import { checkChatContent, blockReason } from '../utils/chatFilter';
 
@@ -208,6 +208,51 @@ router.get('/me', verifyJWT, async (req: Request, res: Response) => {
   const owner = await ownerOf(user.username);
   const name = await displayNameOf(user.username);
   res.json({ code: 200, data: { username: user.username, role: user.role, owner, name } });
+});
+
+/** 子账号从主账号记录继承的公司级字段（与 Web utils/profileInfo 同一清单） */
+const PROFILE_INHERIT_FIELDS = [
+  'companyShortName', 'companyNo', 'orderPrefix', 'legalPerson', 'taxpayerCode',
+  'province', 'city', 'district', 'addressDetail', 'businessAddress',
+  'email', 'registerDate', 'status', 'trialEndDate', 'authorizedUntil',
+];
+
+/** GET /api/wx/profile —— 企业信息：与网页版右上角「企业信息」弹窗基本信息同口径；子账号公司级字段继承主账号 */
+router.get('/profile', verifyJWT, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user as JWTPayload;
+    const owner = await ownerOf(user.username);
+    const users = await readRows('registeredUsers');
+    const me: any = users.find((u: any) => u && u.username === user.username) || {};
+    const parent: any = owner && owner !== user.username ? (users.find((u: any) => u && u.username === owner) || {}) : {};
+    const merged: any = { ...me };
+    PROFILE_INHERIT_FIELDS.forEach((f) => { if (!merged[f] && parent[f]) merged[f] = parent[f]; });
+    // 公司名称与认证主体始终跟随主账号（与 Web 合并规则一致）
+    if (parent.companyName) merged.companyName = parent.companyName;
+    const s = (v: any) => String(v ?? '').trim();
+    const address = [merged.province, merged.city, merged.district, merged.addressDetail].map(s).filter(Boolean).join(' ') || s(merged.businessAddress);
+    res.json({ code: 200, data: { profile: {
+      username: user.username,
+      role: String(user.role || ''),
+      name: await displayNameOf(user.username),
+      companyName: s(merged.companyName),
+      legalPerson: s(merged.legalPerson),
+      companyNo: s(merged.companyNo) || s(merged.companyShortName),
+      orderPrefix: s(merged.orderPrefix),
+      taxpayerCode: s(merged.taxpayerCode),
+      contactPerson: s(me.contactPerson),
+      phone: s(me.phone),
+      address,
+      email: s(merged.email),
+      registerDate: s(merged.registerDate),
+      status: s(merged.status),
+      trialEndDate: s(merged.trialEndDate),
+      authorizedUntil: s(merged.authorizedUntil),
+    } } });
+  } catch (err: any) {
+    console.error('[wx] profile error:', err.message);
+    res.status(500).json({ code: 500, message: '服务器内部错误' });
+  }
 });
 
 // ============ 工作台 ============
@@ -1595,6 +1640,47 @@ router.post('/chat/read', verifyJWT, async (req: Request, res: Response) => {
     res.json({ code: 200, data: { saved: true } });
   } catch (err: any) {
     console.error('[wx] chat read error:', err.message);
+    res.status(500).json({ code: 500, message: '服务器内部错误' });
+  }
+});
+
+/** GET /api/wx/chat/conversations —— 会话列表（我的消息）：与 Web ChatPage 左列同一份会话，附加对方展示信息与在线状态 */
+router.get('/chat/conversations', verifyJWT, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user as JWTPayload;
+    const convs = await chatConvs(user.username);
+    const users = await readRows('registeredUsers');
+    const coOf = (u: string) => {
+      const h: any = users.find((x: any) => x && x.username === u) || {};
+      return String(h.companyName || '');
+    };
+    const list = [];
+    for (const c of convs) {
+      list.push({
+        convId: String(c.convId || ''),
+        other: { username: c.otherUser, name: await displayNameOf(c.otherUser), company: coOf(c.otherUser), online: isUserOnline(c.otherUser) },
+        lastMessage: String(c.lastMessage || ''),
+        lastMessageType: String(c.lastMessageType || 'text'),
+        lastTime: Number(c.lastTime) || 0,
+        subject: String(c.subject || ''),
+        unread: Number(c.unreadCount) || 0,
+      });
+    }
+    res.json({ code: 200, data: { list } });
+  } catch (err: any) {
+    console.error('[wx] chat conversations error:', err.message);
+    res.status(500).json({ code: 500, message: '服务器内部错误' });
+  }
+});
+
+/** GET /api/wx/chat/unread —— 总未读数（「我的」Tab 气泡与消息列表角标共用同一口径） */
+router.get('/chat/unread', verifyJWT, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user as JWTPayload;
+    const count = await chatUnread(user.username);
+    res.json({ code: 200, data: { count: Number(count) || 0 } });
+  } catch (err: any) {
+    console.error('[wx] chat unread error:', err.message);
     res.status(500).json({ code: 500, message: '服务器内部错误' });
   }
 });

@@ -12,6 +12,7 @@ export default defineAppConfig({
     'pages/module/index',
     'pages/approval-detail/index',
     'pages/chat/index',
+    'pages/messages/index',
   ],
   window: {
     backgroundTextStyle: 'light',
