@@ -108,9 +108,10 @@ const Workbench = () => {
           {favGrid.map(g => (
             <View key={g.id} className="grid-item" onClick={g.onClick} style={{ position: 'relative', width: '25%' }}>
               {g.icon.includes('.') ? (
-                /* 图片图标对齐表情图标：表情行高 44（.grid-icon），故用等高容器居中，图形本体 32 */
-                <View style={{ height: 44, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  <Image src={g.icon} style={{ width: 32, height: 32, display: 'block' }} mode="aspectFit" />
+                /* 图片图标对齐表情图标：表情 .grid-icon 为 font-size 36 / line-height 44（scss px 即 rpx），
+                   行内 style 的数字按真实 px 渲染（约 2 倍），故此处必须显式带 rpx 单位才能同高 */
+                <View style={{ height: '44rpx', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <Image src={g.icon} style={{ width: '36rpx', height: '36rpx', display: 'block' }} mode="aspectFit" />
                 </View>
               ) : (
                 <Text className="grid-icon">{g.icon}</Text>
