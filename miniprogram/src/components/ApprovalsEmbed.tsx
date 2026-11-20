@@ -63,22 +63,21 @@ const ApprovalsEmbed = ({ tick = 0 }: { tick?: number }) => {
         <View
           key={`${it.type}-${it.key}`}
           className="card"
+          style={{ padding: '18px 24px' }}
           onClick={() => Taro.navigateTo({ url: `/pages/approval-detail/index?type=${it.type}&key=${encodeURIComponent(it.key)}` })}
         >
-          {/* 横向四列：报销标题 | 金额 | 申请人 | 申请时间（单号与状态标签挂在首/末列） */}
+          {/* 两行卡：第一行 标题左 + 金额右；第二行 时间·申请人·单号 + 状态标签 */}
           <View style={{ display: 'flex', alignItems: 'center' }}>
-            <View style={{ flex: 1, minWidth: 0, marginRight: 12 }}>
-              <Text style={{ display: 'block', fontWeight: 600, fontSize: 28, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {it.title || ((it as any).isReceipt ? '收款登记' : '付款申请')}
-              </Text>
-              <Text className="muted" style={{ display: 'block', fontSize: 22, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.no}</Text>
-            </View>
-            <Text className="amount" style={{ marginRight: 12, whiteSpace: 'nowrap' }}>¥{(it.amount || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2 })}</Text>
-            <Text className="muted" style={{ marginRight: 12, maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.applicantName || it.applicant}</Text>
-            <View style={{ textAlign: 'right', flexShrink: 0 }}>
-              <Text className="muted" style={{ display: 'block', fontSize: 22, whiteSpace: 'nowrap' }}>{it.time}</Text>
-              <Text className={`tag ${statusTag(it.status)}`} style={{ marginTop: 4 }}>{it.statusText}</Text>
-            </View>
+            <Text style={{ flex: 1, minWidth: 0, fontWeight: 600, fontSize: 30, lineHeight: '40px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {it.title || ((it as any).isReceipt ? '收款登记' : '付款申请')}
+            </Text>
+            <Text className="amount" style={{ fontSize: 30, marginLeft: 12, whiteSpace: 'nowrap' }}>¥{(it.amount || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2 })}</Text>
+          </View>
+          <View style={{ display: 'flex', alignItems: 'center', marginTop: 8 }}>
+            <Text className="muted" style={{ flex: 1, minWidth: 0, fontSize: 24, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {it.time}{(it.applicantName || it.applicant) ? ` · ${it.applicantName || it.applicant}` : ''}{it.no ? ` · ${it.no}` : ''}
+            </Text>
+            <Text className={`tag ${statusTag(it.status)}`} style={{ marginLeft: 12, flexShrink: 0 }}>{it.statusText}</Text>
           </View>
         </View>
       ))}
