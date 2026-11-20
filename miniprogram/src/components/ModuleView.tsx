@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
-import { View, Text, ScrollView, Button } from '@tarojs/components'
+import { View, Text, ScrollView, Button, Image } from '@tarojs/components'
 import Taro from '@tarojs/taro'
 import { findModule } from '../config/menu'
+import scanCameraIcon from '../assets/scan-camera.png'
 import ApprovalsEmbed from './ApprovalsEmbed'
 import InventoryEmbed from './InventoryEmbed'
 import OrdersEmbed from './OrdersEmbed'
@@ -30,7 +31,7 @@ const ScanLauncher = ({ onScanned }: { onScanned: (code: string) => void }) => {
   }
   return (
     <View style={{ padding: '80px 48px', textAlign: 'center' }}>
-      <Text style={{ fontSize: 96, display: 'block' }}>📷</Text>
+      <Image src={scanCameraIcon} style={{ width: 160, height: 160, display: 'block', margin: '0 auto' }} />
       <Text className="muted" style={{ display: 'block', margin: '24px 0 48px' }}>扫描商品条码或款号二维码，快速查询商品与库存</Text>
       <Button className="btn-primary" onClick={onScan}>开始扫码</Button>
     </View>

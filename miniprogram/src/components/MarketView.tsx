@@ -3,6 +3,7 @@ import { View, Text, Image, Input } from '@tarojs/components'
 import Taro from '@tarojs/taro'
 import { getMarket } from '../services/api'
 import { computeSubjectFeatures, subjectSimilarity } from '../services/imageSimilarity'
+import scanCameraIcon from '../assets/scan-camera.png'
 
 const SEGMENTS = [
   { key: 'semi', label: '发包市场' },
@@ -104,8 +105,8 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
         <View className="btn-primary" style={btnStyle} onClick={() => setApplied(input.trim())}>
           搜索
         </View>
-        <View className="btn-primary" style={{ ...btnStyle, padding: '0 12px' }} onClick={pickImageSearch}>
-          📷
+        <View className="btn-primary" style={{ ...btnStyle, padding: '0 12px', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={pickImageSearch}>
+          <Image src={scanCameraIcon} style={{ width: 28, height: 28 }} />
         </View>
       </View>
       {refUrl ? (

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { View, Text } from '@tarojs/components'
+import { View, Text, Image } from '@tarojs/components'
 import Taro from '@tarojs/taro'
 import { MODULES, CHILD_ICONS, openMenuChild } from '../../config/menu'
 import { isFav, toggleFav } from '../../services/favorites'
@@ -30,7 +30,11 @@ const More = () => {
                     style={{ position: 'relative', background: '#fff', borderRadius: 12, padding: '22px 0', textAlign: 'center', boxShadow: '0 2px 8px rgba(31,39,51,0.06)' }}
                     onClick={() => openMenuChild(m.key, c.key)}
                   >
-                    <Text style={{ fontSize: 40, display: 'block', lineHeight: '48px' }}>{CHILD_ICONS[c.key] || '📌'}</Text>
+                    {(CHILD_ICONS[c.key] || '').includes('.') ? (
+                      <Image src={CHILD_ICONS[c.key]} style={{ width: 40, height: 40, display: 'block', margin: '0 auto 4px' }} />
+                    ) : (
+                      <Text style={{ fontSize: 40, display: 'block', lineHeight: '48px' }}>{CHILD_ICONS[c.key] || '📌'}</Text>
+                    )}
                     <Text style={{ fontSize: 24, color: '#5a6d85' }}>{c.title}</Text>
                     <Text
                       style={{ position: 'absolute', top: 4, right: 6, fontSize: 30, lineHeight: '36px', width: 40, textAlign: 'center', color: fav ? '#52c41a' : '#1677ff', fontWeight: 700 }}

@@ -88,12 +88,14 @@ export const TAB_MODULE_PATHS: Record<string, string> = {
 export const findModule = (key: string): MenuModule | undefined => MODULES.find(m => m.key === key)
 
 // 子菜单图标（首页常用功能宫格与查看更多卡片共用）
+// 值为资源路径（含 '.'）时渲染端改用 Image，而非 Text 表情
+import scanCameraIcon from '../assets/scan-camera.png'
 export const CHILD_ICONS: Record<string, string> = {
   approvals: '✅', reimburse: '🧾', bookkeeping: '📔',
   orders: '📋', production: '🏭', purchase: '📥',
   'production-order': '🏭', 'processing-order': '⚙️', 'purchase-requisition': '📥',
   'workflow-templates': '🧭', 'production-schedule': '📅',
-  inventory: '📦', scan: '📷',
+  inventory: '📦', scan: scanCameraIcon,
   finished: '🛒', semi: '📤', mold: '🧰',
   progress: '📈', 'shop-management': '🏪', opportunity: '🛒', 'warehouse-stats': '📊', manage: '🏅',
   attendance: '⏰', staff: '🧑‍💼', leave: '📝',

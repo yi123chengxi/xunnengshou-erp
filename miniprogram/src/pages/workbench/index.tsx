@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { View, Text } from '@tarojs/components'
+import { View, Text, Image } from '@tarojs/components'
 import Taro, { useDidShow } from '@tarojs/taro'
 import { getSummary, SummaryData } from '../../services/api'
 import { getUser, getToken } from '../../services/session'
@@ -107,7 +107,11 @@ const Workbench = () => {
         <View className="grid">
           {favGrid.map(g => (
             <View key={g.id} className="grid-item" onClick={g.onClick} style={{ position: 'relative', width: '25%' }}>
-              <Text className="grid-icon">{g.icon}</Text>
+              {g.icon.includes('.') ? (
+                <Image src={g.icon} style={{ width: 36, height: 36, display: 'block', margin: '0 auto' }} />
+              ) : (
+                <Text className="grid-icon">{g.icon}</Text>
+              )}
               {!!g.badge && (
                 <Text style={{ position: 'absolute', top: 6, right: 24, background: '#f5222d', color: '#fff', borderRadius: 20, fontSize: 16, lineHeight: '24px', padding: '0 8px' }}>
                   {g.badge}
