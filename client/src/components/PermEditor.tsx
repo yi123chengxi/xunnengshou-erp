@@ -138,7 +138,7 @@ const PermEditor: React.FC<Props> = ({ scopes, value, onChange, pageChecks, onPa
 
   const fnRows = useMemo(() => FN_POINTS
     .filter(p => p.key.startsWith(`fn:${activeMenu}:`))
-    .map(p => ({ action: p.key.slice(`fn:${activeMenu}:`.length), key: p.key })), [activeMenu]);
+    .map(p => ({ action: p.key.slice(`fn:${activeMenu}:`.length), key: p.key, label: p.label })), [activeMenu]);
   const hasFnPoints = fnRows.length > 0;
 
   return (
@@ -232,7 +232,7 @@ const PermEditor: React.FC<Props> = ({ scopes, value, onChange, pageChecks, onPa
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '6px 16px' }}>
                     {fnRows.map(r => (
                       <div key={r.key} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                        <Text style={{ fontSize: 13 }}>{FN_ACTION_LABEL[r.action as keyof typeof FN_ACTION_LABEL]}</Text>
+                        <Text style={{ fontSize: 13 }}>{FN_ACTION_LABEL[r.action as keyof typeof FN_ACTION_LABEL] || r.label}</Text>
                         <TriRadio value={value[r.key]} onChange={v => set(r.key, v)} />
                       </div>
                     ))}

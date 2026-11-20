@@ -16,6 +16,8 @@ import DevPointsStatsPage from './dev/DevPointsStatsPage';
 import DevPerformanceNewPage from './dev/DevPerformanceNewPage';
 import NewStyleProgressPage from './NewStyleProgressPage';
 import type { AnalyticsPlatform } from '../utils/devStore';
+import { canFn, usePermTick } from '../utils/perm';
+import { SHOP_MENU_KEY, PURCHASER_SHOP_MENU_KEY } from '../config/permRegistry';
 
 const { Sider, Content } = Layout;
 
@@ -39,6 +41,10 @@ const ShopManagementPage: React.FC = () => {
   const platform: AnalyticsPlatform = useMemo(() => {
     return window.location.pathname.startsWith('/purchaser') ? 'purchaser' : 'supplier';
   }, []);
+  // 业绩分析子页面权限门控：权限点挂在店铺管理菜单的 fn 点（权限编辑器内可逐页允许/禁止）
+  const permScope = platform === 'purchaser' ? 'purchaser' : 'supplier';
+  const shopMenuKey = platform === 'purchaser' ? PURCHASER_SHOP_MENU_KEY : SHOP_MENU_KEY;
+  usePermTick();
 
   // 业绩分析子页面（带 platform prop）
   const analyticsPages: SubPageItem[] = useMemo(() => [
@@ -76,25 +82,33 @@ const ShopManagementPage: React.FC = () => {
     setActiveKey(key);
   }, []);
 
-  // 查找当前激活的组件
+  // 查找当前激活的组件（被权限禁止的业绩分析子页回退店铺列表，防 URL/事件直达）
+  const visibleAnalytics = useMemo(
+    () => analyticsPages.filter(p => canFn(permScope, shopMenuKey, p.key)),
+    [analyticsPages, permScope, shopMenuKey],
+  );
+  const effectiveActiveKey = useMemo(() => {
+    if (analyticsPages.some(p => p.key === activeKey) && !visibleAnalytics.some(p => p.key === activeKey)) return 'list';
+    return activeKey;
+  }, [activeKey, analyticsPages, visibleAnalytics]);
   const ActiveComponent = useMemo(() => {
-    const shopMatch = shopPages.find(p => p.key === activeKey);
+    const shopMatch = shopPages.find(p => p.key === effectiveActiveKey);
     if (shopMatch) return shopMatch.component;
-    const analyticsMatch = analyticsPages.find(p => p.key === activeKey);
+    const analyticsMatch = visibleAnalytics.find(p => p.key === effectiveActiveKey);
     if (analyticsMatch) return analyticsMatch.component;
     return ShopListPage;
-  }, [activeKey, analyticsPages]);
+  }, [effectiveActiveKey, visibleAnalytics]);
 
-  // 构建菜单项（店铺管理 + 业绩分析分组）
+  // 构建菜单项（店铺管理 + 业绩分析分组；子页全被禁止时隐藏整个分组）
   const menuItems = useMemo(() => [
     ...shopPages.map(p => ({ key: p.key, icon: p.icon, label: p.label })),
-    {
+    ...(visibleAnalytics.length > 0 ? [{
       key: 'analytics-group',
       icon: <TrophyOutlined />,
       label: '业绩分析',
-      children: analyticsPages.map(p => ({ key: p.key, icon: p.icon, label: p.label })),
-    },
-  ], [analyticsPages]);
+      children: visibleAnalytics.map(p => ({ key: p.key, icon: p.icon, label: p.label })),
+    }] : []),
+  ], [visibleAnalytics]);
 
   return (
     <Layout style={{ height: 'calc(100vh - 64px)', background: 'transparent' }}>
@@ -134,7 +148,7 @@ const ShopManagementPage: React.FC = () => {
         <Menu
           className="shop-mgmt-menu"
           mode="inline"
-          selectedKeys={[activeKey]}
+          selectedKeys={[effectiveActiveKey]}
           defaultOpenKeys={['analytics-group']}
           onClick={handleMenuClick}
           items={menuItems}

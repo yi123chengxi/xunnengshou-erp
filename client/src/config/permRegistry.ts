@@ -264,6 +264,17 @@ export const PRODUCT_FIELD_KEYS = PRODUCT_FIELD_META.map(c => c.dataIndex);
 
 /** 店铺管理菜单 key（字段/按键权限点归属） */
 export const SHOP_MENU_KEY = 'ecommerce/shop-management';
+/** 采购商平台店铺管理菜单 key */
+export const PURCHASER_SHOP_MENU_KEY = 'purchaser/ecommerce/shop-management';
+/** 业绩分析子页面权限点（店铺管理包裹页内部侧边栏子页，非布局路由）：action 与 ShopManagementPage 内部 key 同名 */
+export const SHOP_ANALYTICS_FN: { action: string; label: string }[] = [
+  { action: 'analytics-payment', label: '业绩分析-运营统计' },
+  { action: 'analytics-group-stats', label: '业绩分析-分组统计' },
+  { action: 'analytics-action-points', label: '业绩分析-积分明细' },
+  { action: 'analytics-points-stats', label: '业绩分析-积分兑换' },
+  { action: 'analytics-performance', label: '业绩分析-绩效考核' },
+  { action: 'analytics-newstyle', label: '业绩分析-新款列表' },
+];
 export let FN_POINTS: PermPoint[] = [];
 export let FIELD_POINTS: PermPoint[] = [];
 
@@ -312,6 +323,12 @@ FN_POINTS = (() => {
   });
   return out;
 })();
+
+// 业绩分析子页面功能点：店铺管理/采购商店铺管理两 scope 各挂一组（默认 allow 保证存量行为零破坏）
+FN_POINTS = FN_POINTS.concat([
+  ...SHOP_ANALYTICS_FN.map(a => ({ key: `fn:${SHOP_MENU_KEY}:${a.action}`, label: `${a.label}(子页面)`, type: 'fn' as PermPointType, group: 'ecommerce', scope: 'supplier' as PermScope, def: 'allow' as const })),
+  ...SHOP_ANALYTICS_FN.map(a => ({ key: `fn:${PURCHASER_SHOP_MENU_KEY}:${a.action}`, label: `${a.label}(子页面)`, type: 'fn' as PermPointType, group: 'ecommerce', scope: 'purchaser' as PermScope, def: 'allow' as const })),
+]);
 
 // 字段点：商品列表（pageConfig）+ 全页面扫描产物（按子页面分组，查看/编辑双点）
 FIELD_POINTS = PRODUCT_FIELD_META.flatMap(c => [
