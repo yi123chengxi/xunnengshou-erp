@@ -224,8 +224,10 @@ const PrPoImgCell = ({ productCode, owner }: { productCode: string; owner: strin
 const useSharedProductImg = (recKey: string, fallback?: string) => {
   const resolvedFallback = absoluteImageUrl(fallback) || '';
   const [src, setSrc] = useState(resolvedFallback);
+  const [loadFailed, setLoadFailed] = useState(false);
   useEffect(() => {
     let cancelled = false;
+    setLoadFailed(false);
     const isCloudUrl = !!resolvedFallback && !resolvedFallback.startsWith('data:') && !resolvedFallback.startsWith('blob:');
     if (!recKey || isCloudUrl) { setSrc(resolvedFallback); return; }
     setSrc(resolvedFallback);
@@ -236,7 +238,10 @@ const useSharedProductImg = (recKey: string, fallback?: string) => {
     });
     return () => { cancelled = true; };
   }, [recKey, resolvedFallback]);
-  return src;
+  // 加载失败自愈：本地值损坏（配额截断的 base64/失效 blob/二进制缺失）时回退图片空间绑定表云端通道
+  const onError = useCallback(() => setLoadFailed(true), []);
+  const finalSrc = loadFailed ? (() => { const c = cloudImageOf(recKey); return c && c !== src ? c : ''; })() : src;
+  return { src: finalSrc, onError };
 };
 
 // 商品列表图片单元格：默认显示共享库（新品研发）图片，悬停浮层支持预览/删除，点击换图
@@ -246,7 +251,7 @@ const ProductImageCell = ({ record, val, onUpload, onPreview, onRemove }: {
   onPreview: (p: { url: string; visible: boolean }) => void;
   onRemove: (r: any) => void;
 }) => {
-  const src = useSharedProductImg(record?.key || '', val);
+  const { src, onError } = useSharedProductImg(record?.key || '', val);
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
       {src ? (
@@ -255,6 +260,7 @@ const ProductImageCell = ({ record, val, onUpload, onPreview, onRemove }: {
           onMouseLeave={(e) => { const overlay = e.currentTarget.querySelector('.img-overlay') as HTMLElement; if (overlay) overlay.style.opacity = '0'; }}
         >
           <img src={src} alt="" style={{ width: 40, height: 40, objectFit: 'cover', borderRadius: 4, cursor: 'pointer', display: 'block' }}
+            onError={onError}
             onClick={() => onUpload(record)} />
           <div className="img-overlay" style={{
             position: 'absolute', top: 0, left: 0, width: 40, height: 40, borderRadius: 4,
@@ -293,12 +299,12 @@ const ProductImageCell = ({ record, val, onUpload, onPreview, onRemove }: {
 
 // 上传弹窗当前图片回显（共享库优先）
 const CurrentProductImg = ({ recKey, fallback }: { recKey: string; fallback?: string }) => {
-  const src = useSharedProductImg(recKey, fallback);
+  const { src, onError } = useSharedProductImg(recKey, fallback);
   if (!src) return null;
   return (
     <div style={{ marginBottom: 12 }}>
       <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>当前图片（与新品研发共用同一图片库）</div>
-      <img src={src} alt="" style={{ width: 96, height: 96, objectFit: 'cover', borderRadius: 6, border: '1px solid #eee' }} />
+      <img src={src} alt="" style={{ width: 96, height: 96, objectFit: 'cover', borderRadius: 6, border: '1px solid #eee' }} onError={onError} />
     </div>
   );
 };

@@ -401,6 +401,23 @@ const collectVariants = (prods: any[], styleCode: string): any[] => {
     productStatus: p.productStatus || '', shortName: p.shortName || '',
   }));
 };
+// 发包市场半成品图单元格：候选源逐个回退（记录图 → pubImg_ 本地 → prodImg_/产品记录），任一加载失败自动换下一个，
+// 兜底全部失败显示占位——避免单个损坏值（截断 base64/失效 blob/二进制缺失）导致整列破图
+const SemiImgCell: React.FC<{ r: any }> = ({ r }) => {
+  const candidates = useMemo(() => {
+    const out: string[] = [];
+    const push = (v: string) => { const u = v ? absoluteImageUrl(v) : ''; if (u && !out.includes(u)) out.push(u); };
+    push(String(r.image || ''));
+    try { push(localStorage.getItem(`pubImg_${r.publisherUsername}_${r.key}`) || ''); } catch { /* ignore */ }
+    push(imgOf(r.publisherUsername, { key: r.productKey }));
+    return out;
+  }, [r]);
+  const [idx, setIdx] = useState(0);
+  useEffect(() => { setIdx(0); }, [candidates]);
+  if (idx >= candidates.length) return <>—</>;
+  return <Image src={candidates[idx]} alt="半成品图" width={40} style={{ maxHeight: 40, objectFit: 'cover', borderRadius: 4 }} onError={() => setIdx(i => i + 1)} />;
+};
+
 // 跨账号颜色图解析：本地存储（发布方本机）优先，回退卡片内嵌图（productColor→image / variantImages）
 const embeddedSrcOf = (rec: any, color: string): string => {
   if (!rec) return '';
@@ -1060,8 +1077,9 @@ const MarketPage: React.FC = () => {
       const rawProds = loadJson(pkeyName, []);
       const prods: any[] = Array.isArray(rawProds) ? rawProds : [];
       const groups = new Map<string, any>();
-      // 过滤条件：产品种类=成品 + 商品状态=在售 + 款式编码非空 + 排除半成品脏数据（SEMI-前缀）+ 基础价≠0且大于成本价
-      prods.filter(p => p.productType === '成品' && p.productStatus === '在售' && p.styleCode && !String(p.productCode || '').startsWith('SEMI-') && isPricePublishable(p)).forEach(p => { if (!groups.has(p.styleCode)) groups.set(p.styleCode, p); });
+      // 过滤条件：产品种类=成品 + 款式编码非空 + 排除半成品脏数据（SEMI-前缀）+ 基础价≠0且大于成本价；
+      // 不按 productStatus 硬过滤：存量记录状态多为空，硬过滤会在发布方本机把自家卡片误打墓碑（他人端副本差异则仍可见）
+      prods.filter(p => p.productType === '成品' && p.styleCode && !String(p.productCode || '').startsWith('SEMI-') && isPricePublishable(p)).forEach(p => { if (!groups.has(p.styleCode)) groups.set(p.styleCode, p); });
       // 下架清理：该账号不再在售的款式自动卡片打墓碑标记（全局键并集合并，物理删除会被其他账号合并复活）
       out = out.map(r => (r.type === 'finished' && r.auto && r.publisherUsername === owner && !r.delisted && !groups.has(r.styleCode) ? { ...r, delisted: true, delistedAt: new Date().toISOString() } : r));
       // 下架收敛：本地存在产品列表键时，不再在售款式的手动卡片同样打墓碑，保证下架状态跨账号收敛不被并集复活
@@ -2097,11 +2115,7 @@ const addToCart = useCallback((rec: any, qty?: number) => {
     { key: 'id', title: '发布单号', dataIndex: 'id', width: 120, align: 'center' },
     {
       key: 'image', title: '图片', width: 70, align: 'center',
-      render: (_: any, r: any) => {
-        // 优先产品自带 image（URL），回退发布者图片存储键（pubImg_ 或 prodImg_）
-        const src = r.image || localStorage.getItem(`pubImg_${r.publisherUsername}_${r.key}`) || imgOf(r.publisherUsername, { key: r.productKey });
-        return src ? <Image src={absoluteImageUrl(src)} alt="半成品图" width={40} style={{ maxHeight: 40, objectFit: 'cover', borderRadius: 4 }} /> : '—';
-      },
+      render: (_: any, r: any) => <SemiImgCell r={r} />,
     },
     { key: 'shortName', title: '商品简称', dataIndex: 'shortName', width: 120, align: 'center' },
     { key: 'styleCode', title: '款式编码', dataIndex: 'styleCode', width: 110, align: 'center' },
