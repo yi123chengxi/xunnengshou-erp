@@ -26,7 +26,8 @@ const fmtAmt = (n: number | null | undefined) => {
   return `¥${v.toFixed(2)}`
 }
 
-/** 看板指标格：按 375pt 屏宽两列排布（每格约 163pt），label 六字中文在 19px 下不换行 */
+/** 看板指标格：字号一律用 rpx 字符串（行内数字按真实 px 渲染且不随窗口缩放，rpx 才随屏宽自适应）；
+    两列排布下六字中文标签在 24rpx 可完整一行显示 */
 const BoardCell = ({ label, value, sub, onClick }: {
   label: string; value: string; sub?: string; onClick?: () => void
 }) => (
@@ -34,16 +35,16 @@ const BoardCell = ({ label, value, sub, onClick }: {
     style={{ width: '50%', minWidth: 0, boxSizing: 'border-box', paddingRight: 16, marginBottom: 14 }}
     onClick={onClick}
   >
-    <Text style={{ fontSize: 32, fontWeight: 700, display: 'block', lineHeight: '40px', whiteSpace: 'nowrap' }}>{value}</Text>
-    <Text style={{ fontSize: 19, opacity: 0.9, display: 'block', marginTop: 2, whiteSpace: 'nowrap' }}>{label}</Text>
-    {sub ? <Text style={{ fontSize: 16, opacity: 0.72, display: 'block', whiteSpace: 'nowrap' }}>{sub}</Text> : null}
+    <Text style={{ fontSize: '40rpx', fontWeight: 700, display: 'block', lineHeight: '52rpx', whiteSpace: 'nowrap' }}>{value}</Text>
+    <Text style={{ fontSize: '24rpx', opacity: 0.9, display: 'block', marginTop: 2, whiteSpace: 'nowrap' }}>{label}</Text>
+    {sub ? <Text style={{ fontSize: '22rpx', opacity: 0.72, display: 'block', whiteSpace: 'nowrap' }}>{sub}</Text> : null}
   </View>
 )
-/** 展开项：单列整行两端对齐。两列在 375pt 下每格只有 187pt，「本月销售额」+「¥5000.00」会挤压 label 逐字竖排（实测），改单列 */
+/** 展开项：单列整行两端对齐；字号同样走 rpx 随窗口缩放 */
 const BoardPair = ({ label, value }: { label: string; value: string }) => (
   <View style={{ width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', padding: '5px 0' }}>
-    <Text style={{ fontSize: 19, opacity: 0.85, flex: 1, minWidth: 0 }}>{label}</Text>
-    <Text style={{ fontSize: 20, fontWeight: 600, whiteSpace: 'nowrap', marginLeft: 12 }}>{value}</Text>
+    <Text style={{ fontSize: '26rpx', opacity: 0.85, flex: 1, minWidth: 0 }}>{label}</Text>
+    <Text style={{ fontSize: '28rpx', fontWeight: 600, whiteSpace: 'nowrap', marginLeft: 12 }}>{value}</Text>
   </View>
 )
 
@@ -114,7 +115,7 @@ const Workbench = () => {
       {/* 经营看板：生产（待生产/今日完工）+ 销售（今日已付款）+ 资金（银行流水收支）
           指标值全部由服务端计算下发，无权限的指标为 null → 显示 —；手机端不重复算口径，避免与网页版两个数 */}
       <View className="card" style={{ marginTop: -36, padding: '20px 24px', background: 'linear-gradient(135deg,#4096ff,#69b1ff)', color: '#fff' }}>
-        <Text style={{ fontSize: 22, opacity: 0.9 }}>经营看板（今日）</Text>
+        <Text style={{ fontSize: '30rpx', opacity: 0.9 }}>经营看板（今日）</Text>
         <View style={{ display: 'flex', flexWrap: 'wrap', marginTop: 12 }}>
           <BoardCell
             label="待生产数量"
@@ -154,8 +155,8 @@ const Workbench = () => {
           style={{ borderTop: '1px solid rgba(255,255,255,0.25)', paddingTop: 8, display: 'flex', alignItems: 'center' }}
           onClick={() => setMoreOpen(v => !v)}
         >
-          <Text style={{ fontSize: 19, opacity: 0.9 }}>生产超期 {fmtNum(m?.overdueCount)} 单</Text>
-          <Text style={{ fontSize: 17, opacity: 0.75, marginLeft: 'auto' }}>{moreOpen ? '收起 ▲' : '更多指标 ▼'}</Text>
+          <Text style={{ fontSize: '26rpx', opacity: 0.9 }}>生产超期 {fmtNum(m?.overdueCount)} 单</Text>
+          <Text style={{ fontSize: '24rpx', opacity: 0.75, marginLeft: 'auto' }}>{moreOpen ? '收起 ▲' : '更多指标 ▼'}</Text>
         </View>
         {moreOpen && (
           <View style={{ marginTop: 4 }}>

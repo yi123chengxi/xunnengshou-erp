@@ -24,7 +24,8 @@ const TABS = [
 ]
 
 /** 指标卡：与网页版 MetricCard 同结构（label / value / sub）同配色入参；
-    宽度按 375pt 屏宽两列估算（每卡约 154pt、正文有约 130pt），value 统一 nowrap + 短写避免撑破 */
+    字号一律写成 rpx 字符串（行内数字会被当作真实 px 渲染、不随窗口缩放，rpx 才按屏宽 750 基准自适应），
+    并保留 value nowrap + 短写避免撑破 */
 const Metric = ({ label, value, sub, color = PRIMARY, bg = '#f0f5ff' }: {
   label: string; value: ReactNode; sub?: string; color?: string; bg?: string
 }) => (
@@ -32,9 +33,9 @@ const Metric = ({ label, value, sub, color = PRIMARY, bg = '#f0f5ff' }: {
     width: '48.5%', boxSizing: 'border-box', borderRadius: 10, padding: '10px 12px',
     background: bg, border: `1px solid ${color}22`, marginBottom: 12,
   }}>
-    <Text style={{ fontSize: 18, color: '#5a6d85', display: 'block' }}>{label}</Text>
-    <Text style={{ fontSize: 26, fontWeight: 700, color, lineHeight: '34px', display: 'block', whiteSpace: 'nowrap' }}>{value}</Text>
-    <Text style={{ fontSize: 16, color: '#8c9bb0', display: 'block', minHeight: 20, lineHeight: '20px' }}>{sub || ''}</Text>
+    <Text style={{ fontSize: '26rpx', color: '#5a6d85', display: 'block' }}>{label}</Text>
+    <Text style={{ fontSize: '36rpx', fontWeight: 700, color, lineHeight: '46rpx', display: 'block', whiteSpace: 'nowrap' }}>{value}</Text>
+    <Text style={{ fontSize: '22rpx', color: '#8c9bb0', display: 'block', minHeight: '30rpx', lineHeight: '30rpx' }}>{sub || ''}</Text>
   </View>
 )
 const Row2 = ({ children }: { children: ReactNode }) => (
@@ -42,8 +43,8 @@ const Row2 = ({ children }: { children: ReactNode }) => (
 )
 const Section = ({ title, hint }: { title: string; hint?: string }) => (
   <View style={{ display: 'flex', alignItems: 'baseline', flexWrap: 'wrap', margin: '4px 0 10px' }}>
-    <Text style={{ fontWeight: 600, fontSize: 24, color: PRIMARY }}>{title}</Text>
-    {hint ? <Text style={{ fontSize: 17, color: '#8c9bb0', marginLeft: 10 }}>{hint}</Text> : null}
+    <Text style={{ fontWeight: 600, fontSize: '32rpx', color: PRIMARY }}>{title}</Text>
+    {hint ? <Text style={{ fontSize: '24rpx', color: '#8c9bb0', marginLeft: 10 }}>{hint}</Text> : null}
   </View>
 )
 /** 进度条（对应网页版 antd Progress） */
@@ -53,7 +54,7 @@ const Bar = ({ percent, danger = false }: { percent: number; danger?: boolean })
   </View>
 )
 const Tag = ({ text, color }: { text: string; color: string }) => (
-  <Text style={{ fontSize: 18, color: '#fff', background: color, borderRadius: 4, padding: '2px 8px' }}>{text}</Text>
+  <Text style={{ fontSize: '24rpx', color: '#fff', background: color, borderRadius: 4, padding: '4rpx 12rpx' }}>{text}</Text>
 )
 
 /** 待生产池 / 超期订单明细行（超期整行浅红，与网页版 table-row-overdue 一致） */
@@ -63,12 +64,12 @@ const OrderRow = ({ r, mode }: { r: PendingRowBrief; mode: 'pool' | 'overdue' })
     background: r.overdue ? '#fff1f0' : '#fff',
   }}>
     <View style={{ display: 'flex', alignItems: 'center' }}>
-      <Text style={{ fontFamily: 'monospace', fontSize: 22, color: PRIMARY, fontWeight: 600 }}>{r.id}</Text>
+      <Text style={{ fontFamily: 'monospace', fontSize: '28rpx', color: PRIMARY, fontWeight: 600 }}>{r.id}</Text>
       <Tag text={r.statusLabel} color={STATUS_COLOR[r.statusLabel] || '#8c9bb0'} />
-      {r.overdue ? <Text style={{ fontSize: 18, color: '#ff4d4f', marginLeft: 'auto' }}>超期 {Math.round(r.elapsedDays - r.limitDays)} 天</Text> : null}
+      {r.overdue ? <Text style={{ fontSize: '24rpx', color: '#ff4d4f', marginLeft: 'auto' }}>超期 {Math.round(r.elapsedDays - r.limitDays)} 天</Text> : null}
     </View>
-    <View style={{ fontSize: 18, color: '#5a6d85', marginTop: 4 }}>{r.productName || '—'} · {r.customerName || '—'}</View>
-    <View style={{ display: 'flex', fontSize: 18, marginTop: 4 }}>
+    <View style={{ fontSize: '24rpx', color: '#5a6d85', marginTop: 4 }}>{r.productName || '—'} · {r.customerName || '—'}</View>
+    <View style={{ display: 'flex', fontSize: '24rpx', marginTop: 4 }}>
       {mode === 'pool' ? (
         <View style={{ flex: 1, minWidth: 0 }}>
           <Text>待生产 <Text style={{ color: '#fa8c16', fontWeight: 600 }}>{fmt(r.pendingQty)}</Text></Text>
@@ -89,7 +90,7 @@ const OrderRow = ({ r, mode }: { r: PendingRowBrief; mode: 'pool' | 'overdue' })
       )}
       <Text style={{ width: '30%', textAlign: 'right', color: r.overdue ? '#ff4d4f' : '#5a6d85' }}>{r.nodeName || '—'}</Text>
     </View>
-    <View style={{ display: 'flex', alignItems: 'center', fontSize: 18, color: '#8c9bb0', marginTop: 4 }}>
+    <View style={{ display: 'flex', alignItems: 'center', fontSize: '24rpx', color: '#8c9bb0', marginTop: 4 }}>
       <Text style={{ whiteSpace: 'nowrap' }}>完工率 {r.progress}%</Text>
       <View style={{ width: 70, margin: '0 6px' }}><Bar percent={r.progress} /></View>
       <Text style={{ flex: 1, minWidth: 0, textAlign: 'right', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>负责人 {r.person || '—'}</Text>
@@ -104,16 +105,16 @@ const DimTable = ({ title, hint, rows }: {
 }) => (
   <View>
     <Section title={title} hint={hint} />
-    {rows.length === 0 ? <Text style={{ fontSize: 20, color: '#c0c6cf' }}>暂无数据</Text> : null}
+    {rows.length === 0 ? <Text style={{ fontSize: '28rpx', color: '#c0c6cf' }}>暂无数据</Text> : null}
     {rows.map((r, i) => (
       <View key={`${r.name}-${i}`} style={{ borderTop: i ? '1px solid #f0f2f5' : 'none', padding: '8px 0' }}>
         <View style={{ display: 'flex', alignItems: 'baseline' }}>
-          <Text style={{ flex: 1, minWidth: 0, fontSize: 20, color: '#333', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.name}</Text>
-          <Text style={{ fontSize: 20, color: PRIMARY, marginLeft: 10, whiteSpace: 'nowrap' }}>{r.main}</Text>
+          <Text style={{ flex: 1, minWidth: 0, fontSize: '28rpx', color: '#333', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.name}</Text>
+          <Text style={{ fontSize: '28rpx', color: PRIMARY, marginLeft: 10, whiteSpace: 'nowrap' }}>{r.main}</Text>
         </View>
         <View style={{ display: 'flex', alignItems: 'center', marginTop: 5 }}>
           <View style={{ flex: 1, minWidth: 0 }}>{r.percent !== undefined ? <Bar percent={r.percent} /> : null}</View>
-          {r.extra ? <Text style={{ width: '52%', fontSize: 16, color: '#8c9bb0', textAlign: 'right', marginLeft: 10 }}>{r.extra}</Text> : null}
+          {r.extra ? <Text style={{ width: '52%', fontSize: '24rpx', color: '#8c9bb0', textAlign: 'right', marginLeft: 10 }}>{r.extra}</Text> : null}
         </View>
       </View>
     ))}
@@ -128,12 +129,12 @@ const PendingStatsCard = ({ data }: { data: PendingStats | null }) => {
 
   return (
     <View className="card" style={{ padding: '20px 24px' }}>
-      {/* 标题与元信息分两行：375pt 下同一行会把 28px 标题挤成逐字竖排（实测） */}
-      <Text style={{ fontSize: 28, fontWeight: 600, color: PRIMARY, display: 'block' }}>📥 待生产数据统计</Text>
-      <Text style={{ fontSize: 16, color: '#8c9bb0', display: 'block', marginTop: 4 }}>
-        共 {totals.allCount} 张生产订单 · 数据时间 {data.generatedAt}
+      {/* 标题独占一行（nowrap 避免被挤成逐字竖排），下面一行只放数据时间，字号取标题的一半 */}
+      <Text style={{ fontSize: '40rpx', fontWeight: 600, color: PRIMARY, display: 'block', whiteSpace: 'nowrap' }}>📥 待生产数据统计</Text>
+      <Text style={{ fontSize: '20rpx', color: '#8c9bb0', display: 'block', marginTop: 4 }}>
+        数据时间 {data.generatedAt}
       </Text>
-      <Text style={{ fontSize: 16, color: '#8c9bb0', display: 'block', lineHeight: '22px', marginTop: 6 }}>
+      <Text style={{ fontSize: '22rpx', color: '#8c9bb0', display: 'block', lineHeight: '32rpx', marginTop: 6 }}>
         超期阈值 = 流程节点预计用时之和，未维护时按默认 7 天；待生产数量 = 计划数量 − 完工数量；未排期数量 = 计划数量 − 已排期数量
       </Text>
 
@@ -144,7 +145,7 @@ const PendingStatsCard = ({ data }: { data: PendingStats | null }) => {
             key={t.key}
             onClick={() => setTab(t.key)}
             style={{
-              display: 'inline-block', marginRight: 12, padding: '8px 20px', borderRadius: 8, fontSize: 22,
+              display: 'inline-block', marginRight: 12, padding: '8px 20px', borderRadius: 8, fontSize: '28rpx',
               background: tab === t.key ? PRIMARY : '#eef1f5', color: tab === t.key ? '#fff' : '#5a6d85',
             }}
           >
@@ -181,7 +182,7 @@ const PendingStatsCard = ({ data }: { data: PendingStats | null }) => {
           </Row2>
           <Section title="待生产订单明细" hint={`待生产数量降序，最多 20 单（共 ${totals.poolCount} 单）`} />
           {data.poolTop.length === 0
-            ? <Text style={{ fontSize: 20, color: '#c0c6cf' }}>暂无待生产订单（生产订单全部完工或数量为 0）</Text>
+            ? <Text style={{ fontSize: '28rpx', color: '#c0c6cf' }}>暂无待生产订单（生产订单全部完工或数量为 0）</Text>
             : data.poolTop.map(r => <OrderRow key={r.id} r={r} mode="pool" />)}
         </View>
       )}
@@ -201,12 +202,12 @@ const PendingStatsCard = ({ data }: { data: PendingStats | null }) => {
               sub={`加工单 ${bom.jgDoneCount}/${bom.jgTotalCount} 已完成`} />
           </Row2>
           {bom.cgsqOpenCount > 0 && (
-            <View style={{ background: '#fffbe6', border: '1px solid #ffe58f', borderRadius: 8, padding: '10px 14px', fontSize: 20, color: '#d48806' }}>
+            <View style={{ background: '#fffbe6', border: '1px solid #ffe58f', borderRadius: 8, padding: '10px 14px', fontSize: '26rpx', color: '#d48806' }}>
               待生产订单还有 {bom.cgsqOpenCount} 张采购申请单处于「待采购」（申请数量合计 {fmt(bom.cgsqOpenQty)}），原材料未到位将直接卡住开线
             </View>
           )}
           <Section title="齐套概览" hint={`清单齐套 ${bom.readyCount} 单 · 前道阻塞 ${bom.blockedCount} 单`} />
-          <View style={{ background: '#f7f9fc', borderRadius: 8, padding: '12px 16px', fontSize: 20, color: '#5a6d85', lineHeight: '34px' }}>
+          <View style={{ background: '#f7f9fc', borderRadius: 8, padding: '12px 16px', fontSize: '26rpx', color: '#5a6d85', lineHeight: '44rpx' }}>
             <View>· 未生成物料清单：{bom.noCgsqCount} 单</View>
             <View>· 未生成加工清单：{bom.noJgCount} 单</View>
             <View>· 未回厂半成品数量：{fmt(bom.jgOpenQty)}（金额 ¥{fmt(Math.round(bom.jgOpenAmount))}）</View>
@@ -236,7 +237,7 @@ const PendingStatsCard = ({ data }: { data: PendingStats | null }) => {
           }))} />
           <Section title="超期订单 Top" hint="按超出阈值天数降序，最多 10 单" />
           {data.overdueTop.length === 0
-            ? <Text style={{ fontSize: 20, color: '#c0c6cf' }}>没有超期订单</Text>
+            ? <Text style={{ fontSize: '28rpx', color: '#c0c6cf' }}>没有超期订单</Text>
             : data.overdueTop.map(r => <OrderRow key={r.id} r={r} mode="overdue" />)}
         </View>
       )}
