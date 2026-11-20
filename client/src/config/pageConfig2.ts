@@ -61,6 +61,8 @@ export const productionPages: Record<string, ChildPageConfig> = {
       { title: '进度', dataIndex: 'progress', key: 'progress', width: 110, type: 'progress', group: '生产信息' },
       { title: '计划开工', dataIndex: 'startDate', key: 'startDate', width: 110, type: 'date', group: '生产信息' },
       { title: '计划完工', dataIndex: 'endDate', key: 'endDate', width: 110, type: 'date', group: '生产信息' },
+      // 已用时：派生列（创建日→今日自然日差），不落库；超过流程节点预计用时之和则整行浅红，模板未填按 7 天
+      { title: '已用时', dataIndex: 'elapsedDays', key: 'elapsedDays', width: 90, type: 'text', align: 'right', group: '生产信息' },
       { title: '负责人', dataIndex: 'person', key: 'person', width: 90, type: 'text', group: '订单信息' },
       { title: '订单标签', dataIndex: 'orderTag', key: 'orderTag', width: 150, type: 'tag', group: '订单信息' },
       { title: '生成状态', dataIndex: 'status', key: 'status', width: 110, type: 'tag', group: '订单信息' },

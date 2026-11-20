@@ -242,6 +242,13 @@ body {
   margin: 0;
 }
 
+/* 生产订单：已用时超过流程节点预计用时之和（模板未填按 7 天）→ 整行浅红；
+   放在点击高亮规则之前，使选中行的黄色底优先于超期红底 */
+.ant-table-tbody > tr.table-row-overdue > td,
+.ant-table-tbody > tr.table-row-overdue:hover > td {
+  background: #fff1f0 !important;
+}
+
 /* 订单管理/财务审核/打单拣货：鼠标点击行高亮（黄色底，点击后立即生效，覆盖 hover 样式） */
 .ant-table-tbody > tr.table-row-clicked > td,
 .ant-table-tbody > tr.table-row-clicked:hover > td {

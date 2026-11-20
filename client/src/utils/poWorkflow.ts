@@ -131,3 +131,47 @@ export function poCurrentNodeOverdue(order: WfOrder, nodes: WfNode[]): PoNodeOve
   if (actual <= est) return null;
   return { index: i, name: (node as any).name || `节点${i + 1}`, actualDays: actual, estimatedDays: est, overDays: Math.ceil(actual - est) };
 }
+
+/** 生产订单整单超期的默认天数（流程模板未填预计用时时使用） */
+export const PO_DEFAULT_OVERDUE_DAYS = 7;
+
+const dayStart = (ts: number): number => {
+  const d = new Date(ts);
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+};
+
+/** 订单创建时间戳：兼容 ISO / toLocaleString('zh-CN') 斜杠串 / 纯日期串，无法解析返回 NaN */
+export function poCreatedTs(record: any): number {
+  for (const v of [record?.createTime, record?.createdAt, record?.wf?.createdAt, record?.date, record?.orderDate]) {
+    if (!v) continue;
+    const t = new Date(String(v)).getTime();
+    if (!Number.isNaN(t)) return t;
+  }
+  return NaN;
+}
+
+/** 已用时（天）：创建日 → 今日的自然日差，当天创建为 0；创建时间不可解析按 0 计 */
+export function poElapsedDays(record: any): number {
+  const ts = poCreatedTs(record);
+  if (Number.isNaN(ts)) return 0;
+  return Math.max(0, Math.round((dayStart(Date.now()) - dayStart(ts)) / 86400000));
+}
+
+/** 流程节点预计用时之和（天）：customNodes 优先，否则关联模板；无节点或均未填预计用时返回 0 */
+export function poEstimatedTotalDays(record: any, data: PoWfData): number {
+  const nodes = poNodesOf(poToWfOrder(record, data), data.templates);
+  return nodes.reduce((s: number, n: any) => s + (Number(n?.estimatedDays) || 0), 0);
+}
+
+/** 订单是否已终结（完工/已拆分）：终结单不再判超期 */
+export function poIsFinished(record: any): boolean {
+  const st = String(record?.status || '');
+  return st === 'completed' || st === '已完工' || st === '已拆分' || Number(record?.progress) >= 100;
+}
+
+/** 整单超期：已用时 > 节点预计用时之和（未填则按 PO_DEFAULT_OVERDUE_DAYS 天）；完工/已拆分不判超期 */
+export function poIsOverdue(record: any, data: PoWfData): boolean {
+  if (poIsFinished(record)) return false;
+  const est = poEstimatedTotalDays(record, data);
+  return poElapsedDays(record) > (est > 0 ? est : PO_DEFAULT_OVERDUE_DAYS);
+}

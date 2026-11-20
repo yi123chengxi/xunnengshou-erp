@@ -123,7 +123,7 @@ import { normBillDay } from '../utils/billDate';
 import { loadAllCustomersFromStorage } from './CustomerInfo';
 import { loadRoleRecords, loadRoleAll, upsertRecords } from '../utils/reconStore';
 import { resolveCustomerPrice, resolveCustomerRef } from '../utils/priceStrategy';
-import { loadPoTemplates, poToWfOrder as corePoToWfOrder, buildPoWfPatch, poPlanQty } from '../utils/poWorkflow';
+import { loadPoTemplates, poToWfOrder as corePoToWfOrder, buildPoWfPatch, poPlanQty, poElapsedDays, poEstimatedTotalDays, poIsOverdue, PO_DEFAULT_OVERDUE_DAYS } from '../utils/poWorkflow';
 import { canFn, canField, usePermTick } from '../utils/perm';
 import useResizableColumns from '../hooks/useResizableColumns';
 import { downloadBillExportCsv, BillItemExportRow, loadExportFieldCfg, loadProductMasterMap, resolveItemColorSpec } from '../utils/billItemsExport';
@@ -12292,6 +12292,24 @@ const handleBatchAttrsConfirm = () => {
           ? <Tag color="green" style={{ fontWeight: 500 }}>已生成</Tag>
           : <Tag color="default">未生成</Tag>);
       }
+      // 生产订单：已用时（创建日→今日的自然日差，派生不落库）；超过流程节点预计用时之和则红字，模板未填预计用时按 7 天
+      if (pageConfig?.title === '生产订单' && col.key === 'elapsedDays') {
+        baseCol.sorter = (a: any, b: any) => poElapsedDays(a) - poElapsedDays(b);
+        baseCol.render = (_: any, record: any) => {
+          const days = poElapsedDays(record);
+          const est = poEstimatedTotalDays(record, poWfData);
+          const limit = est > 0 ? est : PO_DEFAULT_OVERDUE_DAYS;
+          const over = poIsOverdue(record, poWfData);
+          return (
+            <span
+              style={{ color: over ? '#ff4d4f' : undefined, fontWeight: over ? 600 : undefined }}
+              title={est > 0 ? `流程节点预计用时合计 ${limit} 天` : `流程模板未填预计用时，按默认 ${PO_DEFAULT_OVERDUE_DAYS} 天`}
+            >
+              {days === 0 ? '当天' : `${days} 天`}
+            </span>
+          );
+        };
+      }
       // 生产排期：计划明细列（反查生产订单计划明细汇总显示）
       if (pageConfig?.title === '生产排期' && col.key === 'planItems') {
         baseCol.render = (_: any, record: any) => {
@@ -15095,6 +15113,8 @@ const handleBatchAttrsConfirm = () => {
             if (hideHeaderBanner && record.key === clickedRowKey) classes.push('table-row-clicked');
             if (pageConfig?.title === '生产订单' && record.status === '已拆分') classes.push('table-row-split');
             if (pageConfig?.title === '生产订单' && record.status === 'completed') classes.push('table-row-split');
+            // 生产订单：已用时超过流程预计用时合计（模板未填按 7 天）→ 整行浅红
+            if (pageConfig?.title === '生产订单' && poIsOverdue(record, poWfData)) classes.push('table-row-overdue');
             return classes.join(' ');
           }}
           onRow={(record) => ({
