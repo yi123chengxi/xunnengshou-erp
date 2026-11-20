@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { View, Text, Input, Picker, Button, Image } from '@tarojs/components'
+import { View, Text, Input, Picker, Image } from '@tarojs/components'
 import Taro from '@tarojs/taro'
 import { createWsRecord, getWsMaterials, getWsRecord, updateWsRecord } from '../services/api'
 import { chooseAndUploadImage } from '../services/upload'
@@ -63,6 +63,14 @@ const todayStr = () => {
   const p = (n: number) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
 }
+
+// 选择/图片类字段行：与 .input 输入框同底色并补一圈灰边框（.row 类本身无边框，
+// 且类里的 padding 会压过行内值，故整行改纯行内声明）
+const PICKER_ROW = {
+  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+  background: '#f5f6f8', border: '1px solid #c9d1da', borderRadius: '12rpx',
+  padding: '16rpx 20rpx', marginBottom: '20rpx', boxSizing: 'border-box',
+} as const
 
 // 详情/编辑弹窗字段（k=ro/money 只读，其余可录入；src 为落库字段名，与 Web 记录结构同名）
 interface DField { key: string; label: string; k?: 'text' | 'number' | 'date' | 'material' | 'money' | 'type' | 'image' | 'ro'; src?: string; required?: boolean }
@@ -169,11 +177,14 @@ const WarehouseStatsView = ({ tick = 0 }: { tick?: number }) => {
 
   const setField = (key: string, val: string) => setForm(prev => ({ ...prev, [key]: val }))
 
-  const pickImage = async () => {
+  // 选图：['camera'] 直接进相机，['album'] 走相册（与新款进度录入同口径）；用户取消不当错误弹提
+  const pickImage = async (sourceType: ('album' | 'camera')[]) => {
     try {
-      const url = await chooseAndUploadImage()
+      const url = await chooseAndUploadImage(sourceType)
       setImage(url)
     } catch (e: any) {
+      const msg = String((e && (e.errMsg || e.message)) || '')
+      if (/cancel|取消/i.test(msg)) return
       Taro.showToast({ title: e.message || '上传失败', icon: 'none' })
     }
   }
@@ -263,11 +274,13 @@ const WarehouseStatsView = ({ tick = 0 }: { tick?: number }) => {
     }
   }
 
-  const pickEditImage = async () => {
+  const pickEditImage = async (sourceType: ('album' | 'camera')[]) => {
     try {
-      const url = await chooseAndUploadImage()
+      const url = await chooseAndUploadImage(sourceType)
       setEdit(p => ({ ...p, image: url }))
     } catch (e: any) {
+      const msg = String((e && (e.errMsg || e.message)) || '')
+      if (/cancel|取消/i.test(msg)) return
       Taro.showToast({ title: e.message || '上传失败', icon: 'none' })
     }
   }
@@ -343,7 +356,7 @@ const WarehouseStatsView = ({ tick = 0 }: { tick?: number }) => {
           <Text className="muted" style={{ marginRight: 12, flexShrink: 0 }}>统计月份</Text>
           <Input
             className="input"
-            style={{ flex: 1, marginBottom: 0 }}
+            style={{ flex: 1, marginBottom: 0, border: '1px solid #c9d1da' }}
             placeholder="YYYY-MM"
             value={month}
             onInput={e => setMonth(e.detail.value)}
@@ -358,19 +371,17 @@ const WarehouseStatsView = ({ tick = 0 }: { tick?: number }) => {
             <Text style={{ fontSize: '26rpx', color: '#1677ff' }} onClick={() => { setFormVisible(false); setForm({}); setImage('') }}>返回列表 ›</Text>
           </View>
           {tab === 'note' && (
-            <View className="row">
-              <Text className="muted">类型</Text>
+            <View style={PICKER_ROW}>
+              <Text style={{ fontSize: '26rpx', color: '#5a6d85' }}>类型</Text>
               <View style={{ display: 'flex' }}>
                 <Text
-                  className={`tag ${noteType === 0 ? 'tag-green' : 'tag-gray'}`}
-                  style={{ marginRight: 12, fontSize: 26, lineHeight: '44px', padding: '0 24px' }}
+                  style={{ marginRight: '12rpx', fontSize: '26rpx', lineHeight: '44rpx', padding: '0 24rpx', borderRadius: '6rpx', color: noteType === 0 ? '#fff' : '#5a6d85', background: noteType === 0 ? '#52c41a' : '#eef1f5' }}
                   onClick={() => setNoteType(0)}
                 >
                   奖励
                 </Text>
                 <Text
-                  className={`tag ${noteType === 1 ? 'tag-red' : 'tag-gray'}`}
-                  style={{ fontSize: 26, lineHeight: '44px', padding: '0 24px' }}
+                  style={{ fontSize: '26rpx', lineHeight: '44rpx', padding: '0 24rpx', borderRadius: '6rpx', color: noteType === 1 ? '#fff' : '#5a6d85', background: noteType === 1 ? '#ff4d4f' : '#eef1f5' }}
                   onClick={() => setNoteType(1)}
                 >
                   罚款
@@ -379,17 +390,27 @@ const WarehouseStatsView = ({ tick = 0 }: { tick?: number }) => {
             </View>
           )}
           {(tab === 'stock' || tab === 'urgent') && (
-            <View className="row">
-              <Text className="muted">图片</Text>
+            /* 图片行：拍照与相册两个独立入口（weapp 下预览须经 fullImageUrl 归一才能渲染） */
+            <View style={PICKER_ROW}>
+              <Text style={{ fontSize: '26rpx', color: '#5a6d85' }}>图片</Text>
               <View style={{ display: 'flex', alignItems: 'center' }}>
                 {image ? (
-                  <Image src={image} mode="aspectFill" style={{ width: 96, height: 96, borderRadius: 8, marginRight: 12 }} />
+                  <Image src={fullImageUrl(image)} mode="aspectFill" style={{ width: '88rpx', height: '88rpx', borderRadius: '8rpx', marginRight: '16rpx' }} />
                 ) : null}
-                <Button size="mini" className="btn-primary" style={{ lineHeight: '56px', marginRight: 12 }} onClick={pickImage}>
-                  {image ? '换图' : '选图上传'}
-                </Button>
+                <View
+                  style={{ height: '60rpx', lineHeight: '60rpx', padding: '0 22rpx', fontSize: '26rpx', color: '#fff', background: '#1677ff', borderRadius: '8rpx', marginRight: '12rpx', flexShrink: 0, boxSizing: 'border-box' }}
+                  onClick={() => pickImage(['camera'])}
+                >
+                  拍照
+                </View>
+                <View
+                  style={{ height: '60rpx', lineHeight: '60rpx', padding: '0 22rpx', fontSize: '26rpx', color: '#1677ff', background: '#e6f4ff', borderRadius: '8rpx', marginRight: '12rpx', flexShrink: 0, boxSizing: 'border-box' }}
+                  onClick={() => pickImage(['album'])}
+                >
+                  相册
+                </View>
                 {image ? (
-                  <Text className="muted" style={{ fontSize: 24 }} onClick={() => setImage('')}>清除</Text>
+                  <Text style={{ fontSize: '26rpx', color: '#9aa3ad' }} onClick={() => setImage('')}>清除</Text>
                 ) : null}
               </View>
             </View>
@@ -397,9 +418,9 @@ const WarehouseStatsView = ({ tick = 0 }: { tick?: number }) => {
           {fields.map(f => (
             f.kind === 'date' ? (
               <Picker key={f.key} mode="date" value={form[f.key] || todayStr()} onChange={e => setField(f.key, e.detail.value)}>
-                <View className="row">
-                  <Text className="muted">{f.label}</Text>
-                  <Text style={{ color: '#1677ff' }}>{form[f.key] || todayStr()} ▾</Text>
+                <View style={PICKER_ROW}>
+                  <Text style={{ fontSize: '26rpx', color: '#5a6d85' }}>{f.label}</Text>
+                  <Text style={{ fontSize: '28rpx', color: '#1677ff' }}>{form[f.key] || todayStr()} ▾</Text>
                 </View>
               </Picker>
             ) : f.kind === 'material' ? (
@@ -411,15 +432,16 @@ const WarehouseStatsView = ({ tick = 0 }: { tick?: number }) => {
                 value={Math.max(0, materials.indexOf(form[f.key] || ''))}
                 onChange={e => setField(f.key, materials[Number(e.detail.value)] || '')}
               >
-                <View className="row">
-                  <Text className="muted">{f.label}</Text>
-                  <Text style={{ color: form[f.key] ? '#333' : '#1677ff' }}>{form[f.key] || '选择材质'} ▾</Text>
+                <View style={PICKER_ROW}>
+                  <Text style={{ fontSize: '26rpx', color: '#5a6d85' }}>{f.label}</Text>
+                  <Text style={{ fontSize: '28rpx', color: form[f.key] ? '#1f2733' : '#1677ff' }}>{form[f.key] || '选择材质'} ▾</Text>
                 </View>
               </Picker>
             ) : (
               <Input
                 key={f.key}
                 className="input"
+                style={{ border: '1px solid #c9d1da' }}
                 type={f.kind === 'number' ? 'digit' : 'text'}
                 placeholder={f.label}
                 value={form[f.key] || ''}
@@ -484,7 +506,20 @@ const WarehouseStatsView = ({ tick = 0 }: { tick?: number }) => {
                         <Image src={fullImageUrl(img)} mode="aspectFill" style={{ width: '120rpx', height: '120rpx', borderRadius: '8rpx', marginRight: '16rpx' }} />
                       ) : null}
                       {editing ? (
-                        <Text style={{ fontSize: '26rpx', color: '#1677ff' }} onClick={pickEditImage}>{img ? '换图' : '选图上传'}</Text>
+                        <View style={{ display: 'flex', alignItems: 'center' }}>
+                          <View
+                            style={{ height: '56rpx', lineHeight: '56rpx', padding: '0 20rpx', fontSize: '26rpx', color: '#fff', background: '#1677ff', borderRadius: '8rpx', marginRight: '12rpx', boxSizing: 'border-box' }}
+                            onClick={() => pickEditImage(['camera'])}
+                          >
+                            拍照
+                          </View>
+                          <View
+                            style={{ height: '56rpx', lineHeight: '56rpx', padding: '0 20rpx', fontSize: '26rpx', color: '#1677ff', background: '#e6f4ff', borderRadius: '8rpx', boxSizing: 'border-box' }}
+                            onClick={() => pickEditImage(['album'])}
+                          >
+                            相册
+                          </View>
+                        </View>
                       ) : img ? null : (
                         <Text style={{ fontSize: '26rpx', color: '#9aa3ad' }}>无</Text>
                       )}
