@@ -340,27 +340,43 @@ const WarehouseStatsView = ({ tick = 0 }: { tick?: number }) => {
 
   return (
     <View>
-      <View className="segment" style={{ margin: '16px 24px 0' }}>
-        {TABS.map(t => (
-          <View
-            key={t.key}
-            className={`segment-item ${tab === t.key ? 'active' : ''}`}
-            onClick={() => { setTab(t.key); setFormVisible(false); setForm({}); setImage(''); setDetail(null) }}
-          >
-            {t.label}
-          </View>
-        ))}
+      {/* 页签菜单栏：每个按键自带描边，选中蓝底白字（不挂全局 .segment 类，避免与商机市场三切换互相干扰） */}
+      <View style={{ display: 'flex', margin: '12px 24px 0' }}>
+        {TABS.map((t, i) => {
+          const on = tab === t.key
+          return (
+            <View
+              key={t.key}
+              style={{
+                flex: 1, minWidth: 0, marginLeft: i ? 6 : 0, height: 32, lineHeight: '32px',
+                textAlign: 'center', whiteSpace: 'nowrap', overflow: 'hidden', fontSize: 14,
+                borderRadius: 8, boxSizing: 'border-box',
+                border: on ? '1px solid #1677ff' : '1px solid #c9d1da',
+                background: on ? '#1677ff' : '#fff', color: on ? '#fff' : '#5a6d85',
+              }}
+              onClick={() => { setTab(t.key); setFormVisible(false); setForm({}); setImage(''); setDetail(null) }}
+            >
+              {t.label}
+            </View>
+          )
+        })}
       </View>
+      {/* 统计月份：只占一行，上贴页签栏、下贴搜索框；点框弹月份选择器（与 Web 同 mode=date fields=month） */}
       {tab === 'salary' && (
-        <View style={{ display: 'flex', padding: '16px 24px 0', alignItems: 'center' }}>
-          <Text className="muted" style={{ marginRight: 12, flexShrink: 0 }}>统计月份</Text>
-          <Input
-            className="input"
-            style={{ flex: 1, marginBottom: 0, border: '1px solid #c9d1da' }}
-            placeholder="YYYY-MM"
+        <View style={{ display: 'flex', padding: '6px 24px 0', alignItems: 'center' }}>
+          <Text style={{ marginRight: 10, flexShrink: 0, fontSize: 15, lineHeight: '24px', color: '#8a94a6' }}>统计月份</Text>
+          <Picker
+            mode="date"
+            fields="month"
             value={month}
-            onInput={e => setMonth(e.detail.value)}
-          />
+            onChange={e => setMonth(String(e.detail.value).slice(0, 7))}
+            style={{ flex: 1 }}
+          >
+            <View style={{ height: 24, boxSizing: 'border-box', border: '1px solid #c9d1da', borderRadius: 6, background: '#fff', padding: '0 8px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <Text style={{ fontSize: 15, lineHeight: '22px', color: '#1f2733' }}>{month || '选择月份'}</Text>
+              <Text style={{ fontSize: 12, lineHeight: '22px', color: '#9aa3ad' }}>▾</Text>
+            </View>
+          </Picker>
         </View>
       )}
       {formVisible && fields.length > 0 ? (
@@ -477,6 +493,7 @@ const WarehouseStatsView = ({ tick = 0 }: { tick?: number }) => {
           addLabel={fields.length > 0 ? '新增记录' : undefined}
           onAdd={fields.length > 0 ? () => setFormVisible(true) : undefined}
           onRowClick={tab === 'salary' ? undefined : openDetail}
+          padTop={tab === 'salary' ? 6 : 16}
           tick={tick + reload}
         />
       )}

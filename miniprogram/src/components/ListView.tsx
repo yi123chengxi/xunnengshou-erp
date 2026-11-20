@@ -30,8 +30,8 @@ const localDay = (offset = 0): string => {
  * 搜索为「点击查询后才生效」的双态模式，减少大列表实时过滤开销。
  */
 const ListView = ({
-  page, extra = '', headers, addLabel, onAdd, tick = 0, quick = false, quickDate, compact = false, onRowClick,
-}: { page: string; extra?: string; headers?: string[]; addLabel?: string; onAdd?: () => void; tick?: number; quick?: boolean; quickDate?: 'first' | 'last'; compact?: boolean; onRowClick?: (it: ListItem) => void }) => {
+  page, extra = '', headers, addLabel, onAdd, tick = 0, quick = false, quickDate, compact = false, onRowClick, padTop = 16,
+}: { page: string; extra?: string; headers?: string[]; addLabel?: string; onAdd?: () => void; tick?: number; quick?: boolean; quickDate?: 'first' | 'last'; compact?: boolean; onRowClick?: (it: ListItem) => void; padTop?: number }) => {
   const [input, setInput] = useState('')
   const [applied, setApplied] = useState('')
   const [range, setRange] = useState('')
@@ -86,7 +86,8 @@ const ListView = ({
 
   return (
     <View>
-      <View style={{ display: 'flex', padding: '16px 24px 0', alignItems: 'center' }}>
+      {/* 搜索行上间距可由调用方收紧（仓库统计工资汇总页上方已有「统计月份」行，须与其贴紧） */}
+      <View style={{ display: 'flex', padding: `${padTop}px 24px 0`, alignItems: 'center' }}>
         {/* 输入框同样不挂 .input 类（类里 font-size:28/padding:18 会压过行内值导致比按键高） */}
         <Input
           style={{ flex: 1, marginBottom: 0, height: 36, lineHeight: '36px', fontSize: 17, padding: '0 11px', background: '#fff', border: '1px solid #c9d1da', borderRadius: 8, boxSizing: 'border-box' }}
