@@ -107,7 +107,19 @@ const Workbench = () => {
         </View>
         <View className="grid">
           {favGrid.map(g => (
-            <View key={g.id} className="grid-item" onClick={g.onClick} style={{ position: 'relative', width: '25%' }}>
+            <View
+              key={g.id}
+              className="grid-item"
+              onClick={g.onClick}
+              style={{
+                position: 'relative',
+                width: 'calc(25% - 12px)',
+                margin: '0 6px 10px',
+                border: '1px solid #e5e6eb',
+                borderRadius: 8,
+                boxSizing: 'border-box',
+              }}
+            >
               {g.icon.includes('.') ? (
                 /* 图片图标对齐表情图标：表情 .grid-icon 为 font-size 36 / line-height 44（scss px 即 rpx），
                    行内 style 的数字按真实 px 渲染（约 2 倍），故此处必须显式带 rpx 单位才能同高 */
