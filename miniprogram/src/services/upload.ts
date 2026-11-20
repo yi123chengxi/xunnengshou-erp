@@ -4,9 +4,12 @@ import { request } from './request'
 /**
  * 选图并上传到图片空间（POST /api/images，base64 落盘 + Nginx /uploads 静态直出），
  * 返回可直接引用的图片 URL；与 Web 图片空间同一份二进制与索引。
+ * sourceType 缺省为「相册+拍照」（微信端会弹来源选择）；传 ['camera'] 即直接进相机。
  */
-export const chooseAndUploadImage = async (): Promise<string> => {
-  const res = await Taro.chooseImage({ count: 1, sizeType: ['compressed'], sourceType: ['album', 'camera'] })
+export const chooseAndUploadImage = async (
+  sourceType: ('album' | 'camera')[] = ['album', 'camera'],
+): Promise<string> => {
+  const res = await Taro.chooseImage({ count: 1, sizeType: ['compressed'], sourceType })
   const filePath = (res.tempFilePaths || [])[0]
   if (!filePath) throw new Error('未选择图片')
   let dataUrl = ''

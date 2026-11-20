@@ -3,6 +3,7 @@ import { View, Text, Input, Picker, Button, Image, Checkbox, CheckboxGroup } fro
 import Taro from '@tarojs/taro'
 import { createNewStyle } from '../services/api'
 import { chooseAndUploadImage } from '../services/upload'
+import { fullImageUrl } from '../utils/imageUrl'
 import ListView from './ListView'
 
 // 与 Web NewStyleProgressPage 四页签同构：主表单/回传图片/到货款式/商品属性
@@ -59,9 +60,10 @@ const NewStyleProgressView = ({ tick = 0 }: { tick?: number }) => {
   const cur = TABS.find(t => t.key === tab) || TABS[0]
 
   // 左标签右输入的行布局：标签固定宽，输入框自适应填满右侧
-  const labelStyle = { width: 150, flexShrink: 0, fontSize: 26, color: '#5a6d85' }
+  // 行内 style 的数字按真实 px 渲染（约 2 倍 rpx），所以尺寸属性一律显式带 rpx 单位
+  const labelStyle = { width: '150rpx', flexShrink: 0, fontSize: '28rpx', color: '#5a6d85' }
   const fieldRow = (f: Field) => (
-    <View key={f.key} style={{ display: 'flex', alignItems: 'center', marginBottom: 20 }}>
+    <View key={f.key} style={{ display: 'flex', alignItems: 'center', marginBottom: '20rpx' }}>
       <Text style={labelStyle}>{f.label}{f.required ? '*' : ''}</Text>
       <Input
         className="input"
@@ -84,12 +86,15 @@ const NewStyleProgressView = ({ tick = 0 }: { tick?: number }) => {
     setFormVisible(v => !v)
   }
 
-  const pickImage = async () => {
+  // 款式图片：拍照 / 相册两入口（sourceType 只传 camera 则直接进相机，不再弹来源选择）
+  const pickImage = async (sourceType: ('album' | 'camera')[]) => {
     try {
-      const url = await chooseAndUploadImage()
+      const url = await chooseAndUploadImage(sourceType)
       setImage(url)
     } catch (e: any) {
-      Taro.showToast({ title: e.message || '上传失败', icon: 'none' })
+      const msg = String((e && (e.errMsg || e.message)) || '')
+      if (/cancel|取消/i.test(msg)) return
+      Taro.showToast({ title: e?.message || '上传失败', icon: 'none' })
     }
   }
 
@@ -127,55 +132,71 @@ const NewStyleProgressView = ({ tick = 0 }: { tick?: number }) => {
           </View>
         ))}
       </View>
-      {formVisible && tab === 'progress' && (
-        <View className="card">
+      {formVisible && tab === 'progress' ? (
+        /* 新增窗口独立：填单时整页只呈现表单（下方列表隐藏），保存或点「返回列表」后回到列表 */
+        <View className="card" style={{ margin: '20rpx 24rpx', padding: '24rpx' }}>
+          <View style={{ display: 'flex', alignItems: 'center', marginBottom: '24rpx' }}>
+            <Text style={{ flex: 1, fontSize: '30rpx', fontWeight: 600 }}>新增新款</Text>
+            <Text style={{ fontSize: '26rpx', color: '#1677ff' }} onClick={() => setFormVisible(false)}>返回列表 ›</Text>
+          </View>
           {FIELDS_A.map(fieldRow)}
-          {/* 规格：预设 33-46 每项前置复选框，勾选结果以逗号列表落库 */}
-          <View style={{ display: 'flex', alignItems: 'flex-start', marginBottom: 20 }}>
-            <Text style={{ ...labelStyle, lineHeight: '48px' }}>规格</Text>
+          {/* 规格：预设 33-46 每项前置复选框，勾选结果以逗号列表落库；字号用 rpx 以免撑破 25% 列宽 */}
+          <View style={{ display: 'flex', alignItems: 'flex-start', marginBottom: '20rpx' }}>
+            <Text style={{ ...labelStyle, lineHeight: '56rpx' }}>规格</Text>
             <CheckboxGroup
               style={{ flex: 1, display: 'flex', flexWrap: 'wrap' }}
               onChange={e => setSizes((e.detail.value || []).map(Number))}
             >
               {PRESET_SIZES.map(n => (
-                <View key={n} style={{ display: 'flex', alignItems: 'center', width: '25%', padding: '4px 0' }}>
+                <View key={n} style={{ display: 'flex', alignItems: 'center', width: '25%', padding: '4rpx 0' }}>
                   <Checkbox value={String(n)} checked={sizes.includes(n)} />
-                  <Text style={{ fontSize: 26 }}>{n}</Text>
+                  <Text style={{ fontSize: '26rpx', marginLeft: '4rpx' }}>{n}</Text>
                 </View>
               ))}
             </CheckboxGroup>
           </View>
           {FIELDS_B.map(fieldRow)}
-          <View style={{ display: 'flex', alignItems: 'center', marginBottom: 20 }}>
+          <View style={{ display: 'flex', alignItems: 'center', marginBottom: '20rpx' }}>
             <Text style={labelStyle}>何时上架</Text>
             <Picker mode="selector" range={LIST_MODES} value={modeIdx} onChange={e => setModeIdx(Number(e.detail.value))} style={{ flex: 1 }}>
               <View className="input" style={{ marginBottom: 0, color: '#1677ff' }}>{LIST_MODES[modeIdx]} ▾</View>
             </Picker>
           </View>
-          <View style={{ display: 'flex', alignItems: 'center', marginBottom: 20 }}>
+          {/* 款式图片：拍照上传 + 相册选图；weapp 下服务端回传相对路径须经 fullImageUrl 归一才能渲染 */}
+          <View style={{ display: 'flex', alignItems: 'center', marginBottom: '24rpx' }}>
             <Text style={labelStyle}>款式图片</Text>
             <View style={{ flex: 1, display: 'flex', alignItems: 'center' }}>
               {image ? (
-                <Image src={image} mode="aspectFill" style={{ width: 96, height: 96, borderRadius: 8, marginRight: 12 }} />
+                <Image src={fullImageUrl(image)} mode="aspectFill" style={{ width: '120rpx', height: '120rpx', borderRadius: '8rpx', marginRight: '16rpx' }} />
               ) : null}
-              <Button size="mini" className="btn-primary" style={{ lineHeight: '56px', marginRight: 12 }} onClick={pickImage}>
-                {image ? '换图' : '选图上传'}
-              </Button>
+              <View
+                style={{ height: '64rpx', lineHeight: '64rpx', padding: '0 24rpx', fontSize: '28rpx', color: '#fff', background: '#1677ff', borderRadius: '8rpx', marginRight: '16rpx', flexShrink: 0, boxSizing: 'border-box' }}
+                onClick={() => pickImage(['camera'])}
+              >
+                拍照
+              </View>
+              <View
+                style={{ height: '64rpx', lineHeight: '64rpx', padding: '0 24rpx', fontSize: '28rpx', color: '#1677ff', background: '#e6f4ff', borderRadius: '8rpx', marginRight: '16rpx', flexShrink: 0, boxSizing: 'border-box' }}
+                onClick={() => pickImage(['album'])}
+              >
+                相册
+              </View>
               {image ? (
-                <Text className="muted" style={{ fontSize: 24 }} onClick={() => setImage('')}>清除</Text>
+                <Text className="muted" style={{ fontSize: '26rpx' }} onClick={() => setImage('')}>清除</Text>
               ) : null}
             </View>
           </View>
           <Button className="btn-primary" loading={busy} onClick={submit}>保存新增</Button>
         </View>
+      ) : (
+        <ListView
+          page={cur.page}
+          headers={HEADERS[tab]}
+          addLabel={tab === 'progress' ? '新增新款' : undefined}
+          onAdd={tab === 'progress' ? openForm : undefined}
+          tick={tick + reload}
+        />
       )}
-      <ListView
-        page={cur.page}
-        headers={HEADERS[tab]}
-        addLabel={tab === 'progress' ? '新增新款' : undefined}
-        onAdd={tab === 'progress' ? openForm : undefined}
-        tick={tick + reload}
-      />
     </View>
   )
 }
