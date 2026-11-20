@@ -88,6 +88,7 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
   const [scores, setScores] = useState<Record<string, number>>({})
   const [computing, setComputing] = useState(false)
   const [list, setList] = useState<any[]>([])
+  const [imgFail, setImgFail] = useState<Record<string, boolean>>({})
   const [loaded, setLoaded] = useState(false)
   const [detail, setDetail] = useState<MarketDetail | null>(null)
 
@@ -97,8 +98,12 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
 
   useEffect(() => {
     setLoaded(false)
+    setImgFail({})
     getMarket(type, applied)
-      .then(d => setList(d.list))
+      // 服务端保留图片字段的历史形态（相对 /api/images/file、/uploads/images、带 host 的绝对地址、base64），
+      // weapp 下相对地址会被当成本地包路径而静默不渲染（表现为卡片封面整块空白），
+      // 必须在入口统一归一为可加载地址，与详情弹层、聊天图片同一口径
+      .then(d => setList((d.list || []).map((r: any) => ({ ...r, image: fullImageUrl(String(r.image || '')) }))))
       .catch(e => Taro.showToast({ title: e.message, icon: 'none' }))
       .finally(() => setLoaded(true))
   }, [type, applied, tick])
@@ -237,8 +242,12 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
             >
               {/* 封面区：padding-top:100% 撑出正方形（H5/weapp 通用，不依赖 aspect-ratio） */}
               <View style={{ position: 'relative', width: '100%', paddingTop: '100%' }}>
-                {r.image ? (
-                  <Image src={r.image} mode="aspectFill" style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%' }} />
+                {r.image && !imgFail[String(r.id)] ? (
+                  <Image
+                    src={r.image} mode="aspectFill"
+                    style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%' }}
+                    onError={() => setImgFail(v => ({ ...v, [String(r.id)]: true }))}
+                  />
                 ) : (
                   <View style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', background: 'linear-gradient(135deg,#e6f4ff,#f0f5ff)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 72 }}>
                     {type === 'mold' ? '🧰' : '🛍️'}

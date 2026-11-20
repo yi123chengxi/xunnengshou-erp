@@ -753,7 +753,15 @@ const firstImage = (r: any): string => {
     const hit = r.images.map(keepImage).filter(Boolean)[0];
     if (hit) return hit;
   }
-  return keepImage(r.image);
+  const own = keepImage(r.image);
+  if (own) return own;
+  // 主图可能是发布方本机的 blob/引用键（服务端解不出）：回退到随记录同步过来的 SKU 变体图，
+  // 与详情接口 images 的取值链保持一致，避免出现「详情有图、列表无图」
+  if (Array.isArray(r.variantImages)) {
+    const hit = r.variantImages.map((v: any) => keepImage(v && (v.src || v.image))).filter(Boolean)[0];
+    if (hit) return hit;
+  }
+  return '';
 };
 
 /** GET /api/wx/market?type=finished|semi|mold —— 商机市场三列表（成品/发包/模具租售） */
