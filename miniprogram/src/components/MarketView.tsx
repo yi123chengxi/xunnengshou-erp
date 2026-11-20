@@ -1,8 +1,9 @@
 import { useState, useEffect, useMemo } from 'react'
-import { View, Text, Image, Input } from '@tarojs/components'
+import { View, Text, Image, Input, ScrollView } from '@tarojs/components'
 import Taro from '@tarojs/taro'
-import { getMarket } from '../services/api'
+import { getMarket, getMarketDetail, MarketDetail } from '../services/api'
 import { computeSubjectFeatures, subjectSimilarity } from '../services/imageSimilarity'
+import { fullImageUrl } from '../utils/imageUrl'
 import scanCameraGrayIcon from '../assets/scan-camera-gray.png'
 
 const SEGMENTS = [
@@ -20,6 +21,58 @@ const statusTag = (status: string) => {
   return 'tag-green'
 }
 
+const money = (v: any) => `¥${(Number(v) || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2 })}`
+
+// 详情字段行：与 Web MarketPage 详情弹窗 / MoldMarketTab 详情同口径（服务端不下发脱敏占位，只下发可见内容）
+const detailRows = (d: MarketDetail): [string, string][] => {
+  if (d.type === 'mold') {
+    return [
+      ['模具编号', d.moldCode || '—'],
+      ['模具名称', d.moldName || '—'],
+      ['规格型号', d.spec || '—'],
+      ['类型', d.mode || '—'],
+      ['价格', d.price ? `${money(d.price)}${d.rent ? '/天' : ''}` : '—'],
+      ['数量总计', d.totalQty ? String(d.totalQty) : '—'],
+      ['发布时间', d.publishTime || '—'],
+      ['备注', d.remark || '—'],
+    ]
+  }
+  if (d.type === 'finished') {
+    return [
+      ['商品简称', d.shortName || '—'],
+      ['款式编码', d.styleCode || '—'],
+      ['单位', d.unit || '件'],
+      ['鞋面材质', d.shoeUpper || '—'],
+      ['鞋底材质', d.shoeSole || '—'],
+      ['总库存', String(d.totalStock || 0)],
+      ['供货价', `${money(d.targetPrice)} 起`],
+      ['上架时间', d.publishTime || '—'],
+      ['状态', d.status || '—'],
+    ]
+  }
+  return [
+    ['商品简称', d.shortName || '—'],
+    ['款式编码', d.styleCode || '—'],
+    ['商品编码', d.productCode || '—'],
+    ['数量', `${d.quantity || 0} ${d.unit || '件'}`],
+    ['期望单价', d.targetPrice ? money(d.targetPrice) : '—'],
+    ['报价截止', d.deadline || '—'],
+    ['工序类型', (d.processTypes || []).join('、') || '—'],
+    ['保证金', d.deposit ? `${money(d.deposit)}（${d.depositStatus || '需缴纳'}）` : '—'],
+    ['状态', d.status || '—'],
+    ['发布时间', d.publishTime || '—'],
+    ['备注', d.remark || '—'],
+  ]
+}
+
+// 详情底部弹层（与仓库统计记录详情同写法：遮罩高于 TabBar，面板靠底可滚）
+const SHEET_MASK = { position: 'fixed', left: 0, right: 0, top: 0, bottom: 0, background: 'rgba(0,0,0,0.45)', zIndex: 300 } as const
+const SHEET_PANEL = { position: 'absolute', left: 0, right: 0, bottom: 0, background: '#fff', borderRadius: '16px 16px 0 0', paddingTop: 14, paddingBottom: 'calc(14px + env(safe-area-inset-bottom))', maxHeight: '82vh', boxSizing: 'border-box' } as const
+const SHEET_TITLE = { flex: 1, fontSize: 18, fontWeight: 600, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' } as const
+const ROW_LABEL = { fontSize: 15, color: '#8a94a6', flexShrink: 0, marginRight: 12 } as const
+const ROW_VALUE = { flex: 1, fontSize: 17, textAlign: 'right', wordBreak: 'break-all' } as const
+const CONTACT_BTN = { height: 44, lineHeight: '44px', textAlign: 'center', fontSize: 17, color: '#fff', background: '#1677ff', borderRadius: 8, boxSizing: 'border-box' } as const
+
 // 商机市场视图：顶部三切换（默认成品市场），商品双列卡片式展示。
 // 与 Web 市场卡片同口径：成品卡不显示简称标题（首行款号标签）、不显示报价/询价数；
 // 报价/询价数仅发包市场显示；模具卡左上角租/售角标
@@ -32,6 +85,7 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
   const [computing, setComputing] = useState(false)
   const [list, setList] = useState<any[]>([])
   const [loaded, setLoaded] = useState(false)
+  const [detail, setDetail] = useState<MarketDetail | null>(null)
 
   useEffect(() => {
     if (fixedType) setType(fixedType)
@@ -85,13 +139,34 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
     } catch { /* 用户取消 */ }
   }
 
+  // 点卡片任意位置开详情：先用卡片字段占位即时响应，详情接口回来再覆盖
+  const openDetail = async (r: any) => {
+    setDetail({ ...(r || {}), type } as MarketDetail)
+    try {
+      const d = await getMarketDetail(type, String(r?.id || ''))
+      if (d && d.detail) setDetail(d.detail)
+      else Taro.showToast({ title: '详情接口尚未部署上线', icon: 'none' })
+    } catch (e: any) {
+      Taro.showToast({ title: e?.message || '详情加载失败', icon: 'none' })
+    }
+  }
+
+  // 与网页版同行为：联系=直接打开与该发布方的站内会话
+  const openContact = () => {
+    const pub = String(detail?.publisherUsername || '')
+    if (!pub) { Taro.showToast({ title: '未获取到供应商标账号', icon: 'none' }); return }
+    const name = encodeURIComponent(String(detail?.publisherCompany || pub))
+    const subject = encodeURIComponent(String(detail?.shortName || detail?.title || ''))
+    Taro.navigateTo({ url: `/pages/chat/index?to=${encodeURIComponent(pub)}&name=${name}&subject=${subject}` })
+  }
+
   const shown = refUrl && Object.keys(scores).length
     ? [...filtered].sort((a, b) => (scores[String(b.id)] || 0) - (scores[String(a.id)] || 0))
     : filtered
   // 搜索行尺寸：输入框与两个按键等高（weapp 下全局类尺寸会压过行内覆盖，故一律纯行内自带全部视觉属性）
   const cellH = 39
   const btnStyle = { marginLeft: 7, height: cellH, lineHeight: `${cellH}px`, padding: '0 11px', fontSize: 17, color: '#fff', background: '#1677ff', borderRadius: 7, textAlign: 'center', flexShrink: 0, boxSizing: 'border-box' } as const
-  const inputStyle = { flex: 1, marginBottom: 0, height: cellH, lineHeight: `${cellH}px`, fontSize: 17, padding: '0 11px', background: '#f5f6f8', borderRadius: 7, boxSizing: 'border-box' } as const
+  const inputStyle = { flex: 1, marginBottom: 0, height: cellH, lineHeight: `${cellH}px`, fontSize: 17, padding: '0 11px', background: '#fff', border: '1px solid #c9d1da', borderRadius: 7, boxSizing: 'border-box' } as const
 
   return (
     <View>
@@ -138,7 +213,10 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
       <View style={{ display: 'flex', flexWrap: 'wrap', padding: '8px 16px 0' }}>
         {shown.map((r: any) => (
           <View key={String(r.id)} style={{ width: '50%', boxSizing: 'border-box', padding: 8 }}>
-            <View style={{ background: '#fff', borderRadius: 12, overflow: 'hidden', boxShadow: '0 2px 8px rgba(31,39,51,0.06)', position: 'relative' }}>
+            <View
+              style={{ background: '#fff', borderRadius: 12, overflow: 'hidden', boxShadow: '0 2px 8px rgba(31,39,51,0.06)', position: 'relative' }}
+              onClick={() => openDetail(r)}
+            >
               {/* 封面区：padding-top:100% 撑出正方形（H5/weapp 通用，不依赖 aspect-ratio） */}
               <View style={{ position: 'relative', width: '100%', paddingTop: '100%' }}>
                 {r.image ? (
@@ -201,6 +279,116 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
           </View>
         ))}
       </View>
+      {/* 产品详情底部弹层：字段与 Web 详情弹窗同口径，底部「联系」直接发起站内会话 */}
+      {detail && (() => {
+        const rawImgs = Array.isArray(detail.images) && detail.images.length
+          ? detail.images
+          : ((detail as any).image ? [(detail as any).image] : [])
+        const imgs = rawImgs.map((u: string) => fullImageUrl(u)).filter(Boolean)
+        const skus = detail.variants || []
+        const qs = detail.quotes || []
+        const specs = detail.specs || []
+        return (
+          <View style={SHEET_MASK} onClick={() => setDetail(null)}>
+            <View style={SHEET_PANEL} onClick={e => e.stopPropagation()}>
+              <View style={{ display: 'flex', alignItems: 'center', padding: '0 20px 12px', borderBottom: '1px solid #f0f2f5' }}>
+                <Text style={SHEET_TITLE}>
+                  {detail.type === 'mold' ? '模具详情'
+                    : detail.type === 'finished' ? `成品详情 - ${detail.id || ''}` : `发包详情 - ${detail.id || ''}`}
+                </Text>
+                <Text style={{ fontSize: 15, color: '#8a94a6', paddingLeft: 12 }} onClick={() => setDetail(null)}>关闭</Text>
+              </View>
+              <ScrollView scrollY style={{ maxHeight: '58vh', padding: '12px 20px 0' }}>
+                {imgs.length ? (
+                  <View>
+                    <View style={{ position: 'relative', width: '100%', paddingTop: '72%', borderRadius: 10, overflow: 'hidden', background: '#f5f6f8' }}>
+                      <Image
+                        src={imgs[0]} mode="aspectFill"
+                        style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%' }}
+                        onClick={() => Taro.previewImage({ urls: imgs, current: imgs[0] })}
+                      />
+                    </View>
+                    {imgs.length > 1 && (
+                      <View style={{ display: 'flex', flexWrap: 'wrap', marginTop: 8 }}>
+                        {imgs.slice(1).map((u, i) => (
+                          <Image
+                            key={i} src={u} mode="aspectFill"
+                            style={{ width: 52, height: 52, borderRadius: 6, margin: '0 8px 8px 0', background: '#f5f6f8' }}
+                            onClick={() => Taro.previewImage({ urls: imgs, current: u })}
+                          />
+                        ))}
+                      </View>
+                    )}
+                  </View>
+                ) : null}
+                {detailRows(detail).map(([label, value]) => (
+                  <View key={label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '7px 0', borderBottom: '1px solid #f7f8fa' }}>
+                    <Text style={ROW_LABEL}>{label}</Text>
+                    <Text style={ROW_VALUE}>{value}</Text>
+                  </View>
+                ))}
+                <View style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '7px 0' }}>
+                  <Text style={ROW_LABEL}>供应商</Text>
+                  <Text style={ROW_VALUE}>{detail.publisherCompany || '—'}</Text>
+                </View>
+                {specs.length > 0 && (
+                  <View style={{ marginTop: 8 }}>
+                    <Text style={{ fontSize: 15, color: '#8a94a6' }}>规格明细与数量</Text>
+                    {specs.map((s, i) => (
+                      <View key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', fontSize: 15 }}>
+                        <Text style={{ flex: 1 }}>{s.spec}</Text>
+                        <Text style={{ color: '#1677ff' }}>× {s.qty}</Text>
+                      </View>
+                    ))}
+                  </View>
+                )}
+                {skus.length > 0 && (
+                  <View style={{ marginTop: 10, border: '1px solid #e6e9ee', borderRadius: 8, overflow: 'hidden' }}>
+                    <View style={{ display: 'flex', background: '#fafbfc', padding: '6px 10px', fontSize: 13, color: '#8a94a6' }}>
+                      <Text style={{ flex: 2 }}>颜色/SKU</Text>
+                      <Text style={{ flex: 1.4 }}>规格</Text>
+                      <Text style={{ flex: 1, textAlign: 'right' }}>供货价</Text>
+                      <Text style={{ flex: 1, textAlign: 'right' }}>库存</Text>
+                    </View>
+                    {skus.map((v, i) => (
+                      <View key={i} style={{ display: 'flex', padding: '6px 10px', fontSize: 15, borderTop: '1px solid #f0f2f5' }}>
+                        <View style={{ flex: 2 }}>
+                          <Text style={{ fontSize: 15 }}>{v.color || '—'}</Text>
+                          <Text style={{ display: 'block', fontSize: 13, color: '#8a94a6' }}>{v.productCode || ''}</Text>
+                        </View>
+                        <Text style={{ flex: 1.4 }}>{v.spec || '—'}</Text>
+                        <Text style={{ flex: 1, textAlign: 'right', color: '#f5222d' }}>{money(v.unitPrice)}</Text>
+                        <Text style={{ flex: 1, textAlign: 'right' }}>{v.stock || 0}</Text>
+                      </View>
+                    ))}
+                  </View>
+                )}
+                {qs.length > 0 && (
+                  <View style={{ marginTop: 12 }}>
+                    <Text style={{ fontSize: 15, color: '#8a94a6' }}>报价记录（{qs.length}）</Text>
+                    {qs.map((q, i) => (
+                      <View key={i} style={{ marginTop: 6, padding: '8px 10px', background: '#fafbfc', borderRadius: 8 }}>
+                        <Text style={{ fontSize: 15 }}>{q.company || '—'}</Text>
+                        <Text style={{ display: 'block', fontSize: 14, color: '#8a94a6' }}>
+                          单价 {money(q.unitPrice)} · 总价 {money(q.totalPrice)} · 交期 {q.deliveryDays || '—'} 天 · {q.status || '—'}
+                        </Text>
+                        {(q.contactPerson || q.contactPhone) ? (
+                          <Text style={{ display: 'block', fontSize: 14, color: '#8a94a6' }}>{[q.contactPerson, q.contactPhone].filter(Boolean).join(' · ')}</Text>
+                        ) : null}
+                      </View>
+                    ))}
+                  </View>
+                )}
+              </ScrollView>
+              {detail.canContact ? (
+                <View style={{ padding: '12px 20px 0' }}>
+                  <View style={CONTACT_BTN} onClick={openContact}>联系</View>
+                </View>
+              ) : null}
+            </View>
+          </View>
+        )
+      })()}
     </View>
   )
 }

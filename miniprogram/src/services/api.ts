@@ -52,6 +52,69 @@ export const getOrders = (q: string) =>
 export const getMarket = (type: 'finished' | 'semi' | 'mold', q = '') =>
   request<{ list: any[] }>(`/wx/market?type=${type}&q=${encodeURIComponent(q)}`)
 
+/** 市场产品详情（字段与 Web 详情弹窗同口径；报价记录仅发布方自己下发） */
+export interface MarketDetail {
+  id: string
+  type: string
+  shortName?: string
+  styleCode?: string
+  productCode?: string
+  unit?: string
+  quantity?: number
+  totalStock?: number
+  targetPrice?: number
+  status?: string
+  deadline?: string
+  processTypes?: string[]
+  deposit?: number
+  depositStatus?: string
+  remark?: string
+  publishTime?: string
+  shoeUpper?: string
+  shoeSole?: string
+  images?: string[]
+  variants?: { color: string; spec: string; productCode: string; unitPrice: number; stock: number; status: string }[]
+  quoteCount?: number
+  quotes?: {
+    company: string; unitPrice: number; totalPrice: number; quantity: number;
+    deliveryDays: number; contactPerson: string; contactPhone: string; time: string; status: string
+  }[]
+  publisherUsername?: string
+  publisherCompany?: string
+  canContact?: boolean
+  /** 模具租售 */
+  title?: string
+  moldCode?: string
+  moldName?: string
+  spec?: string
+  mode?: string
+  price?: number
+  rent?: boolean
+  specs?: { spec: string; qty: number }[]
+  totalQty?: number
+}
+
+export const getMarketDetail = (type: string, id: string) =>
+  request<{ detail: MarketDetail }>(`/wx/market/${type}/${encodeURIComponent(id)}`)
+
+/** 站内消息（与网页版 ChatPage 同一份消息库；手机端 HTTP + 轮询） */
+export interface ChatMsg {
+  id: string; from: string; to: string; content: string; type: string; subject: string; ts: number; mine: boolean
+}
+
+export interface ChatPeer { username: string; name: string; company: string; online?: boolean }
+
+export const getChatHistory = (to: string) =>
+  request<{ convId: string; other: ChatPeer; messages: ChatMsg[] }>(
+    `/wx/chat/history?to=${encodeURIComponent(to)}&limit=100`,
+  )
+
+export const sendChatMessage = (body: { to: string; content: string; msg_type?: 'text' | 'image'; subject?: string }) =>
+  request<{ saved: boolean; message: ChatMsg }>('/wx/chat/send', { method: 'POST', data: body })
+
+export const markChatRead = (to: string) =>
+  request<{ saved: boolean }>('/wx/chat/read', { method: 'POST', data: { to } })
+
 /** 银行账户（服务端 /wx/bank-accounts 只读下发，不含密码类字段） */
 export interface BankAccount {
   key: string

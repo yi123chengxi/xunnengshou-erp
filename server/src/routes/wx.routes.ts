@@ -5,6 +5,9 @@ import { store } from '../database/store';
 import { verifyJWT, verifyCredentials, issueToken, JWTPayload } from './auth.routes';
 import { getJwtSecret } from '../utils/jwtSecret';
 import { resolveCompanyRoot } from '../services/storageUsage';
+import { makeConvId, getHistory as chatHistory, saveMessage as chatSaveMessage, markConvRead as chatMarkRead } from '../ws/chat-store';
+import { isUserOnline, pushSavedToRecipient } from '../ws/chat-ws';
+import { checkChatContent, blockReason } from '../utils/chatFilter';
 
 dotenv.config();
 
@@ -554,13 +557,39 @@ async function companyMap(): Promise<Record<string, string>> {
   return map;
 }
 
+/** 发布方账号：模具租售行存 publisher，成品/发包行存 publisherUsername */
+const pubOf = (r: any): string => String(r.publisherUsername || r.publisher || '');
+/** 模具类型归一：Web 存 rent/sell，历史数据可能直接存中文 */
+const moldModeOf = (r: any): string => {
+  const m = String(r.mode || '');
+  if (m === 'rent') return '出租';
+  if (m === 'sell') return '出售';
+  return m;
+};
+/** 模具价格归一：出租取日租金、出售取售价（与 Web MoldMarketTab 同一取值口径） */
+const moldPriceOf = (r: any): number => {
+  const v = r.mode === 'sell' ? r.sellPrice : r.mode === 'rent' ? r.rentPrice : pick(r.price, r.targetPrice);
+  return Number(v) || 0;
+};
+/** 图片引用键归一：Web 历史行里混存 localStorage 引用键，服务端无法解析，只保留可直接加载的地址 */
+const keepImage = (u: any): string => (
+  typeof u === 'string' && /^(https?:\/\/|data:|\/uploads\/|\/api\/)/i.test(u) ? u : ''
+);
+const firstImage = (r: any): string => {
+  if (Array.isArray(r.images)) {
+    const hit = r.images.map(keepImage).filter(Boolean)[0];
+    if (hit) return hit;
+  }
+  return keepImage(r.image);
+};
+
 /** GET /api/wx/market?type=finished|semi|mold —— 商机市场三列表（成品/发包/模具租售） */
 router.get('/market', verifyJWT, async (req: Request, res: Response) => {
   try {
     const type = String(req.query.type || 'finished');
     const q = String(req.query.q || '').trim().toLowerCase();
     const companies = await companyMap();
-    const coOf = (r: any) => r.publisherCompany || companies[r.publisherUsername] || r.publisherUsername || '';
+    const coOf = (r: any) => r.publisherCompany || companies[pubOf(r)] || pubOf(r) || '';
     if (type === 'mold') {
       const rows = await readRows('market_mold_listings');
       // 模具搜索口径与 Web MoldMarketTab 同：标题/模具编号/名称/规格
@@ -569,10 +598,10 @@ router.get('/market', verifyJWT, async (req: Request, res: Response) => {
         : rows;
       const list = hit.slice(0, 50).map((r: any) => ({
         id: r.key || r.id, title: r.title || r.name || r.moldName || '模具租售',
-        price: Number(r.price || r.targetPrice) || 0, publisherCompany: coOf(r),
-        publishTime: r.publishTime || r.createTime || '', status: r.status || '',
-        image: (Array.isArray(r.images) && r.images[0]) || r.image || '',
-        mode: r.mode || '', moldCode: r.moldCode || '', spec: r.spec || '',
+        price: moldPriceOf(r), publisherCompany: coOf(r), publisherUsername: pubOf(r),
+        publishTime: r.publishTime || r.createTime || r.createdAt || '', status: r.status || '',
+        image: firstImage(r),
+        mode: moldModeOf(r), moldCode: r.moldCode || '', spec: r.spec || '',
       }));
       res.json({ code: 200, data: { list } });
       return;
@@ -585,13 +614,91 @@ router.get('/market', verifyJWT, async (req: Request, res: Response) => {
     const list = hit.slice(0, 50).map((r: any) => ({
       id: r.id || r.key, styleCode: r.styleCode || '', shortName: r.shortName || '',
       quantity: Number(r.quantity) || 0, targetPrice: Number(r.targetPrice) || 0,
-      publisherCompany: coOf(r), publishTime: r.publishTime || '', status: r.status || '',
+      publisherCompany: coOf(r), publisherUsername: pubOf(r),
+      publishTime: r.publishTime || '', status: r.status || '',
       quoteCount: Array.isArray(r.quotes) ? r.quotes.length : 0,
-      image: (Array.isArray(r.images) && r.images[0]) || r.image || '',
+      image: firstImage(r),
     }));
     res.json({ code: 200, data: { list } });
   } catch (err: any) {
     console.error('[wx] market error:', err.message);
+    res.status(500).json({ code: 500, message: '服务器内部错误' });
+  }
+});
+
+/** GET /api/wx/market/:type/:id —— 产品详情（字段与 Web MarketPage 详情弹窗 / MoldMarketTab 详情同口径）
+ *  脱敏口径与 Web 一致：报价记录只对发布方自己下发（其他账号 Web 做逐列脱敏，手机端不展示脱敏占位）；
+ *  跨账号一律不下发对方联系方式，联系走 /wx/chat/* 站内会话 */
+router.get('/market/:type/:id', verifyJWT, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user as JWTPayload;
+    const type = String(req.params.type || 'finished');
+    const id = String(req.params.id || '');
+    const me = await ownerOf(user.username);
+    const companies = await companyMap();
+    const coOf = (u: string, snap?: any) => String(snap || companies[u] || u || '');
+    if (type === 'mold') {
+      const rows = await readRows('market_mold_listings');
+      const r = rows.find((x: any) => String(x.key || x.id || '') === id);
+      if (!r) { res.status(404).json({ code: 404, message: '该模具信息已下架或不存在' }); return; }
+      const pub = pubOf(r);
+      const specs = (Array.isArray(r.specs) ? r.specs : [])
+        .filter((s: any) => s && s.specName)
+        .map((s: any) => ({ spec: String(s.specName), qty: Number(s.quantity) || 0 }));
+      res.json({ code: 200, data: { detail: {
+        id, type, title: r.title || r.moldName || '模具租售',
+        moldCode: r.moldCode || '', moldName: r.moldName || '', spec: r.spec || '',
+        mode: moldModeOf(r), price: moldPriceOf(r), rent: r.mode === 'rent',
+        status: r.status || '', dealt: r.dealt === true,
+        publishTime: day10(r.publishTime || r.createTime || r.createdAt),
+        images: (Array.isArray(r.images) ? r.images.map(keepImage) : [keepImage(r.image)]).filter(Boolean),
+        specs, totalQty: Number(r.totalQuantity) || specs.reduce((s: number, x: any) => s + x.qty, 0),
+        remark: r.remark || '',
+        publisherUsername: pub, publisherCompany: coOf(pub, r.publisherCompany),
+        canContact: !!pub && pub !== me,
+      } } });
+      return;
+    }
+    const rows = await readRows('market_publish_orders');
+    const r = rows.find((x: any) => String(x.id || x.key || '') === id
+      && (type === 'finished' ? x.type === 'finished' : x.type !== 'finished'));
+    if (!r || r.delisted === true) { res.status(404).json({ code: 404, message: '该商品已下架或不存在' }); return; }
+    const pub = pubOf(r);
+    const isMine = !!pub && pub === me;
+    const variants = (Array.isArray(r.variants) ? r.variants : []).map((v: any) => ({
+      color: v.color || '', spec: v.spec || '', productCode: v.productCode || '',
+      unitPrice: Number(v.suggestedPrice) || 0, stock: Number(v.actualStock) || 0, status: v.productStatus || '',
+    }));
+    const variantImages = (Array.isArray(r.variantImages) ? r.variantImages : [])
+      .map((e: any) => ({ color: e.color || '', src: keepImage(e.src || e.image) }))
+      .filter((e: any) => e.src);
+    const quotes = (Array.isArray(r.quotes) ? r.quotes : []).map((q: any) => ({
+      company: coOf(String(q.bidderUsername || ''), q.bidderCompany),
+      unitPrice: Number(q.unitPrice) || 0, totalPrice: Number(q.totalPrice) || 0,
+      quantity: Number(q.quantity) || 0, deliveryDays: Number(q.deliveryDays) || 0,
+      contactPerson: q.contactPerson || '', contactPhone: q.contactPhone || '',
+      time: day10(q.quoteTime), status: q.status || '',
+    }));
+    const images = (Array.isArray(r.images) ? r.images.map(keepImage) : [keepImage(r.image)])
+      .concat(variantImages.map((e: any) => e.src)).filter(Boolean);
+    res.json({ code: 200, data: { detail: {
+      id, type: r.type || type, shortName: r.shortName || '', styleCode: r.styleCode || '',
+      productCode: r.productCode || '', unit: r.unit || '件',
+      quantity: Number(r.quantity) || 0, targetPrice: Number(r.targetPrice) || 0,
+      status: r.status || '', deadline: day10(r.deadline), auto: r.auto === true,
+      processTypes: Array.isArray(r.processTypes) ? r.processTypes : [],
+      deposit: Number(r.deposit) || 0, depositStatus: r.depositStatus || '',
+      remark: r.remark || '', publishTime: day10(r.publishTime),
+      shoeUpper: r.shoeUpper || '', shoeSole: r.shoeSole || '',
+      images: Array.from(new Set(images)),
+      variants, quoteCount: quotes.length,
+      quotes: isMine ? quotes : [],
+      totalStock: variants.reduce((s: number, v: any) => s + v.stock, 0) || Number(r.quantity) || 0,
+      publisherUsername: pub, publisherCompany: coOf(pub, r.publisherCompany),
+      canContact: !!pub && pub !== me,
+    } } });
+  } catch (err: any) {
+    console.error('[wx] market detail error:', err.message);
     res.status(500).json({ code: 500, message: '服务器内部错误' });
   }
 });
@@ -1407,6 +1514,87 @@ router.get('/lists/:page', verifyJWT, async (req: Request, res: Response) => {
     res.json({ code: 200, data });
   } catch (err: any) {
     console.error('[wx] lists error:', err.message);
+    res.status(500).json({ code: 500, message: '服务器内部错误' });
+  }
+});
+
+// ============ 站内聊天（市场「联系」：与 Web ChatPage 同一份消息库，HTTP 通道 + 客户端轮询） ============
+
+/** 会话归属账号：子账号沿用 Web 口径以主账号建会话，保证手机/网页看到的是同一个会话 */
+function chatConvUser(user: JWTPayload): string {
+  const owner = String(user.owner || '');
+  return owner && owner !== user.username ? owner : user.username;
+}
+
+const toMiniMsg = (m: any, mineUsernames: Set<string>) => ({
+  id: String(m.id || ''), from: String(m.from_user || ''), to: String(m.to_user || ''),
+  content: String(m.content || ''), type: String(m.msg_type || 'text'),
+  subject: String(m.conv_subject || ''), ts: Number(m.created_at) || 0,
+  mine: mineUsernames.has(String(m.from_user || '')),
+});
+
+/** GET /api/wx/chat/history?to=xxx&limit=50 —— 与指定账号的会话历史（时间升序）+ 对方展示信息 */
+router.get('/chat/history', verifyJWT, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user as JWTPayload;
+    const to = String(req.query.to || '');
+    if (!to) { res.status(400).json({ code: 400, message: '缺少联系对象' }); return; }
+    const convUser = chatConvUser(user);
+    const convId = makeConvId(convUser, to);
+    const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 100);
+    const rows = await chatHistory(convId, undefined, limit);
+    const users = await readRows('registeredUsers');
+    const hit: any = users.find((u: any) => u && u.username === to) || {};
+    const mineSet = new Set([user.username, convUser]);
+    res.json({ code: 200, data: {
+      convId,
+      other: { username: to, name: await displayNameOf(to), company: String(hit.companyName || ''), online: isUserOnline(to) },
+      messages: rows.map((m: any) => toMiniMsg(m, mineSet)),
+    } });
+  } catch (err: any) {
+    console.error('[wx] chat history error:', err.message);
+    res.status(500).json({ code: 500, message: '服务器内部错误' });
+  }
+});
+
+/** POST /api/wx/chat/send {to, content, msg_type, subject} —— 发送站内消息
+ *  与 Web 同口径：文本过内容审核（403 不落库），落库后接收方在线则实时推送，否则等对方拉历史 */
+router.post('/chat/send', verifyJWT, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user as JWTPayload;
+    const to = String(req.body?.to || '');
+    const content = String(req.body?.content || '');
+    const msgType = req.body?.msg_type === 'image' ? 'image' : 'text';
+    const subject = String(req.body?.subject || '');
+    const convUser = chatConvUser(user);
+    if (!to || !content) { res.status(400).json({ code: 400, message: '缺少联系对象或消息内容' }); return; }
+    if (to === convUser) { res.status(400).json({ code: 400, message: '不能联系自己' }); return; }
+    if (msgType === 'text') {
+      const chk = checkChatContent(content);
+      if (chk.blocked) { res.status(403).json({ code: 403, message: blockReason(chk) }); return; }
+    }
+    const saved = await chatSaveMessage({
+      from_user: user.username, to_user: to, content, msg_type: msgType,
+      conv_subject: subject, conv_from_user: convUser,
+    });
+    pushSavedToRecipient(saved);
+    res.json({ code: 200, data: { saved: true, message: toMiniMsg(saved, new Set([user.username, convUser])) } });
+  } catch (err: any) {
+    console.error('[wx] chat send error:', err.message);
+    res.status(500).json({ code: 500, message: '服务器内部错误' });
+  }
+});
+
+/** POST /api/wx/chat/read {to} —— 标记会话已读（与 Web 同一张 chat_messages） */
+router.post('/chat/read', verifyJWT, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user as JWTPayload;
+    const to = String(req.body?.to || '');
+    if (!to) { res.status(400).json({ code: 400, message: '缺少联系对象' }); return; }
+    await chatMarkRead(makeConvId(chatConvUser(user), to), user.username);
+    res.json({ code: 200, data: { saved: true } });
+  } catch (err: any) {
+    console.error('[wx] chat read error:', err.message);
     res.status(500).json({ code: 500, message: '服务器内部错误' });
   }
 });
