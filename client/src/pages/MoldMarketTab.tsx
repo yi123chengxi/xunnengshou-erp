@@ -98,7 +98,9 @@ const extractImagesToKeys = (listing: MoldListing): MoldListing => {
 const resolveImageKeys = (listing: MoldListing): MoldListing => {
   if (!listing.images || listing.images.length === 0) return listing;
   const resolved = listing.images.map(ref => {
-    if (ref.startsWith('data:') || ref.startsWith('http')) return ref;
+    if (ref.startsWith('data:')) return ref;
+    // 云端绝对 URL（历史数据可能存 http/IP/裸域形态）统一改写到同源图片通道
+    if (ref.startsWith('http')) return absoluteImageUrl(ref);
     // 是引用键，读取实际数据
     try { return localStorage.getItem(ref) || ''; } catch { return ''; }
   }).filter(Boolean); // 过滤掉无法解析的空引用

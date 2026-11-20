@@ -533,7 +533,7 @@ const CreateInventoryModal: React.FC<CreateInventoryModalProps> = ({ onCancel, o
           <Row gutter={[12, 12]}>
             {filteredProducts.map((item: any) => {
               const isSelected = selectedKeys.includes(item.key);
-              const imgSrc = item.image || imgOf(username, { key: item.productKey });
+              const imgSrc = absoluteImageUrl(item.image || imgOf(username, { key: item.productKey }));
               return (
                 <Col xs={12} sm={8} md={6} key={item.key}>
                   <div
@@ -690,7 +690,7 @@ const AddProductsToInventoryModal: React.FC<AddProductsToInventoryModalProps> = 
           <Row gutter={[12, 12]}>
             {filteredProducts.map((item: any) => {
               const isSelected = selectedKeys.includes(item.key);
-              const imgSrc = item.image || imgOf(username, { key: item.productKey });
+              const imgSrc = absoluteImageUrl(item.image || imgOf(username, { key: item.productKey }));
               return (
                 <Col xs={12} sm={8} md={6} key={item.key}>
                   <div
@@ -824,7 +824,7 @@ const MarketPage: React.FC = () => {
       const scores: Record<string, number> = {};
       for (const item of finishedItems) {
         if (cancelled) break;
-        const src = item.image || imgOf(item.publisherUsername, { key: item.productKey });
+        const src = absoluteImageUrl(item.image || imgOf(item.publisherUsername, { key: item.productKey }));
         if (!src) { scores[item.key] = 0; continue; }
         const feat = await computeSubjectFeatures(src);
         scores[item.key] = feat.hist.length === 0 ? 0 : subjectSimilarity(refFeat, feat);
@@ -2278,7 +2278,7 @@ const addToCart = useCallback((rec: any, qty?: number) => {
               semiList.length === 0 ? <Empty description="暂无发包订单" /> : (
                 <Row gutter={[12, 12]}>
                   {semiList.map(r => {
-                    const imgSrc = r.image || localStorage.getItem(`pubImg_${r.publisherUsername}_${r.key}`) || imgOf(r.publisherUsername, { key: r.productKey });
+                    const imgSrc = absoluteImageUrl(r.image || localStorage.getItem(`pubImg_${r.publisherUsername}_${r.key}`) || imgOf(r.publisherUsername, { key: r.productKey }));
                     const minQuote = (r.quotes || []).map((q: any) => Number(q.unitPrice) || 0).filter((n: number) => n > 0);
                     const lowestPrice = minQuote.length ? Math.min(...minQuote) : null;
                     return (
@@ -2459,7 +2459,7 @@ const addToCart = useCallback((rec: any, qty?: number) => {
               <Row gutter={[12, 12]}>
                 {finishedList.map(r => {
                   const faved = favorites.some(f => f.cardKey === r.key);
-                  const imgSrc = r.image || imgOf(r.publisherUsername, { key: r.productKey });
+                  const imgSrc = absoluteImageUrl(r.image || imgOf(r.publisherUsername, { key: r.productKey }));
                   return (
                     <Col xs={12} sm={8} md={6} lg={4} xl={4} key={r.key}>
                       <div style={{ background: '#fff', borderRadius: 12, overflow: 'hidden', boxShadow: '0 2px 12px rgba(0,0,0,0.08)', transition: 'all 0.3s', cursor: 'pointer' }}
@@ -2633,7 +2633,7 @@ const addToCart = useCallback((rec: any, qty?: number) => {
                     <Row gutter={[12, 12]}>
                       {displayProducts.map(r => {
                         const faved = favorites.some(f => f.cardKey === r.key);
-                        const imgSrc = r.image || imgOf(r.publisherUsername, { key: r.productKey });
+                        const imgSrc = absoluteImageUrl(r.image || imgOf(r.publisherUsername, { key: r.productKey }));
                         return (
                           <Col xs={12} sm={8} md={6} lg={4} xl={4} key={r.key}>
                             <div style={{ background: '#fff', borderRadius: 12, overflow: 'hidden', boxShadow: '0 2px 12px rgba(0,0,0,0.08)', transition: 'all 0.3s', cursor: 'pointer' }}
@@ -2717,7 +2717,7 @@ const addToCart = useCallback((rec: any, qty?: number) => {
                     />
                     <Row gutter={[16, 16]}>
                       {sharedInventory.products?.map((p: any) => {
-                        const imgSrc = p.image || imgOf(p.publisherUsername, { key: p.productKey });
+                        const imgSrc = absoluteImageUrl(p.image || imgOf(p.publisherUsername, { key: p.productKey }));
                         const supplierName = p.supplierName || p.publisherCompany || '';
                         return (
                         <Col key={p.key} xs={24} sm={12} md={8} lg={6}>
@@ -2963,7 +2963,7 @@ const addToCart = useCallback((rec: any, qty?: number) => {
                 tabIndex={0}
                 style={{ width: 120, height: 120, border: '2px dashed #d9d9d9', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', overflow: 'hidden', background: '#fafafa' }}>
                 {pubImage ? (
-                  <img src={pubImage} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  <img src={absoluteImageUrl(pubImage)} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                 ) : (
                   <div style={{ textAlign: 'center', color: '#999', fontSize: 12 }}>
                     <CameraOutlined style={{ fontSize: 24, display: 'block', marginBottom: 4 }} />
@@ -3045,13 +3045,13 @@ const addToCart = useCallback((rec: any, qty?: number) => {
                 <Col span={9}>
                   <div style={{ height: 300, background: '#fafafa', border: '1px solid #f0f0f0', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', cursor: detailImg ? 'zoom-in' : 'default' }}
                     onClick={() => { if (detailImg) { setImgPreviewSrc(detailImg); setImgPreviewVisible(true); } }}>
-                    {detailImg ? <img src={detailImg} alt={detailRec.shortName} style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} /> : <ShopOutlined style={{ fontSize: 64, color: '#d9d9d9' }} />}
+                    {detailImg ? <img src={absoluteImageUrl(detailImg)} alt={detailRec.shortName} style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} /> : <ShopOutlined style={{ fontSize: 64, color: '#d9d9d9' }} />}
                   </div>
                   <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
                     {detailThumbs.map((t, i) => (
                       <Tooltip key={i} title={t.label}>
                         <div onClick={() => setDetailImg(t.src)} style={{ width: 52, height: 52, border: detailImg === t.src ? '2px solid ' + PRIMARY : '1px solid #d9d9d9', borderRadius: 4, overflow: 'hidden', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#fff' }}>
-                          <img src={t.src} alt={t.label} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                          <img src={absoluteImageUrl(t.src)} alt={t.label} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                         </div>
                       </Tooltip>
                     ))}
@@ -3202,7 +3202,7 @@ const addToCart = useCallback((rec: any, qty?: number) => {
         destroyOnClose
       >
         <div style={{ textAlign: 'center', padding: '20px 0' }}>
-          <img src={imgPreviewSrc} alt="预览" style={{ maxWidth: '100%', maxHeight: '80vh', objectFit: 'contain' }} />
+          <img src={absoluteImageUrl(imgPreviewSrc)} alt="预览" style={{ maxWidth: '100%', maxHeight: '80vh', objectFit: 'contain' }} />
         </div>
       </Modal>
 
@@ -3253,7 +3253,7 @@ const addToCart = useCallback((rec: any, qty?: number) => {
               <Row gutter={16} style={{ marginBottom: 12 }}>
               <Col span={8}>
                 <div style={{ height: 200, background: '#fafafa', border: '1px solid #f0f0f0', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
-                  {addToCartImg ? <img src={addToCartImg} alt={addToCartModalRec.shortName} style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} /> : <ShopOutlined style={{ fontSize: 48, color: '#d9d9d9' }} />}
+                  {addToCartImg ? <img src={absoluteImageUrl(addToCartImg)} alt={addToCartModalRec.shortName} style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} /> : <ShopOutlined style={{ fontSize: 48, color: '#d9d9d9' }} />}
                 </div>
               </Col>
               <Col span={16}>
@@ -3316,7 +3316,7 @@ const addToCart = useCallback((rec: any, qty?: number) => {
       <Drawer title={`收藏夹（${liveFavorites.length}）`} open={favVisible} onClose={() => setFavVisible(false)} width={420}>
         {liveFavorites.length === 0 ? <Empty description="暂无收藏" /> : liveFavorites.map(f => {
           const rec = market.find(r => r.key === f.cardKey);
-          const img = rec ? (rec.image || imgOf(rec.publisherUsername, { key: rec.productKey })) : '';
+          const img = rec ? absoluteImageUrl(rec.image || imgOf(rec.publisherUsername, { key: rec.productKey })) : '';
           return (
             <Card size="small" key={f.cardKey} style={{ marginBottom: 8 }}
               extra={<Space><Button size="small" onClick={() => rec && addToCart(rec)}>加购</Button><Button size="small" danger onClick={() => rec && toggleFav(rec)}>取消</Button></Space>}>
@@ -3357,7 +3357,7 @@ const addToCart = useCallback((rec: any, qty?: number) => {
               }>
               {g.items.map((c: any) => {
                 const ck = c._key;
-                const img = c.sku?.image || imgOf(sup, { key: g.rec.productKey, image: g.rec.image });
+                const img = absoluteImageUrl(c.sku?.image || imgOf(sup, { key: g.rec.productKey, image: g.rec.image }));
                 const price = Number(c.sku?.unitPrice ?? g.rec.targetPrice) || 0;
                 return (
                   <div key={ck} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0', borderBottom: '1px dashed #f0f0f0' }}>
