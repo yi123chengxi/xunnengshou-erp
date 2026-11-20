@@ -92,16 +92,16 @@ const Workbench = () => {
         <View className="card-title" style={{ fontSize: 28, marginBottom: 12 }}>常用功能</View>
         <View style={{ display: 'flex', marginBottom: 4 }}>
           <View
-            style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'linear-gradient(135deg,#52c41a,#95de64)', borderRadius: 12, padding: '10px 0', color: '#fff', marginRight: 12 }}
+            style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'linear-gradient(135deg,#52c41a,#95de64)', borderRadius: 12, padding: '16px 0', color: '#fff', marginRight: 12 }}
             onClick={() => goModule('hr', 'attendance')}
           >
-            <Text style={{ fontSize: 26, fontWeight: 600, lineHeight: '32px' }}>上下班打卡</Text>
+            <Text style={{ fontSize: 26, fontWeight: 600, lineHeight: '40px' }}>上下班打卡</Text>
           </View>
           <View
-            style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'linear-gradient(135deg,#fa8c16,#ffc069)', borderRadius: 12, padding: '10px 0', color: '#fff' }}
+            style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'linear-gradient(135deg,#fa8c16,#ffc069)', borderRadius: 12, padding: '16px 0', color: '#fff' }}
             onClick={() => goModule('finance', 'reimburse')}
           >
-            <Text style={{ fontSize: 26, fontWeight: 600, lineHeight: '32px' }}>报销申请</Text>
+            <Text style={{ fontSize: 26, fontWeight: 600, lineHeight: '40px' }}>报销申请</Text>
           </View>
         </View>
         <View className="grid">
