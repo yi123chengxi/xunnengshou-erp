@@ -113,11 +113,11 @@ const ModuleView = ({
 
   return (
     <View style={{ paddingBottom: 340 }}>
-      {/* 页头标题：财务管理/仓库管理按用户要求缩小 50%；电商常用显示当前子菜单名称并缩小 30%；其余模块维持原字号 */}
+      {/* 页头标题：财务管理/仓库管理/订单管理按用户要求缩小 50%；电商常用显示当前子菜单名称并缩小 30%；其余模块维持原字号 */}
       <View
         style={{
           padding: '20px 24px 0', fontWeight: 600,
-          fontSize: moduleKey === 'finance' || moduleKey === 'warehouse' ? 16 : (moduleKey === 'ecommerce' ? 22 : 32),
+          fontSize: moduleKey === 'finance' || moduleKey === 'warehouse' || moduleKey === 'order' ? 16 : (moduleKey === 'ecommerce' ? 22 : 32),
         }}
       >
         {mod.icon} {moduleKey === 'ecommerce' ? (mod.children.find(c => c.key === child)?.title || mod.title) : mod.title}

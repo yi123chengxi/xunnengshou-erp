@@ -80,6 +80,13 @@ const PICK_ROW = { display: 'flex', alignItems: 'center', justifyContent: 'space
 const PICK_LBL = { fontSize: 15, color: '#1f2733' } as const
 const PICK_CHK_ON = { fontSize: 15, color: '#1677ff', fontWeight: 600 } as const
 const PICK_CHK_OFF = { fontSize: 15, color: '#c9d4e3' } as const
+const LOG_BOX = { background: '#ffffff', borderRadius: 10, padding: '2px 12px' } as const
+const LOG_ROW = { padding: '8px 0', borderBottom: '1px solid #f2f4f7' } as const
+const LOG_HEAD = { display: 'flex', alignItems: 'center' } as const
+const LOG_ACTION = { fontSize: 13, fontWeight: 600, color: '#1677ff', flexShrink: 0 } as const
+const LOG_TIME = { fontSize: 12, color: '#86909c', marginLeft: 8, flexShrink: 0 } as const
+const LOG_OP = { fontSize: 12, color: '#5a6d85', marginLeft: 8, overflow: 'hidden' } as const
+const LOG_DETAIL = { display: 'block', fontSize: 12, color: '#5a6d85', marginTop: 2, lineHeight: '18px' } as const
 
 // 订单查询内嵌视图：输入后点「查询」再搜索；卡片显示款式x数量/商品总额/订单状态/收件人；点卡片看详情（货品明细+字段显示控制）
 const OrdersEmbed = ({ tick = 0 }: { tick?: number }) => {
@@ -112,12 +119,26 @@ const OrdersEmbed = ({ tick = 0 }: { tick?: number }) => {
     })
   }
 
-  // 第一行款式串：款式编码x数量，多个款式后拼总数量
+  // 款式编码前缀提取（对齐 Web 端 ScheduleBoard 口径：剥掉「-颜色-规格」后缀，6851-黑色-35 → 6851）
+  const stylePrefixOf = (raw: any): string => {
+    const s = String(raw || '')
+    const m = s.match(/^[^-]+(?:-[^-]+)*?(?=\s*-\s*[\u4e00-\u9fff])/)
+    if (m) return m[0]
+    const numOnly = s.match(/^\d+/)
+    return numOnly ? numOnly[0] : s
+  }
+
+  // 第一行：按款式编码聚合数量（款式编码x汇总数量，多款式依次拼接并追加总数）
   const styleLineOf = (r: any): string => {
     const items: any[] = Array.isArray(r.items) ? r.items : []
     if (items.length === 0) return ''
-    return items.map((it: any) => `${it.styleCode || it.productCode || '—'}x${it.quantity}`).join(' ')
-      + (items.length > 1 ? ` 共${r.totalQty}` : '')
+    const byStyle = new Map<string, number>()
+    items.forEach((it: any) => {
+      const k = stylePrefixOf(it.styleCode || it.productCode) || '—'
+      byStyle.set(k, (byStyle.get(k) || 0) + (Number(it.quantity) || 0))
+    })
+    const parts = Array.from(byStyle.entries()).map(([k, n]) => `${k}x${n}`)
+    return parts.join(' ') + (byStyle.size > 1 ? ` 共${r.totalQty}` : '')
   }
 
   // 明细行单元格：图片列固定宽，其余按权重伸展、按字段配置对齐
@@ -138,6 +159,7 @@ const OrdersEmbed = ({ tick = 0 }: { tick?: number }) => {
 
   const activeFields = ITEM_FIELDS.filter(f => fields.includes(f.key))
   const detailItems: any[] = Array.isArray(detail?.items) ? detail.items : []
+  const detailLogs: any[] = Array.isArray(detail?.logs) ? detail.logs : []
 
   return (
     <View>
@@ -235,6 +257,27 @@ const OrdersEmbed = ({ tick = 0 }: { tick?: number }) => {
                 ))}
               </View>
             )}
+
+            {/* 订单日志：与 Web 端订单管理详情同源（orderLog 时间线，按发生顺序正序展示） */}
+            <View style={{ ...SEC_TITLE }}>
+              <Text style={{ ...SEC_TXT }}>订单日志</Text>
+            </View>
+            <View style={{ ...LOG_BOX }}>
+              {detailLogs.length === 0 ? (
+                <View style={{ ...EMPTY_ITEMS }}>暂无操作记录</View>
+              ) : (
+                detailLogs.map((lg: any, i: number) => (
+                  <View key={i} style={{ ...LOG_ROW, borderBottom: i === detailLogs.length - 1 ? 'none' : '1px solid #f2f4f7' }}>
+                    <View style={{ ...LOG_HEAD }}>
+                      <Text style={{ ...LOG_ACTION }}>{lg.action || '—'}</Text>
+                      {!!lg.time && <Text style={{ ...LOG_TIME }}>{lg.time}</Text>}
+                      {!!lg.operator && <Text style={{ ...LOG_OP }} numberOfLines={1}>{lg.operator}</Text>}
+                    </View>
+                    {!!lg.detail && <Text style={{ ...LOG_DETAIL }}>{lg.detail}</Text>}
+                  </View>
+                ))
+              )}
+            </View>
           </View>
         </View>
       )}

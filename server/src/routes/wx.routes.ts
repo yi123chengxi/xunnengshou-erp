@@ -574,6 +574,15 @@ router.get('/orders', verifyJWT, async (req: Request, res: Response) => {
           amount: Number(it.amount) || 0, image: it.image || '',
         }));
       } catch { items = []; }
+      // 订单日志：与 Web 端 getOrderLogs 同源，读订单记录 orderLog（JSON 字符串数组 time/action/operator/detail）
+      let logs: any[] = [];
+      try {
+        const rawLog = typeof r.orderLog === 'string' ? JSON.parse(r.orderLog) : (Array.isArray(r.orderLog) ? r.orderLog : []);
+        logs = (Array.isArray(rawLog) ? rawLog : []).map((l: any) => ({
+          time: String(l.time || ''), action: String(l.action || ''),
+          operator: String(l.operator || ''), detail: String(l.detail || ''),
+        }));
+      } catch { logs = []; }
       const receiverAddress = String(r.receiverAddress || '').trim()
         || [r.province, r.city, r.district, r.addressDetail].filter(Boolean).map((s: any) => String(s).trim()).join(' ');
       return {
@@ -582,7 +591,7 @@ router.get('/orders', verifyJWT, async (req: Request, res: Response) => {
         receiverName: r.receiverName || r.person || '', receiverPhone: r.receiverPhone || '',
         receiverAddress, productAmount: Number(r.productAmount) || Number(r.amount) || 0,
         totalQty: items.reduce((s: number, it: any) => s + (Number(it.quantity) || 0), 0),
-        items,
+        items, logs,
       };
     });
     res.json({ code: 200, data: { list, total: hit.length } });
