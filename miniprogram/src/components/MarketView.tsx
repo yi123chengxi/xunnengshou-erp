@@ -3,6 +3,7 @@ import { View, Text, Image, Input, ScrollView } from '@tarojs/components'
 import Taro from '@tarojs/taro'
 import { getMarket, getMarketDetail, MarketDetail } from '../services/api'
 import { computeSubjectFeatures, subjectSimilarity } from '../services/imageSimilarity'
+import { getUser } from '../services/session'
 import { fullImageUrl } from '../utils/imageUrl'
 import scanCameraGrayIcon from '../assets/scan-camera-gray.png'
 
@@ -22,6 +23,9 @@ const statusTag = (status: string) => {
 }
 
 const money = (v: any) => `¥${(Number(v) || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2 })}`
+
+/** 模具类型归一：线上旧接口直传 rent/sell，新接口下发中文，角标与详情统一走这里 */
+const modeText = (v: any): string => (v === 'rent' ? '出租' : v === 'sell' ? '出售' : String(v || ''))
 
 // 详情字段行：与 Web MarketPage 详情弹窗 / MoldMarketTab 详情同口径（服务端不下发脱敏占位，只下发可见内容）
 const detailRows = (d: MarketDetail): [string, string][] => {
@@ -139,13 +143,27 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
     } catch { /* 用户取消 */ }
   }
 
-  // 点卡片任意位置开详情：先用卡片字段占位即时响应，详情接口回来再覆盖
+  // 点卡片任意位置开详情：先用卡片字段占位即时渲染，详情接口回来再覆盖
   const openDetail = async (r: any) => {
-    setDetail({ ...(r || {}), type } as MarketDetail)
+    const base: any = { ...(r || {}), type }
+    if (type === 'mold') {
+      // 列表口径已有 title/moldCode/spec/mode，补齐 moldName 与 /天 标记，未部署时也能看出一份模具详情
+      base.mode = modeText(r?.mode)
+      base.moldName = r?.moldName || r?.title || ''
+      base.rent = base.mode === '出租'
+    }
+    // 自己（或本公司子账号）发布的记录不显示联系键；服务端 canContact 按 owner 判定，接口未部署时按账号+公司名本地兜底
+    if (base.canContact === undefined) {
+      const me = getUser()
+      const pub = String(base.publisherUsername || '')
+      const mine = !!me && (pub === me.username || (!!me.company_name && String(base.publisherCompany || '') === me.company_name))
+      base.canContact = !!pub && !mine
+    }
+    setDetail(base as MarketDetail)
     try {
       const d = await getMarketDetail(type, String(r?.id || ''))
       if (d && d.detail) setDetail(d.detail)
-      else Taro.showToast({ title: '详情接口尚未部署上线', icon: 'none' })
+      else Taro.showToast({ title: '详情接口尚未部署上线，暂显示列表信息', icon: 'none' })
     } catch (e: any) {
       Taro.showToast({ title: e?.message || '详情加载失败', icon: 'none' })
     }
@@ -226,9 +244,9 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
                     {type === 'mold' ? '🧰' : '🛍️'}
                   </View>
                 )}
-                {type === 'mold' && r.mode ? (
-                  <Text style={{ position: 'absolute', top: 0, left: 0, color: '#fff', fontSize: 20, lineHeight: '32px', padding: '0 14px', borderRadius: '12px 0 12px 0', background: r.mode === '出租' ? 'linear-gradient(135deg,#1677ff,#69b1ff)' : 'linear-gradient(135deg,#52c41a,#95de64)' }}>
-                    {r.mode}
+                {type === 'mold' && modeText(r.mode) ? (
+                  <Text style={{ position: 'absolute', top: 0, left: 0, color: '#fff', fontSize: 20, lineHeight: '32px', padding: '0 14px', borderRadius: '12px 0 12px 0', background: modeText(r.mode) === '出租' ? 'linear-gradient(135deg,#1677ff,#69b1ff)' : 'linear-gradient(135deg,#52c41a,#95de64)' }}>
+                    {modeText(r.mode)}
                   </Text>
                 ) : null}
                 {/* 图片搜索相似度角标（与 Web 分档同口径） */}
@@ -256,9 +274,10 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
                     {r.shortName}
                   </Text>
                 ) : null}
+                {/* 第二行显示规格而不是重复一遍标题；字号取原 26 的 30%（行内数字按真实 px 渲染，26≈52rpx → 8≈16rpx） */}
                 {type === 'mold' ? (
-                  <Text style={{ fontSize: 26, fontWeight: 600, display: 'block', margin: '8px 0 4px', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
-                    {r.title}
+                  <Text style={{ fontSize: 8, lineHeight: '12px', fontWeight: 400, display: 'block', margin: '4px 0 2px', color: '#5a6d85', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
+                    规格：{r.spec || '—'}
                   </Text>
                 ) : null}
                 <Text className="muted" style={{ display: 'block', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
