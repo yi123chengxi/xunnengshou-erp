@@ -52,6 +52,25 @@ export const getOrders = (q: string) =>
 export const getMarket = (type: 'finished' | 'semi' | 'mold', q = '') =>
   request<{ list: any[] }>(`/wx/market?type=${type}&q=${encodeURIComponent(q)}`)
 
+/** 银行账户（服务端 /wx/bank-accounts 只读下发，不含密码类字段） */
+export interface BankAccount {
+  key: string
+  name: string
+  shortName: string
+  bankName: string
+  branchName: string
+  bankAccountNo: string
+  accountType: string
+  balance: number
+  status: string
+  openDate: string
+  person: string
+  txnCount?: number
+}
+
+export const getBankAccounts = (q = '') =>
+  request<{ list: BankAccount[]; total: number; totalBalance: number }>(`/wx/bank-accounts?q=${encodeURIComponent(q)}`)
+
 export interface AttendanceRecord { key: string; username: string; name?: string; date: string; in: string; out: string }
 
 export const getAttendance = () => request<{ record: AttendanceRecord | null; date: string }>('/wx/attendance')

@@ -11,6 +11,7 @@ export const MODULES: MenuModule[] = [
       { key: 'approvals', title: '审批中心' },
       { key: 'reimburse', title: '报销申请' },
       { key: 'bookkeeping', title: '日常记账' },
+      { key: 'bank-account', title: '银行账户' },
     ],
   },
   {
@@ -91,7 +92,7 @@ export const findModule = (key: string): MenuModule | undefined => MODULES.find(
 // 值为资源路径（含 '.'）时渲染端改用 Image，而非 Text 表情
 import scanCameraIcon from '../assets/scan-camera.png'
 export const CHILD_ICONS: Record<string, string> = {
-  approvals: '✅', reimburse: '🧾', bookkeeping: '📔',
+  approvals: '✅', reimburse: '🧾', bookkeeping: '📔', 'bank-account': '🏦',
   orders: '📋', production: '🏭', purchase: '📥',
   'production-order': '🏭', 'processing-order': '⚙️', 'purchase-requisition': '📥',
   'workflow-templates': '🧭', 'production-schedule': '📅',

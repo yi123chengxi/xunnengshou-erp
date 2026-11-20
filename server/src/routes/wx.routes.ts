@@ -515,6 +515,33 @@ router.get('/orders', verifyJWT, async (req: Request, res: Response) => {
   }
 });
 
+/** GET /api/wx/bank-accounts?q= —— 银行账户列表（与 Web 财务管理→银行账户同源同字段，只读）
+ *  密码类字段（uShieldPwd/withdrawPwd）一律不下发到手机端 */
+router.get('/bank-accounts', verifyJWT, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user as JWTPayload;
+    const owner = await ownerOf(user.username);
+    const q = String(req.query.q || '').trim().toLowerCase();
+    const rows = await readRows(`pageData_finance_bank-account_${owner}`);
+    const textOf = (r: any): string => [
+      r.name, r.shortName, r.bankName, r.branchName, r.bankAccountNo, r.accountType, r.status, r.person,
+    ].map(v => String(v || '')).join(' ').toLowerCase();
+    const hit = q ? rows.filter((r: any) => textOf(r).includes(q)) : rows;
+    const list = hit.slice(0, 100).map((r: any) => ({
+      key: r.key || r.id || '', name: r.name || '', shortName: r.shortName || '',
+      bankName: r.bankName || '', branchName: r.branchName || '', bankAccountNo: r.bankAccountNo || '',
+      accountType: r.accountType || '', balance: Number(r.balance) || 0,
+      status: r.status || '', openDate: day10(r.openDate), person: r.person || '',
+      txnCount: Array.isArray(r.transactions) ? r.transactions.length : 0,
+    }));
+    const totalBalance = hit.reduce((s: number, r: any) => s + (Number(r.balance) || 0), 0);
+    res.json({ code: 200, data: { list, total: hit.length, totalBalance } });
+  } catch (err: any) {
+    console.error('[wx] bank-accounts error:', err.message);
+    res.status(500).json({ code: 500, message: '服务器内部错误' });
+  }
+});
+
 // ============ 商机市场（只读） ============
 
 /** 公司名实时解析（与 Web 端 resolveCompany 同口径：快照字段失真时回退 registeredUsers） */

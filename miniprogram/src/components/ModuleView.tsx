@@ -11,6 +11,7 @@ import AttendanceView from './AttendanceView'
 import LeaveView from './LeaveView'
 import ListView from './ListView'
 import BookkeepingView from './BookkeepingView'
+import BankAccountsView from './BankAccountsView'
 import WarehouseStatsView from './WarehouseStatsView'
 import NewStyleProgressView from './NewStyleProgressView'
 import ScheduleBoardView from './ScheduleBoardView'
@@ -87,6 +88,7 @@ const ModuleView = ({
       case 'leave': return <LeaveView tick={tick} />
       // 以下子菜单与 Web 同页面同源数据，服务端 /wx/lists/:page 映射展示结构
       case 'bookkeeping': return <BookkeepingView tick={tick} />
+      case 'bank-account': return <BankAccountsView tick={tick} />
       case 'production': return <ListView page="production" tick={tick} />
       case 'purchase': return <ListView page="purchase" tick={tick} />
       // 生产管理子菜单（与 Web production 分组同口径）
