@@ -143,6 +143,7 @@ const modules: MenuModule[] = [
     icon: <ToolOutlined />,
     color: PRIMARY,
     children: [
+      { key: 'production-pending-stats', label: '待生产数据统计' },
       { key: 'production-order', label: '生产订单' },
       { key: 'processing-order', label: '加工订单' },
       { key: 'purchase-requisition', label: '采购申请单' },

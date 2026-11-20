@@ -33,6 +33,37 @@ const generateData2 = (
 
 // ============ 4. 生产管理模块 ============
 export const productionPages: Record<string, ChildPageConfig> = {
+  // 待生产数据统计：独立统计页（ModuleChildPage 早退渲染），列定义仅供字段配置/导出兼容，指标口径见 utils/productionStats
+  'production-pending-stats': {
+    title: '待生产数据统计',
+    description: '汇总待生产订单总量、清单齐套与半成品回厂、超期与节点卡点、产能负荷与结构效率，口径与生产订单、排期看板一致',
+    relatedModules: [
+      { moduleKey: 'production', moduleLabel: '生产管理', relation: '指标来源于生产订单/加工订单/采购申请单/生产排期' },
+      { moduleKey: 'sales', moduleLabel: '销售管理', relation: '待生产订单由销售订单安排生产流转而来' },
+      { moduleKey: 'basic-data', moduleLabel: '基础数据', relation: '模具编号与款式/颜色/尺码结构取自商品主数据' },
+    ],
+    stats: [
+      { title: '待生产订单', dataIndex: 'poolCount', format: 'count', suffix: '单' },
+      { title: '待生产数量', dataIndex: 'poolQty', format: 'count', suffix: '双' },
+      { title: '未排期数量', dataIndex: 'unscheduledQty', format: 'count', suffix: '双' },
+      { title: '超期订单', dataIndex: 'overdueCount', format: 'count', suffix: '单' },
+    ],
+    columns: [
+      { title: '生产单号', dataIndex: 'id', key: 'id', width: 150, type: 'text' },
+      { title: '商品名称', dataIndex: 'productName', key: 'productName', width: 180, type: 'text' },
+      { title: '客户名称', dataIndex: 'customerName', key: 'customerName', width: 140, type: 'text' },
+      { title: '状态', dataIndex: 'statusLabel', key: 'statusLabel', width: 90, type: 'tag' },
+      { title: '当前节点', dataIndex: 'nodeName', key: 'nodeName', width: 120, type: 'text' },
+      { title: '待生产数量', dataIndex: 'pendingQty', key: 'pendingQty', width: 110, type: 'number', align: 'right' },
+      { title: '未排期数量', dataIndex: 'remainScheduleQty', key: 'remainScheduleQty', width: 110, type: 'number', align: 'right' },
+      { title: '已用时', dataIndex: 'elapsedDays', key: 'elapsedDays', width: 90, type: 'number', align: 'right' },
+      { title: '计划完工', dataIndex: 'planEnd', key: 'planEnd', width: 110, type: 'date' },
+      { title: '负责人', dataIndex: 'person', key: 'person', width: 90, type: 'text' },
+    ],
+    filters: [],
+    mockData: [],
+  },
+
   'production-order': {
     title: '生产订单',
     description: '集中管理生产订单，跟踪从接单排产、生产执行到完工入库的全流程',

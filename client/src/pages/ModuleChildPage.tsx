@@ -104,6 +104,7 @@ import BatchAddProductModal from '../components/BatchAddProductModal';
 import ScheduleBoard from '../components/ScheduleBoard';
 import MoldPickerModal from '../components/MoldPickerModal';
 import SalesOutboundStatsPage from './inventory/SalesOutboundStatsPage';
+import PendingProductionStatsPage from './production/PendingProductionStatsPage';
 import { safeSetItem, canCacheDataset, tryCacheDataset } from '../utils/storageQuota';
 import { getDataOwner } from '../utils/brandAuth';
 import { getSessionOwner, mergeStrandedTenantDataset } from '../utils/dataOwner';
@@ -11046,6 +11047,11 @@ const handleBatchAttrsConfirm = () => {
   // 销售出库统计 - 独立统计分析页面
   if (childKey === 'sales-out-stats') {
     return <SalesOutboundStatsPage />;
+  }
+
+  // 待生产数据统计 - 独立统计分析页面（指标由 utils/productionStats 从原始存储键现算）
+  if (childKey === 'production-pending-stats') {
+    return <PendingProductionStatsPage />;
   }
 
   // 商品打印：独立页面（无 pageConfig，必须在占位分支之前早退）

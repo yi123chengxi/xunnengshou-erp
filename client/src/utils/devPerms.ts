@@ -143,6 +143,13 @@ export const PERM_V18_DEFAULT_KEYS = [
   'basic-data/image-space',
 ];
 
+// 权限数据版本哨兵 V19：含此标记的权限数组为「包含生产管理-待生产数据统计菜单」的新版数据；
+// 旧版数据（无此标记）中缺失的待生产统计键视为默认放行（否则新增菜单会被历史白名单误判为未授权而隐藏）
+export const PERM_V19 = '__v19';
+export const PERM_V19_DEFAULT_KEYS = [
+  'production/production-pending-stats',
+];
+
 // 电商常用菜单键迁移映射（旧键 → 新键），用于加载旧版权限数据时自动转换
 export const ECOM_KEY_MIGRATION: Record<string, string> = {
   'newstyle/progress': 'ecommerce/progress',
@@ -190,6 +197,7 @@ export const isPermAllowed = (set: Set<string> | null, key: string): boolean => 
   if (!set.has(PERM_V16) && PERM_V16_DEFAULT_KEYS.includes(key)) return true;
   if (!set.has(PERM_V17) && PERM_V17_DEFAULT_KEYS.includes(key)) return true;
   if (!set.has(PERM_V18) && PERM_V18_DEFAULT_KEYS.includes(key)) return true;
+  if (!set.has(PERM_V19) && PERM_V19_DEFAULT_KEYS.includes(key)) return true;
   // 电商常用键迁移兼容：旧版权限数据含旧键时，新键也放行
   const reverseMap: Record<string, string> = {};
   Object.entries(ECOM_KEY_MIGRATION).forEach(([oldK, newK]) => { reverseMap[newK] = oldK; });

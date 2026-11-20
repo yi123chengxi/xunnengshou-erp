@@ -58,6 +58,7 @@ export const PERM_MENUS: Record<PermScope, PermMenuGroup[]> = {
     },
     {
       key: 'production', label: '生产管理', items: [
+        { key: 'production/production-pending-stats', label: '待生产数据统计' },
         { key: 'production/production-order', label: '生产订单' },
         { key: 'production/processing-order', label: '加工订单' },
         { key: 'production/purchase-requisition', label: '采购申请单' },

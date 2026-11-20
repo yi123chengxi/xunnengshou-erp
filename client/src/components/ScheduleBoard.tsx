@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Space, Tag, DatePicker, InputNumber, Modal, Select, Input, message, Tooltip, Empty, Segmented, Progress, Alert, Tabs } from 'antd';
 import { saveDataset } from '../utils/dataStore';
 import { safeSetItem } from '../utils/storageQuota';
+import { readLineCapacity, writeLineCapacity } from '../utils/productionStats';
 import { getCurrentUserDisplayName } from '../utils/billLog';
 import {
   CalendarOutlined, LeftOutlined, RightOutlined, PlusOutlined, DeleteOutlined,
@@ -71,6 +72,13 @@ const ScheduleBoard: React.FC<ScheduleBoardProps> = ({ owner, onSchedulesChange,
   useEffect(() => { try { localStorage.setItem(`sb_deferred_${owner}`, JSON.stringify(Array.from(deferredIds))); } catch { /* ignore */ } }, [deferredIds, owner]);
   const [planPo, setPlanPo] = useState<any | null>(null);
   const [pendingSearch, setPendingSearch] = useState('');
+  // 生产线单班次标准产量（待生产数据统计的产能缺口/积压天数口径）：未维护时统计页回退近 14 天实际均产
+  const [lineCap, setLineCap] = useState<Record<string, number>>(() => readLineCapacity(owner));
+  const setLineCapValue = (line: string, v: number | null) => {
+    const next = { ...lineCap, [line]: Number(v) || 0 };
+    setLineCap(next);
+    writeLineCapacity(owner, next);
+  };
   const dragRef = useRef<{ poId: string; assignKey?: string } | null>(null);
   const products = useMemo(() => readList(productKey), []);
 
@@ -453,7 +461,15 @@ const ScheduleBoard: React.FC<ScheduleBoardProps> = ({ owner, onSchedulesChange,
               <Button size="small" icon={<ToolOutlined />} onClick={reload}>刷新</Button>
               <Space size={4} style={{ marginLeft: 8 }}>
                 {lines.map(l => (
-                  <Tag key={l} closable onClose={() => { const next = lines.filter(x => x !== l); setLines(next); writeList(lineKey, next); }}>{l}</Tag>
+                  <Tag key={l} closable onClose={() => { const next = lines.filter(x => x !== l); setLines(next); writeList(lineKey, next); }}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 6px', marginRight: 0 }}>
+                    <span>{l}</span>
+                    <Tooltip title="单班次标准产量（双）：用于「待生产数据统计」的产能缺口与积压天数计算，留空则按该线近 14 天实际单班次均产估算">
+                      <InputNumber size="small" min={0} controls={false} style={{ width: 72 }} placeholder="单班产量"
+                        value={lineCap[l] ? lineCap[l] : undefined}
+                        onChange={v => setLineCapValue(l, v as number | null)} />
+                    </Tooltip>
+                  </Tag>
                 ))}
                 <Input size="small" style={{ width: 90 }} placeholder="新增生产线" value={lineInput} onChange={e => setLineInput(e.target.value)} onPressEnter={addLine} />
                 <Button size="small" icon={<PlusOutlined />} onClick={addLine} />

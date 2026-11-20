@@ -112,24 +112,32 @@ export function poNodesOf(order: WfOrder, templates: WfTemplate[]): WfNode[] {
 }
 
 export interface PoNodeOverdue { index: number; name: string; actualDays: number; estimatedDays: number; overDays: number; }
+export interface PoNodeStay { index: number; name: string; actualDays: number; estimatedDays: number; }
 
-/** 当前节点超时判定（与 WorkflowOrderCard 同口径：节点预计天数 vs 实际停留天数；起点=上一节点推进记录时间，首节点=创建时间） */
-export function poCurrentNodeOverdue(order: WfOrder, nodes: WfNode[]): PoNodeOverdue | null {
+/**
+ * 当前节点停留情况（不做超时判定，供统计页算平均停留）：
+ * 起点=上一节点推进记录时间，首节点=创建时间；订单已完成或无当前节点返回 null
+ */
+export function poNodeStay(order: WfOrder, nodes: WfNode[]): PoNodeStay | null {
   if (order.status === 'COMPLETED') return null;
   const i = typeof order.currentStep === 'number' ? order.currentStep : 0;
   const node = nodes[i];
   if (!node) return null;
-  const est = Number((node as any).estimatedDays) || 0;
-  if (est <= 0) return null;
   let start: number;
   if (i === 0) start = new Date(order.createdAt).getTime() || Date.now();
   else {
     const prev = (order.records || []).filter((r: any) => r.stepIndex === i - 1);
     start = prev.length > 0 ? (new Date(prev[prev.length - 1].createdAt).getTime() || new Date(order.createdAt).getTime()) : (new Date(order.createdAt).getTime() || Date.now());
   }
-  const actual = (Date.now() - start) / 86400000;
-  if (actual <= est) return null;
-  return { index: i, name: (node as any).name || `节点${i + 1}`, actualDays: actual, estimatedDays: est, overDays: Math.ceil(actual - est) };
+  return { index: i, name: (node as any).name || `节点${i + 1}`, actualDays: (Date.now() - start) / 86400000, estimatedDays: Number((node as any).estimatedDays) || 0 };
+}
+
+/** 当前节点超时判定（与 WorkflowOrderCard 同口径：节点预计天数 vs 实际停留天数；起点=上一节点推进记录时间，首节点=创建时间） */
+export function poCurrentNodeOverdue(order: WfOrder, nodes: WfNode[]): PoNodeOverdue | null {
+  const stay = poNodeStay(order, nodes);
+  if (!stay || stay.estimatedDays <= 0) return null;
+  if (stay.actualDays <= stay.estimatedDays) return null;
+  return { index: stay.index, name: stay.name, actualDays: stay.actualDays, estimatedDays: stay.estimatedDays, overDays: Math.ceil(stay.actualDays - stay.estimatedDays) };
 }
 
 /** 生产订单整单超期的默认天数（流程模板未填预计用时时使用） */

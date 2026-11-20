@@ -11,7 +11,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { PermScope, PermTri, isMenuPoint } from '../config/permRegistry';
 import { getAllRoles, getMergedPermissions, getRolesStorageKey } from '../config/permissions';
 import { getDevIdentity, getSubRole } from './devStore';
-import { isPermAllowed, PERM_V18_DEFAULT_KEYS } from './devPerms';
+import { isPermAllowed, PERM_V18_DEFAULT_KEYS, PERM_V19_DEFAULT_KEYS } from './devPerms';
 
 export const PERM_EVENT = 'perm-changed';
 export const emitPermChanged = () => window.dispatchEvent(new Event(PERM_EVENT));
@@ -237,7 +237,7 @@ export const resolvePerm = (scope: PermScope, key: string): boolean => {
     if (isMenuPoint('supplier', key) && scope === 'supplier') {
       if (getMergedPermissions(roleNames, customPerms).includes(key)) return true;
       // 旧角色快照早于该菜单上线时默认放行（管理员可在角色三态/账号覆写中显式拒绝）
-      return PERM_V18_DEFAULT_KEYS.includes(key);
+      return PERM_V18_DEFAULT_KEYS.includes(key) || PERM_V19_DEFAULT_KEYS.includes(key);
     }
     return true;
   }

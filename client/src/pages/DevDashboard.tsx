@@ -10,7 +10,7 @@ import request from '../utils/request';
 import { validatePassword } from '../utils/passwordPolicy';
 import useStickTableHeight from '../hooks/useStickTableHeight';
 import { getDevIdentity, loadGroups, saveGroups, loadGroupPerms, saveGroupPerms, applyGroupPermsToMembers, loadCustomerPerms, saveCustomerPerms, allPermKeys, buildPermTree, updateRegisteredUsers, getSubRole, loadDevSubAccounts, loadFollowups, addFollowup, loadCustomerLogs, addCustomerLog } from '../utils/devStore';
-import { readDevPermSet, ECOM_KEY_MIGRATION, PERM_V2, PERM_V3, PERM_V3_DEFAULT_KEYS, PERM_V4, PERM_V4_DEFAULT_KEYS, PERM_V5, PERM_V5_DEFAULT_KEYS, PERM_V6, PERM_V6_DEFAULT_KEYS, PERM_V7, PERM_V7_DEFAULT_KEYS, PERM_V8, PERM_V8_DEFAULT_KEYS, PERM_V9, PERM_V9_DEFAULT_KEYS, PERM_V10, PERM_V10_DEFAULT_KEYS, PERM_V16, PERM_V16_DEFAULT_KEYS, PERM_V17, PERM_V17_DEFAULT_KEYS, PERM_V18, PERM_V18_DEFAULT_KEYS } from '../utils/devPerms';
+import { readDevPermSet, ECOM_KEY_MIGRATION, PERM_V2, PERM_V3, PERM_V3_DEFAULT_KEYS, PERM_V4, PERM_V4_DEFAULT_KEYS, PERM_V5, PERM_V5_DEFAULT_KEYS, PERM_V6, PERM_V6_DEFAULT_KEYS, PERM_V7, PERM_V7_DEFAULT_KEYS, PERM_V8, PERM_V8_DEFAULT_KEYS, PERM_V9, PERM_V9_DEFAULT_KEYS, PERM_V10, PERM_V10_DEFAULT_KEYS, PERM_V16, PERM_V16_DEFAULT_KEYS, PERM_V17, PERM_V17_DEFAULT_KEYS, PERM_V18, PERM_V18_DEFAULT_KEYS, PERM_V19, PERM_V19_DEFAULT_KEYS } from '../utils/devPerms';
 import { loadDevDeny, saveDevDeny } from '../utils/perm';
 import { CertBadge, fetchCertBatch } from '../components/EnterpriseCertModal';
 import type { CertInfo } from '../components/EnterpriseCertModal';
@@ -374,7 +374,11 @@ const DevDashboard: React.FC = () => {
     const legacy18 = saved !== null && rawSet !== null && !rawSet.has(PERM_V18);
 const v18Keys = allPermKeys().filter(k => PERM_V18_DEFAULT_KEYS.includes(k));
     const checkedFinal18 = legacy18 ? Array.from(new Set([...checkedFinal17, ...v18Keys])) : checkedFinal17;
-    setPermChecked(checkedFinal18);
+    // 旧版数据（未含待生产数据统计菜单控制）：对应键默认补勾
+    const legacy19 = saved !== null && rawSet !== null && !rawSet.has(PERM_V19);
+    const v19Keys = allPermKeys().filter(k => PERM_V19_DEFAULT_KEYS.includes(k));
+    const checkedFinal19 = legacy19 ? Array.from(new Set([...checkedFinal18, ...v19Keys])) : checkedFinal18;
+    setPermChecked(checkedFinal19);
     setPermNote(saved
       ? (legacy
         ? `当前已保存自定义权限（旧版数据）：勾选 ${saved.length} 个菜单；采购商/加工厂平台为新增控制项，已默认全勾选，保存后按新勾选生效`
@@ -387,9 +391,12 @@ const v18Keys = allPermKeys().filter(k => PERM_V18_DEFAULT_KEYS.includes(k));
     setPermDenied([]);
     const groupSaved = loadGroupPerms(g.id);
     const groupKeys = groupSaved ? migrateSavedPermKeys(groupSaved) : allPermKeys();
-    // 旧分组权限快照早于图片空间上线时默认补勾（保存后写入 __v18 标记，之后以勾选为准）
+    // 旧分组权限快照早于图片空间/待生产统计上线时默认补勾（保存后写入 __v18/__v19 标记，之后以勾选为准）
     if (groupSaved && !groupSaved.includes(PERM_V18)) {
       PERM_V18_DEFAULT_KEYS.forEach(k => { if (!groupKeys.includes(k)) groupKeys.push(k); });
+    }
+    if (groupSaved && !groupSaved.includes(PERM_V19)) {
+      PERM_V19_DEFAULT_KEYS.forEach(k => { if (!groupKeys.includes(k)) groupKeys.push(k); });
     }
     setPermChecked(groupKeys);
     setPermVisible(true);
