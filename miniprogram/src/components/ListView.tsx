@@ -143,24 +143,34 @@ const ListView = ({
       )}
       {loaded && list.length === 0 && <View className="empty">暂无数据</View>}
       {headers && headers.length ? (
-        /* 横向表格模式：顶部字段名行 + 每条记录一行单元格 */
-        <View style={{ margin: '8px 24px 0', background: '#fff', borderRadius: 12, overflow: 'hidden' }}>
-          <View style={{ display: 'flex', background: '#eef1f5', padding: '14px 0' }}>
+        /* 横向表格模式：顶部字段名行 + 每条记录一行单元格
+           行内 style 数字按真实 px 渲染，故表头 13px、单元格 15px（≈26/30rpx）才是舒适密度；
+           列边线按项目表格规范逐格 borderLeft，首列不带，外框整圈灰线 */
+        <View style={{ margin: '8px 24px 0', background: '#fff', borderRadius: 8, overflow: 'hidden', border: '1px solid #e6e9ee' }}>
+          <View style={{ display: 'flex', background: '#f2f4f7' }}>
             {headers.map((h, i) => (
-              <Text key={h} style={{ flex: i === 0 ? 1.4 : 1, textAlign: 'center', fontSize: 24, color: '#5a6d85', fontWeight: 600 }}>
-                {h}
-              </Text>
+              <View
+                key={h}
+                style={{ flex: i === 0 ? 1.4 : 1, padding: '7px 4px', borderLeft: i === 0 ? 'none' : '1px solid #e6e9ee', boxSizing: 'border-box', minWidth: 0 }}
+              >
+                <Text style={{ display: 'block', textAlign: 'center', fontSize: 13, color: '#5a6d85', fontWeight: 600, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
+                  {h}
+                </Text>
+              </View>
             ))}
           </View>
           {list.map(it => (
-            <View key={String(it.key)} style={{ display: 'flex', padding: '18px 0', borderTop: '1px solid #f0f2f5', alignItems: 'center' }}>
-              {(it.row || []).map((c, i) => (
-                <Text
+            /* 单元格按 headers 个数对齐渲染（行数据短于表头时补空），保证列边线上下对齐 */
+            <View key={String(it.key)} style={{ display: 'flex', borderTop: '1px solid #e6e9ee', alignItems: 'stretch' }}>
+              {headers.map((_, i) => (
+                <View
                   key={i}
-                  style={{ flex: i === 0 ? 1.4 : 1, textAlign: 'center', fontSize: 26, padding: '0 8px', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}
+                  style={{ flex: i === 0 ? 1.4 : 1, padding: '9px 4px', borderLeft: i === 0 ? 'none' : '1px solid #e6e9ee', boxSizing: 'border-box', minWidth: 0 }}
                 >
-                  {c || '—'}
-                </Text>
+                  <Text style={{ display: 'block', textAlign: 'center', fontSize: 15, color: '#1f2733', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
+                    {(it.row || [])[i] || '—'}
+                  </Text>
+                </View>
               ))}
             </View>
           ))}
