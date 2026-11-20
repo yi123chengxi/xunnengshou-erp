@@ -76,11 +76,6 @@ const BookkeepingView = ({ tick = 0 }: { tick?: number }) => {
 
   return (
     <View>
-      <View style={{ padding: '16px 24px 0' }}>
-        <Button className="btn-primary" style={{ lineHeight: '72px' }} onClick={() => setFormVisible(v => !v)}>
-          {formVisible ? '收起表单' : '＋ 新增记账'}
-        </Button>
-      </View>
       {formVisible && (
         <View className="card">
           <Picker mode="date" value={date} onChange={e => setDate(e.detail.value)}>
@@ -144,7 +139,8 @@ const BookkeepingView = ({ tick = 0 }: { tick?: number }) => {
           <Button className="btn-primary" loading={busy} onClick={submit}>保存记账</Button>
         </View>
       )}
-      <ListView page="bookkeeping" tick={tick + reload} />
+      {/* 紧凑列表模式；新增入口移到查询行（查询右侧）的「新增记账」小按键 */}
+      <ListView page="bookkeeping" tick={tick + reload} compact addLabel="新增记账" onAdd={() => setFormVisible(v => !v)} />
     </View>
   )
 }

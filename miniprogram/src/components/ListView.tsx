@@ -30,8 +30,8 @@ const localDay = (offset = 0): string => {
  * 搜索为「点击查询后才生效」的双态模式，减少大列表实时过滤开销。
  */
 const ListView = ({
-  page, extra = '', headers, addLabel, onAdd, tick = 0, quick = false, quickDate,
-}: { page: string; extra?: string; headers?: string[]; addLabel?: string; onAdd?: () => void; tick?: number; quick?: boolean; quickDate?: 'first' | 'last' }) => {
+  page, extra = '', headers, addLabel, onAdd, tick = 0, quick = false, quickDate, compact = false,
+}: { page: string; extra?: string; headers?: string[]; addLabel?: string; onAdd?: () => void; tick?: number; quick?: boolean; quickDate?: 'first' | 'last'; compact?: boolean }) => {
   const [input, setInput] = useState('')
   const [applied, setApplied] = useState('')
   const [range, setRange] = useState('')
@@ -95,18 +95,16 @@ const ListView = ({
           onInput={e => setInput(e.detail.value)}
           onConfirm={() => setApplied(input.trim())}
         />
-        {/* 行内按键用 View 实现：Taro H5 的 Button 基础样式（满宽/行高）会干扰 flex 对齐 */}
+        {/* 行内按键：纯行内样式不带 btn-primary 类（类里 84px 行高/30px 字会压过行内覆盖导致按键过大） */}
         <View
-          className="btn-primary"
-          style={{ marginLeft: 8, width: 'auto', height: 38, lineHeight: '38px', padding: '0 12px', fontSize: 13, flexShrink: 0, boxSizing: 'border-box', borderRadius: 8 }}
+          style={{ marginLeft: 8, height: 36, lineHeight: '36px', padding: '0 16px', fontSize: 15, color: '#fff', background: '#1677ff', borderRadius: 8, flexShrink: 0, boxSizing: 'border-box' }}
           onClick={() => setApplied(input.trim())}
         >
           查询
         </View>
         {onAdd ? (
           <View
-            className="btn-primary"
-            style={{ marginLeft: 8, width: 'auto', height: 38, lineHeight: '38px', padding: '0 12px', fontSize: 13, flexShrink: 0, boxSizing: 'border-box', borderRadius: 8 }}
+            style={{ marginLeft: 8, height: 36, lineHeight: '36px', padding: '0 16px', fontSize: 15, color: '#fff', background: '#1677ff', borderRadius: 8, flexShrink: 0, boxSizing: 'border-box' }}
             onClick={onAdd}
           >
             {addLabel || '新增'}
@@ -168,17 +166,31 @@ const ListView = ({
         </View>
       ) : (
         list.map(it => (
-        <View key={String(it.key)} className="card">
-          <View className="row">
-            <Text style={{ fontWeight: 600, flex: 1, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
+        <View key={String(it.key)} className="card" style={compact ? { padding: '12px 20px' } : undefined}>
+          {/* compact：标题与金额同行，副信息合成一行点分隔，降低单条高度 */}
+          <View style={{ display: 'flex', alignItems: 'center' }}>
+            <Text style={{ fontWeight: 600, fontSize: compact ? 24 : undefined, flex: 1, minWidth: 0, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
               {it.title}
             </Text>
-            {it.tag ? <Text className={`tag ${TONE_CLASS[it.tone || 'blue'] || 'tag-blue'}`}>{it.tag}</Text> : null}
+            {compact && typeof it.amount === 'number' && it.amount !== 0 ? (
+              <Text style={{ marginLeft: 12, flexShrink: 0, fontWeight: 700, fontSize: 24, color: it.amount >= 0 ? '#52c41a' : '#ff4d4f' }}>
+                {it.amount >= 0 ? '+' : '-'}¥{Math.abs(it.amount).toFixed(2)}
+              </Text>
+            ) : null}
+            {it.tag ? <Text className={`tag ${TONE_CLASS[it.tone || 'blue'] || 'tag-blue'}`} style={{ marginLeft: 12, flexShrink: 0 }}>{it.tag}</Text> : null}
           </View>
-          {(it.sub || []).map((s, i) => (
-            <View key={i} className="muted" style={{ paddingTop: 4, fontSize: 24 }}>{s}</View>
-          ))}
-          {typeof it.amount === 'number' && it.amount !== 0 ? (
+          {compact ? (
+            (it.sub && it.sub.length > 0) ? (
+              <View className="muted" style={{ paddingTop: 4, fontSize: 22, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
+                {it.sub.join(' · ')}
+              </View>
+            ) : null
+          ) : (
+            (it.sub || []).map((s, i) => (
+              <View key={i} className="muted" style={{ paddingTop: 4, fontSize: 24 }}>{s}</View>
+            ))
+          )}
+          {!compact && typeof it.amount === 'number' && it.amount !== 0 ? (
             <View style={{ paddingTop: 8, fontWeight: 700, fontSize: 30, color: it.amount >= 0 ? '#52c41a' : '#ff4d4f' }}>
               {it.amount >= 0 ? '+' : '-'}¥{Math.abs(it.amount).toFixed(2)}
             </View>
