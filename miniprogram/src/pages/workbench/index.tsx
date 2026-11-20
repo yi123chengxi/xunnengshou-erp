@@ -130,7 +130,7 @@ const Workbench = () => {
                 <Text className="grid-icon">{g.icon}</Text>
               )}
               {!!g.badge && (
-                <Text style={{ position: 'absolute', top: 6, right: 24, background: '#f5222d', color: '#fff', borderRadius: 20, fontSize: 16, lineHeight: '24px', padding: '0 8px' }}>
+                <Text style={{ position: 'absolute', top: 4, right: 4, background: '#f5222d', color: '#fff', borderRadius: 10, fontSize: 10, lineHeight: '16px', padding: '0 5px' }}>
                   {g.badge}
                 </Text>
               )}
