@@ -115,7 +115,7 @@ const ListView = ({
       {/* 计数+快速筛选+汇总同行：靠左对齐；quick 页签恒显示，点击筛选后不隐藏 */}
       {(quick || (loaded && total > 0)) && (
         <View style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', padding: '8px 24px 0' }}>
-          <Text className="muted" style={{ fontSize: 22 }}>
+          <Text className="muted" style={{ fontSize: compact ? 15 : 22 }}>
             共 {total} 条{total > 100 ? '，仅显示前 100 条' : ''}
           </Text>
           {quick && QUICK_RANGES.map(r => (
@@ -170,11 +170,11 @@ const ListView = ({
         <View key={String(it.key)} className="card" style={compact ? { padding: '12px 20px' } : undefined}>
           {/* compact：标题与金额同行，副信息合成一行点分隔，降低单条高度 */}
           <View style={{ display: 'flex', alignItems: 'center' }}>
-            <Text style={{ fontWeight: 600, fontSize: compact ? 24 : undefined, flex: 1, minWidth: 0, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
+            <Text style={{ fontWeight: 600, fontSize: compact ? 17 : undefined, flex: 1, minWidth: 0, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
               {it.title}
             </Text>
             {compact && typeof it.amount === 'number' && it.amount !== 0 ? (
-              <Text style={{ marginLeft: 12, flexShrink: 0, fontWeight: 700, fontSize: 24, color: it.amount >= 0 ? '#52c41a' : '#ff4d4f' }}>
+              <Text style={{ marginLeft: 12, flexShrink: 0, fontWeight: 700, fontSize: 17, color: it.amount >= 0 ? '#52c41a' : '#ff4d4f' }}>
                 {it.amount >= 0 ? '+' : '-'}¥{Math.abs(it.amount).toFixed(2)}
               </Text>
             ) : null}
@@ -182,7 +182,7 @@ const ListView = ({
           </View>
           {compact ? (
             (it.sub && it.sub.length > 0) ? (
-              <View className="muted" style={{ paddingTop: 4, fontSize: 22, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
+              <View className="muted" style={{ paddingTop: 4, fontSize: 15, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
                 {it.sub.join(' · ')}
               </View>
             ) : null
