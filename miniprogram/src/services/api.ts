@@ -31,6 +31,73 @@ export interface ApprovalDetail {
 
 export const getSummary = () => request<SummaryData>('/wx/summary')
 
+/**
+ * 工作台经营看板（服务端 /wx/dashboard 按网页版同口径计算后下发）
+ * - metrics 中无权限的指标服务端直接下发 null（手机端显示 —），不是 0
+ * - pendingStats 为「生产管理-待生产数据统计」快照，无权限时为 null（整块不渲染）
+ */
+export interface BoardMetrics {
+  pendingQty: number | null; pendingCount: number | null; allOrderCount: number | null; planQtyAll: number | null
+  todayDoneQty: number | null; todayDoneCount: number | null
+  todaySalesCount: number | null; todaySalesQty: number | null; todaySalesAmount: number | null
+  monthSalesCount: number | null; monthSalesAmount: number | null
+  todayIncome: number | null; todayExpense: number | null
+  monthIncome: number | null; monthExpense: number | null
+  balanceTotal: number | null; accountCount: number | null
+  overdueCount: number | null; overdueRate: number | null; unscheduledQty: number | null; done30Qty: number | null
+}
+
+/** 待生产统计行（与网页版 PendingRow 同名精简字段） */
+export interface PendingRowBrief {
+  id: string; productName: string; customerName: string; statusLabel: string
+  nodeName: string; pendingQty: number; remainScheduleQty: number; progress: number
+  elapsedDays: number; limitDays: number; overdue: boolean; planEnd: string
+  hasCgsq: boolean; jgDone: number; jgTotal: number; person: string
+}
+
+export interface PendingStats {
+  generatedAt: string
+  totals: {
+    allCount: number; poolCount: number; pendingCount: number; processingCount: number; warningCount: number
+    doneCount: number; poolQty: number; planQty: number; doneQty: number; planQtyAll: number
+    scheduledQty: number; unscheduledQty: number; unscheduledCount: number
+    deferredCount: number; deferredQty: number; avgProgress: number
+  }
+  bom: {
+    noCgsqCount: number; noJgCount: number; readyCount: number; jgTotalCount: number; jgDoneCount: number
+    jgDoneRate: number; jgOpenCount: number; jgOpenQty: number; jgOpenAmount: number
+    cgsqOpenCount: number; cgsqOpenQty: number; blockedCount: number
+  }
+  risk: {
+    overdueCount: number; overdueRate: number; avgOverDays: number; maxOverDays: number
+    nodeOverCount: number; dueSoonCount: number; planEndPassedCount: number; noPlanEndCount: number
+  }
+  nodes: { index: number; name: string; count: number; qty: number; avgStayDays: number; estDays: number; overCount: number }[]
+  persons: { name: string; count: number; qty: number; overdueCount: number }[]
+  styles: { styleCode: string; moldCode: string; qty: number; orderCount: number; colors: number; sizes: number }[]
+  colors: { name: string; qty: number; orderCount: number }[]
+  sizes: { name: string; qty: number; orderCount: number }[]
+  capacity: {
+    lines: { line: string; standard: number; avgShiftOutput: number; usedCapacity: number; scheduled7: number; capacity7: number }[]
+    days: { date: string; label: string; scheduled: number; capacity: number }[]
+    capacity7: number; unscheduledQty: number; gap: number
+    backlogDays: number | null; hasStandard: boolean; lineCount: number
+  }
+  efficiency: { done30Count: number; done30Qty: number; avgCycleDays: number | null; completeRate: number; scheduleRate: number }
+  doneTodayQty: number; doneTodayCount: number
+  poolTop: PendingRowBrief[]
+  overdueTop: PendingRowBrief[]
+}
+
+export interface DashboardData {
+  perm: { productionStats: boolean; productionOrder: boolean; salesOrder: boolean; bankAccount: boolean }
+  metrics: BoardMetrics
+  pendingStats: PendingStats | null
+  updatedAt: string
+}
+
+export const getDashboard = () => request<DashboardData>('/wx/dashboard')
+
 export const getApprovals = (type: 'reimbursement' | 'payment', tab: string) =>
   request<{ list: ApprovalItem[] }>(`/wx/approvals?type=${type}&tab=${tab}`)
 

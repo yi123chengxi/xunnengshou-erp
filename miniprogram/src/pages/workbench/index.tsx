@@ -2,18 +2,56 @@ import { useState } from 'react'
 import './index.scss'
 import { View, Text, Image } from '@tarojs/components'
 import Taro, { useDidShow } from '@tarojs/taro'
-import { getSummary, SummaryData } from '../../services/api'
+import { getSummary, getDashboard, SummaryData, DashboardData, BoardMetrics } from '../../services/api'
 import { getUser, getToken } from '../../services/session'
 import { isPreviewMode } from '../../services/auth'
 import { getFavs } from '../../services/favorites'
 import { CHILD_ICONS, childTitle, openMenuChild } from '../../config/menu'
 import AppTabBar from '../../components/AppTabBar'
+import PendingStatsCard from '../../components/PendingStatsCard'
 
-const fmtMoney = (n: number) => `¥${(n || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+/** 看板数值：服务端对无权限指标下发 null → 显示 — 而不是 0，避免「看起来像 0 业绩」；
+    行内 style 数字在真机按真实 px 渲染，格宽有限，十万以上折成「万」防止长数字撑破格子 */
+const fmtNum = (n: number | null | undefined) => {
+  if (n === null || n === undefined) return '—'
+  const v = Number(n) || 0
+  if (Math.abs(v) >= 100000) return `${(v / 10000).toFixed(1)}万`
+  return v.toLocaleString('zh-CN')
+}
+/** 金额短写：万元以上用「万」，卡片宽度有限时保证不折行 */
+const fmtAmt = (n: number | null | undefined) => {
+  if (n === null || n === undefined) return '—'
+  const v = Number(n) || 0
+  if (Math.abs(v) >= 10000) return `¥${(v / 10000).toFixed(2)}万`
+  return `¥${v.toFixed(2)}`
+}
+
+/** 看板指标格：按 375pt 屏宽两列排布（每格约 163pt），label 六字中文在 19px 下不换行 */
+const BoardCell = ({ label, value, sub, onClick }: {
+  label: string; value: string; sub?: string; onClick?: () => void
+}) => (
+  <View
+    style={{ width: '50%', minWidth: 0, boxSizing: 'border-box', paddingRight: 16, marginBottom: 14 }}
+    onClick={onClick}
+  >
+    <Text style={{ fontSize: 32, fontWeight: 700, display: 'block', lineHeight: '40px', whiteSpace: 'nowrap' }}>{value}</Text>
+    <Text style={{ fontSize: 19, opacity: 0.9, display: 'block', marginTop: 2, whiteSpace: 'nowrap' }}>{label}</Text>
+    {sub ? <Text style={{ fontSize: 16, opacity: 0.72, display: 'block', whiteSpace: 'nowrap' }}>{sub}</Text> : null}
+  </View>
+)
+/** 展开项：单列整行两端对齐。两列在 375pt 下每格只有 187pt，「本月销售额」+「¥5000.00」会挤压 label 逐字竖排（实测），改单列 */
+const BoardPair = ({ label, value }: { label: string; value: string }) => (
+  <View style={{ width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', padding: '5px 0' }}>
+    <Text style={{ fontSize: 19, opacity: 0.85, flex: 1, minWidth: 0 }}>{label}</Text>
+    <Text style={{ fontSize: 20, fontWeight: 600, whiteSpace: 'nowrap', marginLeft: 12 }}>{value}</Text>
+  </View>
+)
 
 // 首页：经营概览 + 常用功能（上下班/报销置顶醒目）+ 更多入口
 const Workbench = () => {
   const [summary, setSummary] = useState<SummaryData | null>(null)
+  const [dash, setDash] = useState<DashboardData | null>(null)
+  const [moreOpen, setMoreOpen] = useState(false)
   const [updatedAt, setUpdatedAt] = useState('')
   const user = getUser()
 
@@ -22,6 +60,7 @@ const Workbench = () => {
       Taro.redirectTo({ url: '/pages/login/index' })
       return
     }
+    // 待办数沿用 /wx/summary；经营看板走 /wx/dashboard（服务端按网页版同口径计算并做权限裁剪）
     getSummary()
       .then(d => {
         setSummary(d)
@@ -31,9 +70,15 @@ const Workbench = () => {
         // 布局预览模式（后端 /api/wx 未部署）不弹报错，仅展示结构
         if (!isPreviewMode()) Taro.showToast({ title: e.message, icon: 'none' })
       })
+    getDashboard()
+      .then(d => setDash(d && d.metrics ? d : null))
+      .catch(() => {
+        // 看板接口异常/未部署时静默：指标显示 —，不阻塞首页其他模块
+      })
   })
 
   const todos = summary?.todos
+  const m: BoardMetrics | undefined = dash?.metrics
   const pendingTotal = (todos?.reimbPending || 0) + (todos?.payPending || 0) + (todos?.recvPending || 0)
   const goModule = (key: string, child?: string) =>
     Taro.navigateTo({ url: `/pages/module/index?key=${key}${child ? `&child=${child}` : ''}` })
@@ -66,26 +111,67 @@ const Workbench = () => {
         </View>
       </View>
 
-      {/* 本月经营卡（紧凑版） */}
+      {/* 经营看板：生产（待生产/今日完工）+ 销售（今日已付款）+ 资金（银行流水收支）
+          指标值全部由服务端计算下发，无权限的指标为 null → 显示 —；手机端不重复算口径，避免与网页版两个数 */}
       <View className="card" style={{ marginTop: -36, padding: '20px 24px', background: 'linear-gradient(135deg,#4096ff,#69b1ff)', color: '#fff' }}>
-        <Text style={{ fontSize: 22, opacity: 0.9 }}>本月销售金额</Text>
-        <Text style={{ fontSize: 44, fontWeight: 700, display: 'block', lineHeight: '52px', margin: '4px 0 12px' }}>
-          {fmtMoney(summary?.month.salesAmount || 0)}
-        </Text>
-        <View style={{ display: 'flex', borderTop: '1px solid rgba(255,255,255,0.25)', paddingTop: 12 }}>
-          <View style={{ flex: 1 }}>
-            <Text style={{ fontSize: 26, fontWeight: 600, display: 'block', lineHeight: '32px' }}>{summary?.month.orderCount ?? '—'}</Text>
-            <Text style={{ fontSize: 20, opacity: 0.85 }}>本月订单</Text>
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={{ fontSize: 26, fontWeight: 600, display: 'block', lineHeight: '32px' }}>{summary?.today.orderCount ?? '—'}</Text>
-            <Text style={{ fontSize: 20, opacity: 0.85 }}>今日订单</Text>
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={{ fontSize: 26, fontWeight: 600, display: 'block', lineHeight: '32px' }}>{fmtMoney(summary?.today.salesAmount || 0)}</Text>
-            <Text style={{ fontSize: 20, opacity: 0.85 }}>今日销售额</Text>
-          </View>
+        <Text style={{ fontSize: 22, opacity: 0.9 }}>经营看板（今日）</Text>
+        <View style={{ display: 'flex', flexWrap: 'wrap', marginTop: 12 }}>
+          <BoardCell
+            label="待生产数量"
+            value={fmtNum(m?.pendingQty)}
+            sub={m?.pendingCount === null || m?.pendingCount === undefined ? undefined : `${m.pendingCount} 单待生产`}
+            onClick={dash?.perm.productionOrder ? () => openMenuChild('production-mgmt', 'production-order') : undefined}
+          />
+          <BoardCell
+            label="今日生产数量"
+            value={fmtNum(m?.todayDoneQty)}
+            sub={m?.todayDoneCount === null || m?.todayDoneCount === undefined ? undefined : `完工 ${m.todayDoneCount} 单`}
+            onClick={dash?.perm.productionOrder ? () => openMenuChild('production-mgmt', 'production-order') : undefined}
+          />
+          <BoardCell
+            label="今日销售数量"
+            value={fmtNum(m?.todaySalesQty)}
+            sub={m?.todaySalesCount === null || m?.todaySalesCount === undefined ? undefined : `${m.todaySalesCount} 单已付款`}
+            onClick={dash?.perm.salesOrder ? () => openMenuChild('order', 'orders') : undefined}
+          />
+          <BoardCell
+            label="今日收入金额"
+            value={fmtAmt(m?.todayIncome)}
+            onClick={dash?.perm.bankAccount ? () => openMenuChild('finance', 'bank-account') : undefined}
+          />
+          <BoardCell
+            label="今日支出金额"
+            value={fmtAmt(m?.todayExpense)}
+            onClick={dash?.perm.bankAccount ? () => openMenuChild('finance', 'bank-account') : undefined}
+          />
+          <BoardCell
+            label="本月销售金额"
+            value={fmtAmt(m?.monthSalesAmount)}
+            onClick={dash?.perm.salesOrder ? () => openMenuChild('order', 'orders') : undefined}
+          />
         </View>
+        <View
+          style={{ borderTop: '1px solid rgba(255,255,255,0.25)', paddingTop: 8, display: 'flex', alignItems: 'center' }}
+          onClick={() => setMoreOpen(v => !v)}
+        >
+          <Text style={{ fontSize: 19, opacity: 0.9 }}>生产超期 {fmtNum(m?.overdueCount)} 单</Text>
+          <Text style={{ fontSize: 17, opacity: 0.75, marginLeft: 'auto' }}>{moreOpen ? '收起 ▲' : '更多指标 ▼'}</Text>
+        </View>
+        {moreOpen && (
+          <View style={{ marginTop: 4 }}>
+            <BoardPair label="本月销售额" value={fmtAmt(m?.monthSalesAmount)} />
+            <BoardPair label="本月订单" value={m?.monthSalesCount === null || m?.monthSalesCount === undefined ? '—' : `${m.monthSalesCount} 单`} />
+            <BoardPair label="本月收入" value={fmtAmt(m?.monthIncome)} />
+            <BoardPair label="本月支出" value={fmtAmt(m?.monthExpense)} />
+            <BoardPair label="账户余额" value={fmtAmt(m?.balanceTotal)} />
+            <BoardPair label="银行账户" value={m?.accountCount === null || m?.accountCount === undefined ? '—' : `${m.accountCount} 户`} />
+            <BoardPair label="超期订单" value={m?.overdueCount === null || m?.overdueCount === undefined ? '—' : `${m.overdueCount}单 / ${m.overdueRate}%`} />
+            <BoardPair label="未排期数量" value={fmtNum(m?.unscheduledQty)} />
+            <BoardPair label="近30天完工" value={fmtNum(m?.done30Qty)} />
+            <BoardPair label="全部生产单" value={m?.allOrderCount === null || m?.allOrderCount === undefined ? '—' : `${m.allOrderCount} 单`} />
+            <BoardPair label="计划总量" value={fmtNum(m?.planQtyAll)} />
+          </View>
+        )}
       </View>
 
       {/* 常用功能：上下班 / 报销 置顶（横向矮卡） */}
@@ -152,6 +238,9 @@ const Workbench = () => {
         <View className="row"><Text className="muted">付款待审</Text><Text>{todos?.payPending ?? 0}</Text></View>
         <View className="row"><Text className="muted">收款待确认</Text><Text>{todos?.recvPending ?? 0}</Text></View>
       </View>
+
+      {/* 生产管理-待生产数据统计（与网页版同口径同配色）；无权限时服务端不下发，整块不渲染 */}
+      <PendingStatsCard data={dash?.pendingStats ?? null} />
 
       <AppTabBar current="home" />
     </View>

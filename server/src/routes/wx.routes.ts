@@ -8,6 +8,8 @@ import { resolveCompanyRoot } from '../services/storageUsage';
 import { makeConvId, getHistory as chatHistory, saveMessage as chatSaveMessage, markConvRead as chatMarkRead, getConversations as chatConvs, getUnreadCount as chatUnread } from '../ws/chat-store';
 import { isUserOnline, pushSavedToRecipient } from '../ws/chat-ws';
 import { checkChatContent, blockReason } from '../utils/chatFilter';
+import { canViewMenus } from '../services/wxPerms';
+import { loadPendingStats, loadSalesMetrics, loadBankMetrics } from '../services/wxDashboard';
 
 dotenv.config();
 
@@ -291,6 +293,78 @@ router.get('/summary', verifyJWT, async (req: Request, res: Response) => {
     });
   } catch (err: any) {
     console.error('[wx] summary error:', err.message);
+    res.status(500).json({ code: 500, message: '服务器内部错误' });
+  }
+});
+
+/**
+ * GET /api/wx/dashboard —— 工作台经营看板（指标 + 待生产数据统计）
+ * - 指标口径与网页版同源：待生产/今日生产取「生产管理-待生产数据统计」口径层（services/wxDashboard），
+ *   今日销售取「销售管理-订单管理」今日新增且已付款完成（已发货/已完成也算），
+ *   今日收支取「财务管理-银行账户」交易流水当日 in/out 合计
+ * - 权限：按网页版 PERM_V2 菜单点在服务端复算，无权限的指标直接不下发数值（手机端显示 —），
+ *   无「待生产数据统计」权限时整块统计不计算也不下发（不依赖前端隐藏，防抓包绕过）
+ */
+router.get('/dashboard', verifyJWT, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user as JWTPayload;
+    const owner = await ownerOf(user.username);
+    const perms = await canViewMenus(user.username, [
+      'production/production-pending-stats', 'production/production-order',
+      'sales/order-manage', 'finance/bank-account',
+    ]);
+    const canStats = !!perms['production/production-pending-stats'] || !!perms['production/production-order'];
+    const canSales = !!perms['sales/order-manage'];
+    const canBank = !!perms['finance/bank-account'];
+    const [stats, sales, bank] = await Promise.all([
+      canStats ? loadPendingStats(owner) : Promise.resolve(null),
+      canSales ? loadSalesMetrics(owner) : Promise.resolve(null),
+      canBank ? loadBankMetrics(owner) : Promise.resolve(null),
+    ]);
+    const t = stats?.totals || null;
+    const risk = stats?.risk || null;
+    const eff = stats?.efficiency || null;
+    res.json({
+      code: 200,
+      data: {
+        perm: {
+          productionStats: !!perms['production/production-pending-stats'],
+          productionOrder: !!perms['production/production-order'],
+          salesOrder: canSales, bankAccount: canBank,
+        },
+        metrics: {
+          // 生产：待生产数量=所有生产订单（未完工部分）待生产合计；今日生产数量=今日完工订单数量合计
+          pendingQty: t ? t.poolQty : null,
+          pendingCount: t ? t.poolCount : null,
+          allOrderCount: t ? t.allCount : null,
+          planQtyAll: t ? t.planQtyAll : null,
+          todayDoneQty: stats ? stats.doneTodayQty : null,
+          todayDoneCount: stats ? stats.doneTodayCount : null,
+          // 销售：今日新增且已付款完成（含已发货）
+          todaySalesCount: sales ? sales.today.count : null,
+          todaySalesQty: sales ? sales.today.qty : null,
+          todaySalesAmount: sales ? sales.today.amount : null,
+          monthSalesCount: sales ? sales.month.count : null,
+          monthSalesAmount: sales ? sales.month.amount : null,
+          // 资金：银行账户流水
+          todayIncome: bank ? bank.todayIncome : null,
+          todayExpense: bank ? bank.todayExpense : null,
+          monthIncome: bank ? bank.monthIncome : null,
+          monthExpense: bank ? bank.monthExpense : null,
+          balanceTotal: bank ? bank.balanceTotal : null,
+          accountCount: bank ? bank.accountCount : null,
+          // 建议补充的风险/效率指标（同样受生产统计权限约束）
+          overdueCount: risk ? risk.overdueCount : null,
+          overdueRate: risk ? risk.overdueRate : null,
+          unscheduledQty: t ? t.unscheduledQty : null,
+          done30Qty: eff ? eff.done30Qty : null,
+        },
+        pendingStats: stats,
+        updatedAt: localYmdHm(),
+      },
+    });
+  } catch (err: any) {
+    console.error('[wx] dashboard error:', err.message);
     res.status(500).json({ code: 500, message: '服务器内部错误' });
   }
 });
