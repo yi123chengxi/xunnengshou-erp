@@ -148,6 +148,24 @@ export function isLocalImageRef(value: string | undefined | null): boolean {
     value.startsWith('payShot_') || value.startsWith('mold_img_');
 }
 
+/**
+ * 业务记录里的图片字段值 → 可直接交给 <img src> 的地址。
+ * 四种存量形态一律包含：
+ * - base64 / blob：原样返回；
+ * - 相对云端地址（图片空间上传后返回的 `/uploads/images/<账号>/<id>.jpg`）：必须改写，
+ *   否则会被当成页面自身静态资源请求（开发端口无 /uploads 目录、生产面板 vhost 拦图片扩展名）而破图；
+ * - 绝对 URL（历史存下的 http/https + IP/裸域/www 形态）：同样改写回当前同源通道；
+ * - 其余当本机存储键（mold_img_/prodImg_ 等）回源。
+ * @param readLocal 本机键读取方式，默认 localStorage
+ */
+export function resolveImageValue(value: string | undefined | null, readLocal?: (key: string) => string): string {
+  if (!value) return '';
+  if (/^(data:|blob:)/i.test(value)) return value;
+  if (/^https?:/i.test(value) || value.startsWith('/')) return absoluteImageUrl(value);
+  const get = readLocal || ((k: string) => { try { return localStorage.getItem(k) || ''; } catch { return ''; } });
+  return get(value) || '';
+}
+
 /** 图片链接 / 引用位置跳转地址 */
 export function imageRefLink(ref: ImageRef): string {
   const base = `/${ref.module}${ref.childKey ? `/${ref.childKey}` : ''}`;

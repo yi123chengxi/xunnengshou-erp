@@ -7,7 +7,7 @@ import {
   SearchOutlined, ReloadOutlined, CameraOutlined, CloseOutlined, MessageOutlined,
 } from '@ant-design/icons';
 import { compressImageFile } from '../utils/imageCompress';
-import { absoluteImageUrl, prepareImageFile, uploadImage } from '../utils/imageSpace';
+import { attachImageToRecord, prepareImageFile, resolveImageValue, uploadImage } from '../utils/imageSpace';
 import { safeSetItem } from '../utils/storageQuota';
 import { flushDatasetUpload, reloadAfterPull } from '../utils/serverSync';
 import { computeSubjectFeatures, subjectSimilarity } from '../utils/imageSimilarity';
@@ -94,16 +94,17 @@ const extractImagesToKeys = (listing: MoldListing): MoldListing => {
   return { ...listing, images: keys };
 };
 
+/** 将图片引用解析回可直接渲染的值。
+    图片空间改造后 listing 里存的是服务端返回的相对地址 `/uploads/images/<账号>/<id>.jpg`，
+    该路径既不能直接当 src 用（开发端口无 /uploads 静态目录、生产面板 vhost 会拦图片扩展名），
+    也不能当 localStorage 键去取，必须由 resolveImageValue 改写为同源 /api/images/file 通道。 */
+const resolveImageRef = (ref: string): string => resolveImageValue(ref);
+
 /** 将图片引用键解析回实际图片数据 */
 const resolveImageKeys = (listing: MoldListing): MoldListing => {
   if (!listing.images || listing.images.length === 0) return listing;
-  const resolved = listing.images.map(ref => {
-    if (ref.startsWith('data:')) return ref;
-    // 云端绝对 URL（历史数据可能存 http/IP/裸域形态）统一改写到同源图片通道
-    if (ref.startsWith('http')) return absoluteImageUrl(ref);
-    // 是引用键，读取实际数据
-    try { return localStorage.getItem(ref) || ''; } catch { return ''; }
-  }).filter(Boolean); // 过滤掉无法解析的空引用
+  // 仅丢弃解析不出内容的本机引用键；URL 形态一律保留，避免整条 listing 图片被静默清空
+  const resolved = listing.images.map(resolveImageRef).filter(Boolean);
   return { ...listing, images: resolved };
 };
 
@@ -164,6 +165,8 @@ const MoldMarketTab: React.FC<{ onContact?: (username: string, subject: string) 
 
   // 图片上传
   const [listingImages, setListingImages] = useState<string[]>([]);
+  const [publishing, setPublishing] = useState(false);
+  const [savingEdit, setSavingEdit] = useState(false);
   const imgInputRef = useRef<HTMLInputElement>(null);
   // 拖拽排序
   const dragItemRef = useRef<number | null>(null);
@@ -214,6 +217,18 @@ const MoldMarketTab: React.FC<{ onContact?: (username: string, subject: string) 
     if (!editImages || editImages.length === 0) { message.warning('请至少保留一张展示图片：模具无图片不能发布'); return; }
     if (editMode === 'rent' && !editRentPrice) { message.warning('请填写每天租金'); return; }
     if (editMode === 'sell' && !editSellPrice) { message.warning('请填写出售价格'); return; }
+    void doSaveEdit();
+  };
+
+  const doSaveEdit = async () => {
+    if (!editingListing) return;
+    setSavingEdit(true);
+    let images: string[];
+    try {
+      images = await toCloudImages(editImages, editingListing.moldCode || editingListing.title || '模具');
+    } finally {
+      setSavingEdit(false);
+    }
     const updated: MoldListing = {
       ...editingListing,
       mode: editMode,
@@ -221,7 +236,7 @@ const MoldMarketTab: React.FC<{ onContact?: (username: string, subject: string) 
       rentPrice: editMode === 'rent' ? editRentPrice : undefined,
       sellPrice: editMode === 'sell' ? editSellPrice : undefined,
       remark: editRemark,
-      images: editImages,
+      images,
     };
     // 清理旧图片键
     for (let i = 0; i < 20; i++) {
@@ -247,6 +262,7 @@ const MoldMarketTab: React.FC<{ onContact?: (username: string, subject: string) 
       try { const url = await imageToStoredUrl(f); newImgs.push(url); } catch { /* skip */ }
     }
     if (newImgs.length) setEditImages(prev => [...prev, ...newImgs]);
+    else message.error('图片读取失败，请重新选择图片');
   };
 
   const handleEditPasteImage = async () => {
@@ -332,6 +348,30 @@ const MoldMarketTab: React.FC<{ onContact?: (username: string, subject: string) 
     }
   };
 
+  /** 本机 base64 → 图片空间 URL（已是 URL/引用键的原样保留）。
+      模具档案里的图是本机 base64，直接发布会被写进 mold_img_ 本机键，
+      而该前缀不参与跨端同步，换账号/换浏览器就只剩破图，所以入库前先搬上云。 */
+  const toCloudImages = async (imgs: string[], namePrefix: string): Promise<string[]> => {
+    const out: string[] = [];
+    for (let idx = 0; idx < imgs.length; idx++) {
+      const it = imgs[idx];
+      if (!it.startsWith('data:')) { out.push(it); continue; }
+      try {
+        const asset = await attachImageToRecord(it, {
+          name: `${namePrefix}-图${idx + 1}`,
+          tags: ['模具图'],
+          module: 'market', moduleLabel: '商机市场',
+          childKey: 'mold', childLabel: '模具租售',
+          recordKey: 'mold-listing-image', recordName: namePrefix, field: 'images',
+        });
+        out.push(asset.url);
+      } catch {
+        out.push(it); // 上传失败保留 base64，至少本机可显示（下一步退回独立存储键）
+      }
+    }
+    return out;
+  };
+
   const handleImageFiles = async (files: FileList | File[]) => {
     const arr = Array.from(files) as File[];
     const newImgs: string[] = [];
@@ -339,6 +379,7 @@ const MoldMarketTab: React.FC<{ onContact?: (username: string, subject: string) 
       try { const url = await imageToStoredUrl(f); newImgs.push(url); } catch { /* skip */ }
     }
     if (newImgs.length) setListingImages(prev => [...prev, ...newImgs]);
+    else message.error('图片读取失败，请重新选择图片');
   };
 
   const pasteImage = async () => {
@@ -376,12 +417,21 @@ const MoldMarketTab: React.FC<{ onContact?: (username: string, subject: string) 
     setModeVisible(true);
   };
 
-  const handlePublish = () => {
+  const handlePublish = async () => {
     if (!selectedMold) return;
     if (!listingTitle.trim()) { message.warning('请填写标题'); return; }
     if (!listingImages || listingImages.length === 0) { message.warning('请至少上传一张展示图片：模具无图片不能发布'); return; }
     if (mode === 'rent' && !rentPrice) { message.warning('请填写每天租金'); return; }
     if (mode === 'sell' && !sellPrice) { message.warning('请填写出售价格'); return; }
+
+    // 发布前先确保展示图都已上云（云端 URL 体积小，可随数据集跳账号同步）
+    setPublishing(true);
+    let images: string[];
+    try {
+      images = await toCloudImages(listingImages, selectedMold.moldCode || selectedMold.moldName || '模具');
+    } finally {
+      setPublishing(false);
+    }
 
     const newListing: MoldListing = {
       key: `ML-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -394,7 +444,7 @@ const MoldMarketTab: React.FC<{ onContact?: (username: string, subject: string) 
       mode,
       rentPrice: mode === 'rent' ? rentPrice : undefined,
       sellPrice: mode === 'sell' ? sellPrice : undefined,
-      images: listingImages,
+      images,
       publisher: username,
       publisherCompany: companyName,
       createdAt: new Date().toISOString().slice(0, 10),
@@ -564,7 +614,7 @@ const MoldMarketTab: React.FC<{ onContact?: (username: string, subject: string) 
     {
       title: '图片', dataIndex: 'images', key: 'images', width: 80, align: 'center' as const,
       render: (imgs: string[]) => imgs && imgs.length > 0
-        ? <Image src={imgs[0]} width={50} height={50} style={{ objectFit: 'cover', borderRadius: 4, cursor: 'pointer' }} />
+        ? <Image src={resolveImageValue(imgs[0])} width={50} height={50} style={{ objectFit: 'cover', borderRadius: 4, cursor: 'pointer' }} />
         : <span style={{ color: '#ccc' }}>无图</span>,
     },
     { title: '模具编号', dataIndex: 'moldCode', key: 'moldCode', width: 140, align: 'center' as const,
@@ -745,7 +795,7 @@ const MoldMarketTab: React.FC<{ onContact?: (username: string, subject: string) 
                     <div style={{ width: '100%', aspectRatio: '1 / 1', background: '#f5f5f5', position: 'relative', overflow: 'hidden' }}
                       onClick={() => { setDetailRecord(r); setDetailVisible(true); }}>
                       {r.images && r.images.length > 0
-                        ? <Image src={r.images[0]} width={'100%'} height={'100%'} style={{ objectFit: 'cover', width: '100%', height: '100%' }} preview={false} />
+                        ? <Image src={resolveImageValue(r.images[0])} width={'100%'} height={'100%'} style={{ objectFit: 'cover', width: '100%', height: '100%' }} preview={false} />
                         : <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><ToolOutlined style={{ fontSize: 48, color: '#d9d9d9' }} /></div>}
                       {/* 类型角标 */}
                       {r.mode === 'rent'
@@ -852,7 +902,7 @@ const MoldMarketTab: React.FC<{ onContact?: (username: string, subject: string) 
           columns={[
             { title: '图片', dataIndex: 'images', key: 'images', width: 60, align: 'center',
               render: (imgs: string[] | undefined) => imgs && imgs.length > 0
-                ? <Image src={imgs[0]} width={40} height={40} style={{ objectFit: 'cover', borderRadius: 4 }} />
+                ? <Image src={resolveImageValue(imgs[0])} width={40} height={40} style={{ objectFit: 'cover', borderRadius: 4 }} />
                 : <span style={{ color: '#ccc', fontSize: 11 }}>无图</span> },
             { title: '模具编号', dataIndex: 'moldCode', key: 'moldCode', width: 140,
               render: (v: string) => <span style={{ fontFamily: 'monospace', fontWeight: 600, color: PRIMARY }}>{v}</span> },
@@ -887,6 +937,7 @@ const MoldMarketTab: React.FC<{ onContact?: (username: string, subject: string) 
         onOk={handlePublish}
         okText="发布"
         cancelText="取消"
+        okButtonProps={{ loading: publishing }}
         width={560}
         destroyOnClose
       >
@@ -894,7 +945,7 @@ const MoldMarketTab: React.FC<{ onContact?: (username: string, subject: string) 
           <div style={{ marginBottom: 16, padding: '10px 14px', background: '#f6f8fa', borderRadius: 8, border: '1px solid #e8e8e8' }}>
             <Space>
               {selectedMold.images && selectedMold.images.length > 0 && (
-                <Image src={selectedMold.images[0]} width={45} height={45} style={{ objectFit: 'cover', borderRadius: 4 }} />
+                <Image src={resolveImageValue(selectedMold.images[0])} width={45} height={45} style={{ objectFit: 'cover', borderRadius: 4 }} />
               )}
               <div>
                 <div style={{ fontWeight: 600 }}>{selectedMold.moldCode} - {selectedMold.moldName}</div>
@@ -949,7 +1000,7 @@ const MoldMarketTab: React.FC<{ onContact?: (username: string, subject: string) 
                 setDragOverIdx(null);
               }}
               style={{ position: 'relative', width: 68, height: 68, cursor: 'grab', border: dragOverIdx === idx ? '2px solid #1677ff' : '2px solid transparent', borderRadius: 8, transition: 'border-color 0.2s' }}>
-              <Image src={img} width={68} height={68} style={{ objectFit: 'cover', borderRadius: 6, border: '1px solid #eee' }} preview={false} />
+              <Image src={resolveImageValue(img)} width={68} height={68} style={{ objectFit: 'cover', borderRadius: 6, border: '1px solid #eee' }} preview={false} />
               <Button size="small" type="text" danger icon={<DeleteOutlined />}
                 style={{ position: 'absolute', top: -8, right: -8, background: '#fff', borderRadius: '50%', boxShadow: '0 1px 4px rgba(0,0,0,.2)', width: 20, height: 20, padding: 0 }}
                 onClick={() => setListingImages(prev => prev.filter((_, i) => i !== idx))} />
@@ -1009,7 +1060,7 @@ const MoldMarketTab: React.FC<{ onContact?: (username: string, subject: string) 
                   <Row gutter={[8, 8]}>
                     {detailRecord.images.map((img, idx) => (
                       <Col key={idx}>
-                        <Image src={img} width={140} height={140} style={{ objectFit: 'cover', borderRadius: 8 }} />
+                        <Image src={resolveImageValue(img)} width={140} height={140} style={{ objectFit: 'cover', borderRadius: 8 }} />
                       </Col>
                     ))}
                   </Row>
@@ -1079,6 +1130,7 @@ const MoldMarketTab: React.FC<{ onContact?: (username: string, subject: string) 
         onOk={handleSaveEdit}
         okText="保存"
         cancelText="取消"
+        okButtonProps={{ loading: savingEdit }}
         width={560}
         destroyOnClose
       >
@@ -1134,7 +1186,7 @@ const MoldMarketTab: React.FC<{ onContact?: (username: string, subject: string) 
                 setEditDragOverIdx(null);
               }}
               style={{ position: 'relative', width: 68, height: 68, cursor: 'grab', border: editDragOverIdx === idx ? '2px solid #1677ff' : '2px solid transparent', borderRadius: 8, transition: 'border-color 0.2s' }}>
-              <Image src={img} width={68} height={68} style={{ objectFit: 'cover', borderRadius: 6, border: '1px solid #eee' }} preview={false} />
+              <Image src={resolveImageValue(img)} width={68} height={68} style={{ objectFit: 'cover', borderRadius: 6, border: '1px solid #eee' }} preview={false} />
               <Button size="small" type="text" danger icon={<DeleteOutlined />}
                 style={{ position: 'absolute', top: -8, right: -8, background: '#fff', borderRadius: '50%', boxShadow: '0 1px 4px rgba(0,0,0,.2)', width: 20, height: 20, padding: 0 }}
                 onClick={() => setEditImages(prev => prev.filter((_, i) => i !== idx))} />
