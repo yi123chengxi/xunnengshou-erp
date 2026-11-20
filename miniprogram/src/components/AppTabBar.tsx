@@ -25,8 +25,8 @@ const AppTabBar = ({ current }: { current?: string }) => (
         style={{ flex: 1, textAlign: 'center' }}
         onClick={() => { if (t.key !== current) Taro.reLaunch({ url: t.path }) }}
       >
-        <Text style={{ fontSize: 32, display: 'block', lineHeight: '36px' }}>{t.icon}</Text>
-        <Text style={{ fontSize: 20, lineHeight: '26px', color: current === t.key ? '#1677ff' : '#8a94a6', fontWeight: current === t.key ? 600 : 400 }}>
+        <Text style={{ fontSize: 32, display: 'block', lineHeight: '34px' }}>{t.icon}</Text>
+        <Text style={{ fontSize: 18, lineHeight: '24px', color: current === t.key ? '#1677ff' : '#8a94a6', fontWeight: current === t.key ? 600 : 400 }}>
           {t.label}
         </Text>
       </View>
