@@ -24,12 +24,12 @@ const SUMMARY_AMT = { fontSize: 17, fontWeight: 700, color: '#1f2733' } as const
 const CARD = { background: '#ffffff', borderRadius: 16, margin: '16px 24px', padding: '16px 24px', boxShadow: '0 2px 8px rgba(31,39,51,0.04)' } as const
 const C_ROW = { display: 'flex', alignItems: 'center' } as const
 const C_ROW2 = { display: 'flex', alignItems: 'center', marginTop: 4, overflow: 'hidden' } as const
-const C_NAME = { flex: 1, minWidth: 0, fontWeight: 600, fontSize: 24, lineHeight: '32px', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' } as const
-const C_SUB = { color: '#8a94a6', fontSize: 20, lineHeight: '28px' } as const
-const C_NO = { flex: 1, minWidth: 0, fontSize: 20, lineHeight: '28px', fontFamily: 'monospace', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' } as const
-const C_TAG = { marginLeft: 8, flexShrink: 0, display: 'inline-block', fontSize: 18, lineHeight: '26px', padding: '0 8px', borderRadius: 6 } as const
-const C_BAL = { flex: 1, minWidth: 0, fontWeight: 700, fontSize: 26, lineHeight: '34px', color: '#1f2733' } as const
-const DETAIL_BTN = { marginLeft: 12, flexShrink: 0, height: 32, lineHeight: '32px', padding: '0 14px', background: '#1677ff', color: '#ffffff', fontSize: 14, borderRadius: 16, textAlign: 'center' } as const
+const C_NAME = { flex: 1, minWidth: 0, fontWeight: 600, fontSize: 17, lineHeight: '24px', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' } as const
+const C_SUB = { color: '#8a94a6', fontSize: 14, lineHeight: '20px' } as const
+const C_NO = { flex: 1, minWidth: 0, fontSize: 14, lineHeight: '20px', fontFamily: 'monospace', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' } as const
+const C_TAG = { marginLeft: 8, flexShrink: 0, display: 'inline-block', fontSize: 13, lineHeight: '19px', padding: '0 8px', borderRadius: 6 } as const
+const C_BAL = { flex: 1, minWidth: 0, fontWeight: 700, fontSize: 18, lineHeight: '25px', color: '#1f2733' } as const
+const DETAIL_BTN = { marginLeft: 12, flexShrink: 0, height: 32, lineHeight: '32px', padding: '0 14px', background: '#1677ff', color: '#ffffff', fontSize: 12, borderRadius: 16, textAlign: 'center' } as const
 const MASK = { position: 'fixed', left: 0, top: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.45)', zIndex: 1000 } as const
 const SHEET = { position: 'fixed', left: 0, right: 0, bottom: 0, background: '#f7f9fb', borderTopLeftRadius: 16, borderTopRightRadius: 16, padding: '0 20px 28px', zIndex: 1001, maxHeight: '78%', boxSizing: 'border-box', overflowY: 'scroll' } as const
 const SHEET_HEAD = { display: 'flex', alignItems: 'center', paddingTop: 16 } as const
@@ -131,7 +131,7 @@ const BankAccountsView = ({ tick = 0 }: { tick?: number }) => {
           <View style={{ ...C_ROW }}>
             <Text style={{ ...C_NAME }}>
               {acc.name || '未命名账户'}
-              {acc.shortName ? <Text style={{ color: '#8a94a6', fontWeight: 400, fontSize: 20, marginLeft: 8 }}>{acc.shortName}</Text> : null}
+              {acc.shortName ? <Text style={{ color: '#8a94a6', fontWeight: 400, fontSize: 14, marginLeft: 8 }}>{acc.shortName}</Text> : null}
             </Text>
             {acc.status ? <Text className={statusTone(acc.status)} style={{ ...C_TAG }}>{acc.status}</Text> : null}
           </View>
@@ -158,7 +158,7 @@ const BankAccountsView = ({ tick = 0 }: { tick?: number }) => {
       ))}
 
       {loaded && list.length > 0 && (
-        <View style={{ color: '#8a94a6', textAlign: 'center', fontSize: 20, padding: '8px 24px 0' }}>点击银行账号可复制，余额与网页端实时同步</View>
+        <View style={{ color: '#8a94a6', textAlign: 'center', fontSize: 14, padding: '8px 24px 0' }}>点击银行账号可复制，余额与网页端实时同步</View>
       )}
 
       {/* 银行账户明细弹层：账户信息 + 交易流水 */}
