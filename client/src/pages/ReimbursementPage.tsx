@@ -1155,8 +1155,8 @@ const ReimbursementPage: React.FC = () => {
   }, [paymentRecords]);
 
   return (
-    <div ref={tableWrapRef} style={{ padding: 16, height: '100%', overflow: 'hidden' }}>
-      <Card style={{ display: 'flex', flexDirection: 'column', height: '100%' }} styles={{ body: { flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' } }}>
+    <div ref={tableWrapRef} style={{ padding: 16, height: '100%', overflowY: 'auto', overflowX: 'hidden' }}>
+      <Card style={{ display: 'flex', flexDirection: 'column', minHeight: '100%' }} styles={{ body: { flex: 1, overflow: 'visible', display: 'flex', flexDirection: 'column' } }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
           <Title level={4} style={{ margin: 0, color: PRIMARY }}><FileTextOutlined style={{ marginRight: 8 }} />报销管理</Title>
           <Space>

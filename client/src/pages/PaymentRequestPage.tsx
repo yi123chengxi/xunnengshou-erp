@@ -1256,7 +1256,7 @@ const PaymentRequestPage: React.FC = () => {
   };
 
   return (
-    <div style={{ padding: 16 }}>
+    <div style={{ padding: 16, height: '100%', overflowY: 'auto', overflowX: 'hidden' }}>
       <Card>
         <div style={{ marginBottom: 16 }}>
           <Title level={4} style={{ margin: 0, color: PRIMARY }}><WalletOutlined style={{ marginRight: 8 }} />收/付申请</Title>

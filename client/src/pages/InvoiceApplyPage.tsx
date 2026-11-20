@@ -153,7 +153,7 @@ const InvoiceApplyPage: React.FC = () => {
   ];
 
   return (
-    <div style={{ padding: 0 }}>
+    <div style={{ padding: 0, height: '100%', overflowY: 'auto', overflowX: 'hidden' }}>
       <Card style={{ marginBottom: 16, borderRadius: 8 }} bodyStyle={{ padding: '16px 24px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
           <Space>
