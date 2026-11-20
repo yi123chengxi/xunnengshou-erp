@@ -688,6 +688,39 @@ const COMMON_BANKS = [
   { name: '上海银行', short: 'BOS', color: '#00519e' },
 ];
 
+// ============ 银行账户列表行底色 ============
+// 每行一个矩形边框 + 一层浅色底，不同开户银行给不同浅色，便于在长列表里一眼分行分户
+const BANK_ROW_TINTS = ['#f2f7fd', '#fff6ec', '#effaf1', '#fdf2f3', '#f6f3fd', '#fffbe6', '#eefafb', '#fdf2f9', '#f6faee', '#f1f5fa'];
+
+// 银行→浅色映射缓存：银行名单未变时不重建（行渲染每行都会取色）
+let bankTintCache: { sig: string; map: Record<string, string> } | null = null;
+/** 按银行名单建立「开户银行 → 浅色底」映射：常用银行按既定顺序、其余按名称排序，保证同一家银行颜色稳定不随筛选变 */
+const buildBankTintMap = (names: string[]): Record<string, string> => {
+  const uniq = Array.from(new Set(names.filter(Boolean)));
+  const sig = uniq.slice().sort().join('|');
+  if (bankTintCache && bankTintCache.sig === sig) return bankTintCache.map;
+  const orderOf = (n: string) => { const i = COMMON_BANKS.findIndex(b => b.name === n); return i < 0 ? 999 : i; };
+  uniq.sort((a, b) => { const d = orderOf(a) - orderOf(b); return d !== 0 ? d : a.localeCompare(b, 'zh-CN'); });
+  const map: Record<string, string> = {};
+  uniq.forEach((n, i) => { map[n] = BANK_ROW_TINTS[i % BANK_ROW_TINTS.length]; });
+  bankTintCache = { sig, map };
+  return map;
+};
+/** 本行浅色底：同一银行固定一色；与上一行同属一家银行时顺延一色错开，避免相邻两行色块完全一样看不出分隔 */
+const bankRowTintOf = (list: any[], pageStart: number, index: number | undefined, record: any): string => {
+  const rows = Array.isArray(list) ? list : [];
+  const map = buildBankTintMap(rows.map(r => String((r && r.bankName) || '')));
+  const name = String((record && record.bankName) || '');
+  const base = map[name] || '';
+  if (!base) return '';
+  const prev = rows[pageStart + (index || 0) - 1];
+  if (prev && String(prev.bankName || '') === name) {
+    const i = BANK_ROW_TINTS.indexOf(base);
+    return BANK_ROW_TINTS[(i + 1) % BANK_ROW_TINTS.length];
+  }
+  return base;
+};
+
 // ============ 优惠输入组件 ============
 const DiscountInput: React.FC<{
   value?: string; onChange?: (val: string) => void;
@@ -14051,6 +14084,8 @@ const handleBatchAttrsConfirm = () => {
                   bordered
                   dataSource={filtered}
                   rowKey={(r) => `${r.accountName}-${r.key}`}
+                  rowClassName={() => 'bank-row-box'}
+                  onRow={(record, index) => ({ style: { '--row-tint': bankRowTintOf(filtered, 0, index, record) } as React.CSSProperties })}
                   scroll={{ y: 'calc(100vh - 380px)' }}
                   pagination={filtered.length > 15 ? { pageSize: 15, size: 'small', showTotal: (t: number) => `共 ${t} 笔` } : false}
                   locale={{ emptyText: <Empty description="暂无银行流水记录" image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
@@ -15121,16 +15156,22 @@ const handleBatchAttrsConfirm = () => {
             if (pageConfig?.title === '生产订单' && record.status === 'completed') classes.push('table-row-split');
             // 生产订单：已用时超过流程预计用时合计（模板未填按 7 天）→ 整行浅红
             if (pageConfig?.title === '生产订单' && poIsOverdue(record, poWfData)) classes.push('table-row-overdue');
+            // 银行账户：每行矩形边框 + 按开户银行分色的浅色底（见 index.css bank-row-box）
+            if (pageConfig?.title === '银行账户') classes.push('bank-row-box');
             return classes.join(' ');
           }}
-          onRow={(record) => ({
+          onRow={(record, index) => ({
             onClick: () => {
               if (hideHeaderBanner) {
                 if ((pageConfig?.title === '生产订单' || pageConfig?.title === '加工订单') && record.status === '已拆分') return;
                 setClickedRowKey(prev => prev === record.key ? null : record.key);
               }
             },
-            style: (pageConfig?.title === '生产订单' || pageConfig?.title === '加工订单') && record.status === '已拆分' ? { background: '#f5f5f5', color: '#999', cursor: 'not-allowed' } : undefined,
+            style: (pageConfig?.title === '生产订单' || pageConfig?.title === '加工订单') && record.status === '已拆分'
+              ? { background: '#f5f5f5', color: '#999', cursor: 'not-allowed' }
+              : (pageConfig?.title === '银行账户'
+                ? ({ '--row-tint': bankRowTintOf(filteredData, (mainTablePage - 1) * mainTablePageSize, index, record) } as React.CSSProperties)
+                : undefined),
           })}
           rowSelection={{
             type: 'checkbox',

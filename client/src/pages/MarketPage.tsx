@@ -21,6 +21,7 @@ import ChatPage from './ChatPage';
 import { triggerOpenChat, fetchUnreadCount, onNewMessage as onChatNewMessage } from '../utils/chatSocket';
 import { getDataOwner } from '../utils/brandAuth';
 import { attachImageToRecord, absoluteImageUrl } from '../utils/imageSpace';
+import { productImgKeyOf, productImgSync, resolveProductImage, shrinkImgForStore } from '../utils/productImage';
 import { copyText } from '../utils/clipboard';
 
 const { Text, Paragraph } = Typography;
@@ -449,6 +450,12 @@ const resolveImg = async (owner: string, key: string, suffix = ''): Promise<stri
   try { const ls = localStorage.getItem(`prodImg_${owner}_${key}${suffix}`); if (ls) return ls; } catch { /* ignore */ }
   return idbGet(`${key}${suffix}`);
 };
+
+// 自动上架聚合用的同步取图缓存：预扫描解析出来但写不进 localStorage（配额）的图片暂存内存，
+// 保证 sweepFinished 这一路同步读取仍能拿到图，不会把有图商品当成「无图」
+const imgMemo = new Map<string, string>();
+const sweptImgOf = (owner: string, p: any): string =>
+  productImgSync(owner, p && p.key, p && p.image) || imgMemo.get(productImgKeyOf(owner, String(p && p.key || ''))) || '';
 
 const PROCESS_OPTIONS = ['复合', '针车', '成型', '裁断', '绣花', '印花', '电脑车'].map(v => ({ value: v, label: v }));
 
@@ -1004,6 +1011,11 @@ const MarketPage: React.FC = () => {
   const [manualPublishProducts, setManualPublishProducts] = useState<any[]>([]);
   const [manualPublishSearch, setManualPublishSearch] = useState({ styleCode: '', hasImage: '', published: '' });
   const [manualPublishAppliedSearch, setManualPublishAppliedSearch] = useState({ styleCode: '', hasImage: '', published: '' });
+  // 手动发布弹窗图片解析结果（键=产品key，值=可用图片地址）：图片可能只存在于 IndexedDB/图片空间，
+  // 同步读 localStorage 缩略图会把有图商品判成「无图」，表现为图片列红叉 + 勾选框禁用 + 确认发布被阻断
+  const [manualImgMap, setManualImgMap] = useState<Record<string, string>>({});
+  // 成品图片预扫描是否跑完：扫描完成前不做自动上架聚合，避免图片还没解析出来就被当成「无图」下架
+  const [imgScanned, setImgScanned] = useState(false);
   // 成品编辑弹窗
   const [editFinishedVisible, setEditFinishedVisible] = useState(false);
   const [editFinishedForm] = Form.useForm();
@@ -1048,6 +1060,7 @@ const MarketPage: React.FC = () => {
   // 按款式编码聚合为卡片写入全局市场键（成品页与产品列表共享 pageData_basic-data_product-list_<账号> 键）
   const sweepFinished = useCallback((list: any[]) => {
     let out = [...list];
+    const me = getDataOwner();
     // 候选账号 = 设置键 ∪ 产品列表键；显式 autoPublishOnSale=false 为关闭，其余（含未设置）一律开启
     const settingOn = new Map<string, boolean>();
     const candidates = new Set<string>();
@@ -1077,17 +1090,25 @@ const MarketPage: React.FC = () => {
       const rawProds = loadJson(pkeyName, []);
       const prods: any[] = Array.isArray(rawProds) ? rawProds : [];
       const groups = new Map<string, any>();
-      // 过滤条件：产品种类=成品 + 款式编码非空 + 排除半成品脏数据（SEMI-前缀）+ 基础价≠0且大于成本价；
-      // 不按 productStatus 硬过滤：存量记录状态多为空，硬过滤会在发布方本机把自家卡片误打墓碑（他人端副本差异则仍可见）
-      prods.filter(p => p.productType === '成品' && p.styleCode && !String(p.productCode || '').startsWith('SEMI-') && isPricePublishable(p)).forEach(p => { if (!groups.has(p.styleCode)) groups.set(p.styleCode, p); });
+      // 合格在售行：产品种类=成品 + 款式编码非空 + 排除半成品脏数据（SEMI-前缀）+ 未被标为已下架 + 基础价≠0且大于成本价；
+      // 不按 productStatus 正向硬过滤「在售」：存量记录状态多为空，那样会在发布方本机把自家卡片误打墓碑（他人端副本差异则仍可见）；
+      // 但必须排除显式「已下架」：详情抽屉的下架只改商品状态不删行，不排除会被下一次聚合把墓碑洗回 delisted:false（下架失效）
+      const eligible = prods.filter(p => p.productType === '成品' && p.styleCode && !String(p.productCode || '').startsWith('SEMI-') && String(p.productStatus || '') !== '已下架' && isPricePublishable(p));
+      // 上架资格再叠加「有图片」（无图不上架）：仅对本账号生效——他人账号的图片可能只存在对方电脑的 IndexedDB 里，
+      // 本机判不出「有图」就给对方卡片打墓碑，会经全局市场键并集同步把对方商品在所有人的端上一起下架
+      const isSelf = owner === me;
+      eligible.filter(p => !isSelf || !!sweptImgOf(owner, p)).forEach(p => { if (!groups.has(p.styleCode)) groups.set(p.styleCode, p); });
+      const groupsAll = new Map<string, any>();
+      eligible.forEach(p => { if (!groupsAll.has(p.styleCode)) groupsAll.set(p.styleCode, p); });
+      const delistGroups = isSelf ? groups : groupsAll;
       // 下架清理：该账号不再在售的款式自动卡片打墓碑标记（全局键并集合并，物理删除会被其他账号合并复活）
-      out = out.map(r => (r.type === 'finished' && r.auto && r.publisherUsername === owner && !r.delisted && !groups.has(r.styleCode) ? { ...r, delisted: true, delistedAt: new Date().toISOString() } : r));
+      out = out.map(r => (r.type === 'finished' && r.auto && r.publisherUsername === owner && !r.delisted && !delistGroups.has(r.styleCode) ? { ...r, delisted: true, delistedAt: new Date().toISOString() } : r));
       // 下架收敛：本地存在产品列表键时，不再在售款式的手动卡片同样打墓碑，保证下架状态跨账号收敛不被并集复活
-      if (hasProdKey) out = out.map(r => (r.type === 'finished' && !r.auto && r.publisherUsername === owner && !r.delisted && !groups.has(r.styleCode) ? { ...r, delisted: true, delistedAt: new Date().toISOString() } : r));
+      if (hasProdKey) out = out.map(r => (r.type === 'finished' && !r.auto && r.publisherUsername === owner && !r.delisted && !delistGroups.has(r.styleCode) ? { ...r, delisted: true, delistedAt: new Date().toISOString() } : r));
       const u = users.find(x => x.username === owner);
       groups.forEach((p, sc) => {
         const exist = out.find(r => r.type === 'finished' && r.publisherUsername === owner && r.styleCode === sc);
-        const resolvedImg = p.image || localStorage.getItem(`prodImg_${owner}_${p.key}`) || '';
+        const resolvedImg = sweptImgOf(owner, p);
         if (!exist) {
           out = [{
             key: `mkt_fin_${owner}_${sc}`, id: nextMarketId(out), type: 'finished', auto: true,
@@ -1106,37 +1127,48 @@ const MarketPage: React.FC = () => {
     return out;
   }, []);
 
-  // 成品页打开即聚合所有开启设置的账号（公开市场，不依赖对方登录）
+  // 成品页打开即聚合所有开启设置的账号（公开市场，不依赖对方登录）；
+  // 图片预扫描完成前不聚合：自动上架现在要求「有图片」，抢跑会把仅存 IndexedDB 的图片误判为无图而不上架/误打墓碑
   useEffect(() => {
-    if (tab !== 'finished') return;
+    if (tab !== 'finished' || !imgScanned) return;
     setMarket(prev => {
       const swept = sweepFinished(prev);
       if (swept.length !== prev.length || swept.some((r, i) => r !== prev[i])) { saveJson(MARKET_KEY, swept); return swept; }
       return prev;
     });
-  }, [tab, sweepFinished]);
+  }, [tab, imgScanned, sweepFinished]);
 
-  // IndexedDB → localStorage 图片同步：修复仅在 IndexedDB 中存在的图片（PlanDesignPage 早期上传未写 localStorage 的历史数据）
+  // 成品图片预扫描：把只存在于 IndexedDB（旧共享库/原图库）或图片空间绑定表里的图片补写进 localStorage 缩略图键，
+  // 供后续同步链路（自动上架聚合、卡片取图）读取；写完才放开 imgScanned 走聚合，避免「有图被判无图」
   useEffect(() => {
     if (tab !== 'finished') return;
-    const syncAndResweep = async () => {
-      let synced = 0;
+    let cancelled = false;
+    (async () => {
+      const listKeys: string[] = [];
       for (let i = 0; i < localStorage.length; i++) {
         const k = localStorage.key(i);
-        if (!k || !k.startsWith('pageData_basic-data_product-list_')) continue;
-        const owner = k.slice('pageData_basic-data_product-list_'.length);
+        if (k && k.startsWith('pageData_basic-data_product-list_')) listKeys.push(k);
+      }
+      let synced = 0;
+      for (const k of listKeys) {
+        const acct = k.slice('pageData_basic-data_product-list_'.length);
         const raw = loadJson(k, []);
         const prods: any[] = Array.isArray(raw) ? raw : [];
         for (const p of prods) {
-          if (!p.key) continue;
-          const lsKey = `prodImg_${owner}_${p.key}`;
-          if (localStorage.getItem(lsKey)) continue; // 已存在，跳过
-          const idbImg = await idbGet(p.key);
-          if (idbImg) {
-            try { localStorage.setItem(lsKey, idbImg); synced++; } catch { /* quota */ }
-          }
+          // 记录自带 image 时同步链路已能取到，无需占 localStorage 配额
+          if (!p || !p.key || p.image) continue;
+          const lsKey = productImgKeyOf(acct, p.key);
+          if (localStorage.getItem(lsKey)) continue;
+          const src = await resolveProductImage(acct, p.key);
+          if (!src) continue;
+          // 缩略图键只存小图：旧共享库里可能是未压缩原图，原样写入会直接撞爆 5MB 配额
+          const thumb = await shrinkImgForStore(src, 420);
+          try { localStorage.setItem(lsKey, thumb); } catch { imgMemo.set(lsKey, thumb); }
+          synced++;
         }
       }
+      if (cancelled) return;
+      setImgScanned(true);
       if (synced > 0) {
         // 同步后重新扫描，让市场卡片获得图片
         setMarket(prev => {
@@ -1145,8 +1177,8 @@ const MarketPage: React.FC = () => {
           return prev;
         });
       }
-    };
-    syncAndResweep();
+    })();
+    return () => { cancelled = true; };
   }, [tab, sweepFinished]);
 
   // 图片回填：历史已发布卡片（手动发布/自动上架关闭时发布）的图片仅存于发布方本地 prodImg 键，
@@ -1163,9 +1195,10 @@ const MarketPage: React.FC = () => {
         if (!r || r.type !== 'finished' || r.publisherUsername !== owner) { updated.push(r); continue; }
         let next = r;
         if (!next.image && next.productKey) {
-          const src = prods.find((p: any) => p.key === next.productKey)?.image
-            || localStorage.getItem(`prodImg_${owner}_${next.productKey}`)
-            || await idbGet(next.productKey) || '';
+          const rec = prods.find((p: any) => p.key === next.productKey);
+          // 走全部存储通道解析（旧共享库/原图库/图片空间绑定表），并压成小图再嵌入卡片：
+          // 卡片随 market_publish_orders 同步，嵌原图会把同步数据集撑爆
+          const src = await shrinkImgForStore(await resolveProductImage(owner, next.productKey, rec && rec.image), 800);
           if (src) next = { ...next, image: src };
         }
         if (!next.productColor && next.productKey) {
@@ -1175,7 +1208,7 @@ const MarketPage: React.FC = () => {
         if ((!Array.isArray(next.variantImages) || next.variantImages.length === 0) && next.styleCode) {
           const vi: { key: string; color: string; src: string }[] = [];
           for (const p of prods.filter((p: any) => p.styleCode === next.styleCode && p.key && p.key !== next.productKey)) {
-            const src = p.image || localStorage.getItem(`prodImg_${owner}_${p.key}`) || await idbGet(p.key) || '';
+            const src = await shrinkImgForStore(await resolveProductImage(owner, p.key, p.image), 800);
             if (src) vi.push({ key: p.key, color: p.color || '', src });
           }
           if (vi.length) next = { ...next, variantImages: vi };
@@ -1196,7 +1229,7 @@ const MarketPage: React.FC = () => {
   // 监听产品图片上传/修改事件，触发成品市场自动上架刷新
   useEffect(() => {
     const onImageUpdated = () => {
-      if (tab !== 'finished') return;
+      if (tab !== 'finished' || !imgScanned) return;
       setMarket(prev => {
         const swept = sweepFinished(prev);
         if (swept.length !== prev.length || swept.some((r, i) => r !== prev[i])) { saveJson(MARKET_KEY, swept); return swept; }
@@ -1205,12 +1238,12 @@ const MarketPage: React.FC = () => {
     };
     window.addEventListener('product-image-updated', onImageUpdated);
     return () => window.removeEventListener('product-image-updated', onImageUpdated);
-  }, [tab, sweepFinished]);
+  }, [tab, imgScanned, sweepFinished]);
 
   // 监听产品状态变更事件（研发完成等），触发成品市场自动上架刷新
   useEffect(() => {
     const onStatusUpdated = () => {
-      if (tab !== 'finished') return;
+      if (tab !== 'finished' || !imgScanned) return;
       setMarket(prev => {
         const swept = sweepFinished(prev);
         if (swept.length !== prev.length || swept.some((r, i) => r !== prev[i])) { saveJson(MARKET_KEY, swept); return swept; }
@@ -1219,16 +1252,54 @@ const MarketPage: React.FC = () => {
     };
     window.addEventListener('product-status-updated', onStatusUpdated);
     return () => window.removeEventListener('product-status-updated', onStatusUpdated);
-  }, [tab, sweepFinished]);
+  }, [tab, imgScanned, sweepFinished]);
 
   // 手动发布：打开弹窗，加载当前账号的在售成品列表（仅成品，排除半成品）
   const openManualPublish = useCallback(() => {
     const prods: any[] = loadJson(`pageData_basic-data_product-list_${owner}`, []);
     const finished = prods.filter(p => p.productType === '成品' && p.styleCode && !String(p.productCode || '').startsWith('SEMI-'));
     setManualPublishProducts(finished);
+    setManualImgMap({});
     setManualPublishSelected(new Set());
     setManualPublishVisible(true);
   }, [owner]);
+
+  // 手动发布：弹窗打开后异步解析每个产品的图片（走全部存储通道），结果回填后才参与判定与发布
+  useEffect(() => {
+    if (!manualPublishVisible || manualPublishProducts.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      const byKey = new Map<string, any>();
+      manualPublishProducts.forEach(p => { if (p.key && !byKey.has(p.key)) byKey.set(p.key, p); });
+      const next: Record<string, string> = {};
+      for (const [k, rec] of Array.from(byKey.entries())) {
+        const src = await resolveProductImage(owner, k, rec && rec.image);
+        if (src) next[k] = await shrinkImgForStore(src, 800);
+      }
+      if (!cancelled && Object.keys(next).length > 0) setManualImgMap(prev => ({ ...prev, ...next }));
+    })();
+    return () => { cancelled = true; };
+  }, [manualPublishVisible, manualPublishProducts, owner]);
+
+  // 手动发布：按款式编码聚合代表行，优先取「价格合格且有图片」的那一条，
+  // 避免同款多颜色/多尺码时代表行恰好落在无图的那一条上（表现为整款红叉不可勾选）
+  const manualPublishRows = useMemo(() => {
+    const pick = (p: any) => ({
+      styleCode: p.styleCode, key: p.key, shortName: p.shortName, productCode: p.productCode, unit: p.unit,
+      suggestedPrice: p.suggestedPrice, costPrice: p.costPrice, actualStock: p.actualStock, color: p.color, image: p.image,
+    });
+    const scoreOf = (r: any): number => (isPricePublishable(r) ? 2 : 0) + (manualImgMap[r.key] ? 1 : 0);
+    const acc = new Map<string, any>();
+    manualPublishProducts.forEach(p => {
+      const sc = String(p.styleCode || '');
+      if (!sc) return;
+      const cur = acc.get(sc);
+      if (!cur || scoreOf(p) > scoreOf(cur)) acc.set(sc, pick(p));
+    });
+    return Array.from(acc.values());
+  }, [manualPublishProducts, manualImgMap]);
+  // 款式是否有图：以异步解析结果为准（解析未回来时回退同步通道，避免闪一下红叉）
+  const styleHasImg = useCallback((r: any): boolean => !!((r && manualImgMap[r.key]) || productImgSync(owner, r && r.key, r && r.image)), [manualImgMap, owner]);
 
   // 手动发布：确认发布选中的款式
   const handleManualPublish = useCallback(() => {
@@ -1240,20 +1311,20 @@ const MarketPage: React.FC = () => {
     const styleCodes = Array.from(manualPublishSelected);
     let published = 0;
     let blocked = 0;
+    let noImg = 0;
     styleCodes.forEach(sc => {
       // 检查是否已存在
       const exist = out.find((r: any) => r.type === 'finished' && r.publisherUsername === owner && r.styleCode === sc);
       if (exist && !exist.delisted) return;
-      // 找该款式的一个代表产品（优先取符合价格资格的：基础价≠0且大于成本价）
-      const rep = manualPublishProducts.find((p: any) => p.styleCode === sc && isPricePublishable(p)) || manualPublishProducts.find((p: any) => p.styleCode === sc);
+      // 代表产品：直接用弹窗里看到的那一行（已优先选出价格合格且有图的款式），避免发布时换了另一条无图代表行
+      const rep = manualPublishRows.find((r: any) => r.styleCode === sc);
       if (!rep) return;
       // 价格资格校验：基础价不等于 0 且大于成本价才能发布
       if (!isPricePublishable(rep)) { blocked++; return; }
-      // 检查是否有图片
-      const hasImage = rep.image || localStorage.getItem(`prodImg_${owner}_${rep.key}`);
-      if (!hasImage) return; // 无图片不发布
-      // 图片嵌入卡片记录：prodImg_ 不参与服务器同步，不嵌入则其他账号看不到图片
-      const resolvedImg = rep.image || localStorage.getItem(`prodImg_${owner}_${rep.key}`) || '';
+      // 图片校验：走全部存储通道解析（仅读 localStorage 缩略图会把 IndexedDB/图片空间的图误判为无图）；
+      // 解析出的图片嵌入卡片记录：prodImg_ 不参与服务器同步，不嵌入则其他账号看不到图片
+      const resolvedImg = manualImgMap[rep.key] || productImgSync(owner, rep.key, rep.image);
+      if (!resolvedImg) { noImg++; return; } // 无图片不发布
       // 已下架卡片重新发布：原位复活原记录（保留 key/id 与报价历史），清除墓碑标记
       if (exist) {
         out = out.map((r: any) => (r.key === exist.key ? {
@@ -1280,13 +1351,13 @@ const MarketPage: React.FC = () => {
     if (published > 0) {
       saveJson(MARKET_KEY, out);
       setMarket(out);
-      message.success(`成功发布 ${published} 个款式到成品市场${blocked > 0 ? `；${blocked} 个款式基础价为 0 或不大于成本价，未发布` : ''}`);
+      message.success(`成功发布 ${published} 个款式到成品市场${blocked > 0 ? `；${blocked} 个款式基础价为 0 或不大于成本价，未发布` : ''}${noImg > 0 ? `；${noImg} 个款式无图片，未发布` : ''}`);
     } else {
-      message.warning('所选款式已发布、无图片，或基础价为 0/不大于成本价，无法发布');
+      message.warning(`所选款式已发布、无图片（${noImg}）或基础价为 0/不大于成本价（${blocked}），无法发布`);
     }
     setManualPublishVisible(false);
     setManualPublishSelected(new Set());
-  }, [manualPublishSelected, manualPublishProducts, owner]);
+  }, [manualPublishSelected, manualPublishRows, manualImgMap, owner]);
 
   // 成品编辑保存
   const handleSaveFinishedEdit = useCallback(() => {
@@ -2157,7 +2228,7 @@ const addToCart = useCallback((rec: any, qty?: number) => {
           <Space size={4} wrap>
             <Button size="small" type="link" icon={<EyeOutlined />} onClick={() => openDetail(r)}>查看报价</Button>
             {mine && r.status !== '已中标' && r.status !== '已关闭' && (
-              <Button size="small" type="link" icon={<EditOutlined />} onClick={() => { setPubEdit(r); pubForm.setFieldsValue({ ...r, deadline: r.deadline ? dayjs(r.deadline) : undefined }); const img = r.image || localStorage.getItem(`pubImg_${owner}_${r.key}`) || ''; setPubImage(img); setPubVisible(true); }}>编辑</Button>
+              <Button size="small" type="link" icon={<EditOutlined />} onClick={() => { setPubEdit(r); pubForm.setFieldsValue({ ...r, deadline: r.deadline ? dayjs(r.deadline) : undefined }); const img = r.image || localStorage.getItem(`pubImg_${username}_${r.key}`) || ''; setPubImage(img); setPubVisible(true); }}>编辑</Button>
             )}
             {mine && r.status !== '已中标' && r.status !== '已关闭' && (
               <Popconfirm title="关闭后不可再报价，确认关闭？" onConfirm={() => handleClose(r)}><Button size="small" type="link" danger icon={<CloseOutlined />}>关闭</Button></Popconfirm>
@@ -2220,13 +2291,16 @@ const addToCart = useCallback((rec: any, qty?: number) => {
                   <div style={{ maxWidth: 320, lineHeight: 1.6 }}>
                     <div style={{ fontWeight: 600, marginBottom: 4 }}>自动上架触发条件（须同时满足）：</div>
                     <div>1. 账号未显式关闭「在售成品自动上架」（未设置默认开启）</div>
-                    <div>2. 产品种类 = 成品 且 产品状态 = 在售</div>
+                    <div>2. 产品种类 = 成品 且 未被标为「已下架」</div>
                     <div>3. 款式编码非空 且 非半成品（排除 SEMI- 前缀）</div>
                     <div>4. 基础售价 ≠ 0 且 基础售价 &gt; 成本价</div>
+                    <div>5. 产品有图片（记录图片/本地缩略图/新品研发图库/图片空间任一即可；无图不上架仅判本账号，他人账号的图片可能只存在对方电脑，不据此下架）</div>
+                    <div>6. 同一款式编码只取一条（按款式聚合为一张卡片）</div>
                     <div style={{ marginTop: 6, fontWeight: 600 }}>触发时机：</div>
-                    <div>· 切换到成品市场标签页时</div>
-                    <div>· 产品图片上传/修改时</div>
-                    <div>· 产品研发完成、状态变更时</div>
+                    <div>· 打开/切换到成品市场标签页（先跑完本机图片预扫描再聚合）</div>
+                    <div>· 产品图片上传或修改后</div>
+                    <div>· 产品研发完成、商品状态变更后</div>
+                    <div>· 以上任一时机都会重跑一次全量聚合，条件不再满足的自家款式会自动下架（打墓碑）</div>
                   </div>
                 }>
                   <span style={{ marginRight: 4, cursor: 'help' }}>在售成品自动上架</span>
@@ -3558,14 +3632,9 @@ const addToCart = useCallback((rec: any, qty?: number) => {
           <Select placeholder="发布情况" allowClear style={{ width: 120 }} value={manualPublishSearch.published || undefined} onChange={v => setManualPublishSearch(prev => ({ ...prev, published: v || '' }))} options={[{ value: 'yes', label: '已发布' }, { value: 'no', label: '未发布' }]} />
           <Button type="primary" size="small" icon={<SearchOutlined />} onClick={() => { reloadAfterPull(() => { const prods: any[] = loadJson(`pageData_basic-data_product-list_${owner}`, []); setManualPublishProducts(prods.filter((p: any) => p.productType === '成品' && p.styleCode && !String(p.productCode || '').startsWith('SEMI-'))); }); setManualPublishAppliedSearch(manualPublishSearch); }}>查询</Button>
         </div>
-        <Table rowKey="styleCode" bordered size="small" dataSource={manualPublishProducts.reduce((acc: any[], p) => {
-          const exist = acc.find(x => x.styleCode === p.styleCode);
-          if (!exist) acc.push({ styleCode: p.styleCode, shortName: p.shortName, productCode: p.productCode, unit: p.unit, suggestedPrice: p.suggestedPrice, costPrice: p.costPrice, actualStock: p.actualStock, key: p.key, image: p.image });
-          else if (!isPricePublishable(exist) && isPricePublishable(p)) Object.assign(exist, { shortName: p.shortName, productCode: p.productCode, unit: p.unit, suggestedPrice: p.suggestedPrice, costPrice: p.costPrice, actualStock: p.actualStock, key: p.key, image: p.image });
-          return acc;
-        }, []).filter(r => {
-          const hasImg = r.image || localStorage.getItem(`prodImg_${username}_${r.key}`);
-          const isPublished = market.some(m => m.styleCode === r.styleCode && m.publisherUsername === username);
+        <Table rowKey="styleCode" bordered size="small" dataSource={manualPublishRows.filter(r => {
+          const hasImg = styleHasImg(r);
+          const isPublished = market.some(m => m.styleCode === r.styleCode && m.publisherUsername === owner);
           if (manualPublishAppliedSearch.styleCode && !r.styleCode.toLowerCase().includes(manualPublishAppliedSearch.styleCode.toLowerCase())) return false;
           if (manualPublishAppliedSearch.hasImage === 'yes' && !hasImg) return false;
           if (manualPublishAppliedSearch.hasImage === 'no' && hasImg) return false;
@@ -3577,7 +3646,7 @@ const addToCart = useCallback((rec: any, qty?: number) => {
             selectedRowKeys: Array.from(manualPublishSelected),
             onChange: (keys) => setManualPublishSelected(new Set(keys as string[])),
             getCheckboxProps: (record) => ({
-              disabled: (!record.image && !localStorage.getItem(`prodImg_${username}_${record.key}`)) || !isPricePublishable(record),
+              disabled: !styleHasImg(record) || !isPricePublishable(record),
             }),
           }}
           columns={[
@@ -3597,8 +3666,10 @@ const addToCart = useCallback((rec: any, qty?: number) => {
               return isPublished ? <CheckCircleOutlined style={{ color: '#1890ff' }} /> : <Text type="secondary">未发布</Text>;
             }},
             { key: 'image', title: '图片', width: 70, align: 'center', render: (_: any, r: any) => {
-              const hasImg = r.image || localStorage.getItem(`prodImg_${owner}_${r.key}`);
-              return hasImg ? <CheckCircleOutlined style={{ color: '#52c41a' }} /> : <CloseCircleOutlined style={{ color: '#ff4d4f' }} />;
+              const src = manualImgMap[r.key] || productImgSync(owner, r.key, r.image);
+              return src
+                ? <Image src={src} alt="" width={30} height={30} style={{ objectFit: 'cover', borderRadius: 4 }} />
+                : <Tooltip title="未解析到图片（记录图片字段/本地缩略图/新品研发图库/图片空间均无），请先在产品列表上传图片"><CloseCircleOutlined style={{ color: '#ff4d4f' }} /></Tooltip>;
             }},
           ]}
           pagination={false}

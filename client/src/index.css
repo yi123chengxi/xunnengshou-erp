@@ -249,6 +249,22 @@ body {
   background: #fff1f0 !important;
 }
 
+/* 银行账户（账户列表/银行流水）：每行一个矩形边框 + 一层浅色底，底色由行内联 --row-tint 按开户银行给定，
+   不同银行不同色、相邻行错开，直角边框让每条记录自成一块便于纵向扫读（hover/点击高亮仍优先） */
+.ant-table-tbody > tr.bank-row-box > td {
+  background: var(--row-tint, #fff);
+  border-top: 1px solid #dfe6f0;
+  border-bottom: 1px solid #dfe6f0;
+}
+.ant-table-tbody > tr.bank-row-box > td:first-child {
+  border-left: 1px solid #dfe6f0;
+  border-radius: 0;
+}
+.ant-table-tbody > tr.bank-row-box > td:last-child {
+  border-right: 1px solid #dfe6f0;
+  border-radius: 0;
+}
+
 /* 订单管理/财务审核/打单拣货：鼠标点击行高亮（黄色底，点击后立即生效，覆盖 hover 样式） */
 .ant-table-tbody > tr.table-row-clicked > td,
 .ant-table-tbody > tr.table-row-clicked:hover > td {
