@@ -154,6 +154,17 @@ export interface CompanyProfile {
 
 export const getProfile = () => request<{ profile: CompanyProfile }>('/wx/profile')
 
+/** 银行账户交易流水（与 Web normalizeBankTxns 口径一致） */
+export interface BankTxn {
+  time: string
+  type: 'in' | 'out'
+  amount: number
+  balanceAfter: number | null
+  counterparty: string
+  person: string
+  remark: string
+}
+
 /** 银行账户（服务端 /wx/bank-accounts 只读下发，不含密码类字段） */
 export interface BankAccount {
   key: string
@@ -168,6 +179,7 @@ export interface BankAccount {
   openDate: string
   person: string
   txnCount?: number
+  transactions?: BankTxn[]
 }
 
 export const getBankAccounts = (q = '') =>

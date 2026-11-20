@@ -604,13 +604,29 @@ router.get('/bank-accounts', verifyJWT, async (req: Request, res: Response) => {
       r.name, r.shortName, r.bankName, r.branchName, r.bankAccountNo, r.accountType, r.status, r.person,
     ].map(v => String(v || '')).join(' ').toLowerCase();
     const hit = q ? rows.filter((r: any) => textOf(r).includes(q)) : rows;
-    const list = hit.slice(0, 100).map((r: any) => ({
-      key: r.key || r.id || '', name: r.name || '', shortName: r.shortName || '',
-      bankName: r.bankName || '', branchName: r.branchName || '', bankAccountNo: r.bankAccountNo || '',
-      accountType: r.accountType || '', balance: Number(r.balance) || 0,
-      status: r.status || '', openDate: day10(r.openDate), person: r.person || '',
-      txnCount: Array.isArray(r.transactions) ? r.transactions.length : 0,
-    }));
+    const list = hit.slice(0, 100).map((r: any) => {
+      // 交易流水只读下发（与 Web normalizeBankTxns 口径一致：type 归一 in/out，余额空回 null），精简字段控制体积
+      let txns: any[] = [];
+      try {
+        const raw = Array.isArray(r.transactions) ? r.transactions : [];
+        txns = raw.map((t: any) => ({
+          time: t.time || t.date || '',
+          type: (t.type === 'in' || t.type === '收入' || t.type === 'income') ? 'in' : 'out',
+          amount: Number(t.amount) || 0,
+          balanceAfter: (t.balanceAfter === undefined || t.balanceAfter === null || t.balanceAfter === '') ? null : Number(t.balanceAfter),
+          counterparty: t.counterparty || '',
+          person: t.person || '',
+          remark: t.remark || '',
+        }));
+      } catch { txns = []; }
+      return {
+        key: r.key || r.id || '', name: r.name || '', shortName: r.shortName || '',
+        bankName: r.bankName || '', branchName: r.branchName || '', bankAccountNo: r.bankAccountNo || '',
+        accountType: r.accountType || '', balance: Number(r.balance) || 0,
+        status: r.status || '', openDate: day10(r.openDate), person: r.person || '',
+        txnCount: txns.length, transactions: txns,
+      };
+    });
     const totalBalance = hit.reduce((s: number, r: any) => s + (Number(r.balance) || 0), 0);
     res.json({ code: 200, data: { list, total: hit.length, totalBalance } });
   } catch (err: any) {
