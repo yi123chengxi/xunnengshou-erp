@@ -30,8 +30,8 @@ const localDay = (offset = 0): string => {
  * 搜索为「点击查询后才生效」的双态模式，减少大列表实时过滤开销。
  */
 const ListView = ({
-  page, extra = '', headers, addLabel, onAdd, tick = 0, quick = false, quickDate, compact = false,
-}: { page: string; extra?: string; headers?: string[]; addLabel?: string; onAdd?: () => void; tick?: number; quick?: boolean; quickDate?: 'first' | 'last'; compact?: boolean }) => {
+  page, extra = '', headers, addLabel, onAdd, tick = 0, quick = false, quickDate, compact = false, onRowClick,
+}: { page: string; extra?: string; headers?: string[]; addLabel?: string; onAdd?: () => void; tick?: number; quick?: boolean; quickDate?: 'first' | 'last'; compact?: boolean; onRowClick?: (it: ListItem) => void }) => {
   const [input, setInput] = useState('')
   const [applied, setApplied] = useState('')
   const [range, setRange] = useState('')
@@ -112,17 +112,25 @@ const ListView = ({
           </View>
         ) : null}
       </View>
-      {/* 计数+快速筛选+汇总同行：靠左对齐；quick 页签恒显示，点击筛选后不隐藏 */}
+      {/* 计数+快速筛选同行：quick 页签强制单行（nowrap）且各元素可收缩，装不下时自动缩窄 */}
       {(quick || (loaded && total > 0)) && (
-        <View style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', padding: '8px 24px 0' }}>
-          <Text className="muted" style={{ fontSize: compact ? 15 : 22 }}>
+        <View style={{ display: 'flex', alignItems: 'center', flexWrap: quick ? 'nowrap' : 'wrap', padding: '8px 24px 0' }}>
+          <Text
+            className="muted"
+            style={{
+              fontSize: quick ? 13 : (compact ? 15 : 22),
+              minWidth: 0, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', flexShrink: quick ? 1 : 0,
+            }}
+          >
             共 {total} 条{total > 100 ? '，仅显示前 100 条' : ''}
           </Text>
           {quick && QUICK_RANGES.map(r => (
             <View
               key={r.key}
               style={{
-                marginLeft: 12, padding: '4px 18px', fontSize: 22, borderRadius: 8,
+                // 快捷筛选按键按真实 px 定档：13px 字 + 2/9px 内边距，可收缩以免换行
+                marginLeft: 6, padding: '2px 9px', fontSize: 13, borderRadius: 6, lineHeight: '18px',
+                flexShrink: 1, minWidth: 0, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis',
                 background: range === r.key ? '#1677ff' : '#eef1f5',
                 color: range === r.key ? '#fff' : '#5a6d85',
               }}
@@ -131,14 +139,6 @@ const ListView = ({
               {r.label}
             </View>
           ))}
-          {/* 汇总值与筛选键同行显示：无底色，金额红字 */}
-          {quick && computedSums.length > 0 && (headers || []).map((h, i) =>
-            (h === '数量' || h.includes('工资')) && computedSums[i] ? (
-              <Text key={h} style={{ marginLeft: 16, fontSize: 22, color: '#5a6d85' }}>
-                {h} <Text style={{ color: '#ff4d4f', fontWeight: 700, fontSize: 24 }}>{computedSums[i]}</Text>
-              </Text>
-            ) : null,
-          )}
         </View>
       )}
       {loaded && list.length === 0 && <View className="empty">暂无数据</View>}
@@ -159,9 +159,34 @@ const ListView = ({
               </View>
             ))}
           </View>
+          {/* 汇总行：紧跟表头下方、数据行上方，数值对齐所属列；字号跟随单元格 15px */}
+          {quick && computedSums.length > 0 && (
+            <View style={{ display: 'flex', borderTop: '1px solid #e6e9ee', background: '#fafbfc' }}>
+              {headers.map((h, i) => (
+                <View
+                  key={`sum-${h}`}
+                  style={{ flex: i === 0 ? 1.4 : 1, padding: '6px 4px', borderLeft: i === 0 ? 'none' : '1px solid #e6e9ee', boxSizing: 'border-box', minWidth: 0 }}
+                >
+                  <Text
+                    style={{
+                      display: 'block', textAlign: 'center', fontSize: 15, fontWeight: 700,
+                      color: i === 0 ? '#5a6d85' : String(computedSums[i] || '').includes('¥') ? '#ff4d4f' : '#1f2733',
+                      overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis',
+                    }}
+                  >
+                    {i === 0 ? '合计' : (computedSums[i] || '—')}
+                  </Text>
+                </View>
+              ))}
+            </View>
+          )}
           {list.map(it => (
             /* 单元格按 headers 个数对齐渲染（行数据短于表头时补空），保证列边线上下对齐 */
-            <View key={String(it.key)} style={{ display: 'flex', borderTop: '1px solid #e6e9ee', alignItems: 'stretch' }}>
+            <View
+              key={String(it.key)}
+              style={{ display: 'flex', borderTop: '1px solid #e6e9ee', alignItems: 'stretch' }}
+              onClick={onRowClick ? () => onRowClick(it) : undefined}
+            >
               {headers.map((_, i) => (
                 <View
                   key={i}
@@ -177,7 +202,12 @@ const ListView = ({
         </View>
       ) : (
         list.map(it => (
-        <View key={String(it.key)} className="card" style={compact ? { padding: '12px 20px' } : undefined}>
+        <View
+          key={String(it.key)}
+          className="card"
+          style={compact ? { padding: '12px 20px' } : undefined}
+          onClick={onRowClick ? () => onRowClick(it) : undefined}
+        >
           {/* compact：标题与金额同行，副信息合成一行点分隔，降低单条高度 */}
           <View style={{ display: 'flex', alignItems: 'center' }}>
             <Text style={{ fontWeight: 600, fontSize: compact ? 17 : undefined, flex: 1, minWidth: 0, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>

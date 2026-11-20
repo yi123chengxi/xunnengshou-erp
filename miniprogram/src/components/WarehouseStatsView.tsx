@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react'
 import { View, Text, Input, Picker, Button, Image } from '@tarojs/components'
 import Taro from '@tarojs/taro'
-import { createWsRecord, getWsMaterials } from '../services/api'
+import { createWsRecord, getWsMaterials, getWsRecord, updateWsRecord } from '../services/api'
 import { chooseAndUploadImage } from '../services/upload'
+import { fullImageUrl } from '../utils/imageUrl'
 import ListView from './ListView'
 
 const TABS = [
@@ -63,6 +64,79 @@ const todayStr = () => {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
 }
 
+// 详情/编辑弹窗字段（k=ro/money 只读，其余可录入；src 为落库字段名，与 Web 记录结构同名）
+interface DField { key: string; label: string; k?: 'text' | 'number' | 'date' | 'material' | 'money' | 'type' | 'image' | 'ro'; src?: string; required?: boolean }
+
+const DETAIL_FIELDS: Record<TabKey, DField[]> = {
+  stock: [
+    { key: 'orderNo', label: '内部单号', k: 'text', required: true },
+    { key: 'quantity', label: '数量', k: 'number', required: true },
+    { key: 'material', label: '鞋子材质', k: 'material' },
+    { key: 'qcWage', label: '质检工资', k: 'money' },
+    { key: 'priceRate', label: '质检工价', k: 'money' },
+    { key: 'packWage', label: '打包工资', k: 'money' },
+    { key: 'commission', label: '外贸提成', k: 'money' },
+    { key: 'date', label: '日期', k: 'date' },
+    { key: 'month', label: '月份', k: 'ro' },
+    { key: 'inspector', label: '质检员', k: 'text', src: 'qcInspector' },
+    { key: 'packer', label: '打包员', k: 'text' },
+    { key: 'foreignTeam', label: '外贸组长', k: 'text' },
+    { key: 'productCode', label: '货号', k: 'text' },
+    { key: 'remark', label: '备注', k: 'text' },
+    { key: 'image', label: '图片', k: 'image' },
+    { key: 'creator', label: '创建人', k: 'ro' },
+    { key: 'lastEditor', label: '最后修改', k: 'ro' },
+  ],
+  pick: [
+    { key: 'orderNo', label: '内部单号', k: 'text', required: true },
+    { key: 'quantity', label: '数量', k: 'number', required: true },
+    { key: 'wage', label: '计件工资', k: 'money' },
+    { key: 'priceRate', label: '统一工价', k: 'money' },
+    { key: 'picker', label: '配货员', k: 'text' },
+    { key: 'month', label: '月份 YYYY-MM', k: 'text' },
+    { key: 'createdAt', label: '登记时间', k: 'ro' },
+    { key: 'creator', label: '创建人', k: 'ro' },
+  ],
+  urgent: [
+    { key: 'orderNo', label: '内部单号', k: 'text', required: true },
+    { key: 'quantity', label: '数量', k: 'number', required: true },
+    { key: 'material', label: '鞋子材质', k: 'material' },
+    { key: 'wage', label: '质检工资', k: 'money' },
+    { key: 'priceRate', label: '质检工价', k: 'money' },
+    { key: 'packWage', label: '打包工资', k: 'money' },
+    { key: 'commission', label: '外贸提成', k: 'money' },
+    { key: 'date', label: '质检日期', k: 'date' },
+    { key: 'month', label: '月份', k: 'ro' },
+    { key: 'inspector', label: '质检员', k: 'text' },
+    { key: 'packer', label: '打包员', k: 'text' },
+    { key: 'foreignTeam', label: '外贸组长', k: 'text' },
+    { key: 'productCode', label: '货号', k: 'text' },
+    { key: 'remark', label: '备注', k: 'text' },
+    { key: 'image', label: '图片', k: 'image' },
+    { key: 'creator', label: '创建人', k: 'ro' },
+    { key: 'lastEditor', label: '最后修改', k: 'ro' },
+  ],
+  note: [
+    { key: 'person', label: '人员', k: 'text', required: true },
+    { key: 'type', label: '类型', k: 'type' },
+    { key: 'amount', label: '金额（元）', k: 'number', required: true },
+    { key: 'date', label: '日期', k: 'date' },
+    { key: 'month', label: '月份', k: 'ro' },
+    { key: 'note', label: '备注内容', k: 'text', required: true },
+  ],
+  salary: [],
+}
+
+/** 详情只读取值：工资按 ¥ 两位小数、奖惩类型与时间类字段同 Web 文案 */
+const detailVal = (f: DField, rec: any): string => {
+  const raw = rec[f.src || f.key]
+  if (f.k === 'money') return Number(raw) ? `¥${Number(raw).toFixed(2)}` : '—'
+  if (f.k === 'type') return rec.type === 'punishment' ? '罚款' : '奖励'
+  if (f.key === 'lastEditor') return [rec.lastEditor, String(rec.lastEditTime || '').slice(0, 10)].filter(Boolean).join(' ') || '—'
+  if (f.key === 'createdAt') return String(rec.createdAt || '').slice(0, 10) || '—'
+  return String(raw ?? '').trim() || '—'
+}
+
 /**
  * 仓库统计：与 Web WarehouseStatsPage 同结构的多子页签移动版
  * （备货/配货/急采/奖惩/工资汇总）；前四页签查询键右侧带「新增记录」手机填单。
@@ -77,16 +151,21 @@ const WarehouseStatsView = ({ tick = 0 }: { tick?: number }) => {
   const [busy, setBusy] = useState(false)
   const [reload, setReload] = useState(0)
   const [materials, setMaterials] = useState<string[]>([])
+  const [detail, setDetail] = useState<any | null>(null)
+  const [editing, setEditing] = useState(false)
+  const [edit, setEdit] = useState<Record<string, string>>({})
+  const [editBusy, setEditBusy] = useState(false)
   const cur = TABS.find(t => t.key === tab) || TABS[0]
   const fields = FORM_FIELDS[tab]
 
-  // 材质下拉候选：打开备货/急采新增窗时拉取（工价表 ∪ 已有记录去重，与 Web 同源）
+  // 材质下拉候选：新增窗与详情编辑窗都要拉（工价表 ∪ 已有记录去重，与 Web 同源）
   useEffect(() => {
-    if (!formVisible || (tab !== 'stock' && tab !== 'urgent')) return
+    if (tab !== 'stock' && tab !== 'urgent') return
+    if (!formVisible && !editing) return
     getWsMaterials(tab)
       .then(d => setMaterials(d.materials || []))
       .catch(() => setMaterials([]))
-  }, [formVisible, tab])
+  }, [formVisible, editing, tab])
 
   const setField = (key: string, val: string) => setForm(prev => ({ ...prev, [key]: val }))
 
@@ -126,6 +205,126 @@ const WarehouseStatsView = ({ tick = 0 }: { tick?: number }) => {
     }
   }
 
+  // 记录行任意位置点开详情：向服务端取原始记录（未部署时提示而非白屏）
+  const openDetail = async (it: { key: string }) => {
+    if (tab === 'salary') return
+    try {
+      const d = await getWsRecord(tab as 'stock' | 'pick' | 'urgent' | 'note', String(it.key))
+      if (!d.record) {
+        // 布局预览模式下未部署的只读接口会静默回落空形状，此处显式提示避免“点了没反应”
+        Taro.showToast({ title: '详情接口尚未部署上线', icon: 'none' })
+        return
+      }
+      setDetail(d.record)
+      setEditing(false)
+      setEdit({})
+    } catch (e: any) {
+      Taro.showToast({ title: e.message || '详情加载失败（需服务端更新后使用）', icon: 'none' })
+    }
+  }
+
+  // 进编辑态：可录入字段从详情记录回显（工资/只读字段不进表单，由服务端重算）
+  const startEdit = () => {
+    const e: Record<string, string> = {}
+    for (const f of DETAIL_FIELDS[tab]) {
+      if (f.k === 'ro' || f.k === 'money') continue
+      if (f.k === 'image') { e.image = String(detail?.image || ''); continue }
+      if (f.k === 'type') { e.type = detail?.type === 'punishment' ? 'punishment' : 'reward'; continue }
+      e[f.key] = String(detail?.[f.src || f.key] ?? '')
+    }
+    setEdit(e)
+    setEditing(true)
+  }
+
+  const saveEdit = async () => {
+    if (editBusy || !detail) return
+    for (const f of DETAIL_FIELDS[tab]) {
+      if (f.required && !String(edit[f.key] || '').trim()) {
+        Taro.showToast({ title: `请填写${f.label.split('（')[0]}`, icon: 'none' })
+        return
+      }
+    }
+    const body: Record<string, any> = {}
+    for (const f of DETAIL_FIELDS[tab]) {
+      if (f.k === 'ro' || f.k === 'money') continue
+      body[f.key] = f.k === 'number' ? Number(edit[f.key]) || 0 : String(edit[f.key] || '').trim()
+    }
+    setEditBusy(true)
+    try {
+      const d = await updateWsRecord(tab as 'stock' | 'pick' | 'urgent' | 'note', String(detail.key), body)
+      setDetail(d.record || detail)
+      setEditing(false)
+      setReload(v => v + 1)
+      Taro.showToast({ title: '已保存', icon: 'success' })
+    } catch (e: any) {
+      Taro.showToast({ title: e.message || '保存失败', icon: 'none' })
+    } finally {
+      setEditBusy(false)
+    }
+  }
+
+  const pickEditImage = async () => {
+    try {
+      const url = await chooseAndUploadImage()
+      setEdit(p => ({ ...p, image: url }))
+    } catch (e: any) {
+      Taro.showToast({ title: e.message || '上传失败', icon: 'none' })
+    }
+  }
+
+  // 编辑态控件：按字段类型给奖惩切换/日期选择/材质下拉/文本输入
+  const editCell = (f: DField) => {
+    const v = edit[f.key] || ''
+    const setV = (val: string) => setEdit(p => ({ ...p, [f.key]: val }))
+    if (f.k === 'type') {
+      return (
+        <View style={{ flex: 1, display: 'flex', justifyContent: 'flex-end' }}>
+          <Text
+            style={{ fontSize: '26rpx', lineHeight: '44rpx', padding: '0 20rpx', marginRight: '12rpx', borderRadius: '6rpx', color: v === 'reward' ? '#fff' : '#5a6d85', background: v === 'reward' ? '#52c41a' : '#eef1f5' }}
+            onClick={() => setV('reward')}
+          >
+            奖励
+          </Text>
+          <Text
+            style={{ fontSize: '26rpx', lineHeight: '44rpx', padding: '0 20rpx', borderRadius: '6rpx', color: v === 'punishment' ? '#fff' : '#5a6d85', background: v === 'punishment' ? '#ff4d4f' : '#eef1f5' }}
+            onClick={() => setV('punishment')}
+          >
+            罚款
+          </Text>
+        </View>
+      )
+    }
+    if (f.k === 'date') {
+      return (
+        <Picker mode="date" value={v || todayStr()} onChange={e => setV(e.detail.value)} style={{ flex: 1 }}>
+          <Text style={{ display: 'block', textAlign: 'right', fontSize: '28rpx', color: '#1677ff' }}>{v || todayStr()} ▾</Text>
+        </Picker>
+      )
+    }
+    if (f.k === 'material') {
+      return (
+        <Picker
+          mode="selector"
+          range={materials.length ? materials : ['暂无材质，请先在网页版工价管理新增']}
+          value={Math.max(0, materials.indexOf(v))}
+          onChange={e => setV(materials[Number(e.detail.value)] || '')}
+          style={{ flex: 1 }}
+        >
+          <Text style={{ display: 'block', textAlign: 'right', fontSize: '28rpx', color: v ? '#1f2733' : '#1677ff' }}>{v || '选择材质'} ▾</Text>
+        </Picker>
+      )
+    }
+    return (
+      <Input
+        style={{ flex: 1, marginBottom: 0, textAlign: 'right', fontSize: '28rpx', color: '#1f2733' }}
+        type={f.k === 'number' ? 'digit' : 'text'}
+        placeholder={f.label}
+        value={v}
+        onInput={e => setV(e.detail.value)}
+      />
+    )
+  }
+
   return (
     <View>
       <View className="segment" style={{ margin: '16px 24px 0' }}>
@@ -133,7 +332,7 @@ const WarehouseStatsView = ({ tick = 0 }: { tick?: number }) => {
           <View
             key={t.key}
             className={`segment-item ${tab === t.key ? 'active' : ''}`}
-            onClick={() => { setTab(t.key); setFormVisible(false); setForm({}); setImage('') }}
+            onClick={() => { setTab(t.key); setFormVisible(false); setForm({}); setImage(''); setDetail(null) }}
           >
             {t.label}
           </View>
@@ -255,8 +454,81 @@ const WarehouseStatsView = ({ tick = 0 }: { tick?: number }) => {
           quickDate={tab === 'pick' ? 'last' : 'first'}
           addLabel={fields.length > 0 ? '新增记录' : undefined}
           onAdd={fields.length > 0 ? () => setFormVisible(true) : undefined}
+          onRowClick={tab === 'salary' ? undefined : openDetail}
           tick={tick + reload}
         />
+      )}
+      {/* 记录详情底部弹层：点遮罩或关闭收起；底部「编辑」切到同字段的录入态 */}
+      {detail && (
+        <View
+          style={{ position: 'fixed', left: 0, right: 0, top: 0, bottom: 0, background: 'rgba(0,0,0,0.45)', zIndex: 300 }}
+          onClick={() => setDetail(null)}
+        >
+          <View
+            style={{ position: 'absolute', left: 0, right: 0, bottom: 0, background: '#fff', borderRadius: '16rpx 16rpx 0 0', padding: '24rpx 24rpx calc(24rpx + env(safe-area-inset-bottom))', maxHeight: '78vh', overflowY: 'auto' }}
+            onClick={e => e.stopPropagation()}
+          >
+            <View style={{ display: 'flex', alignItems: 'center', marginBottom: '12rpx' }}>
+              <Text style={{ flex: 1, fontSize: '30rpx', fontWeight: 600 }}>{cur.label}记录详情</Text>
+              <Text style={{ fontSize: '26rpx', color: '#1677ff' }} onClick={() => setDetail(null)}>关闭 ✕</Text>
+            </View>
+            {DETAIL_FIELDS[tab].map(f => {
+              const img = String((editing ? edit.image : detail.image) || '')
+              const ro = f.k === 'ro' || f.k === 'money'
+              return (
+                <View key={f.key} style={{ display: 'flex', alignItems: 'center', padding: '14rpx 0', borderBottom: '1px solid #f0f2f5' }}>
+                  <Text style={{ width: '180rpx', flexShrink: 0, fontSize: '26rpx', color: '#5a6d85' }}>{f.label}</Text>
+                  {f.k === 'image' ? (
+                    <View style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
+                      {img ? (
+                        <Image src={fullImageUrl(img)} mode="aspectFill" style={{ width: '120rpx', height: '120rpx', borderRadius: '8rpx', marginRight: '16rpx' }} />
+                      ) : null}
+                      {editing ? (
+                        <Text style={{ fontSize: '26rpx', color: '#1677ff' }} onClick={pickEditImage}>{img ? '换图' : '选图上传'}</Text>
+                      ) : img ? null : (
+                        <Text style={{ fontSize: '26rpx', color: '#9aa3ad' }}>无</Text>
+                      )}
+                      {editing && img ? (
+                        <Text style={{ fontSize: '26rpx', color: '#9aa3ad', marginLeft: '16rpx' }} onClick={() => setEdit(p => ({ ...p, image: '' }))}>清除</Text>
+                      ) : null}
+                    </View>
+                  ) : editing && !ro ? (
+                    editCell(f)
+                  ) : (
+                    <Text style={{ flex: 1, textAlign: 'right', fontSize: '28rpx', color: f.k === 'money' && detailVal(f, detail) !== '—' ? '#ff4d4f' : '#1f2733' }}>
+                      {detailVal(f, detail)}
+                    </Text>
+                  )}
+                </View>
+              )
+            })}
+            <View style={{ display: 'flex', marginTop: '24rpx' }}>
+              {editing ? (
+                <View
+                  style={{ flex: 1, height: '72rpx', lineHeight: '72rpx', textAlign: 'center', fontSize: '28rpx', color: '#5a6d85', background: '#eef1f5', borderRadius: '8rpx', boxSizing: 'border-box' }}
+                  onClick={() => setEditing(false)}
+                >
+                  取消
+                </View>
+              ) : null}
+              {editing ? (
+                <View
+                  style={{ flex: 1, marginLeft: '20rpx', height: '72rpx', lineHeight: '72rpx', textAlign: 'center', fontSize: '28rpx', color: '#fff', background: '#1677ff', borderRadius: '8rpx', boxSizing: 'border-box', opacity: editBusy ? 0.6 : 1 }}
+                  onClick={saveEdit}
+                >
+                  保存修改
+                </View>
+              ) : (
+                <View
+                  style={{ flex: 1, height: '72rpx', lineHeight: '72rpx', textAlign: 'center', fontSize: '28rpx', color: '#fff', background: '#1677ff', borderRadius: '8rpx', boxSizing: 'border-box' }}
+                  onClick={startEdit}
+                >
+                  编辑
+                </View>
+              )}
+            </View>
+          </View>
+        </View>
       )}
     </View>
   )

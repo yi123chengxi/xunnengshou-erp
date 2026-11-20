@@ -710,6 +710,132 @@ router.post('/ws/:kind', verifyJWT, async (req: Request, res: Response) => {
   }
 });
 
+const WS_KINDS = ['stock', 'pick', 'urgent', 'note'];
+
+/** GET /api/wx/ws/:kind/:key —— 手机详情：回传该记录的原始字段（工资类为已派生值，与 Web 同结构） */
+router.get('/ws/:kind/:key', verifyJWT, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user as JWTPayload;
+    const owner = await ownerOf(user.username);
+    const kind = String(req.params.kind || '');
+    if (!WS_KINDS.includes(kind)) {
+      res.status(404).json({ code: 404, message: '未知记录类型' });
+      return;
+    }
+    const rows = await readRows(`ws_${kind}_${owner}`);
+    const rec = rows.find((r: any) => String(r.key || '') === String(req.params.key || ''));
+    if (!rec) {
+      res.status(404).json({ code: 404, message: '记录不存在' });
+      return;
+    }
+    res.json({ code: 200, data: { record: rec } });
+  } catch (err: any) {
+    console.error('[wx] ws detail error:', err.message);
+    res.status(500).json({ code: 500, message: '服务器内部错误' });
+  }
+});
+
+/** PUT /api/wx/ws/:kind/:key —— 手机编辑：只改可录入字段，工资/月份按 Web 保存同公式重新派生 */
+router.put('/ws/:kind/:key', verifyJWT, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user as JWTPayload;
+    const owner = await ownerOf(user.username);
+    const kind = String(req.params.kind || '');
+    if (!WS_KINDS.includes(kind)) {
+      res.status(404).json({ code: 404, message: '未知记录类型' });
+      return;
+    }
+    const name = await displayNameOf(user.username);
+    const dsKey = `ws_${kind}_${owner}`;
+    const rows = await readRows(dsKey);
+    const idx = rows.findIndex((r: any) => String(r.key || '') === String(req.params.key || ''));
+    if (idx < 0) {
+      res.status(404).json({ code: 404, message: '记录不存在' });
+      return;
+    }
+    const rec: any = { ...rows[idx] };
+    const str = (k: string) => String(req.body[k] || '').trim();
+    const has = (k: string) => req.body[k] !== undefined;
+    if (kind === 'note') {
+      if (has('person')) rec.person = str('person');
+      if (has('note')) rec.note = str('note');
+      if (has('amount')) rec.amount = Number(req.body.amount) || 0;
+      if (has('type')) rec.type = req.body.type === 'punishment' ? 'punishment' : 'reward';
+      if (has('date') && /^\d{4}-\d{2}-\d{2}$/.test(String(req.body.date))) {
+        rec.date = String(req.body.date);
+        rec.month = rec.date.slice(0, 7);
+      }
+      if (!rec.person || !rec.note || !(Number(rec.amount) > 0)) {
+        res.status(400).json({ code: 400, message: '人员/备注内容/金额(>0)为必填' });
+        return;
+      }
+    } else if (kind === 'pick') {
+      if (has('orderNo')) rec.orderNo = str('orderNo');
+      if (has('quantity')) rec.quantity = Number(req.body.quantity) || 0;
+      if (has('picker')) rec.picker = str('picker');
+      if (has('month') && /^\d{4}-\d{2}$/.test(String(req.body.month))) rec.month = String(req.body.month);
+      if (!rec.orderNo || !(Number(rec.quantity) > 0)) {
+        res.status(400).json({ code: 400, message: '内部单号/数量(>0)为必填' });
+        return;
+      }
+      // 配货统一工价：与 Web 保存同口径取工价表第一条重算计件工资
+      const rates = await readRows(`ws_pickWage_${owner}`);
+      const unifiedRate = Number(rates[0]?.rate) || 0;
+      rec.priceRate = unifiedRate;
+      rec.wage = (Number(rec.quantity) || 0) * unifiedRate;
+    } else {
+      // 备货/急采：质检员字段名不同（stock=qcInspector，urgent=inspector），工价一律按材质重查
+      if (has('orderNo')) rec.orderNo = str('orderNo');
+      if (has('quantity')) rec.quantity = Number(req.body.quantity) || 0;
+      if (has('material')) rec.material = str('material');
+      if (has('productCode')) rec.productCode = str('productCode');
+      if (has('remark')) rec.remark = str('remark');
+      if (has('image')) rec.image = str('image');
+      if (has('packer')) rec.packer = str('packer');
+      if (has('foreignTeam')) rec.foreignTeam = str('foreignTeam');
+      if (has('inspector')) {
+        if (kind === 'stock') rec.qcInspector = str('inspector');
+        else rec.inspector = str('inspector');
+      }
+      if (has('date') && /^\d{4}-\d{2}-\d{2}$/.test(String(req.body.date))) {
+        rec.date = String(req.body.date);
+        rec.month = rec.date.slice(0, 7);
+        if (kind === 'urgent') rec.qcDate = rec.date;
+      }
+      if (!rec.orderNo || !(Number(rec.quantity) > 0)) {
+        res.status(400).json({ code: 400, message: '内部单号/数量(>0)为必填' });
+        return;
+      }
+      if (kind === 'urgent' && rows.some((r: any) => String(r.key || '') !== String(rec.key || '') && String(r.orderNo || '') === String(rec.orderNo))) {
+        res.status(409).json({ code: 409, message: `内部单号 ${rec.orderNo} 已存在，不能重复` });
+        return;
+      }
+      const rates = await readRows(kind === 'stock' ? `ws_wage_${owner}` : `ws_urgentWage_${owner}`);
+      const rateRow: any = rates.find((r: any) => String(r.material || '') === String(rec.material || '')) || {};
+      const qty = Number(rec.quantity) || 0;
+      rec.priceRate = Number(rateRow.rate) || 0;
+      if (kind === 'stock') rec.qcWage = qty * rec.priceRate;
+      else rec.wage = qty * rec.priceRate;
+      rec.packWage = qty * (Number(rateRow.packRate) || 0);
+      rec.commission = qty * (Number(rateRow.teamRate) || 0);
+      if (kind === 'urgent') {
+        const groups = await readRows(`ws_group_${owner}`);
+        const grp: any = groups.find((g: any) => g && g.inspector === rec.inspector) || {};
+        rec.inspectorId = String(grp.inspectorId || rec.inspectorId || '');
+      }
+    }
+    rec.lastEditor = name;
+    rec.lastEditTime = new Date().toISOString();
+    const next = [...rows];
+    next[idx] = rec;
+    await writeRows(dsKey, next, owner);
+    res.json({ code: 200, data: { saved: true, record: rec } });
+  } catch (err: any) {
+    console.error('[wx] ws update error:', err.message);
+    res.status(500).json({ code: 500, message: '服务器内部错误' });
+  }
+});
+
 /** POST /api/wx/newstyle —— 新款进度主表单手机录入（与 Web 新增新款弹窗同字段同派生口径） */
 router.post('/newstyle', verifyJWT, async (req: Request, res: Response) => {
   try {

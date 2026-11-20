@@ -111,6 +111,14 @@ export const createBookkeeping = (body: {
 export const createWsRecord = (kind: 'stock' | 'pick' | 'urgent' | 'note', body: Record<string, any>) =>
   request<{ saved: boolean; record: any }>(`/wx/ws/${kind}`, { method: 'POST', data: body })
 
+/** 仓库统计记录详情：服务端直出原始字段（工资为已派生值） */
+export const getWsRecord = (kind: 'stock' | 'pick' | 'urgent' | 'note', key: string) =>
+  request<{ record: any }>(`/wx/ws/${kind}/${encodeURIComponent(key)}`)
+
+/** 仓库统计记录编辑：只提交可录入字段，工资/月份由服务端按 Web 同公式重算 */
+export const updateWsRecord = (kind: 'stock' | 'pick' | 'urgent' | 'note', key: string, body: Record<string, any>) =>
+  request<{ saved: boolean; record: any }>(`/wx/ws/${kind}/${encodeURIComponent(key)}`, { method: 'PUT', data: body })
+
 /** 材质下拉候选：工价表材质 ∪ 已有记录材质去重（与 Web 材质下拉同源） */
 export const getWsMaterials = (kind: 'stock' | 'urgent') =>
   request<{ materials: string[] }>(`/wx/ws-materials/${kind}`)
