@@ -63,18 +63,18 @@ const ApprovalsEmbed = ({ tick = 0 }: { tick?: number }) => {
         <View
           key={`${it.type}-${it.key}`}
           className="card"
-          style={{ padding: '18px 24px' }}
+          style={{ padding: '16px 24px' }}
           onClick={() => Taro.navigateTo({ url: `/pages/approval-detail/index?type=${it.type}&key=${encodeURIComponent(it.key)}` })}
         >
           {/* 两行卡：第一行 标题左 + 金额右；第二行 时间·申请人·单号 + 状态标签 */}
           <View style={{ display: 'flex', alignItems: 'center' }}>
-            <Text style={{ flex: 1, minWidth: 0, fontWeight: 600, fontSize: 30, lineHeight: '40px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            <Text style={{ flex: 1, minWidth: 0, fontWeight: 600, fontSize: 26, lineHeight: '34px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {it.title || ((it as any).isReceipt ? '收款登记' : '付款申请')}
             </Text>
-            <Text className="amount" style={{ fontSize: 30, marginLeft: 12, whiteSpace: 'nowrap' }}>¥{(it.amount || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2 })}</Text>
+            <Text className="amount" style={{ fontSize: 26, marginLeft: 12, whiteSpace: 'nowrap' }}>¥{(it.amount || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2 })}</Text>
           </View>
-          <View style={{ display: 'flex', alignItems: 'center', marginTop: 8 }}>
-            <Text className="muted" style={{ flex: 1, minWidth: 0, fontSize: 24, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <View style={{ display: 'flex', alignItems: 'center', marginTop: 6 }}>
+            <Text className="muted" style={{ flex: 1, minWidth: 0, fontSize: 22, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {it.time}{(it.applicantName || it.applicant) ? ` · ${it.applicantName || it.applicant}` : ''}{it.no ? ` · ${it.no}` : ''}
             </Text>
             <Text className={`tag ${statusTag(it.status)}`} style={{ marginLeft: 12, flexShrink: 0 }}>{it.statusText}</Text>
