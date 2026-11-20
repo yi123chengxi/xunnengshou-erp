@@ -31,7 +31,10 @@ const More = () => {
                     onClick={() => openMenuChild(m.key, c.key)}
                   >
                     {(CHILD_ICONS[c.key] || '').includes('.') ? (
-                      <Image src={CHILD_ICONS[c.key]} style={{ width: 40, height: 40, display: 'block', margin: '0 auto 4px' }} />
+                      /* 与表情图标等高对齐：表情行高 48，图形本体 36 居中 */
+                      <View style={{ height: 48, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 4 }}>
+                        <Image src={CHILD_ICONS[c.key]} style={{ width: 36, height: 36, display: 'block' }} mode="aspectFit" />
+                      </View>
                     ) : (
                       <Text style={{ fontSize: 40, display: 'block', lineHeight: '48px' }}>{CHILD_ICONS[c.key] || '📌'}</Text>
                     )}

@@ -90,13 +90,13 @@ export const findModule = (key: string): MenuModule | undefined => MODULES.find(
 
 // 子菜单图标（首页常用功能宫格与查看更多卡片共用）
 // 值为资源路径（含 '.'）时渲染端改用 Image，而非 Text 表情
-import scanCameraIcon from '../assets/scan-camera.png'
+import scanCameraOrangeIcon from '../assets/scan-camera-orange.png'
 export const CHILD_ICONS: Record<string, string> = {
   approvals: '✅', reimburse: '🧾', bookkeeping: '📔', 'bank-account': '🏦',
   orders: '📋', production: '🏭', purchase: '📥',
   'production-order': '🏭', 'processing-order': '⚙️', 'purchase-requisition': '📥',
   'workflow-templates': '🧭', 'production-schedule': '📅',
-  inventory: '📦', scan: scanCameraIcon,
+  inventory: '📦', scan: scanCameraOrangeIcon,
   finished: '🛒', semi: '📤', mold: '🧰',
   progress: '📈', 'shop-management': '🏪', opportunity: '🛒', 'warehouse-stats': '📊', manage: '🏅',
   attendance: '⏰', staff: '🧑‍💼', leave: '📝',

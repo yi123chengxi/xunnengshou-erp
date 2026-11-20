@@ -108,7 +108,10 @@ const Workbench = () => {
           {favGrid.map(g => (
             <View key={g.id} className="grid-item" onClick={g.onClick} style={{ position: 'relative', width: '25%' }}>
               {g.icon.includes('.') ? (
-                <Image src={g.icon} style={{ width: 36, height: 36, display: 'block', margin: '0 auto' }} />
+                /* 图片图标对齐表情图标：表情行高 44（.grid-icon），故用等高容器居中，图形本体 32 */
+                <View style={{ height: 44, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <Image src={g.icon} style={{ width: 32, height: 32, display: 'block' }} mode="aspectFit" />
+                </View>
               ) : (
                 <Text className="grid-icon">{g.icon}</Text>
               )}
