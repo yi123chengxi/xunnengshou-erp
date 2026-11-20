@@ -2260,8 +2260,7 @@ const ReconciliationManage: React.FC = () => {
                     {reconTypeLabel[selectedRecord.reconType]}
                   </Tag>
                 </Descriptions.Item>
-                <Descriptions.Item label="对方名称">{selectedRecord.counterparty}</Descriptions.Item>
-                <Descriptions.Item label="对方编码">{selectedRecord.counterpartyCode}</Descriptions.Item>
+                <Descriptions.Item label="对方名称">{cpNameOf(selectedRecord)}</Descriptions.Item>
                 <Descriptions.Item label={`${lblOur}金额`}>
                   <Text strong style={{ fontFamily: 'monospace', color: selectedRecord.ourAmount === 0 ? '#999' : PRIMARY }}>
                     {selectedRecord.ourAmount === 0 ? zeroOurField : `¥${selectedRecord.ourAmount.toLocaleString()}`}
@@ -2276,6 +2275,13 @@ const ReconciliationManage: React.FC = () => {
                     {selectedRecord.theirAmount === 0 ? zeroTheirField : `¥${selectedRecord.theirAmount.toLocaleString()}`}
                   </Text>
                 </Descriptions.Item>
+                {selectedRecord.diffDesc && (
+                  <Descriptions.Item label="差异说明" span={2}>
+                    <Text type={selectedRecord.reconResult === 'detail_diff' ? 'warning' : 'danger'}>
+                      {selectedRecord.diffDesc}
+                    </Text>
+                  </Descriptions.Item>
+                )}
                 <Descriptions.Item label="对账结果" span={2}>
                   {(() => {
                     const isPurple = !isPurchaser && selectedRecord.reconResult === 'pending' && selectedRecord.initiator === 'purchaser';
@@ -2289,13 +2295,6 @@ const ReconciliationManage: React.FC = () => {
                     <Tag color="green" style={{ marginLeft: 8 }}>已确认</Tag>
                   )}
                 </Descriptions.Item>
-                {selectedRecord.diffDesc && (
-                  <Descriptions.Item label="差异说明" span={2}>
-                    <Text type={selectedRecord.reconResult === 'detail_diff' ? 'warning' : 'danger'}>
-                      {selectedRecord.diffDesc}
-                    </Text>
-                  </Descriptions.Item>
-                )}
                 <Descriptions.Item label="本方录入">{selectedRecord.ourEntryDate}</Descriptions.Item>
                 <Descriptions.Item label="对方入账">
                   {selectedRecord.theirEntryDate === '-' ? <Text type="secondary">未入账</Text> : selectedRecord.theirEntryDate}
@@ -2475,7 +2474,7 @@ const ReconciliationManage: React.FC = () => {
                       render: (v: number) => <Text style={{ fontFamily: 'monospace' }}>{v}</Text>,
                     },
                     {
-                      title: '采购商数量', dataIndex: 'theirQty', key: 'theirQty', align: 'right' as const,
+                      title: isPurchaser ? '本方数量' : '采购商数量', dataIndex: 'theirQty', key: 'theirQty', align: 'right' as const,
                       render: (v: number, s: any) => (
                         <Text style={{
                           fontFamily: 'monospace',
