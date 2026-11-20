@@ -105,8 +105,8 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
         <View className="btn-primary" style={btnStyle} onClick={() => setApplied(input.trim())}>
           搜索
         </View>
-        <View className="btn-primary" style={{ ...btnStyle, padding: '0 12px', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={pickImageSearch}>
-          <Image src={scanCameraIcon} style={{ width: 28, height: 28 }} />
+        <View style={{ width: 56, height: 56, marginLeft: 10, flexShrink: 0, borderRadius: 10, overflow: 'hidden' }} onClick={pickImageSearch}>
+          <Image src={scanCameraIcon} style={{ width: 56, height: 56, display: 'block' }} mode="aspectFill" />
         </View>
       </View>
       {refUrl ? (
