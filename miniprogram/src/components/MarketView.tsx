@@ -3,7 +3,7 @@ import { View, Text, Image, Input } from '@tarojs/components'
 import Taro from '@tarojs/taro'
 import { getMarket } from '../services/api'
 import { computeSubjectFeatures, subjectSimilarity } from '../services/imageSimilarity'
-import scanCameraIcon from '../assets/scan-camera.png'
+import scanCameraGrayIcon from '../assets/scan-camera-gray.png'
 
 const SEGMENTS = [
   { key: 'semi', label: '发包市场' },
@@ -88,25 +88,32 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
   const shown = refUrl && Object.keys(scores).length
     ? [...filtered].sort((a, b) => (scores[String(b.id)] || 0) - (scores[String(a.id)] || 0))
     : filtered
-  const btnStyle = { marginLeft: 10, width: 'auto', height: 56, lineHeight: '56px', padding: '0 16px', fontSize: 24, flexShrink: 0, boxSizing: 'border-box', borderRadius: 10 } as const
+  // 搜索行尺寸：输入框与两个按键等高（weapp 下全局类尺寸会压过行内覆盖，故一律纯行内自带全部视觉属性）
+  const cellH = 39
+  const btnStyle = { marginLeft: 7, height: cellH, lineHeight: `${cellH}px`, padding: '0 11px', fontSize: 17, color: '#fff', background: '#1677ff', borderRadius: 7, textAlign: 'center', flexShrink: 0, boxSizing: 'border-box' } as const
+  const inputStyle = { flex: 1, marginBottom: 0, height: cellH, lineHeight: `${cellH}px`, fontSize: 17, padding: '0 11px', background: '#f5f6f8', borderRadius: 7, boxSizing: 'border-box' } as const
 
   return (
     <View>
       {/* 顶部搜索：关键字与网页版同口径 + 图片搜索 */}
       <View style={{ display: 'flex', padding: '16px 24px 0', alignItems: 'center' }}>
         <Input
-          className="input"
-          style={{ flex: 1, marginBottom: 0, height: 56, fontSize: 24, padding: '0 16px', boxSizing: 'border-box' }}
+          style={inputStyle}
           placeholder="搜索单号/款号/简称/公司"
+          placeholderStyle="color:#9aa3ad;font-size:17px"
           value={input}
           onInput={e => setInput(e.detail.value)}
           onConfirm={() => setApplied(input.trim())}
         />
-        <View className="btn-primary" style={btnStyle} onClick={() => setApplied(input.trim())}>
+        <View style={btnStyle} onClick={() => setApplied(input.trim())}>
           搜索
         </View>
-        <View style={{ width: 56, height: 56, marginLeft: 10, flexShrink: 0, borderRadius: 10, overflow: 'hidden' }} onClick={pickImageSearch}>
-          <Image src={scanCameraIcon} style={{ width: 56, height: 56, display: 'block' }} mode="aspectFill" />
+        {/* 拍照搜索键：只保留中间相机（浅灰）+ 灰色描边，图标不再铺满整键 */}
+        <View
+          style={{ width: cellH, height: cellH, marginLeft: 7, flexShrink: 0, borderRadius: 7, background: '#fff', border: '1px solid #c9ced6', boxSizing: 'border-box', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+          onClick={pickImageSearch}
+        >
+          <Image src={scanCameraGrayIcon} style={{ width: 28, height: 28, display: 'block' }} mode="aspectFit" />
         </View>
       </View>
       {refUrl ? (

@@ -55,17 +55,16 @@ const BankAccountsView = ({ tick = 0 }: { tick?: number }) => {
     <View>
       <View style={{ display: 'flex', padding: '16px 24px 0', alignItems: 'center' }}>
         <Input
-          className="input"
-          style={{ flex: 1, marginBottom: 0, height: 38, fontSize: 22, padding: '0 12px', boxSizing: 'border-box' }}
+          style={{ flex: 1, marginBottom: 0, height: 36, lineHeight: '36px', fontSize: 17, padding: '0 11px', background: '#f5f6f8', borderRadius: 8, boxSizing: 'border-box' }}
           placeholder="搜索账户名称/开户银行/银行账号"
+          placeholderStyle="color:#9aa3ad;font-size:17px"
           value={input}
           onInput={e => setInput(e.detail.value)}
           onConfirm={() => setApplied(input.trim())}
         />
-        {/* 行内按键用 View 实现：Taro H5 的 Button 基础样式（满宽/行高）会干扰 flex 对齐 */}
+        {/* 行内按键：纯行内样式不带 btn-primary 类（类里 84px 行高/30px 字会压过行内覆盖导致按键过大） */}
         <View
-          className="btn-primary"
-          style={{ marginLeft: 8, width: 'auto', height: 38, lineHeight: '38px', padding: '0 12px', fontSize: 13, flexShrink: 0, boxSizing: 'border-box', borderRadius: 8 }}
+          style={{ marginLeft: 8, height: 36, lineHeight: '36px', padding: '0 16px', fontSize: 15, color: '#fff', background: '#1677ff', borderRadius: 8, textAlign: 'center', flexShrink: 0, boxSizing: 'border-box' }}
           onClick={() => setApplied(input.trim())}
         >
           查询
@@ -75,7 +74,7 @@ const BankAccountsView = ({ tick = 0 }: { tick?: number }) => {
       {/* 汇总条：账户数 + 总余额（与筛选结果同源，随查询变化） */}
       {loaded && (
         <View style={{ display: 'flex', alignItems: 'center', padding: '10px 24px 0' }}>
-          <Text className="muted" style={{ fontSize: 22 }}>共 {total} 个账户</Text>
+          <Text style={{ color: '#8a94a6', fontSize: 22 }}>共 {total} 个账户</Text>
           <Text style={{ marginLeft: 16, fontSize: 22 }}>
             总余额 <Text style={{ color: totalBalance < 0 ? '#ff4d4f' : '#1f2733', fontWeight: 700, fontSize: 24 }}>{money(totalBalance)}</Text>
           </Text>
@@ -87,13 +86,14 @@ const BankAccountsView = ({ tick = 0 }: { tick?: number }) => {
       )}
       {loaded && failed && <View className="empty">银行账户数据暂不可用（{failed}）</View>}
 
+      {/* 卡片不挂 .card 类（类里 padding:24 会压过行内值），背景/圆角/阴影/外边距全量行内声明 */}
       {list.map(acc => (
-        <View key={String(acc.key || `${acc.name}-${acc.bankAccountNo}`)} className="card" style={{ padding: '16px 24px' }}>
+        <View key={String(acc.key || `${acc.name}-${acc.bankAccountNo}`)} style={{ background: '#fff', borderRadius: 16, margin: '16px 24px', padding: '16px 24px', boxShadow: '0 2px 8px rgba(31,39,51,0.04)' }}>
           {/* 第一行：账户名称 + 余额 */}
           <View style={{ display: 'flex', alignItems: 'center' }}>
             <Text style={{ flex: 1, minWidth: 0, fontWeight: 600, fontSize: 24, lineHeight: '32px', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
               {acc.name || '未命名账户'}
-              {acc.shortName ? <Text className="muted" style={{ fontWeight: 400, fontSize: 20, marginLeft: 8 }}>{acc.shortName}</Text> : null}
+              {acc.shortName ? <Text style={{ color: '#8a94a6', fontWeight: 400, fontSize: 20, marginLeft: 8 }}>{acc.shortName}</Text> : null}
             </Text>
             <Text style={{ marginLeft: 12, flexShrink: 0, fontWeight: 700, fontSize: 26, lineHeight: '32px', color: acc.balance < 0 ? '#ff4d4f' : '#1f2733' }}>
               {money(acc.balance)}
@@ -101,7 +101,7 @@ const BankAccountsView = ({ tick = 0 }: { tick?: number }) => {
           </View>
           {/* 第二行：开户银行（支行） */}
           <View style={{ marginTop: 4 }}>
-            <Text className="muted" style={{ fontSize: 20, lineHeight: '28px' }}>
+            <Text style={{ color: '#8a94a6', fontSize: 20, lineHeight: '28px' }}>
               {acc.bankName || '—'}{acc.branchName ? `（${acc.branchName}）` : ''}
             </Text>
           </View>
@@ -113,12 +113,12 @@ const BankAccountsView = ({ tick = 0 }: { tick?: number }) => {
             >
               {acc.bankAccountNo || '—'}
             </Text>
-            {acc.accountType ? <Text className="tag tag-blue" style={{ marginLeft: 12, flexShrink: 0, fontSize: 18, lineHeight: '26px', padding: '0 8px' }}>{acc.accountType}</Text> : null}
-            {acc.status ? <Text className={`tag ${statusTone(acc.status)}`} style={{ marginLeft: 8, flexShrink: 0, fontSize: 18, lineHeight: '26px', padding: '0 8px' }}>{acc.status}</Text> : null}
+            {acc.accountType ? <Text className="tag-blue" style={{ marginLeft: 12, flexShrink: 0, display: 'inline-block', fontSize: 18, lineHeight: '26px', padding: '0 8px', borderRadius: 6 }}>{acc.accountType}</Text> : null}
+            {acc.status ? <Text className={statusTone(acc.status)} style={{ marginLeft: 8, flexShrink: 0, display: 'inline-block', fontSize: 18, lineHeight: '26px', padding: '0 8px', borderRadius: 6 }}>{acc.status}</Text> : null}
           </View>
           {/* 第四行：开户日期 · 负责人 · 流水笔数 */}
           <View style={{ marginTop: 4 }}>
-            <Text className="muted" style={{ fontSize: 18, lineHeight: '26px' }}>
+            <Text style={{ color: '#8a94a6', fontSize: 18, lineHeight: '26px' }}>
               {[acc.openDate, acc.person && `负责人 ${acc.person}`, acc.txnCount ? `流水 ${acc.txnCount} 笔` : ''].filter(Boolean).join(' · ')}
             </Text>
           </View>
@@ -126,7 +126,7 @@ const BankAccountsView = ({ tick = 0 }: { tick?: number }) => {
       ))}
 
       {loaded && list.length > 0 && (
-        <View className="muted" style={{ textAlign: 'center', fontSize: 20, padding: '8px 24px 0' }}>点击银行账号可复制，余额与网页端实时同步</View>
+        <View style={{ color: '#8a94a6', textAlign: 'center', fontSize: 20, padding: '8px 24px 0' }}>点击银行账号可复制，余额与网页端实时同步</View>
       )}
     </View>
   )

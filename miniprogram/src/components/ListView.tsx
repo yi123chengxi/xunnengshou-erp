@@ -87,9 +87,10 @@ const ListView = ({
   return (
     <View>
       <View style={{ display: 'flex', padding: '16px 24px 0', alignItems: 'center' }}>
+        {/* 输入框同样不挂 .input 类（类里 font-size:28/padding:18 会压过行内值导致比按键高） */}
         <Input
-          className="input"
-          style={{ flex: 1, marginBottom: 0, height: 38, fontSize: 22, padding: '0 12px', boxSizing: 'border-box' }}
+          style={{ flex: 1, marginBottom: 0, height: 36, lineHeight: '36px', fontSize: 17, padding: '0 11px', background: '#f5f6f8', borderRadius: 8, boxSizing: 'border-box' }}
+          placeholderStyle="color:#9aa3ad;font-size:17px"
           placeholder="搜索关键字"
           value={input}
           onInput={e => setInput(e.detail.value)}
