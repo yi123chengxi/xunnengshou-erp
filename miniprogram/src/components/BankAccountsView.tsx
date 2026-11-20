@@ -53,7 +53,7 @@ const EMPTY_TXN = { padding: '18px 0', textAlign: 'center', fontSize: 13, color:
 
 /**
  * 银行账户视图：与 Web 财务管理→银行账户同源（pageData_finance_bank-account_<owner>），只读。
- * 卡片：账户名称 / 开户银行+银行账号 / 支行名称 / 余额+查看明细；点明细看该账户交易流水。
+ * 卡片：账户名称 / 开户银行+银行账号 / 支行名称+账户类型（靠右） / 余额+查看明细；点明细看该账户交易流水。
  * 搜索为「点查询后生效」双态模式，与通用列表口径一致。
  */
 const BankAccountsView = ({ tick = 0 }: { tick?: number }) => {
@@ -145,9 +145,10 @@ const BankAccountsView = ({ tick = 0 }: { tick?: number }) => {
               {acc.bankAccountNo || '—'}
             </Text>
           </View>
-          {/* 第三行：支行名称 */}
-          <View style={{ marginTop: 4 }}>
-            <Text style={{ ...C_SUB }}>支行 {acc.branchName || '—'}</Text>
+          {/* 第三行：支行名称居左，账户类型靠右对齐（支行可能为空，用 flex:1 + 省略号保证不顶掉右侧类型） */}
+          <View style={{ marginTop: 4, display: 'flex', alignItems: 'center' }}>
+            <Text style={{ ...C_SUB, flex: 1, minWidth: 0, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>支行 {acc.branchName || '—'}</Text>
+            <Text style={{ ...C_SUB, flexShrink: 0, marginLeft: 10, color: '#4d6b8a' }}>{acc.accountType || '—'}</Text>
           </View>
           {/* 第四行：账户余额 + 查看明细按键 */}
           <View style={{ ...C_ROW, marginTop: 8 }}>
