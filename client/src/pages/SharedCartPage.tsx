@@ -9,6 +9,7 @@ import {
 import { loadDataset, saveDataset } from '../utils/dataStore';
 import { pullAllDatasets } from '../utils/serverSync';
 import { copyText as copyToClipboard } from '../utils/clipboard';
+import { absoluteImageUrl } from '../utils/imageSpace';
 
 const PRIMARY = '#1e4a7e';
 const SHARED_INVENTORY_KEY = 'market_shared_inventories';
@@ -86,8 +87,9 @@ const loadListLatest = async (key: string): Promise<any[]> => {
 };
 
 const imgOf = (p: any): string => {
-  if (p.image) return String(p.image);
-  try { return localStorage.getItem(`prodImg_${p.publisherUsername}_${p.productKey}`) || ''; } catch { return ''; }
+  if (p.image) return absoluteImageUrl(String(p.image));
+  try { const ls = localStorage.getItem(`prodImg_${p.publisherUsername}_${p.productKey}`); if (ls) return absoluteImageUrl(ls); } catch { /* ignore */ }
+  return '';
 };
 
 const genPoCode = () => {
@@ -215,7 +217,7 @@ const SharedCartPage: React.FC = () => {
         unitPrice: Number(i.price) || 0,
         quantity: Number(i.qty) || 0,
         subtotal: (Number(i.price) || 0) * (Number(i.qty) || 0),
-        image: i.image || imgOf(i),
+        image: imgOf(i),
         publisherUsername: i.publisherUsername || shareRec.supplierUsername,
       }));
       const total = lineItems.reduce((s: number, x: any) => s + x.subtotal, 0);
@@ -389,7 +391,7 @@ const SharedCartPage: React.FC = () => {
               ) : (
                 <Row gutter={[0, 12]}>
                   {shareRec.items.map((i: any, idx: number) => {
-                    const imgSrc = i.image || imgOf(i);
+                    const imgSrc = imgOf(i);
                     return (
                       <Col key={`${i.key}-${idx}`} span={24}>
                         <div style={{ display: 'flex', gap: 16, padding: '12px 8px', borderBottom: '1px solid #f0f0f0', alignItems: 'center' }}>

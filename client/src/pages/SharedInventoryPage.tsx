@@ -9,6 +9,7 @@ import { pullAllDatasets } from '../utils/serverSync';
 import { getProvinceOptions, getCityOptions, getDistrictOptions } from '../utils/regions';
 import { connectChatWS, setGuestIdentity, sendMessage, onNewMessage, fetchHistory, httpMarkRead } from '../utils/chatSocket';
 import { copyText } from '../utils/clipboard';
+import { absoluteImageUrl } from '../utils/imageSpace';
 
 const PRIMARY = '#1e4a7e';
 const SHARED_INVENTORY_KEY = 'market_shared_inventories';
@@ -49,15 +50,21 @@ const loadSharedInventoriesLatest = async (): Promise<any[]> => {
 };
 
 const imgOfVisitor = (p: any): string => {
-  if (p.image) return String(p.image);
-  try { return localStorage.getItem(`prodImg_${p.publisherUsername}_${p && p.key}`) || ''; } catch { return ''; }
+  if (p && p.image) return absoluteImageUrl(String(p.image));
+  // 内嵌图回退（随市场数据跨账号同步）：同颜色变体图 → 首张内嵌图
+  const emb = Array.isArray(p && p.variantImages) ? p.variantImages : [];
+  const byColor = emb.find((e: any) => p && p.color && (e.color || '') === p.color);
+  if (byColor && byColor.src) return absoluteImageUrl(String(byColor.src));
+  if (emb[0] && emb[0].src) return absoluteImageUrl(String(emb[0].src));
+  try { const ls = localStorage.getItem(`prodImg_${p.publisherUsername}_${p && p.key}`); if (ls) return absoluteImageUrl(ls); } catch { /* ignore */ }
+  return '';
 };
 // 跨账号颜色图回退：卡片记录内嵌图（productColor→image / variantImages，随市场数据同步服务器）
 const embSrcOf = (rec: any, color: string): string => {
   if (!rec) return '';
-  if (color && color === (rec.productColor || '') && rec.image) return rec.image;
+  if (color && color === (rec.productColor || '') && rec.image) return absoluteImageUrl(String(rec.image));
   const emb = (Array.isArray(rec.variantImages) ? rec.variantImages : []).find((e: any) => (e.color || '') === color);
-  return emb?.src || '';
+  return emb?.src ? absoluteImageUrl(String(emb.src)) : '';
 };
 
 /** 尺码范围格式化：连续整数段（如 35,36,37,38,39,40）显示为 35-40；非连续或含非数字则逗号拼接 */
@@ -195,7 +202,7 @@ const SharedInventoryPage: React.FC = () => {
         const prods = marketData.filter((r: any) => r.type === 'finished' && !r.delisted && r.publisherUsername === sup);
         const products = prods.map((p: any) => ({
           ...p,
-          image: p.image || (p.productKey ? localStorage.getItem(`prodImg_${sup}_${p.productKey}`) || '' : ''),
+          image: imgOfVisitor(p),
           supplierName: p.publisherCompany || p.supplierName || '',
         }));
         found = {
@@ -710,7 +717,7 @@ const SharedInventoryPage: React.FC = () => {
                     <div style={{ flex: 1, padding: '14px 20px', display: 'flex', gap: 14, alignItems: 'center', background: '#fff' }}>
                       {wechat && (
                         <div style={{ textAlign: 'center', flexShrink: 0 }}>
-                          <img src={wechat} alt="微信二维码" style={{ width: 88, height: 88, objectFit: 'contain', borderRadius: 6, border: '1px solid #eee' }} />
+                          <img src={absoluteImageUrl(wechat)} alt="微信二维码" style={{ width: 88, height: 88, objectFit: 'contain', borderRadius: 6, border: '1px solid #eee' }} />
                           <div style={{ fontSize: 11, color: '#999', marginTop: 2 }}>微信二维码</div>
                         </div>
                       )}
@@ -872,7 +879,7 @@ const SharedInventoryPage: React.FC = () => {
               {items.map(i => (
                 <div key={i.key} style={{ display: 'flex', gap: 12, padding: '8px 0', borderBottom: '1px solid #f0f0f0', alignItems: 'center' }}>
                   <div style={{ width: 64, height: 64, background: '#f5f5f5', borderRadius: 4, overflow: 'hidden', flexShrink: 0 }}>
-                    {i.image ? <img src={i.image} alt={i.shortName} style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><ShopOutlined style={{ color: '#d9d9d9' }} /></div>}
+                    {i.image ? <img src={absoluteImageUrl(i.image)} alt={i.shortName} style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><ShopOutlined style={{ color: '#d9d9d9' }} /></div>}
                   </div>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 13, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{i.shortName}</div>
