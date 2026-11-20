@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { View, Text, Input, Picker, Button, Image, Checkbox, CheckboxGroup } from '@tarojs/components'
+import { View, Text, Input, Picker, Image, Checkbox, CheckboxGroup } from '@tarojs/components'
 import Taro from '@tarojs/taro'
 import { createNewStyle } from '../services/api'
 import { chooseAndUploadImage } from '../services/upload'
@@ -98,7 +98,7 @@ const NewStyleProgressView = ({ tick = 0 }: { tick?: number }) => {
     }
   }
 
-  const submit = async () => {
+  const submit = async (then: 'back' | 'stay') => {
     if (busy) return
     if (!String(form.styleCode || '').trim()) {
       Taro.showToast({ title: '请填写货号', icon: 'none' })
@@ -108,7 +108,8 @@ const NewStyleProgressView = ({ tick = 0 }: { tick?: number }) => {
     try {
       await createNewStyle({ ...form, sizeRange: sizes.join(','), photoThenList: LIST_MODES[modeIdx], image })
       Taro.showToast({ title: '新款已登记', icon: 'success' })
-      setFormVisible(false)
+      // 保存并返回：关窗回列表；保存并继续：留在填单页清空字段接着录下一条
+      if (then === 'back') setFormVisible(false)
       setForm({})
       setImage('')
       setReload(v => v + 1)
@@ -186,7 +187,21 @@ const NewStyleProgressView = ({ tick = 0 }: { tick?: number }) => {
               ) : null}
             </View>
           </View>
-          <Button className="btn-primary" loading={busy} onClick={submit}>保存新增</Button>
+          {/* 保存拆两键：左「保存并返回」存完回列表，右「保存并继续」存完留在本页接着录 */}
+          <View style={{ display: 'flex' }}>
+            <View
+              style={{ flex: 1, height: '72rpx', lineHeight: '72rpx', textAlign: 'center', fontSize: '28rpx', color: '#fff', background: '#1677ff', borderRadius: '8rpx', boxSizing: 'border-box', opacity: busy ? 0.6 : 1 }}
+              onClick={() => submit('back')}
+            >
+              保存并返回
+            </View>
+            <View
+              style={{ flex: 1, marginLeft: '20rpx', height: '72rpx', lineHeight: '72rpx', textAlign: 'center', fontSize: '28rpx', color: '#1677ff', background: '#e6f4ff', borderRadius: '8rpx', boxSizing: 'border-box', opacity: busy ? 0.6 : 1 }}
+              onClick={() => submit('stay')}
+            >
+              保存并继续
+            </View>
+          </View>
         </View>
       ) : (
         <ListView

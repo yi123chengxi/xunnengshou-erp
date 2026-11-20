@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { View, Text, Input, Picker, Button } from '@tarojs/components'
+import { View, Text, Input, Picker } from '@tarojs/components'
 import Taro from '@tarojs/taro'
 import { createBookkeeping } from '../services/api'
 import ListView from './ListView'
@@ -42,7 +42,7 @@ const BookkeepingView = ({ tick = 0 }: { tick?: number }) => {
   const mains = typeIdx === 0 ? INCOME_MAINS : EXPENSE_MAINS
   const subs = mains[mainIdx]?.subs || []
 
-  const submit = async () => {
+  const submit = async (then: 'back' | 'stay') => {
     if (busy) return
     const amt = Number(amount)
     if (!(amt > 0)) {
@@ -61,7 +61,8 @@ const BookkeepingView = ({ tick = 0 }: { tick?: number }) => {
         remark: remark.trim(),
       })
       Taro.showToast({ title: '记账已保存', icon: 'success' })
-      setFormVisible(false)
+      // 保存并返回：关窗回列表；保存并继续：留在填单页只清金额类字段（日期/类型/分类保留）接着记
+      if (then === 'back') setFormVisible(false)
       setAmount('')
       setAccount('')
       setRemark('')
@@ -76,8 +77,13 @@ const BookkeepingView = ({ tick = 0 }: { tick?: number }) => {
 
   return (
     <View>
-      {formVisible && (
+      {formVisible ? (
+        /* 填单态：整页只呈现记账表单（下方列表隐藏），保存或点「返回列表」后回到列表 */
         <View className="card">
+          <View style={{ display: 'flex', alignItems: 'center', marginBottom: '20rpx' }}>
+            <Text style={{ flex: 1, fontSize: '30rpx', fontWeight: 600 }}>新增记账</Text>
+            <Text style={{ fontSize: '26rpx', color: '#1677ff' }} onClick={() => setFormVisible(false)}>返回列表 ›</Text>
+          </View>
           <Picker mode="date" value={date} onChange={e => setDate(e.detail.value)}>
             <View className="row">
               <Text className="muted">记账日期</Text>
@@ -136,11 +142,26 @@ const BookkeepingView = ({ tick = 0 }: { tick?: number }) => {
             onInput={e => setAccount(e.detail.value)}
           />
           <Input className="input" placeholder="备注（选填）" value={remark} onInput={e => setRemark(e.detail.value)} />
-          <Button className="btn-primary" loading={busy} onClick={submit}>保存记账</Button>
+          {/* 保存拆两键：左「保存并返回」存完回列表，右「保存并继续」存完留在本页接着记 */}
+          <View style={{ display: 'flex' }}>
+            <View
+              style={{ flex: 1, height: '72rpx', lineHeight: '72rpx', textAlign: 'center', fontSize: '28rpx', color: '#fff', background: '#1677ff', borderRadius: '8rpx', boxSizing: 'border-box', opacity: busy ? 0.6 : 1 }}
+              onClick={() => submit('back')}
+            >
+              保存并返回
+            </View>
+            <View
+              style={{ flex: 1, marginLeft: '20rpx', height: '72rpx', lineHeight: '72rpx', textAlign: 'center', fontSize: '28rpx', color: '#1677ff', background: '#e6f4ff', borderRadius: '8rpx', boxSizing: 'border-box', opacity: busy ? 0.6 : 1 }}
+              onClick={() => submit('stay')}
+            >
+              保存并继续
+            </View>
+          </View>
         </View>
+      ) : (
+        /* 紧凑列表模式；新增入口为查询行（查询右侧）的「新增记账」小按键 */
+        <ListView page="bookkeeping" tick={tick + reload} compact addLabel="新增记账" onAdd={() => setFormVisible(true)} />
       )}
-      {/* 紧凑列表模式；新增入口移到查询行（查询右侧）的「新增记账」小按键 */}
-      <ListView page="bookkeeping" tick={tick + reload} compact addLabel="新增记账" onAdd={() => setFormVisible(v => !v)} />
     </View>
   )
 }
