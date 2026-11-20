@@ -113,8 +113,8 @@ const ModuleView = ({
 
   return (
     <View style={{ paddingBottom: 340 }}>
-      {/* 页头标题：财务管理按用户要求缩小 50%（其余模块维持原字号） */}
-      <View style={{ padding: '20px 24px 0', fontWeight: 600, fontSize: moduleKey === 'finance' ? 16 : 32 }}>{mod.icon} {mod.title}</View>
+      {/* 页头标题：财务管理/仓库管理按用户要求缩小 50%（其余模块维持原字号） */}
+      <View style={{ padding: '20px 24px 0', fontWeight: 600, fontSize: moduleKey === 'finance' || moduleKey === 'warehouse' ? 16 : 32 }}>{mod.icon} {mod.title}</View>
       {renderChild()}
       {/* 底部子菜单条：固定在 Tab 栏上方（实测高度定位，未测得前用 96px 兜底） */}
       <View
