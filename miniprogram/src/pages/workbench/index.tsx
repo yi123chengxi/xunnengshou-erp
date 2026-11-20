@@ -58,52 +58,52 @@ const Workbench = () => {
           布局预览模式：数据接口待部署后自动接入真实数据
         </View>
       )}
-      <View style={{ background: 'linear-gradient(135deg,#1677ff,#4096ff)', padding: '32px 32px 48px', color: '#fff' }}>
+      <View style={{ background: 'linear-gradient(135deg,#1677ff,#4096ff)', padding: '24px 32px 52px', color: '#fff' }}>
         <View style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <Text style={{ fontSize: 34, fontWeight: 600 }}>{user?.company_name || user?.name || user?.username || ''}</Text>
-          <Text style={{ fontSize: 22, opacity: 0.85 }}>数据更新于 {updatedAt || '--'}</Text>
+          <Text style={{ fontSize: 32, fontWeight: 600 }}>{user?.company_name || user?.name || user?.username || ''}</Text>
+          <Text style={{ fontSize: 20, opacity: 0.8 }}>更新于 {updatedAt || '--'}</Text>
         </View>
       </View>
 
-      {/* 本月经营卡 */}
-      <View className="card" style={{ marginTop: -32, background: 'linear-gradient(135deg,#4096ff,#69b1ff)', color: '#fff' }}>
-        <Text style={{ fontSize: 26, opacity: 0.9 }}>本月销售金额</Text>
-        <Text style={{ fontSize: 56, fontWeight: 700, display: 'block', margin: '8px 0 16px' }}>
+      {/* 本月经营卡（紧凑版） */}
+      <View className="card" style={{ marginTop: -36, padding: '20px 24px', background: 'linear-gradient(135deg,#4096ff,#69b1ff)', color: '#fff' }}>
+        <Text style={{ fontSize: 22, opacity: 0.9 }}>本月销售金额</Text>
+        <Text style={{ fontSize: 44, fontWeight: 700, display: 'block', lineHeight: '52px', margin: '4px 0 12px' }}>
           {fmtMoney(summary?.month.salesAmount || 0)}
         </Text>
-        <View style={{ display: 'flex' }}>
+        <View style={{ display: 'flex', borderTop: '1px solid rgba(255,255,255,0.25)', paddingTop: 12 }}>
           <View style={{ flex: 1 }}>
-            <Text style={{ fontSize: 30, fontWeight: 600, display: 'block' }}>{summary?.month.orderCount ?? '—'}</Text>
-            <Text style={{ fontSize: 22, opacity: 0.85 }}>本月订单</Text>
+            <Text style={{ fontSize: 26, fontWeight: 600, display: 'block', lineHeight: '32px' }}>{summary?.month.orderCount ?? '—'}</Text>
+            <Text style={{ fontSize: 20, opacity: 0.85 }}>本月订单</Text>
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={{ fontSize: 30, fontWeight: 600, display: 'block' }}>{summary?.today.orderCount ?? '—'}</Text>
-            <Text style={{ fontSize: 22, opacity: 0.85 }}>今日订单</Text>
+            <Text style={{ fontSize: 26, fontWeight: 600, display: 'block', lineHeight: '32px' }}>{summary?.today.orderCount ?? '—'}</Text>
+            <Text style={{ fontSize: 20, opacity: 0.85 }}>今日订单</Text>
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={{ fontSize: 30, fontWeight: 600, display: 'block' }}>{fmtMoney(summary?.today.salesAmount || 0)}</Text>
-            <Text style={{ fontSize: 22, opacity: 0.85 }}>今日销售额</Text>
+            <Text style={{ fontSize: 26, fontWeight: 600, display: 'block', lineHeight: '32px' }}>{fmtMoney(summary?.today.salesAmount || 0)}</Text>
+            <Text style={{ fontSize: 20, opacity: 0.85 }}>今日销售额</Text>
           </View>
         </View>
       </View>
 
-      {/* 常用功能：上下班 / 报销 置顶醒目 */}
-      <View className="card">
-        <View className="card-title">常用功能</View>
-        <View style={{ display: 'flex', marginBottom: 8 }}>
+      {/* 常用功能：上下班 / 报销 置顶（横向矮卡） */}
+      <View className="card" style={{ padding: '20px 24px' }}>
+        <View className="card-title" style={{ fontSize: 28, marginBottom: 12 }}>常用功能</View>
+        <View style={{ display: 'flex', marginBottom: 4 }}>
           <View
-            style={{ flex: 1, background: 'linear-gradient(135deg,#52c41a,#95de64)', borderRadius: 12, padding: '24px 0', textAlign: 'center', color: '#fff', marginRight: 12 }}
+            style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'linear-gradient(135deg,#52c41a,#95de64)', borderRadius: 12, padding: '14px 0', color: '#fff', marginRight: 12 }}
             onClick={() => goModule('hr', 'attendance')}
           >
-            <Text style={{ fontSize: 44, display: 'block' }}>⏰</Text>
-            <Text style={{ fontSize: 28, fontWeight: 600 }}>上下班打卡</Text>
+            <Text style={{ fontSize: 30, marginRight: 10 }}>⏰</Text>
+            <Text style={{ fontSize: 26, fontWeight: 600 }}>上下班打卡</Text>
           </View>
           <View
-            style={{ flex: 1, background: 'linear-gradient(135deg,#fa8c16,#ffc069)', borderRadius: 12, padding: '24px 0', textAlign: 'center', color: '#fff' }}
+            style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'linear-gradient(135deg,#fa8c16,#ffc069)', borderRadius: 12, padding: '14px 0', color: '#fff' }}
             onClick={() => goModule('finance', 'reimburse')}
           >
-            <Text style={{ fontSize: 44, display: 'block' }}>🧾</Text>
-            <Text style={{ fontSize: 28, fontWeight: 600 }}>报销申请</Text>
+            <Text style={{ fontSize: 30, marginRight: 10 }}>🧾</Text>
+            <Text style={{ fontSize: 26, fontWeight: 600 }}>报销申请</Text>
           </View>
         </View>
         <View className="grid">
@@ -111,7 +111,7 @@ const Workbench = () => {
             <View key={g.id} className="grid-item" onClick={g.onClick} style={{ position: 'relative', width: '25%' }}>
               <Text className="grid-icon">{g.icon}</Text>
               {!!g.badge && (
-                <Text style={{ position: 'absolute', top: 8, right: 26, background: '#f5222d', color: '#fff', borderRadius: 20, fontSize: 18, padding: '0 10px' }}>
+                <Text style={{ position: 'absolute', top: 6, right: 24, background: '#f5222d', color: '#fff', borderRadius: 20, fontSize: 16, lineHeight: '24px', padding: '0 8px' }}>
                   {g.badge}
                 </Text>
               )}

@@ -16,7 +16,7 @@ const AppTabBar = ({ current }: { current?: string }) => (
     style={{
       position: 'fixed', left: 0, right: 0, bottom: 0, zIndex: 200,
       background: '#fff', borderTop: '1px solid #ebedf0',
-      display: 'flex', padding: '8px 0 calc(8px + env(safe-area-inset-bottom))',
+      display: 'flex', padding: '6px 0 calc(6px + env(safe-area-inset-bottom))',
     }}
   >
     {TABS.map(t => (
@@ -25,8 +25,8 @@ const AppTabBar = ({ current }: { current?: string }) => (
         style={{ flex: 1, textAlign: 'center' }}
         onClick={() => { if (t.key !== current) Taro.reLaunch({ url: t.path }) }}
       >
-        <Text style={{ fontSize: 40, display: 'block', lineHeight: '44px' }}>{t.icon}</Text>
-        <Text style={{ fontSize: 22, color: current === t.key ? '#1677ff' : '#8a94a6', fontWeight: current === t.key ? 600 : 400 }}>
+        <Text style={{ fontSize: 32, display: 'block', lineHeight: '36px' }}>{t.icon}</Text>
+        <Text style={{ fontSize: 20, lineHeight: '26px', color: current === t.key ? '#1677ff' : '#8a94a6', fontWeight: current === t.key ? 600 : 400 }}>
           {t.label}
         </Text>
       </View>
