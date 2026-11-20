@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { View, Text, Image, Textarea, Button } from '@tarojs/components'
 import Taro, { useLoad } from '@tarojs/taro'
 import { getApprovalDetail, auditApproval, ApprovalDetail as ApprovalDetailData } from '../../services/api'
+import { fullImageUrl } from '../../utils/imageUrl'
 import AppTabBar from '../../components/AppTabBar'
 
 const MAIN_CATEGORIES = ['销售费用', '管理费用', '财务费用']
@@ -84,7 +85,8 @@ const ApprovalDetail = () => {
       ['拒绝原因', rec.rejectReason || '—'],
     ]
 
-  const receipts: string[] = Array.isArray(rec.receipts) ? rec.receipts : []
+  // 票据地址归一：网页端上传存的是相对/旧形态绝对 URL，weapp 直接加载会空白，统一转完整 HTTPS 通道地址
+  const receipts: string[] = (Array.isArray(rec.receipts) ? rec.receipts : []).map((s: string) => fullImageUrl(s)).filter(Boolean)
 
   return (
     <View style={{ paddingBottom: 300 }}>

@@ -65,17 +65,20 @@ const ApprovalsEmbed = ({ tick = 0 }: { tick?: number }) => {
           className="card"
           onClick={() => Taro.navigateTo({ url: `/pages/approval-detail/index?type=${it.type}&key=${encodeURIComponent(it.key)}` })}
         >
-          <View className="row">
-            <Text style={{ fontWeight: 600 }}>{it.no}</Text>
-            <Text className={`tag ${statusTag(it.status)}`}>{it.statusText}</Text>
-          </View>
-          <View className="row">
-            <Text className="muted">{it.title || ((it as any).isReceipt ? '收款登记' : '付款申请')}</Text>
-            <Text className="amount">¥{(it.amount || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2 })}</Text>
-          </View>
-          <View className="row">
-            <Text className="muted">{it.applicantName || it.applicant}</Text>
-            <Text className="muted">{it.time}</Text>
+          {/* 横向四列：报销标题 | 金额 | 申请人 | 申请时间（单号与状态标签挂在首/末列） */}
+          <View style={{ display: 'flex', alignItems: 'center' }}>
+            <View style={{ flex: 1, minWidth: 0, marginRight: 12 }}>
+              <Text style={{ display: 'block', fontWeight: 600, fontSize: 28, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {it.title || ((it as any).isReceipt ? '收款登记' : '付款申请')}
+              </Text>
+              <Text className="muted" style={{ display: 'block', fontSize: 22, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.no}</Text>
+            </View>
+            <Text className="amount" style={{ marginRight: 12, whiteSpace: 'nowrap' }}>¥{(it.amount || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2 })}</Text>
+            <Text className="muted" style={{ marginRight: 12, maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.applicantName || it.applicant}</Text>
+            <View style={{ textAlign: 'right', flexShrink: 0 }}>
+              <Text className="muted" style={{ display: 'block', fontSize: 22, whiteSpace: 'nowrap' }}>{it.time}</Text>
+              <Text className={`tag ${statusTag(it.status)}`} style={{ marginTop: 4 }}>{it.statusText}</Text>
+            </View>
           </View>
         </View>
       ))}
