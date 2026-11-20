@@ -120,12 +120,12 @@ const ModuleView = ({
           background: '#fff', borderTop: '1px solid #ebedf0', boxShadow: '0 -2px 8px rgba(31,39,51,0.05)',
         }}
       >
-        <ScrollView scrollX style={{ whiteSpace: 'nowrap', padding: '12px 16px' }}>
+        <ScrollView scrollX style={{ whiteSpace: 'nowrap', padding: '6px 16px' }}>
           {mod.children.map(c => (
             <Text
               key={c.key}
               className={`tag ${child === c.key ? 'tag-blue' : 'tag-gray'}`}
-              style={{ marginRight: 12, fontSize: 26, lineHeight: '48px', padding: '0 24px' }}
+              style={{ marginRight: 6, fontSize: 13, lineHeight: '24px', padding: '0 12px' }}
               onClick={() => setChild(c.key)}
             >
               {c.title}
