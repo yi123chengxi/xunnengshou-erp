@@ -87,7 +87,7 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
   const shown = refUrl && Object.keys(scores).length
     ? [...filtered].sort((a, b) => (scores[String(b.id)] || 0) - (scores[String(a.id)] || 0))
     : filtered
-  const btnStyle = { marginLeft: 12, width: 'auto', height: 76, lineHeight: '76px', padding: '0 24px', fontSize: 26, flexShrink: 0, boxSizing: 'border-box', borderRadius: 12 } as const
+  const btnStyle = { marginLeft: 10, width: 'auto', height: 56, lineHeight: '56px', padding: '0 16px', fontSize: 24, flexShrink: 0, boxSizing: 'border-box', borderRadius: 10 } as const
 
   return (
     <View>
@@ -95,7 +95,7 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
       <View style={{ display: 'flex', padding: '16px 24px 0', alignItems: 'center' }}>
         <Input
           className="input"
-          style={{ flex: 1, marginBottom: 0, height: 76, boxSizing: 'border-box' }}
+          style={{ flex: 1, marginBottom: 0, height: 56, fontSize: 24, padding: '0 16px', boxSizing: 'border-box' }}
           placeholder="搜索单号/款号/简称/公司"
           value={input}
           onInput={e => setInput(e.detail.value)}
@@ -104,7 +104,7 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
         <View className="btn-primary" style={btnStyle} onClick={() => setApplied(input.trim())}>
           搜索
         </View>
-        <View className="btn-primary" style={btnStyle} onClick={pickImageSearch}>
+        <View className="btn-primary" style={{ ...btnStyle, padding: '0 12px' }} onClick={pickImageSearch}>
           📷
         </View>
       </View>
