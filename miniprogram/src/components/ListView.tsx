@@ -89,7 +89,7 @@ const ListView = ({
       <View style={{ display: 'flex', padding: '16px 24px 0', alignItems: 'center' }}>
         <Input
           className="input"
-          style={{ flex: 1, marginBottom: 0, height: 76, boxSizing: 'border-box' }}
+          style={{ flex: 1, marginBottom: 0, height: 38, fontSize: 22, padding: '0 12px', boxSizing: 'border-box' }}
           placeholder="搜索关键字"
           value={input}
           onInput={e => setInput(e.detail.value)}
@@ -98,7 +98,7 @@ const ListView = ({
         {/* 行内按键用 View 实现：Taro H5 的 Button 基础样式（满宽/行高）会干扰 flex 对齐 */}
         <View
           className="btn-primary"
-          style={{ marginLeft: 12, width: 'auto', height: 76, lineHeight: '76px', padding: '0 24px', fontSize: 26, flexShrink: 0, boxSizing: 'border-box', borderRadius: 12 }}
+          style={{ marginLeft: 8, width: 'auto', height: 38, lineHeight: '38px', padding: '0 12px', fontSize: 13, flexShrink: 0, boxSizing: 'border-box', borderRadius: 8 }}
           onClick={() => setApplied(input.trim())}
         >
           查询
@@ -106,7 +106,7 @@ const ListView = ({
         {onAdd ? (
           <View
             className="btn-primary"
-            style={{ marginLeft: 12, width: 'auto', height: 76, lineHeight: '76px', padding: '0 24px', fontSize: 26, flexShrink: 0, boxSizing: 'border-box', borderRadius: 12 }}
+            style={{ marginLeft: 8, width: 'auto', height: 38, lineHeight: '38px', padding: '0 12px', fontSize: 13, flexShrink: 0, boxSizing: 'border-box', borderRadius: 8 }}
             onClick={onAdd}
           >
             {addLabel || '新增'}
