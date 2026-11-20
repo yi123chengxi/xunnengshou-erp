@@ -541,7 +541,8 @@ router.get('/inventory', verifyJWT, async (req: Request, res: Response) => {
   }
 });
 
-/** GET /api/wx/orders?q= —— 订单列表模糊查询（单号/客户） */
+/** GET /api/wx/orders?q= —— 订单列表模糊查询（单号/客户/货品明细），含货品明细与收件信息
+ *  订单状态口径：orderStatus（中文）优先，历史手工单仅存 status('pending') 时映射「待处理」 */
 router.get('/orders', verifyJWT, async (req: Request, res: Response) => {
   try {
     const user = (req as any).user as JWTPayload;
@@ -549,13 +550,41 @@ router.get('/orders', verifyJWT, async (req: Request, res: Response) => {
     const q = String(req.query.q || '').trim().toLowerCase();
     const rows = await readRows(`pageData_sales_order-manage_${owner}`);
     const hit = q
-      ? rows.filter((r: any) => `${r.orderNo || ''}${r.customerName || ''}`.toLowerCase().includes(q))
+      ? rows.filter((r: any) => `${r.orderNo || ''}${r.id || ''}${r.customerName || ''}${r.productDetail || ''}`.toLowerCase().includes(q))
       : rows;
-    const list = hit.slice(0, 50).map((r: any) => ({
-      key: r.key, orderNo: r.orderNo || '', customerName: r.customerName || '',
-      createTime: r.createTime || '', salesAmount: Number(r.salesAmount) || 0,
-      status: r.status || '', person: r.person || '',
-    }));
+    const statusTextOf = (r: any): string => {
+      const os = String(r.orderStatus || '').trim();
+      if (os) return os;
+      const s = String(r.status || '').trim();
+      if (s === 'pending') return '待处理';
+      if (s === 'processing') return '进行中';
+      if (s === 'completed') return '已完成';
+      if (s === 'cancelled') return '已取消';
+      return s;
+    };
+    const list = hit.slice(0, 50).map((r: any) => {
+      // 货品明细唯一读取源 orderItems（JSON 字符串），解析口径与 Web 端一致（unitPrice 兼容映射 price）
+      let items: any[] = [];
+      try {
+        const raw = typeof r.orderItems === 'string' ? JSON.parse(r.orderItems) : (Array.isArray(r.orderItems) ? r.orderItems : []);
+        items = (Array.isArray(raw) ? raw : []).map((it: any) => ({
+          productCode: it.productCode || it.styleCode || '', shortName: it.shortName || '',
+          styleCode: it.styleCode || '', color: it.color || '', spec: it.spec || '',
+          quantity: Number(it.quantity) || 0, price: Number(it.price ?? it.unitPrice) || 0,
+          amount: Number(it.amount) || 0, image: it.image || '',
+        }));
+      } catch { items = []; }
+      const receiverAddress = String(r.receiverAddress || '').trim()
+        || [r.province, r.city, r.district, r.addressDetail].filter(Boolean).map((s: any) => String(s).trim()).join(' ');
+      return {
+        key: r.key, orderNo: r.orderNo || r.id || '', customerName: r.customerName || '',
+        createTime: r.createTime || r.date || '', orderStatus: statusTextOf(r),
+        receiverName: r.receiverName || r.person || '', receiverPhone: r.receiverPhone || '',
+        receiverAddress, productAmount: Number(r.productAmount) || Number(r.amount) || 0,
+        totalQty: items.reduce((s: number, it: any) => s + (Number(it.quantity) || 0), 0),
+        items,
+      };
+    });
     res.json({ code: 200, data: { list, total: hit.length } });
   } catch (err: any) {
     console.error('[wx] orders error:', err.message);
