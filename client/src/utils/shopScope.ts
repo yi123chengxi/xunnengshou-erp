@@ -153,3 +153,10 @@ export const canEditShopData = (owner: string, person?: string, creator?: string
   const username = getCurrentUsername();
   return (!!person && person === me) || (!!creator && (creator === me || creator === username));
 };
+
+// 删除门控：仅店铺负责人本人可删除该店铺（主账号始终豁免）；
+// 编辑权限不再附带删除权——负责人名单里的 edit 勾选者/未设置名单时的普通账号均不可删他人店铺
+export const canDeleteShop = (owner: string, person?: string): boolean => {
+  if (isShopScopeAdmin()) return true;
+  return isShopPersonMe(owner, person);
+};

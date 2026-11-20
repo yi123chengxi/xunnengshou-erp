@@ -14,7 +14,7 @@ import useResizableColumns from '../hooks/useResizableColumns';
 import { safeSetItem } from '../utils/storageQuota';
 import { saveDataset } from '../utils/dataStore';
 import { reloadAfterPull } from '../utils/serverSync';
-import { loadShopManagerPerms, saveShopManagerPerms, isShopScopeAdmin, scopeShops, canEditShopData, ShopManagerPerm } from '../utils/shopScope';
+import { loadShopManagerPerms, saveShopManagerPerms, isShopScopeAdmin, scopeShops, canEditShopData, canDeleteShop, ShopManagerPerm } from '../utils/shopScope';
 import { canField, canFn, usePermTick } from '../utils/perm';
 import { SHOP_MENU_KEY } from '../config/permRegistry';
 import { loadTenantUsers, tenantUserDisplayName } from '../utils/tenantUsers';
@@ -368,6 +368,8 @@ const ShopListPage: React.FC = () => {
   };
 
   const handleDelete = (key: string) => {
+    const target = shops.find(s => s.key === key);
+    if (!canDeleteShop(owner, target?.person)) { message.warning('仅店铺负责人可删除该店铺'); return; }
     saveShops(shops.filter(s => s.key !== key));
     message.success('店铺已删除');
   };
@@ -537,12 +539,13 @@ const ShopListPage: React.FC = () => {
     { title: '操作', key: 'action', width: 140, fixed: 'right' as const,
       render: (_: any, r: ShopInfo) => {
         const editable = canEditShopData(owner, r.person);
+        const deletable = canDeleteShop(owner, r.person);
         return (
         <Space size="small">
           <Button type="link" size="small" icon={<EditOutlined />} disabled={!editable} onClick={() => openEdit(r)}>编辑</Button>
           <Popconfirm title="确认删除此店铺？" description="删除后相关数据不会自动删除"
-            onConfirm={() => handleDelete(r.key)} okText="确认" cancelText="取消" disabled={!editable}>
-            <Button type="link" size="small" danger icon={<DeleteOutlined />} disabled={!editable}>删除</Button>
+            onConfirm={() => handleDelete(r.key)} okText="确认" cancelText="取消" disabled={!deletable}>
+            <Button type="link" size="small" danger icon={<DeleteOutlined />} disabled={!deletable}>删除</Button>
           </Popconfirm>
         </Space>
         );
@@ -925,7 +928,8 @@ const ShopListPage: React.FC = () => {
         okText="保存" cancelText="取消" width={560}>
         <div style={{ marginBottom: 8, color: '#888', fontSize: 12 }}>
           查看权限：可查看全部店铺数据（店铺列表/月末盘点/月利润表/提现充值），组长另可查看本组组员的店铺数据；<br />
-          编辑权限：可编辑/删除他人的店铺数据，仅查看权限者只能操作自己负责的店铺；<br />
+          编辑权限：可编辑他人的店铺数据，仅查看权限者只能操作自己负责的店铺；<br />
+          删除权限：仅店铺负责人本人可删除对应店铺（主账号始终全权）；<br />
           主账号始终拥有全部权限；未设置负责人时所有账号可见可编辑全部；<br />
           与账号管理/分组权限冲突时，以本页负责人设置为准（行级查看/编辑）。
         </div>
