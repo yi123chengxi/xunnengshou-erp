@@ -1,4 +1,5 @@
 import { useCallback, useState } from 'react'
+import './index.scss'
 import { View, Text } from '@tarojs/components'
 import Taro, { useDidShow } from '@tarojs/taro'
 import { getChatConversations, ConvItem } from '../../services/api'

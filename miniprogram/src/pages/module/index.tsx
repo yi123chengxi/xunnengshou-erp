@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import './index.scss'
 import { View } from '@tarojs/components'
 import { useDidShow, useLoad } from '@tarojs/taro'
 import ModuleView from '../../components/ModuleView'

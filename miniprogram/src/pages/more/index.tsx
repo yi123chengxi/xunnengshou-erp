@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import './index.scss'
 import { View, Text, Image } from '@tarojs/components'
 import Taro from '@tarojs/taro'
 import { MODULES, CHILD_ICONS, openMenuChild } from '../../config/menu'

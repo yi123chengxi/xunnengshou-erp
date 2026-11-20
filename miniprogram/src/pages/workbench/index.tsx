@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import './index.scss'
 import { View, Text, Image } from '@tarojs/components'
 import Taro, { useDidShow } from '@tarojs/taro'
 import { getSummary, SummaryData } from '../../services/api'

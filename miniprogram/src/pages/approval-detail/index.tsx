@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import './index.scss'
 import { View, Text, Image, Textarea, Button } from '@tarojs/components'
 import Taro, { useLoad } from '@tarojs/taro'
 import { getApprovalDetail, auditApproval, ApprovalDetail as ApprovalDetailData } from '../../services/api'

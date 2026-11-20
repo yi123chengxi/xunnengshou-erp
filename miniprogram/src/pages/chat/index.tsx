@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import './index.scss'
 import { View, Text, Image, Input, ScrollView } from '@tarojs/components'
 import Taro, { useRouter, useDidShow, useUnload } from '@tarojs/taro'
 import { getChatHistory, sendChatMessage, markChatRead, ChatMsg } from '../../services/api'

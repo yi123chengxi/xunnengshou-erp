@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import './index.scss'
 import { View, Text, Button } from '@tarojs/components'
 import Taro, { useDidShow } from '@tarojs/taro'
 import { getUser, SessionUser } from '../../services/session'

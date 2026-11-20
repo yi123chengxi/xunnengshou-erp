@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import './index.scss'
 import { View, Text, Input, Button } from '@tarojs/components'
 import Taro from '@tarojs/taro'
 import { wxLogin, bindAccount, passwordLogin } from '../../services/auth'
