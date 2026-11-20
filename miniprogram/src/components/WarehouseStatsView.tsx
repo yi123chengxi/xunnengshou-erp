@@ -99,7 +99,7 @@ const WarehouseStatsView = ({ tick = 0 }: { tick?: number }) => {
     }
   }
 
-  const submit = async () => {
+  const submit = async (then: 'back' | 'stay') => {
     if (busy) return
     for (const f of fields) {
       if (f.required && !String(form[f.key] || '').trim()) {
@@ -114,7 +114,8 @@ const WarehouseStatsView = ({ tick = 0 }: { tick?: number }) => {
     try {
       await createWsRecord(tab as 'stock' | 'pick' | 'urgent' | 'note', body)
       Taro.showToast({ title: '已新增', icon: 'success' })
-      setFormVisible(false)
+      // 保存并返回：关窗回列表；保存并继续：留在填单页清空字段接着录下一条
+      if (then === 'back') setFormVisible(false)
       setForm({})
       setImage('')
       setReload(v => v + 1)
@@ -150,8 +151,13 @@ const WarehouseStatsView = ({ tick = 0 }: { tick?: number }) => {
           />
         </View>
       )}
-      {formVisible && fields.length > 0 && (
+      {formVisible && fields.length > 0 ? (
+        /* 填单态：整页只呈现新增表单（下方列表隐藏），保存或点「返回列表」后回到列表 */
         <View className="card">
+          <View style={{ display: 'flex', alignItems: 'center', marginBottom: '20rpx' }}>
+            <Text style={{ flex: 1, fontSize: '30rpx', fontWeight: 600 }}>新增{cur.label}</Text>
+            <Text style={{ fontSize: '26rpx', color: '#1677ff' }} onClick={() => { setFormVisible(false); setForm({}); setImage('') }}>返回列表 ›</Text>
+          </View>
           {tab === 'note' && (
             <View className="row">
               <Text className="muted">类型</Text>
@@ -222,20 +228,36 @@ const WarehouseStatsView = ({ tick = 0 }: { tick?: number }) => {
               />
             )
           ))}
-          <Button className="btn-primary" loading={busy} onClick={submit}>保存新增</Button>
+          {/* 保存拆两键：左「保存并返回」存完关窗回列表，右「保存并继续」存完留在本页清空接着录 */}
+          <View style={{ display: 'flex' }}>
+            <View
+              style={{ flex: 1, height: '72rpx', lineHeight: '72rpx', textAlign: 'center', fontSize: '28rpx', color: '#fff', background: '#1677ff', borderRadius: '8rpx', boxSizing: 'border-box', opacity: busy ? 0.6 : 1 }}
+              onClick={() => submit('back')}
+            >
+              保存并返回
+            </View>
+            <View
+              style={{ flex: 1, marginLeft: '20rpx', height: '72rpx', lineHeight: '72rpx', textAlign: 'center', fontSize: '28rpx', color: '#1677ff', background: '#e6f4ff', borderRadius: '8rpx', boxSizing: 'border-box', opacity: busy ? 0.6 : 1 }}
+              onClick={() => submit('stay')}
+            >
+              保存并继续
+            </View>
+          </View>
         </View>
+      ) : (
+        /* 列表态：填单态下整块隐藏，避免表单与下方表格同屏拥挤 */
+        <ListView
+          key={cur.page}
+          page={cur.page}
+          extra={tab === 'salary' ? `m=${encodeURIComponent(month)}` : ''}
+          headers={HEADERS[tab]}
+          quick={tab === 'stock' || tab === 'pick' || tab === 'urgent'}
+          quickDate={tab === 'pick' ? 'last' : 'first'}
+          addLabel={fields.length > 0 ? '新增记录' : undefined}
+          onAdd={fields.length > 0 ? () => setFormVisible(true) : undefined}
+          tick={tick + reload}
+        />
       )}
-      <ListView
-        key={cur.page}
-        page={cur.page}
-        extra={tab === 'salary' ? `m=${encodeURIComponent(month)}` : ''}
-        headers={HEADERS[tab]}
-        quick={tab === 'stock' || tab === 'pick' || tab === 'urgent'}
-        quickDate={tab === 'pick' ? 'last' : 'first'}
-        addLabel={fields.length > 0 ? '新增记录' : undefined}
-        onAdd={fields.length > 0 ? () => setFormVisible(v => !v) : undefined}
-        tick={tick + reload}
-      />
     </View>
   )
 }
