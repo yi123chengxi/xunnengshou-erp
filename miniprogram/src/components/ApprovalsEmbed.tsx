@@ -68,16 +68,16 @@ const ApprovalsEmbed = ({ tick = 0 }: { tick?: number }) => {
         >
           {/* 两行卡：第一行 标题左 + 金额右；第二行 时间·申请人·单号 + 状态标签 */}
           <View style={{ display: 'flex', alignItems: 'center' }}>
-            <Text style={{ flex: 1, minWidth: 0, fontWeight: 600, fontSize: 26, lineHeight: '34px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            <Text style={{ flex: 1, minWidth: 0, fontWeight: 600, fontSize: 21, lineHeight: '28px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {it.title || ((it as any).isReceipt ? '收款登记' : '付款申请')}
             </Text>
-            <Text className="amount" style={{ fontSize: 26, marginLeft: 12, whiteSpace: 'nowrap' }}>¥{(it.amount || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2 })}</Text>
+            <Text className="amount" style={{ fontSize: 21, marginLeft: 12, whiteSpace: 'nowrap' }}>¥{(it.amount || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2 })}</Text>
           </View>
-          <View style={{ display: 'flex', alignItems: 'center', marginTop: 6 }}>
-            <Text className="muted" style={{ flex: 1, minWidth: 0, fontSize: 22, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <View style={{ display: 'flex', alignItems: 'center', marginTop: 4 }}>
+            <Text className="muted" style={{ flex: 1, minWidth: 0, fontSize: 15, lineHeight: '22px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {it.time}{(it.applicantName || it.applicant) ? ` · ${it.applicantName || it.applicant}` : ''}{it.no ? ` · ${it.no}` : ''}
             </Text>
-            <Text className={`tag ${statusTag(it.status)}`} style={{ marginLeft: 12, flexShrink: 0 }}>{it.statusText}</Text>
+            <Text className={`tag ${statusTag(it.status)}`} style={{ marginLeft: 12, flexShrink: 0, fontSize: 15, lineHeight: '22px', padding: '0 8px' }}>{it.statusText}</Text>
           </View>
         </View>
       ))}
