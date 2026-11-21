@@ -1,2 +1,16 @@
-src/App.tsx(4,36): error TS2307: Cannot find module './utils/dataOwner' or its corresponding type declarations.
-src/pages/Auth.tsx(14,56): error TS2307: Cannot find module '../utils/dataOwner' or its corresponding type declarations.
+src/utils/__tests__/productListReconcile.test.ts(22,6): error TS2339: Property 'mock' does not exist on type '{ resetModules(): void; isolateModules(fn: () => void): void; }'.
+src/utils/__tests__/productListReconcile.test.ts(24,21): error TS2339: Property 'fn' does not exist on type '{ resetModules(): void; isolateModules(fn: () => void): void; }'.
+src/utils/__tests__/productListReconcile.test.ts(25,23): error TS2339: Property 'fn' does not exist on type '{ resetModules(): void; isolateModules(fn: () => void): void; }'.
+src/utils/__tests__/productListReconcile.test.ts(26,21): error TS2339: Property 'fn' does not exist on type '{ resetModules(): void; isolateModules(fn: () => void): void; }'.
+src/utils/__tests__/productListReconcile.test.ts(27,26): error TS2339: Property 'fn' does not exist on type '{ resetModules(): void; isolateModules(fn: () => void): void; }'.
+src/utils/__tests__/productListReconcile.test.ts(28,27): error TS2339: Property 'fn' does not exist on type '{ resetModules(): void; isolateModules(fn: () => void): void; }'.
+src/utils/__tests__/productListReconcile.test.ts(29,26): error TS2339: Property 'fn' does not exist on type '{ resetModules(): void; isolateModules(fn: () => void): void; }'.
+src/utils/__tests__/productListReconcile.test.ts(35,6): error TS2339: Property 'mock' does not exist on type '{ resetModules(): void; isolateModules(fn: () => void): void; }'.
+src/utils/__tests__/productListReconcile.test.ts(36,25): error TS2339: Property 'fn' does not exist on type '{ resetModules(): void; isolateModules(fn: () => void): void; }'.
+src/utils/__tests__/productListReconcile.test.ts(37,28): error TS2339: Property 'fn' does not exist on type '{ resetModules(): void; isolateModules(fn: () => void): void; }'.
+src/utils/__tests__/productListReconcile.test.ts(38,33): error TS2339: Property 'fn' does not exist on type '{ resetModules(): void; isolateModules(fn: () => void): void; }'.
+src/utils/__tests__/productListReconcile.test.ts(42,27): error TS2339: Property 'fn' does not exist on type '{ resetModules(): void; isolateModules(fn: () => void): void; }'.
+src/utils/__tests__/productListReconcile.test.ts(45,6): error TS2339: Property 'mock' does not exist on type '{ resetModules(): void; isolateModules(fn: () => void): void; }'.
+src/utils/__tests__/productListReconcile.test.ts(46,22): error TS2339: Property 'fn' does not exist on type '{ resetModules(): void; isolateModules(fn: () => void): void; }'.
+src/utils/__tests__/productListReconcile.test.ts(158,67): error TS2503: Cannot find namespace 'jest'.
+src/utils/__tests__/productListReconcile.test.ts(160,60): error TS2503: Cannot find namespace 'jest'.
