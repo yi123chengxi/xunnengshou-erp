@@ -91,8 +91,8 @@ const ModuleView = ({
       case 'bank-account': return <BankAccountsView tick={tick} />
       case 'production': return <ListView page="production" tick={tick} />
       case 'purchase': return <ListView page="purchase" tick={tick} />
-      // 打单拣货：订单派生视图（已审核+已付款），列口径与 Web 端 remap 后的四列一致
-      case 'print-picking': return <ListView page="picking" headers={['订单编号', '出库单号', '拣货数量', '创建时间']} tick={tick} />
+      // 打单拣货：订单派生视图（已审核+已付款）；参考订单查询页改用卡片式（card），headers 仅供卡片内配对列名
+      case 'print-picking': return <ListView page="picking" card headers={['订单编号', '出库单号', '拣货数量', '创建时间']} tick={tick} />
       // 生产管理子菜单（与 Web production 分组同口径）
       case 'production-order': return <ListView page="production" tick={tick} />
       case 'processing-order': return <ListView page="processing-order" headers={['加工单号', '来源生产单号', '款式编码', '需求总数量', '状态']} tick={tick} />
@@ -122,7 +122,7 @@ const ModuleView = ({
           fontSize: moduleKey === 'finance' || moduleKey === 'warehouse' || moduleKey === 'order' || moduleKey === 'product' ? 16 : (moduleKey === 'ecommerce' ? 22 : 32),
         }}
       >
-        {mod.icon} {moduleKey === 'ecommerce' ? (mod.children.find(c => c.key === child)?.title || mod.title) : mod.title}
+        {mod.icon} {moduleKey === 'ecommerce' || moduleKey === 'order' ? (mod.children.find(c => c.key === child)?.title || mod.title) : mod.title}
       </View>
       {renderChild()}
       {/* 底部子菜单条：固定在 Tab 栏上方（实测高度定位，未测得前用 96px 兜底） */}

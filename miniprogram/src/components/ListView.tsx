@@ -30,8 +30,8 @@ const localDay = (offset = 0): string => {
  * 搜索为「点击查询后才生效」的双态模式，减少大列表实时过滤开销。
  */
 const ListView = ({
-  page, extra = '', headers, addLabel, onAdd, tick = 0, quick = false, quickDate, compact = false, onRowClick, padTop = 16,
-}: { page: string; extra?: string; headers?: string[]; addLabel?: string; onAdd?: () => void; tick?: number; quick?: boolean; quickDate?: 'first' | 'last'; compact?: boolean; onRowClick?: (it: ListItem) => void; padTop?: number }) => {
+  page, extra = '', headers, addLabel, onAdd, tick = 0, quick = false, quickDate, compact = false, onRowClick, padTop = 16, card = false,
+}: { page: string; extra?: string; headers?: string[]; addLabel?: string; onAdd?: () => void; tick?: number; quick?: boolean; quickDate?: 'first' | 'last'; compact?: boolean; onRowClick?: (it: ListItem) => void; padTop?: number; card?: boolean }) => {
   const [input, setInput] = useState('')
   const [applied, setApplied] = useState('')
   const [range, setRange] = useState('')
@@ -143,7 +143,7 @@ const ListView = ({
         </View>
       )}
       {loaded && list.length === 0 && <View className="empty">暂无数据</View>}
-      {headers && headers.length ? (
+      {headers && headers.length && !card ? (
         /* 横向表格模式：顶部字段名行 + 每条记录一行单元格
            行内 style 数字按真实 px 渲染，故表头 13px、单元格 15px（≈26/30rpx）才是舒适密度；
            列边线按项目表格规范逐格 borderLeft，首列不带，外框整圈灰线 */
@@ -221,6 +221,14 @@ const ListView = ({
             ) : null}
             {it.tag ? <Text className={`tag ${TONE_CLASS[it.tone || 'blue'] || 'tag-blue'}`} style={{ marginLeft: 12, flexShrink: 0 }}>{it.tag}</Text> : null}
           </View>
+          {/* card 模式（参考订单查询页）：把 headers 与 row 配对成「列名 值」行，首列与标题重复故跳过 */}
+          {card && headers && headers.length && (it.row || []).length ? (
+            <View style={{ paddingTop: 4 }}>
+              {headers.map((h, i) => (i === 0 || !(it.row || [])[i] ? null : (
+                <View key={h} className="muted" style={{ paddingTop: 2, fontSize: 24 }}>{h} {(it.row || [])[i]}</View>
+              )))}
+            </View>
+          ) : null}
           {compact ? (
             (it.sub && it.sub.length > 0) ? (
               <View className="muted" style={{ paddingTop: 4, fontSize: 15, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
