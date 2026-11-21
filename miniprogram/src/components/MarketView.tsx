@@ -91,6 +91,9 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
   const [imgFail, setImgFail] = useState<Record<string, { url: string; msg: string; code: string }>>({})
   // 已探测过的地址，避免同一 URL 重复发探测请求
   const probedRef = useRef<Set<string>>(new Set())
+  // base64 回退渲染缓存：id -> data URL
+  const [imgData, setImgData] = useState<Record<string, string>>({})
+  const b64ingRef = useRef<Set<string>>(new Set())
   const [loaded, setLoaded] = useState(false)
   const [detail, setDetail] = useState<MarketDetail | null>(null)
 
@@ -123,6 +126,26 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
     Taro.request({ url, method: 'GET', timeout: 8000, dataType: 'text', responseType: 'text' })
       .then(r => setImgFail(v => (v[id] ? { ...v, [id]: { ...v[id], code: String(r.statusCode) } } : v)))
       .catch(() => setImgFail(v => (v[id] ? { ...v, [id]: { ...v[id], code: 'REQ_FAIL' } } : v)))
+  }
+
+  /**
+   * base64 回退渲染：微信真机 <image> 对「无扩展名、仅靠 Content-Type」的 URL 可能拒绝渲染
+   * （本站 /api/images/file/<dir>/<id> 正是这种形态，而带 .jpg 又会被面板 vhost 劫持成 404，是死锁）。
+   * 既然 wx.request 通道已证明同一地址返回 200，就用它拉 arraybuffer 转 data URL 回填——
+   * data: 不依赖扩展名、不依赖任何合法域名白名单，微信必然渲染。仅在 onError 后触发。
+   */
+  const fallbackToBase64 = (url: string, id: string) => {
+    if (!url || /^data:/i.test(url) || b64ingRef.current.has(url)) return
+    b64ingRef.current.add(url)
+    Taro.request({ url, method: 'GET', responseType: 'arraybuffer', timeout: 20000, header: { Accept: 'image/*' } })
+      .then(res => {
+        if (res.statusCode !== 200 || !res.data) return
+        const h: any = res.header || {}
+        const ctype = String(h['content-type'] || h['Content-Type'] || 'image/jpeg').split(';')[0]
+        const b64 = (Taro as any).arrayBufferToBase64 ? (Taro as any).arrayBufferToBase64(res.data) : ''
+        if (b64) setImgData(v => ({ ...v, [id]: `data:${ctype};base64,${b64}` }))
+      })
+      .catch(() => { /* 外链不在 request 白名单时保持占位与诊断 */ })
   }
 
   // 诊断文案：只输出定性结论，绝不印完整地址（历史版本把 URL 印在窄卡片上会折成满屏乱码）
@@ -270,22 +293,28 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
             >
               {/* 封面区：padding-top:100% 撑出正方形（H5/weapp 通用，不依赖 aspect-ratio） */}
               <View style={{ position: 'relative', width: '100%', paddingTop: '100%' }}>
-                {r.image && !imgFail[String(r.id)] ? (
-                  <Image
-                    src={r.image} mode="aspectFill"
-                    style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%' }}
-                    onError={e => {
-                      const id = String(r.id)
-                      const url = String(r.image || '')
-                      setImgFail(v => ({
-                        ...v,
-                        [id]: { url, msg: String((e as any)?.detail?.errMsg || ''), code: v[id]?.code || '' },
-                      }))
-                      probeImage(url, id)
-                    }}
-                  />
-                ) : (() => {
-                  const f = imgFail[String(r.id)]
+                {(() => {
+                  const id = String(r.id)
+                  const COVER: any = { position: 'absolute', top: 0, left: 0, width: '100%', height: '100%' }
+                  // 回退成功：直接用 base64 渲染，不再走网络通道
+                  if (imgData[id]) return <Image src={imgData[id]} mode="aspectFill" style={COVER} />
+                  if (r.image && !imgFail[id]) {
+                    return (
+                      <Image
+                        src={r.image} mode="aspectFill" style={COVER}
+                        onError={e => {
+                          const url = String(r.image || '')
+                          setImgFail(v => ({
+                            ...v,
+                            [id]: { url, msg: String((e as any)?.detail?.errMsg || ''), code: v[id]?.code || '' },
+                          }))
+                          probeImage(url, id)
+                          fallbackToBase64(url, id)
+                        }}
+                      />
+                    )
+                  }
+                  const f = imgFail[id]
                   return (
                     <View
                       style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', background: 'linear-gradient(135deg,#e6f4ff,#f0f5ff)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', fontSize: 72 }}
