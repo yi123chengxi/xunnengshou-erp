@@ -95,7 +95,10 @@ const SYNC_PREFIXES = [
   // BOM/款式设计图片的云端 URL 绑定表（prodImgUrl_<账号>）：本机图片键 → 图片空间 URL
   'prodImgUrl_',
 ];
-const SYNC_EXACT = ['registeredUsers', 'subscription_orders', 'storage_orders', 'market_publish_orders', 'market_ratings', 'market_trade_orders', 'market_visitor_cart_shares', 'market_mold_listings', 'purchaser_pushed_orders', 'cooperation_applications', 'cooperation_invites', 'recon_records', 'recon_feedback', 'company_renames'];
+const SYNC_EXACT = ['registeredUsers', 'subscription_orders', 'storage_orders', 'market_ratings', 'market_trade_orders', 'market_visitor_cart_shares', 'market_mold_listings', 'purchaser_pushed_orders', 'cooperation_applications', 'cooperation_invites', 'recon_records', 'recon_feedback', 'company_renames'];
+// market_publish_orders 已退役为「商机市场独立库（/api/market/*）的本地只读缓存」，
+// 不再参与全局键同步：写入只走 marketApi.writeMarketCache（safeSetItem，不 saveDataset），
+// 读取靠 fetchMarketListings 水合，避免旧全局键整键替换/墓碑并集把权威数据覆盖
 // 图片块体积大，不参与跨浏览器同步（各浏览器独立）
 const EXCLUDE_PREFIXES = ['prodImg_', 'thumb_', 'payShot_', 'mold_img_'];
 // 仅上传不拉取的键前缀（这类键有独立的恢复机制，避免 pullAllDatasets 的宽限期竞态覆盖本地新数据）
@@ -104,7 +107,8 @@ const UPLOAD_ONLY_PREFIXES = ['credit_adjustments_'];
 const APPEND_ONLY_GLOBAL_KEYS = ['market_trade_orders', 'purchaser_pushed_orders'];
 // 带下架语义的全局列表键：并集合并会在查看端复活已删除记录并回传服务器，
 // 拉取时改为“服务端不旧于本地则整体替换；本地有更新写入则保留本地但同步服务端墓碑”
-const REPLACE_PULL_GLOBAL_KEYS = ['market_publish_orders'];
+// （market_publish_orders 已迁独立库退出此名单；当前无其它下架语义全局键）
+const REPLACE_PULL_GLOBAL_KEYS: string[] = [];
 // 一次性 salvage 回灌的账单类私有键前缀：这些键曾被跨端镜像整键覆盖擦除，
 // 升级后首轮拉取把「本地有、服务端缺失」的行并集回灌服务端（仅一次，避免长期破坏删除语义）
 const SALVAGE_UNION_PREFIXES = ['purchaser_bills_', 'pageData_customer_bill-detail_'];

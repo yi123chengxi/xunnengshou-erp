@@ -135,6 +135,26 @@ db.exec(`
     created_at INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_pending_pool ON chat_pending_messages(pool_owner);
+
+  -- 商机市场独立库：发布单/成品卡片逐条一行（替代 market_publish_orders 全局 JSON 快照，
+  -- 写路径只改目标行，客户端不再持有全量副本，杜绝整键替换/墓碑并集互相覆盖）
+  CREATE TABLE IF NOT EXISTS market_listings (
+    listing_key TEXT PRIMARY KEY,
+    publisher TEXT NOT NULL DEFAULT '',
+    ltype TEXT NOT NULL DEFAULT 'semi',
+    record_json TEXT NOT NULL,
+    delisted INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE INDEX IF NOT EXISTS idx_ml_publisher ON market_listings(publisher);
+
+  -- 库存同步设置：供应商指定哪些采购商可见实际库存（无记录的采购商一律不可见）
+  CREATE TABLE IF NOT EXISTS market_inv_sync (
+    publisher TEXT NOT NULL,
+    viewer TEXT NOT NULL,
+    updated_at INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (publisher, viewer)
+  );
 `);
 
 // 兼容旧库：企业认证表增量列（法人身份证号 / 最近刷脸 CertifyId / 最近变更认证时间）
@@ -319,5 +339,26 @@ export const stmtPendingList: Statement = db.prepare(`
   SELECT * FROM chat_pending_messages WHERE pool_owner = ? ORDER BY created_at ASC
 `);
 export const stmtPendingDelete: Statement = db.prepare(`DELETE FROM chat_pending_messages WHERE id = ?`);
+
+// ============ 商机市场独立库（market_listings / market_inv_sync） ============
+export const stmtMarketListAll: Statement = db.prepare('SELECT listing_key, publisher, ltype, record_json, delisted, updated_at FROM market_listings');
+export const stmtMarketGet: Statement = db.prepare('SELECT listing_key, publisher, ltype, record_json, delisted, updated_at FROM market_listings WHERE listing_key = ?');
+export const stmtMarketUpsert: Statement = db.prepare(`
+  INSERT INTO market_listings (listing_key, publisher, ltype, record_json, delisted, updated_at)
+  VALUES (?, ?, ?, ?, ?, ?)
+  ON CONFLICT(listing_key) DO UPDATE SET
+    publisher = excluded.publisher,
+    ltype = excluded.ltype,
+    record_json = excluded.record_json,
+    delisted = excluded.delisted,
+    updated_at = excluded.updated_at
+`);
+export const stmtMarketDelete: Statement = db.prepare('DELETE FROM market_listings WHERE listing_key = ?');
+export const stmtMarketInvGet: Statement = db.prepare('SELECT viewer FROM market_inv_sync WHERE publisher = ?');
+export const stmtMarketInvDelPublisher: Statement = db.prepare('DELETE FROM market_inv_sync WHERE publisher = ?');
+export const stmtMarketInvAdd: Statement = db.prepare(`
+  INSERT INTO market_inv_sync (publisher, viewer, updated_at) VALUES (?, ?, ?)
+  ON CONFLICT(publisher, viewer) DO UPDATE SET updated_at = excluded.updated_at
+`);
 
 export default db;

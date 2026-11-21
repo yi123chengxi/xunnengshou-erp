@@ -37,6 +37,8 @@ import smsRoutes from './routes/sms.routes';
 import enterpriseRoutes from './routes/enterprise.routes';
 import systemRoutes from './routes/system.routes';
 import imageRoutes from './routes/image.routes';
+import marketRoutes from './routes/market.routes';
+import { migrateLegacyMarketKey } from './services/market-listings';
 import { startEnterprisePatrol } from './services/enterprisePatrol';
 import { initPrintWebSocket } from './ws/print-ws';
 import { initChatWebSocket } from './ws/chat-ws';
@@ -67,6 +69,8 @@ app.use('/api/sms', rateLimit({ name: 'sms', windowMs: 60_000, max: 60, message:
 app.use('/api/sync', rateLimit({ name: 'sync', windowMs: 60_000, max: 2400, message: '同步请求过于频繁，请稍后再试' }));
 // 图片空间：上传为 MB 级请求，单独限流避免挤占同步通道
 app.use('/api/images', rateLimit({ name: 'images', windowMs: 60_000, max: 300, message: '图片操作过于频繁，请稍后再试' }));
+// 商机市场独立库：列表/批量写入/报价，按登录轮询与发布峰值给额度
+app.use('/api/market', rateLimit({ name: 'market', windowMs: 60_000, max: 600, message: '市场请求过于频繁，请稍后再试' }));
 
 app.use('/api/auth', authRoutes);
 app.use('/api/wx', wxRoutes);
@@ -92,6 +96,7 @@ app.use('/api/print', printRoutes);
 app.use('/api/chat', chatRoutes);
 app.use('/api/system', systemRoutes);
 app.use('/api/images', imageRoutes);
+app.use('/api/market', marketRoutes);
 
 // 健康检查
 app.get('/api/health', (_req, res) => {
@@ -151,6 +156,8 @@ server.listen(PORT, async () => {
   })();
   // 错桶迁移：子账号被当成主账号时写进个人桶的订单/账单等，启动时并入主账号桶（幂等，DB 不可写则下次重试）
   void migrateStrandedOwnerDatasets().then((n) => { if (n > 0) console.log(`[rebucket] 启动错桶迁移完成：${n} 个数据集已归并`); }).catch(() => { /* ignore */ });
+  // 商机市场旧键一次性迁移：market_publish_orders 存量存活记录迁入独立库 market_listings（幂等）
+  void migrateLegacyMarketKey().catch(() => { /* ignore */ });
   // 运行期周期迁移：隶属关系运行期变化（在线串联/改绑）后无需等重启即可收敛
   startStrandedMigrationLoop();
   // 企业认证 30 天巡检日任务（当日已跑自动跳过）

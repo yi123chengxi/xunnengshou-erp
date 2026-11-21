@@ -6,6 +6,7 @@ const { Text, Paragraph } = Typography;
 import { ShopOutlined, ShoppingCartOutlined, LoginOutlined, LogoutOutlined, DeleteOutlined, ShareAltOutlined, CopyOutlined, PlusOutlined, MinusOutlined, UserOutlined, EnvironmentOutlined, PhoneOutlined, FileExcelOutlined, MessageOutlined } from '@ant-design/icons';
 import { loadDataset, saveDataset } from '../utils/dataStore';
 import { pullAllDatasets } from '../utils/serverSync';
+import { fetchMarketListings } from '../utils/marketApi';
 import { getProvinceOptions, getCityOptions, getDistrictOptions } from '../utils/regions';
 import { connectChatWS, setGuestIdentity, sendMessage, onNewMessage, fetchHistory, httpMarkRead } from '../utils/chatSocket';
 import { copyText } from '../utils/clipboard';
@@ -189,11 +190,13 @@ const SharedInventoryPage: React.FC = () => {
       const code = shareCodeParam;
       const lists = await loadSharedInventoriesLatest();
       let found = code ? (lists || []).find((s: any) => s.shareCode === code.trim()) : null;
-      // 加载成品市场数据
+      // 加载成品市场数据（独立库：公开分享页也经服务端 /api/market/listings 读取，
+      // 匿名/未授权查看方拿到的成品记录已剥离库存并置 canViewInventory=false）
       let marketData: any[] = [];
       try {
-        const raw = safeJson(MARKET_KEY, []);
-        marketData = Array.isArray(raw) ? raw : [];
+        const fetched = await fetchMarketListings();
+        marketData = Array.isArray(fetched) ? fetched : safeJson(MARKET_KEY, []);
+        if (!Array.isArray(marketData)) marketData = [];
         if (!cancelled) setMarket(marketData);
       } catch { /* ignore */ }
       // 全量分享模式：无分享码且带 supplier 参数时，展示该供应商在成品市场的全部在售商品
@@ -1090,7 +1093,7 @@ const SharedInventoryPage: React.FC = () => {
                   <Descriptions size="small" column={2} bordered>
                     <Descriptions.Item label="款式编码">{detailProduct.styleCode || '—'}</Descriptions.Item>
                     <Descriptions.Item label="单位">{detailProduct.unit || '件'}</Descriptions.Item>
-                    <Descriptions.Item label="总库存">{detailVariants.reduce((s: number, v: any) => s + (Number(v.actualStock) || 0), 0) || 0}</Descriptions.Item>
+                    <Descriptions.Item label="总库存">{detailProduct.canViewInventory === false ? '***' : (detailVariants.reduce((s: number, v: any) => s + (Number(v.actualStock) || 0), 0) || 0)}</Descriptions.Item>
                     <Descriptions.Item label="供应商">{detailProduct.supplierName || detailProduct.publisherCompany || '—'}</Descriptions.Item>
                   </Descriptions>
                   {detailVariants.some(v => v.color) && (
@@ -1118,7 +1121,7 @@ const SharedInventoryPage: React.FC = () => {
                     { key: 'spec', title: '尺码/规格', dataIndex: 'spec', width: 120, align: 'center', render: (v: string) => v || '—' },
                     { key: 'productCode', title: 'SKU编码', dataIndex: 'productCode', width: 160, align: 'center' },
                     { key: 'suggestedPrice', title: '供货价', dataIndex: 'suggestedPrice', width: 100, align: 'center', render: (v: number) => <Text strong style={{ color: '#f5222d' }}>¥{Number(v) || 0}</Text> },
-                    { key: 'actualStock', title: '库存数', dataIndex: 'actualStock', width: 100, align: 'center', render: (v: number) => `${Number(v) || 0}` },
+                    { key: 'actualStock', title: '库存数', dataIndex: 'actualStock', width: 100, align: 'center', render: (v: number) => detailProduct?.canViewInventory === false ? '***' : `${Number(v) || 0}` },
                     {
                       key: 'qty', title: '数量', width: 90, align: 'center',
                       render: (_: any, x: any) => (

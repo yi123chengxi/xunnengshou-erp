@@ -110,6 +110,7 @@ import { safeSetItem, canCacheDataset, tryCacheDataset, invalidateDatasetCache }
 import { getDataOwner } from '../utils/brandAuth';
 import { getSessionOwner, mergeStrandedTenantDataset } from '../utils/dataOwner';
 import { saveDataset, loadDataset, readFreshDataset, setMemProductList } from '../utils/dataStore';
+import { pushMarketRecords, deleteMarketRecords, fetchMarketListings, writeMarketCache } from '../utils/marketApi';
 import { commitProductList, reconcileProductListWithServer, buildStoredProductListJson } from '../utils/productListSync';
 import ReturnRegisterModal from '../components/ReturnRegisterModal';
 import type { ReturnRegisterPayload } from '../components/ReturnRegisterModal';
@@ -3634,10 +3635,18 @@ const ModuleChildPage: React.FC = () => {
       setJgDetailImg('');
     }
   }, [getDataOwner]);
-  // 商机市场发布单（全局键），用于加工订单状态列新报价计数与详情弹窗
+  // 商机市场发布单（独立库本地只读缓存），用于加工订单状态列新报价计数与详情弹窗
+  const [mktTick, setMktTick] = useState(0);
+  // 加工订单页挂载/数据变化时从服务端独立库水合市场缓存，保证新报价计数与详情为权威值
+  useEffect(() => {
+    if (pageConfig?.title !== '加工订单') return;
+    let cancelled = false;
+    fetchMarketListings().then(list => { if (list && !cancelled) setMktTick(t => t + 1); });
+    return () => { cancelled = true; };
+  }, [pageConfig?.title, dataSource]);
   const marketPubOrders = useMemo<any[]>(() => {
     try { const v = JSON.parse(localStorage.getItem('market_publish_orders') || '[]'); return Array.isArray(v) ? v : []; } catch { return []; }
-  }, [dataSource]);
+  }, [dataSource, mktTick]);
   // 打开详情弹窗并把新报价标记为已读（seenQuoteCount 同步报价条数）
   const openMktQuoteDetail = useCallback((record: any) => {
     setMktDetailRec(record);
@@ -4509,17 +4518,17 @@ const ModuleChildPage: React.FC = () => {
     }).catch(() => message.warning('请完善发布表单必填项'));
   }, [pubMktForm, selectedRowKeys, getDataOwner]);
 
-  // 发布到市场的实际执行函数
+  // 发布到市场的实际执行函数（独立库：新发布单逐条 upsert 到服务端 market_listings，本地只写只读缓存）
   const publishToMarket = useCallback((targets: any[], values: any, owner: string, list: any[], selSet: Set<React.Key>, listKey: string) => {
-    const mkey = 'market_publish_orders';
     let mlist: any[] = [];
-    try { mlist = JSON.parse(localStorage.getItem(mkey) || '[]'); if (!Array.isArray(mlist)) mlist = []; } catch { mlist = []; }
+    try { const raw = JSON.parse(localStorage.getItem('market_publish_orders') || '[]'); mlist = Array.isArray(raw) ? raw : []; } catch { mlist = []; }
     const now = new Date().toISOString();
     const supplierName = localStorage.getItem('companyName') || owner;
     let seq = mlist.reduce((m: number, r: any) => { const n = Number(String(r.id || '').replace(/\D/g, '')); return isNaN(n) ? m : Math.max(m, n); }, 0);
+    const created: any[] = [];
     targets.forEach(r => {
       seq += 1;
-      mlist.unshift({
+      const rec = {
         key: `mkt_${Date.now()}_${r.key}`, id: `FB-${String(seq).padStart(6, '0')}`, type: 'semi',
         publisherUsername: owner, publisherCompany: supplierName, publishTime: now, status: '待报价',
         shortName: r.shortName, styleCode: r.styleCode, productCode: r.productCode, unit: r.unit || '件',
@@ -4527,11 +4536,13 @@ const ModuleChildPage: React.FC = () => {
         deadline: values.deadline ? dayjs(values.deadline).format('YYYY-MM-DD') : '', processTypes: values.processTypes || [],
         deposit: Number(values.deposit) || 0, depositStatus: Number(values.deposit) > 0 ? '需缴纳' : undefined,
         remark: values.remark || '', quotes: [], sourceOrderKey: r.key, sourceOrderId: r.id, sourcePoId: r.poId,
-      });
+      };
+      created.push(rec);
+      mlist.unshift(rec);
     });
-    const mjson = JSON.stringify(mlist);
-    safeSetItem(mkey, mjson);
-    saveDataset(mkey, mjson);
+    // 本地只读缓存先行，服务端权威落库走独立库 API（仅本人记录）
+    writeMarketCache(mlist);
+    void pushMarketRecords(created);
     const updated = list.map(r => (selSet.has(r.key) && !r.marketPublished && targets.some(t => t.key === r.key) ? { ...r, marketPublished: '已发布', status: '已发布', seenQuoteCount: 0 } : r));
     const json = JSON.stringify(updated);
     safeSetItem(listKey, json);
@@ -4648,14 +4659,13 @@ const ModuleChildPage: React.FC = () => {
       cancelText: '取消',
       onOk: () => {
         const owner = getDataOwner();
-        // 1. 从发包市场移除该发布单
-        const mkey = 'market_publish_orders';
+        // 1. 从发包市场移除该发布单（独立库：按记录键物理删除，本地同步只读缓存）
         let mlist: any[] = [];
-        try { mlist = JSON.parse(localStorage.getItem(mkey) || '[]'); if (!Array.isArray(mlist)) mlist = []; } catch { mlist = []; }
+        try { const raw = JSON.parse(localStorage.getItem('market_publish_orders') || '[]'); mlist = Array.isArray(raw) ? raw : []; } catch { mlist = []; }
+        const removeKeys = mlist.filter(m => m.sourceOrderKey === rec.key).map(m => m.key).filter(Boolean);
         const filteredMkt = mlist.filter(m => m.sourceOrderKey !== rec.key);
-        const mjson = JSON.stringify(filteredMkt);
-        safeSetItem(mkey, mjson);
-        saveDataset(mkey, mjson);
+        writeMarketCache(filteredMkt);
+        if (removeKeys.length) void deleteMarketRecords(removeKeys);
         // 2. 更新加工订单状态
         const key = `pageData_production_processing-order_${owner}`;
         let list: any[] = [];
@@ -4670,24 +4680,25 @@ const ModuleChildPage: React.FC = () => {
     });
   }, [getDataOwner]);
 
-  // 加工订单：确认中标——设置报价中标状态，从发包市场移除发布单，更新加工订单状态
+  // 加工订单：确认中标——设置报价中标状态，从发包市场移除发布单，更新加工订单状态（独立库）
   const handleConfirmAward = useCallback((record: any, quote: any) => {
     const owner = getDataOwner();
-    // 1. 更新发包市场发布单：设置中标状态，该报价中标其余落选
-    const mkey = 'market_publish_orders';
+    // 1. 更新发包市场发布单：设置中标状态，该报价中标其余落选（本地只读缓存 + 服务端 upsert 变更行）
     let mlist: any[] = [];
-    try { mlist = JSON.parse(localStorage.getItem(mkey) || '[]'); if (!Array.isArray(mlist)) mlist = []; } catch { mlist = []; }
+    try { const raw = JSON.parse(localStorage.getItem('market_publish_orders') || '[]'); mlist = Array.isArray(raw) ? raw : []; } catch { mlist = []; }
+    const changed: any[] = [];
     const updatedMkt = mlist.map(m => {
       if (m.sourceOrderKey !== record.key) return m;
       const updatedQuotes = (m.quotes || []).map((q: any) => ({
         ...q,
         status: q.key === quote.key ? '中标' : '落选'
       }));
-      return { ...m, status: '已中标', quotes: updatedQuotes };
+      const next = { ...m, status: '已中标', quotes: updatedQuotes };
+      changed.push(next);
+      return next;
     });
-    const mjson = JSON.stringify(updatedMkt);
-    safeSetItem(mkey, mjson);
-    saveDataset(mkey, mjson);
+    writeMarketCache(updatedMkt);
+    if (changed.length) void pushMarketRecords(changed);
     // 2. 更新加工订单状态：置为已中标，记录中标信息
     const key = `pageData_production_processing-order_${owner}`;
     let list: any[] = [];

@@ -10,6 +10,7 @@ import { isUserOnline, pushSavedToRecipient } from '../ws/chat-ws';
 import { checkChatContent, blockReason } from '../utils/chatFilter';
 import { canViewMenus } from '../services/wxPerms';
 import { loadPendingStats, loadSalesMetrics, loadBankMetrics } from '../services/wxDashboard';
+import { listDecoratedListings, mergeQuote } from '../services/market-listings';
 
 dotenv.config();
 
@@ -879,7 +880,10 @@ router.get('/market', verifyJWT, async (req: Request, res: Response) => {
       res.json({ code: 200, data: { list } });
       return;
     }
-    const rows = (await readRows('market_publish_orders')).filter((r: any) => r.type === type && r.delisted !== true && r.status !== '已中标');
+    // 商机市场已迁独立库：经服务层读取存活记录（成品含实时库存 join + 按查看方库存可见性剥离）
+    const viewer = ((req as any).user as JWTPayload)?.username || '';
+    const all = await listDecoratedListings(viewer);
+    const rows = all.filter((r: any) => (type === 'finished' ? r.type === 'finished' : r.type !== 'finished') && r.status !== '已中标');
     // 成品/发包搜索口径与 Web MarketPage 同：单号/款号/简称/发布公司
     const hit = q
       ? rows.filter((r: any) => `${r.id || r.key || ''} ${r.styleCode || ''} ${r.shortName || ''} ${coOf(r)}`.toLowerCase().includes(q))
@@ -932,15 +936,18 @@ router.get('/market/:type/:id', verifyJWT, async (req: Request, res: Response) =
       } } });
       return;
     }
-    const rows = await readRows('market_publish_orders');
-    const r = rows.find((x: any) => String(x.id || x.key || '') === id
+    // 商机市场已迁独立库：详情同样经服务层取（库存按查看方白名单剥离，canViewInventory 标记下发）
+    const allRows = await listDecoratedListings(user.username);
+    const r = allRows.find((x: any) => String(x.id || x.key || '') === id
       && (type === 'finished' ? x.type === 'finished' : x.type !== 'finished'));
     if (!r || r.delisted === true) { res.status(404).json({ code: 404, message: '该商品已下架或不存在' }); return; }
     const pub = pubOf(r);
     const isMine = !!pub && pub === me;
+    // 库存可见性：发布方本人恒可见；其余须命中供应商的库存同步设置白名单（服务端已剥离未授权库存）
+    const canViewInventory = r.canViewInventory !== false || isMine;
     const variants = (Array.isArray(r.variants) ? r.variants : []).map((v: any) => ({
       color: v.color || '', spec: v.spec || '', productCode: v.productCode || '',
-      unitPrice: Number(v.suggestedPrice) || 0, stock: Number(v.actualStock) || 0, status: v.productStatus || '',
+      unitPrice: Number(v.suggestedPrice) || 0, stock: canViewInventory ? (Number(v.actualStock) || 0) : -1, status: v.productStatus || '',
     }));
     const variantImages = (Array.isArray(r.variantImages) ? r.variantImages : [])
       .map((e: any) => ({ color: e.color || '', src: keepImage(e.src || e.image) }))
@@ -957,7 +964,7 @@ router.get('/market/:type/:id', verifyJWT, async (req: Request, res: Response) =
     res.json({ code: 200, data: { detail: {
       id, type: r.type || type, shortName: r.shortName || '', styleCode: r.styleCode || '',
       productCode: r.productCode || '', unit: r.unit || '件',
-      quantity: Number(r.quantity) || 0, targetPrice: Number(r.targetPrice) || 0,
+      quantity: canViewInventory ? (Number(r.quantity) || 0) : -1, targetPrice: Number(r.targetPrice) || 0,
       status: r.status || '', deadline: day10(r.deadline), auto: r.auto === true,
       processTypes: Array.isArray(r.processTypes) ? r.processTypes : [],
       deposit: Number(r.deposit) || 0, depositStatus: r.depositStatus || '',
@@ -971,7 +978,8 @@ router.get('/market/:type/:id', verifyJWT, async (req: Request, res: Response) =
         ...q, company: maskName(q.company), contactPerson: maskName(q.contactPerson), contactPhone: '', unitPrice: -1, totalPrice: -1,
       }))) : [],
       isMine,
-      totalStock: variants.reduce((s: number, v: any) => s + v.stock, 0) || Number(r.quantity) || 0,
+      canViewInventory,
+      totalStock: canViewInventory ? (variants.reduce((s: number, v: any) => s + Math.max(0, v.stock), 0) || Number(r.quantity) || 0) : -1,
       publisherUsername: pub, publisherCompany: coOf(pub, r.publisherCompany),
       canContact: !!pub && pub !== me,
     } } });
@@ -982,7 +990,7 @@ router.get('/market/:type/:id', verifyJWT, async (req: Request, res: Response) =
 });
 
 /** POST /api/wx/market/:id/quote —— 加工厂对发包单提交报价（与 Web 同口径：同单允许多厂报价，同厂重复报价覆盖自身那条）
- *  写入全局键 market_publish_orders 的 quotes[]；待报价首报后流转为报价中 */
+ *  写入独立库 market_listings 目标行的 quotes[]（单行读改写，不再整键覆盖）；待报价首报后流转为报价中 */
 router.post('/market/:id/quote', verifyJWT, async (req: Request, res: Response) => {
   try {
     const user = (req as any).user as JWTPayload;
@@ -991,12 +999,12 @@ router.post('/market/:id/quote', verifyJWT, async (req: Request, res: Response) 
     const unitPrice = Number(req.body?.unitPrice);
     if (!id || !(unitPrice > 0)) { res.status(400).json({ code: 400, message: '请填写有效的报价单价' }); return; }
     const companies = await companyMap();
-    const rows = await readRows('market_publish_orders');
+    const rows = await listDecoratedListings(user.username);
     const r = rows.find((x: any) => String(x.id || x.key || '') === id && x.type !== 'finished');
     if (!r || r.delisted === true) { res.status(404).json({ code: 404, message: '该发包单已下架或不存在' }); return; }
     if (r.status === '已中标' || r.status === '已关闭') { res.status(400).json({ code: 400, message: `该发包单${r.status}，不可报价` }); return; }
-    const quotes = Array.isArray(r.quotes) ? r.quotes : [];
     const mine: any = {
+      key: `q_${me}_${Date.now()}`,
       bidderUsername: me, bidderCompany: companies[me] || me,
       factoryUsername: me, factoryCompany: companies[me] || me,
       unitPrice, totalPrice: Number(req.body?.totalPrice) || unitPrice * (Number(r.quantity) || 1),
@@ -1004,12 +1012,9 @@ router.post('/market/:id/quote', verifyJWT, async (req: Request, res: Response) 
       contactPerson: String(req.body?.contactPerson || ''), contactPhone: String(req.body?.contactPhone || ''),
       remark: String(req.body?.remark || ''), quoteTime: new Date().toISOString(), status: '待确认',
     };
-    const idx = quotes.findIndex((q: any) => String(q.bidderUsername || q.factoryUsername || '') === me);
-    if (idx >= 0) quotes[idx] = mine; else quotes.push(mine);
-    r.quotes = quotes;
-    if (r.status === '待报价') r.status = '报价中';
-    await writeRows('market_publish_orders', rows, String(pubOf(r) || me));
-    res.json({ code: 200, data: { saved: true, quoteCount: quotes.length } });
+    const result = await mergeQuote(String(r.key || ''), mine);
+    if (!result.ok) { res.status(400).json({ code: 400, message: result.message || '报价失败' }); return; }
+    res.json({ code: 200, data: { saved: true, quoteCount: result.quoteCount } });
   } catch (err: any) {
     console.error('[wx] market quote error:', err.message);
     res.status(500).json({ code: 500, message: '服务器内部错误' });
@@ -1567,11 +1572,20 @@ const itemCode = (it: any): string => String(it?.productCode || it?.styleCode ||
 const itemsDetailStr = (its: any[]): string => its.map((it: any) => `${it.shortName || it.productName || it.productCode || ''}${it.color ? '-' + it.color : ''}${it.spec ? '-' + it.spec : ''}×${itemQty(it)}`).join('，');
 const itemsTotalQty = (its: any[]): number => its.reduce((s: number, it: any) => s + itemQty(it), 0);
 
-/** 款式编码×汇总数量：同款式（无款式则退商品编码）合并求和，多款式以空格分隔 */
+/** 款式编码前缀：剥掉「-颜色-规格」尾段（6851-黑色-38 → 6851），口径与 Web ScheduleBoard / OrdersEmbed 一致 */
+function stylePrefixOf(raw: any): string {
+  const s = String(raw || '');
+  const m = s.match(/^[^-]+(?:-[^-]+)*?(?=\s*-\s*[\u4e00-\u9fff])/);
+  if (m) return m[0];
+  const numOnly = s.match(/^\d+/);
+  return numOnly ? numOnly[0] : s;
+}
+
+/** 款式编码×汇总数量：按款式前缀（无款式则退商品编码前缀）合并求和，多款式以空格分隔 */
 function styleQtyOf(items: any[]): string {
   const map = new Map<string, number>();
   items.forEach((it: any) => {
-    const code = String(it.styleCode || it.productCode || '—');
+    const code = stylePrefixOf(it.styleCode || it.productCode) || '—';
     map.set(code, round2((map.get(code) || 0) + itemQty(it)));
   });
   return Array.from(map.entries()).map(([c, q]) => `${c}×${q}`).join('  ');
@@ -1600,6 +1614,9 @@ router.get('/picking', verifyJWT, async (req: Request, res: Response) => {
         key: String(r.key || r.id || ''), id: pick(r.id, r.orderNo, r.key) || '—',
         outboundNo: pick(r.outboundNo, '') || '', styleQty: styleQtyOf(items),
         receiverName: pick(r.receiverName, r.person, ''), receiverCity: pick(r.city, ''),
+        receiverPhone: pick(r.receiverPhone, r.phone, ''),
+        receiverAddress: String(r.receiverAddress || '').trim()
+          || [r.province, r.city, r.district, r.addressDetail || r.receiverDetail].filter(Boolean).map((s: any) => String(s).trim()).join(' '),
         customerName: pick(r.customerName, ''), orderStatus: r._legacy ? '遗留单' : pick(r.orderStatus, ''),
         printStatus: pick(r.printStatus, ''), legacy: !!r._legacy,
         totalQty: itemsTotalQty(items), productAmount: round2(Number(r.productAmount) || 0),
@@ -1647,6 +1664,9 @@ router.post('/picking/:id/ship', verifyJWT, async (req: Request, res: Response) 
     if (!items.length) { res.status(400).json({ code: 400, message: '该订单无结构化货品明细，无法发货' }); return; }
     // 发货数量：与 items 顺序对齐，钳制 0..原数量（修改后不能大于订单数量）
     const reqQ = Array.isArray(req.body?.quantities) ? req.body.quantities : [];
+    // 发货凭证图片：小程序侧已压缩并上传到图片空间，这里只存返回的 URL（限 9 张）
+    const shipImages = (Array.isArray(req.body?.images) ? req.body.images : [])
+      .filter((u: any) => typeof u === 'string' && u).slice(0, 9);
     const shipQtys = items.map((it: any, i: number) => {
       const v = Number(reqQ[i]);
       const q = Number.isFinite(v) ? v : itemQty(it);
@@ -1721,7 +1741,7 @@ router.post('/picking/:id/ship', verifyJWT, async (req: Request, res: Response) 
       customerName: base.customerName || '', shopName: base.shopName || base.shop || '',
       receiverName: base.receiverName || '', receiverAddress: base.receiverAddress || '',
       productDetail: itemsDetailStr(origItems), totalQty: itemsTotalQty(origItems),
-      items: outItems, operator, createTime: now, status: '已发货', remark: '',
+      items: outItems, operator, createTime: now, status: '已发货', remark: '', images: shipImages,
     };
     const nextSo = [outbound, ...soList];
 
@@ -1735,7 +1755,7 @@ router.post('/picking/:id/ship', verifyJWT, async (req: Request, res: Response) 
     baseLogs.push({ time: now, action: '交易完成', operator, detail: '供应商已发货，订单交易自动完成' });
     const slim: any = {
       orderStatus: '已完成', auditStatus: '', shipTime: now, completeTime: now, outboundNo: docNo,
-      orderLog: JSON.stringify(baseLogs),
+      shipImages, orderLog: JSON.stringify(baseLogs),
     };
 
     // 缺货拆分：拆出子单进入生产（订单号/出库单号 = 原单号-序号）

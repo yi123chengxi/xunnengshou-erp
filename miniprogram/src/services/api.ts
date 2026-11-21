@@ -155,6 +155,8 @@ export interface MarketDetail {
   canContact?: boolean
   /** 是否本人发布（决定报价价格是否全量、是否显示报价入口） */
   isMine?: boolean
+  /** 是否可见实际库存（供应商库存同步设置白名单命中或本人；false 时库存字段下发 -1，界面显示 ***） */
+  canViewInventory?: boolean
   /** 模具租售 */
   title?: string
   moldCode?: string
@@ -302,6 +304,8 @@ export interface PickingItem {
   styleQty: string
   receiverName: string
   receiverCity: string
+  receiverPhone: string
+  receiverAddress: string
   customerName: string
   orderStatus: string
   printStatus: string
@@ -316,10 +320,11 @@ export const getPicking = (q = '') =>
   request<{ list: PickingItem[]; total: number }>(`/wx/picking?q=${encodeURIComponent(q)}`)
 
 /** 立即发货（可改数量）：quantities 与订单货品明细顺序对齐，逐项 0..原数量；
- *  任一项少于原数量则服务端对缺少部分即时缺货拆分（子单号 = 原单号-1、出库单号 = 原出库单号-1） */
-export const shipPicking = (id: string, quantities: number[]) =>
+ *  任一项少于原数量则服务端对缺少部分即时缺货拆分（子单号 = 原单号-1、出库单号 = 原出库单号-1）；
+ *  images 为发货凭证图片 URL（小程序侧已压缩上传） */
+export const shipPicking = (id: string, quantities: number[], images: string[] = []) =>
   request<{ shipped: boolean; docNo: string; splitChildId: string; needSplit: boolean }>(
-    `/wx/picking/${encodeURIComponent(id)}/ship`, { method: 'POST', data: { quantities } })
+    `/wx/picking/${encodeURIComponent(id)}/ship`, { method: 'POST', data: { quantities, images } })
 
 export const createBookkeeping = (body: {
   bookDate: string; bookType: '收入' | '支出'; mainCategory: string;

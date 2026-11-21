@@ -48,7 +48,7 @@ const detailRows = (d: MarketDetail): [string, string][] => {
       ['单位', d.unit || '件'],
       ['鞋面材质', d.shoeUpper || '—'],
       ['鞋底材质', d.shoeSole || '—'],
-      ['总库存', String(d.totalStock || 0)],
+      ['总库存', d.canViewInventory === false ? '***' : String(d.totalStock || 0)],
       ['供货价', `${money(d.targetPrice)} 起`],
       ['上架时间', d.publishTime || '—'],
       ['状态', d.status || '—'],
@@ -498,7 +498,7 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
                         </View>
                         <Text style={{ flex: 1.4 }}>{v.spec || '—'}</Text>
                         <Text style={{ flex: 1, textAlign: 'right', color: '#f5222d' }}>{money(v.unitPrice)}</Text>
-                        <Text style={{ flex: 1, textAlign: 'right' }}>{v.stock || 0}</Text>
+                        <Text style={{ flex: 1, textAlign: 'right' }}>{detail.canViewInventory === false ? '***' : (v.stock || 0)}</Text>
                       </View>
                     ))}
                   </View>

@@ -20,6 +20,7 @@ import MoldMarketTab from './MoldMarketTab';
 import ChatPage from './ChatPage';
 import { triggerOpenChat, fetchUnreadCount, onNewMessage as onChatNewMessage } from '../utils/chatSocket';
 import { getDataOwner } from '../utils/brandAuth';
+import { fetchMarketListings, pushMarketRecords, submitMarketQuote, writeMarketCache, fetchInvSyncSettings, saveInvSyncSettings } from '../utils/marketApi';
 import { attachImageToRecord, absoluteImageUrl, isRenderableImageValue } from '../utils/imageSpace';
 import { productImgKeyOf, productImgSync, resolveProductImage, shrinkImgForStore, probeImagesLoadable, isImageUnloadable, markImageUnloadable } from '../utils/productImage';
 import { copyText } from '../utils/clipboard';
@@ -27,7 +28,9 @@ import { copyText } from '../utils/clipboard';
 const { Text, Paragraph } = Typography;
 const PRIMARY = '#1e4a7e';
 
-// ============ 商机市场全局存储与工具 ============
+// ============ 商机市场存储与工具 ============
+// 独立库架构：服务端 market_listings 真表是唯一权威源（/api/market/*）；
+// 本键退役为只读缓存（不再参与 serverSync 全局键同步，写入不再 saveDataset 上传）
 const MARKET_KEY = 'market_publish_orders';
 
 // 发布资格校验：基础价（基础售价）不等于 0 且大于成本价，才能发布到成品市场（自动上架/手动发布同口径）
@@ -402,7 +405,7 @@ const CardImg: React.FC<{ src: string; alt?: string; fit?: 'cover' | 'contain' }
 };
 
 // 收集款式下各颜色主图（排除代表产品——其图已记入卡片 image 字段，避免 base64 重复存储），
-// 嵌入卡片记录随 market_publish_orders 同步服务器，供跨账号展示
+// 嵌入卡片记录随成品卡存入独立库（market_listings），供跨账号展示
 const collectVariantImages = (ownerKey: string, prods: any[], styleCode: string, repKey: string): { key: string; color: string; src: string }[] => {
   const out: { key: string; color: string; src: string }[] = [];
   (prods || []).forEach((p: any) => {
@@ -414,7 +417,7 @@ const collectVariantImages = (ownerKey: string, prods: any[], styleCode: string,
   return out;
 };
 
-// 收集款式下各 SKU 的规格明细行（颜色/尺码/SKU编码/供货价/库存/状态）嵌入卡片记录随 market_publish_orders 同步：
+// 收集款式下各 SKU 的规格明细行（颜色/尺码/SKU编码/供货价/库存/状态）嵌入卡片记录随成品卡存入独立库：
 // 其他账号浏览器没有发布方产品列表键（pageData_ 仅同步当前账号自己的数据集），不嵌入则跨账号查看规格明细为空
 const collectVariants = (prods: any[], styleCode: string): any[] => {
   return (prods || []).filter((p: any) => p && p.styleCode === styleCode && p.key).map((p: any) => ({
@@ -1014,6 +1017,30 @@ const MarketPage: React.FC = () => {
       const cfg = loadJson(`market_settings_${owner}`, {}) || {};
       return cfg.autoPublishOnSale !== false; // 未设置时默认开启，仅显式关闭才为关
     });
+  // 库存同步设置：供应商指定哪些采购商可见实际库存（未列入/未设置的一律不可见；发布方自己恒可见）
+  const [invSyncVisible, setInvSyncVisible] = useState(false);
+  const [invSyncViewers, setInvSyncViewers] = useState<string[]>([]);
+  const [invSyncSaving, setInvSyncSaving] = useState(false);
+  // 候选采购商：registeredUsers 中角色含 purchaser 的账号（含 both/双角色）
+  const purchaserOptions = useMemo(() => {
+    try {
+      const users: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+      return users.filter((u: any) => String(u?.role || '').includes('purchaser'))
+        .map((u: any) => ({ value: u.username, label: `${u.companyName || u.username}（${u.username}）` }));
+    } catch { return []; }
+  }, [invSyncVisible]);
+  const openInvSync = useCallback(() => {
+    setInvSyncVisible(true);
+    fetchInvSyncSettings().then(v => setInvSyncViewers(v || []));
+  }, []);
+  const handleInvSyncSave = useCallback(() => {
+    setInvSyncSaving(true);
+    saveInvSyncSettings(invSyncViewers).then(ok => {
+      setInvSyncSaving(false);
+      if (ok) { message.success('库存同步设置已保存：仅名单内采购商可见实际库存'); setInvSyncVisible(false); }
+      else message.error('保存失败，请检查网络后重试');
+    });
+  }, [invSyncViewers]);
   // 手动发布弹窗
   const [manualPublishVisible, setManualPublishVisible] = useState(false);
   const [manualPublishSelected, setManualPublishSelected] = useState<Set<string>>(new Set());
@@ -1042,7 +1069,11 @@ const MarketPage: React.FC = () => {
   // 合同打印
   const [contractRec, setContractRec] = useState<any>(null);
 
-  const reload = useCallback(() => { setMarket(loadJson(MARKET_KEY, [])); }, []);
+  // 挂载/查询时从服务端独立库拉取权威列表水合本地只读缓存；离线/不可达时继续用缓存
+  const reload = useCallback(() => {
+    setMarket(loadJson(MARKET_KEY, []));
+    fetchMarketListings().then(list => { if (list) setMarket(list); });
+  }, []);
   useEffect(() => {
     reload();
     const onSync = () => reload();
@@ -1065,55 +1096,41 @@ const MarketPage: React.FC = () => {
     } catch { /* ignore */ }
   }, [market, openDetail]);
 
-  // 成品市场自动上架（公开信息）：扫描所有未显式关闭「在售成品自动上架」的账号（未设置默认开启）的产品列表，
-  // 按款式编码聚合为卡片写入全局市场键（成品页与产品列表共享 pageData_basic-data_product-list_<账号> 键）
+  // 成品市场自动上架（公开信息）：扫描本账号产品列表按款式编码聚合为卡片；
+  // 独立库架构下只处理自己（owner）的记录：他人卡片的生死由各自客户端派生 + 服务端按行归属校验，
+  // 本端不再重算/写回他人记录（旧版跨账号整键重算是残缺副本误墓碑全端收敛的根因）
   const sweepFinished = useCallback((list: any[]) => {
     let out = [...list];
     const me = getDataOwner();
-    // 候选账号 = 设置键 ∪ 产品列表键；显式 autoPublishOnSale=false 为关闭，其余（含未设置）一律开启
-    const settingOn = new Map<string, boolean>();
-    const candidates = new Set<string>();
-    for (let i = 0; i < localStorage.length; i++) {
-      const k = localStorage.key(i);
-      // 跳过存储层时间戳元数据键（safeSetItem 会附加 <key>_ts，值为数字，误当账号键会致 prods.filter 崩溃白屏）
-      if (!k || k.endsWith('_ts')) continue;
-      if (k.startsWith('market_settings_')) {
-        const o = k.slice('market_settings_'.length);
-        const cfg = loadJson(k, {});
-        settingOn.set(o, !(cfg && cfg.autoPublishOnSale === false));
-        candidates.add(o);
-      } else if (k.startsWith('pageData_basic-data_product-list_')) {
-        candidates.add(k.slice('pageData_basic-data_product-list_'.length));
-      }
+    // 输入完整性闸门：本账号产品列表键不存在或为空时直接跳过聚合，
+    // 防止同步未到位/配额清理后的空输入把自家在售卡片全量误打墓碑
+    const pkeyName = `pageData_basic-data_product-list_${me}`;
+    const rawProds = loadJson(pkeyName, []);
+    const prods: any[] = Array.isArray(rawProds) ? rawProds : [];
+    if (localStorage.getItem(pkeyName) === null || prods.length === 0) return out;
+    // 本账号自动上架开关：仅显式关闭才为关（未设置默认开启）
+    const cfg = loadJson(`market_settings_${me}`, {});
+    if (cfg && cfg.autoPublishOnSale === false) {
+      // 显式关闭：清理自家存量自动卡片，保证开关关闭后立即下架
+      out = out.map(r => (r.type === 'finished' && r.auto && r.publisherUsername === me && !r.delisted ? { ...r, delisted: true, delistedAt: new Date().toISOString() } : r));
+      return out;
     }
-    const owners: string[] = [];
-    const disabled: string[] = [];
-    candidates.forEach(o => { if (settingOn.get(o) === false) disabled.push(o); else owners.push(o); });
-    // 显式关闭的账号：清理其存量自动卡片，保证开关关闭后立即下架
-    disabled.forEach(o => { out = out.map(r => (r.type === 'finished' && r.auto && r.publisherUsername === o && !r.delisted ? { ...r, delisted: true, delistedAt: new Date().toISOString() } : r)); });
+    const owner = me;
     let users: any[] = [];
     try { users = JSON.parse(localStorage.getItem('registeredUsers') || '[]'); } catch { /* ignore */ }
-    owners.forEach(owner => {
-      const pkeyName = `pageData_basic-data_product-list_${owner}`;
-      const hasProdKey = localStorage.getItem(pkeyName) !== null;
-      const rawProds = loadJson(pkeyName, []);
-      const prods: any[] = Array.isArray(rawProds) ? rawProds : [];
+    {
       const groups = new Map<string, any>();
       // 合格在售行：产品种类=成品 + 款式编码非空 + 排除半成品脏数据（SEMI-前缀）+ 未被标为已下架 + 基础价≠0且大于成本价；
-      // 不按 productStatus 正向硬过滤「在售」：存量记录状态多为空，那样会在发布方本机把自家卡片误打墓碑（他人端副本差异则仍可见）；
+      // 不按 productStatus 正向硬过滤「在售」：存量记录状态多为空，那样会在发布方本机把自家卡片误打墓碑；
       // 但必须排除显式「已下架」：详情抽屉的下架只改商品状态不删行，不排除会被下一次聚合把墓碑洗回 delisted:false（下架失效）
       const eligible = prods.filter(p => p.productType === '成品' && p.styleCode && !String(p.productCode || '').startsWith('SEMI-') && String(p.productStatus || '') !== '已下架' && isPricePublishable(p));
-      // 上架资格再叠加「有图片」（无图不上架）：仅对本账号生效——他人账号的图片可能只存在对方电脑的 IndexedDB 里，
-      // 本机判不出「有图」就给对方卡片打墓碑，会经全局市场键并集同步把对方商品在所有人的端上一起下架
-      const isSelf = owner === me;
-      eligible.filter(p => !isSelf || !!sweptImgOf(owner, p)).forEach(p => { if (!groups.has(p.styleCode)) groups.set(p.styleCode, p); });
-      const groupsAll = new Map<string, any>();
-      eligible.forEach(p => { if (!groupsAll.has(p.styleCode)) groupsAll.set(p.styleCode, p); });
-      const delistGroups = isSelf ? groups : groupsAll;
-      // 下架清理：该账号不再在售的款式自动卡片打墓碑标记（全局键并集合并，物理删除会被其他账号合并复活）
+      // 上架资格再叠加「有图片」（无图不上架，只判本账号）
+      eligible.filter(p => !!sweptImgOf(owner, p)).forEach(p => { if (!groups.has(p.styleCode)) groups.set(p.styleCode, p); });
+      const delistGroups = groups;
+      // 下架清理：该账号不再在售的款式自动卡片打墓碑标记（独立库单行 UPDATE，无并集复活语义）
       out = out.map(r => (r.type === 'finished' && r.auto && r.publisherUsername === owner && !r.delisted && !delistGroups.has(r.styleCode) ? { ...r, delisted: true, delistedAt: new Date().toISOString() } : r));
-      // 下架收敛：本地存在产品列表键时，不再在售款式的手动卡片同样打墓碑，保证下架状态跨账号收敛不被并集复活
-      if (hasProdKey) out = out.map(r => (r.type === 'finished' && !r.auto && r.publisherUsername === owner && !r.delisted && !delistGroups.has(r.styleCode) ? { ...r, delisted: true, delistedAt: new Date().toISOString() } : r));
+      // 下架收敛：不再在售款式的手动卡片同样打墓碑，保证下架状态跨账号收敛
+      out = out.map(r => (r.type === 'finished' && !r.auto && r.publisherUsername === owner && !r.delisted && !delistGroups.has(r.styleCode) ? { ...r, delisted: true, delistedAt: new Date().toISOString() } : r));
       const u = users.find(x => x.username === owner);
       groups.forEach((p, sc) => {
         const exist = out.find(r => r.type === 'finished' && r.publisherUsername === owner && r.styleCode === sc);
@@ -1132,7 +1149,7 @@ const MarketPage: React.FC = () => {
           out = out.map(r => (r.key === exist.key ? { ...r, delisted: false, delistedAt: undefined, shortName: buildProductTitle(p) || r.shortName, targetPrice: Number(p.suggestedPrice) || r.targetPrice, image: resolvedImg || r.image, productKey: p.key || r.productKey, productColor: p.color || r.productColor, variantImages: (() => { const vi = collectVariantImages(owner, prods, sc, p.key); return vi.length ? vi : (r.variantImages || []); })(), variants: (() => { const vv = collectVariants(prods, sc); return vv.length ? vv : (r.variants || []); })() } : r));
         }
       });
-    });
+    }
     return out;
   }, []);
 
@@ -1142,7 +1159,7 @@ const MarketPage: React.FC = () => {
     if (tab !== 'finished' || !imgScanned) return;
     setMarket(prev => {
       const swept = sweepFinished(prev);
-      if (swept.length !== prev.length || swept.some((r, i) => r !== prev[i])) { saveJson(MARKET_KEY, swept); return swept; }
+      if (swept.length !== prev.length || swept.some((r, i) => r !== prev[i])) { saveMarketLocal(swept); return swept; }
       return prev;
     });
   }, [tab, imgScanned, sweepFinished]);
@@ -1157,7 +1174,7 @@ const MarketPage: React.FC = () => {
     let cancelled = false;
     const resweep = () => setMarket(prev => {
       const swept = sweepFinished(prev);
-      if (swept.length !== prev.length || swept.some((r, idx) => r !== prev[idx])) { saveJson(MARKET_KEY, swept); return swept; }
+      if (swept.length !== prev.length || swept.some((r, idx) => r !== prev[idx])) { saveMarketLocal(swept); return swept; }
       return prev;
     });
     (async () => {
@@ -1221,7 +1238,7 @@ const MarketPage: React.FC = () => {
   }, [tab, sweepFinished]);
 
   // 图片回填：历史已发布卡片（手动发布/自动上架关闭时发布）的图片仅存于发布方本地 prodImg 键，
-  // 而 prodImg_ 不参与服务器同步，导致其他账号看不到图片；此处把图片写回卡片记录（随 market_publish_orders 同步服务器）
+  // 而 prodImg_ 不参与服务器同步，导致其他账号看不到图片；此处把图片写回卡片记录（随成品卡存入独立库）
   useEffect(() => {
     if (tab !== 'finished') return;
     let cancelled = false;
@@ -1236,7 +1253,7 @@ const MarketPage: React.FC = () => {
         if (!next.image && next.productKey) {
           const rec = prods.find((p: any) => p.key === next.productKey);
           // 走全部存储通道解析（旧共享库/原图库/图片空间绑定表），并压成小图再嵌入卡片：
-          // 卡片随 market_publish_orders 同步，嵌原图会把同步数据集撑爆
+          // 卡片记录存入独立库并随列表接口下发，嵌原图会把响应撑爆
           const src = await shrinkImgForStore(await resolveProductImage(owner, next.productKey, rec && rec.image), 800);
           if (src) next = { ...next, image: src };
         }
@@ -1260,7 +1277,7 @@ const MarketPage: React.FC = () => {
         if (next !== r) changed = true;
         updated.push(next);
       }
-      if (!cancelled && changed) { saveJson(MARKET_KEY, updated); setMarket(updated); }
+      if (!cancelled && changed) { saveMarketLocal(updated); }
     })();
     return () => { cancelled = true; };
   }, [tab, owner]);
@@ -1271,7 +1288,7 @@ const MarketPage: React.FC = () => {
       if (tab !== 'finished' || !imgScanned) return;
       setMarket(prev => {
         const swept = sweepFinished(prev);
-        if (swept.length !== prev.length || swept.some((r, i) => r !== prev[i])) { saveJson(MARKET_KEY, swept); return swept; }
+        if (swept.length !== prev.length || swept.some((r, i) => r !== prev[i])) { saveMarketLocal(swept); return swept; }
         return prev;
       });
     };
@@ -1285,7 +1302,7 @@ const MarketPage: React.FC = () => {
       if (tab !== 'finished' || !imgScanned) return;
       setMarket(prev => {
         const swept = sweepFinished(prev);
-        if (swept.length !== prev.length || swept.some((r, i) => r !== prev[i])) { saveJson(MARKET_KEY, swept); return swept; }
+        if (swept.length !== prev.length || swept.some((r, i) => r !== prev[i])) { saveMarketLocal(swept); return swept; }
         return prev;
       });
     };
@@ -1388,8 +1405,7 @@ const MarketPage: React.FC = () => {
       published++;
     });
     if (published > 0) {
-      saveJson(MARKET_KEY, out);
-      setMarket(out);
+      saveMarketLocal(out);
       message.success(`成功发布 ${published} 个款式到成品市场${blocked > 0 ? `；${blocked} 个款式基础价为 0 或不大于成本价，未发布` : ''}${noImg > 0 ? `；${noImg} 个款式无图片，未发布` : ''}`);
     } else {
       message.warning(`所选款式已发布、无图片（${noImg}）或基础价为 0/不大于成本价（${blocked}），无法发布`);
@@ -1406,8 +1422,7 @@ const MarketPage: React.FC = () => {
         if (r.key !== detailRec.key) return r;
         return { ...r, shortName: values.shortName, targetPrice: Number(values.targetPrice) || 0, unit: values.unit || '件' };
       });
-      saveJson(MARKET_KEY, updated);
-      setMarket(updated);
+      saveMarketLocal(updated);
       // 同步更新 detailRec
       setDetailRec({ ...detailRec, shortName: values.shortName, targetPrice: Number(values.targetPrice) || 0, unit: values.unit || '件' });
       message.success('编辑保存成功');
@@ -1415,7 +1430,17 @@ const MarketPage: React.FC = () => {
     }).catch(() => message.warning('请完善必填字段'));
   }, [editFinishedForm, detailRec]);
 
-  const persist = useCallback((list: any[]) => { saveJson(MARKET_KEY, list); setMarket(list); }, []);
+  // 市场数据统一写出口：写本地只读缓存（不再 saveDataset 上传旧全局键）+ 把自己（owner）的记录
+  // 批量 upsert 到服务端独立库；他人记录不推送（服务端按归属拒绝），
+  // 报价/询价写他人发布单另走 submitMarketQuote 单行合并接口
+  const persist = useCallback((list: any[]) => {
+    writeMarketCache(list);
+    setMarket(list);
+    const mine = list.filter((r: any) => r && r.publisherUsername === getDataOwner());
+    if (mine.length) void pushMarketRecords(mine);
+  }, []);
+  // sweep/回填等 setMarket 更新器内的写出口别名（与 persist 同义）
+  const saveMarketLocal = persist;
   
   // ============ 我的货盘 ============
   const INVENTORY_KEY = `market_inventory_lists_${owner}`;
@@ -1719,7 +1744,7 @@ const MarketPage: React.FC = () => {
       const list = loadJson(MARKET_KEY, []);
       const now = new Date().toISOString();
       const recordKey = pubEdit ? pubEdit.key : `mkt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-      // 图片优先传图片空间：记录只存 URL（随 market_publish_orders 同步），换电脑/对方账号都能看到
+      // 图片优先传图片空间：记录只存 URL（随成品卡存入独立库），换电脑/对方账号都能看到
       let imageUrl = '';
       if (pubImage.startsWith('data:')) {
         try {
@@ -1787,6 +1812,12 @@ const MarketPage: React.FC = () => {
         return { ...r, quotes, status: r.status === '待报价' ? '报价中' : r.status };
       });
       persist(updated);
+      // 独立库：报价写入他人发布单，服务端对目标行做单条合并（同报价方去重覆盖），完成后回拉权威列表
+      void submitMarketQuote(quoteRec.key, {
+        unitPrice: Number(values.unitPrice) || 0, totalPrice: (Number(values.unitPrice) || 0) * (Number(quoteRec.quantity) || 0),
+        quantity: Number(values.quantity) || 0, deliveryDays: Number(values.deliveryDays) || 0,
+        contactPerson: values.contactPerson || '', contactPhone: values.contactPhone || '', remark: values.remark || '',
+      }).then(() => fetchMarketListings()).then(list => { if (list) setMarket(list); });
       setQuoteRec(null); quoteForm.resetFields();
       message.success('报价已提交，发布方可在报价记录中查看');
     }).catch(() => message.warning('请完善必填字段'));
@@ -2156,6 +2187,9 @@ const addToCart = useCallback((rec: any, qty?: number) => {
       return { ...r, quotes, status: r.status === '待报价' ? '报价中' : r.status };
     });
     persist(updated);
+    // 独立库：逐张卡片走服务端单行合并（询价 unitPrice=0），完成后回拉权威列表
+    cardKeys.forEach(ck => { void submitMarketQuote(ck, { unitPrice: 0, totalPrice: 0, quantity: targets.filter(c => c.cardKey === ck).reduce((s: number, c: any) => s + (Number(c.quantity) || 0), 0), deliveryDays: 0, remark: '购物车批量询价' }); });
+    void fetchMarketListings().then(list => { if (list) setMarket(list); });
     setCartVisible(false);
     message.success(`已对 ${cardKeys.length} 个商品发起询价`);
   }, [checkedItems, cart, username, companyName, persist]);
@@ -2301,10 +2335,10 @@ const addToCart = useCallback((rec: any, qty?: number) => {
     const pjson = JSON.stringify(prods);
     safeSetItem(pkey, pjson);
     saveDataset(pkey, pjson);
-    // 墓碑式下架：记录保留并打 delisted 标记（全局键并集合并，物理删除会被其他账号 pull 合并复活并回传服务器），展示端按 delisted 统一过滤
+    // 下架打标记：独立库架构下即单行 UPDATE（delisted=true），无墓碑并集复活语义；展示端按 delisted 统一过滤
     setMarket(prev => {
       const next = prev.map(r => (r.type === 'finished' && r.publisherUsername === owner && r.styleCode === rec.styleCode ? { ...r, delisted: true, delistedAt: new Date().toISOString() } : r));
-      saveJson(MARKET_KEY, next);
+      saveMarketLocal(next);
       return next;
     });
     setDetailRec(null);
@@ -2346,6 +2380,9 @@ const addToCart = useCallback((rec: any, qty?: number) => {
                 </Tooltip>
                 <Switch checked={autoOn} onChange={toggleAuto} checkedChildren="开" unCheckedChildren="关" />
                 {!autoOn && <Button type="primary" size="small" icon={<PlusOutlined />} onClick={openManualPublish}>手动添加</Button>}
+                <Tooltip title="设置哪些采购商可以看到你商品的实际库存；未设置的采购商（含游客）一律不可见，发布方自己恒可见">
+                  <Button size="small" icon={<SettingOutlined />} onClick={openInvSync}>库存同步设置</Button>
+                </Tooltip>
               </>
             )}
           </Space>
@@ -3201,7 +3238,7 @@ const addToCart = useCallback((rec: any, qty?: number) => {
                     {/* 款式编码行下方插入鞋面材质/鞋底材质行（取同款式产品档案字段） */}
                     <Descriptions.Item label="鞋面材质">{detailVariants[0]?.shoeUpper || detailRec.shoeUpper || '—'}</Descriptions.Item>
                     <Descriptions.Item label="鞋底材质">{detailVariants[0]?.shoeSole || detailRec.shoeSole || '—'}</Descriptions.Item>
-                    <Descriptions.Item label="总库存">{detailVariants.reduce((s: number, v: any) => s + (Number(v.actualStock) || 0), 0) || detailRec.quantity || 0}</Descriptions.Item>
+                    <Descriptions.Item label="总库存">{detailRec.canViewInventory === false ? <Tooltip title="供应商未授权你查看实际库存（库存同步设置）"><Text type="secondary">***</Text></Tooltip> : (detailVariants.reduce((s: number, v: any) => s + (Number(v.actualStock) || 0), 0) || detailRec.quantity || 0)}</Descriptions.Item>
                     <Descriptions.Item label="上架时间">{dayjs(detailRec.publishTime).format('YYYY-MM-DD')}</Descriptions.Item>
                     <Descriptions.Item label="供应商" span={2}><CreditTag username={detailRec.publisherUsername} company={detailRec.publisherCompany} openShare /></Descriptions.Item>
                   </Descriptions>
@@ -3228,7 +3265,7 @@ const addToCart = useCallback((rec: any, qty?: number) => {
                       { key: 'spec', title: '尺码/规格', dataIndex: 'spec', width: 120, align: 'center', render: (v: string) => v || '—' },
                       { key: 'productCode', title: 'SKU编码', dataIndex: 'productCode', width: 160, align: 'center' },
                       { key: 'suggestedPrice', title: '供货价', dataIndex: 'suggestedPrice', width: 100, align: 'center', render: (v: number) => <Text strong style={{ color: '#f5222d' }}>¥{Number(v) || 0}</Text> },
-                      { key: 'actualStock', title: '库存数', dataIndex: 'actualStock', width: 100, align: 'center', render: (v: number) => `${Number(v) || 0}` },
+                      { key: 'actualStock', title: '库存数', dataIndex: 'actualStock', width: 100, align: 'center', render: (v: number) => detailRec?.canViewInventory === false ? '***' : `${Number(v) || 0}` },
                       {
                         key: 'qty', title: '数量', width: 90, align: 'center',
                         render: (_: any, x: any) => (
@@ -3396,7 +3433,7 @@ const addToCart = useCallback((rec: any, qty?: number) => {
                 <Descriptions size="small" column={2} bordered>
                   <Descriptions.Item label="商品编码">{addToCartModalRec.productCode || '—'}</Descriptions.Item>
                   <Descriptions.Item label="单位">{addToCartModalRec.unit || '件'}</Descriptions.Item>
-                  <Descriptions.Item label="总库存">{addToCartVariants.reduce((s: number, v: any) => s + (Number(v.actualStock) || 0), 0) || addToCartModalRec.quantity || 0}</Descriptions.Item>
+                  <Descriptions.Item label="总库存">{addToCartModalRec.canViewInventory === false ? '***' : (addToCartVariants.reduce((s: number, v: any) => s + (Number(v.actualStock) || 0), 0) || addToCartModalRec.quantity || 0)}</Descriptions.Item>
                   <Descriptions.Item label="供应商"><CreditTag username={addToCartModalRec.publisherUsername} company={addToCartModalRec.publisherCompany} /></Descriptions.Item>
                 </Descriptions>
                 {addToCartVariants.some(v => v.color) && (
@@ -3421,7 +3458,7 @@ const addToCart = useCallback((rec: any, qty?: number) => {
                 { key: 'spec', title: '尺码/规格', dataIndex: 'spec', width: 110, align: 'center', render: (v: string) => v || '—' },
                 { key: 'productCode', title: 'SKU编码', dataIndex: 'productCode', width: 150, align: 'center' },
                 { key: 'suggestedPrice', title: '供货价', dataIndex: 'suggestedPrice', width: 90, align: 'center', render: (v: number) => <Text strong style={{ color: '#f5222d' }}>¥{Number(v) || 0}</Text> },
-                { key: 'actualStock', title: '库存数', dataIndex: 'actualStock', width: 80, align: 'center', render: (v: number) => `${Number(v) || 0}` },
+                { key: 'actualStock', title: '库存数', dataIndex: 'actualStock', width: 80, align: 'center', render: (v: number) => addToCartModalRec?.canViewInventory === false ? '***' : `${Number(v) || 0}` },
                 {
                   key: 'qty', title: '采购数量', width: 100, align: 'center',
                   render: (_: any, x: any) => (
@@ -3714,6 +3751,22 @@ const addToCart = useCallback((rec: any, qty?: number) => {
           pagination={false}
           locale={{ emptyText: <Empty description="暂无在售成品" /> }}
         />
+      </Modal>
+
+      {/* 库存同步设置弹窗：选择可见实际库存的采购商（白名单，未列入不可见） */}
+      <Modal title="库存同步设置" open={invSyncVisible} onCancel={() => setInvSyncVisible(false)}
+        footer={
+          <Space>
+            <Button onClick={() => setInvSyncVisible(false)}>取消</Button>
+            <Button type="primary" loading={invSyncSaving} onClick={handleInvSyncSave}>保存</Button>
+          </Space>
+        } width={520}>
+        <Alert type="info" showIcon style={{ marginBottom: 12 }}
+          message="仅名单内的采购商可在成品市场看到你商品的实际库存（总库存/SKU 库存数）"
+          description="未设置或未被选中的采购商、游客及小程序未授权账号一律不显示库存数值；你自己（含子账号）恒可见。保存后立即生效。" />
+        <Select mode="multiple" allowClear showSearch style={{ width: '100%' }} placeholder="选择可见实际库存的采购商（可多选，空名单=全部不可见）"
+          value={invSyncViewers} onChange={v => setInvSyncViewers(v as string[])}
+          options={purchaserOptions} optionFilterProp="label" />
       </Modal>
 
       {/* 成品编辑弹窗 */}

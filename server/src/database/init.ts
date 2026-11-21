@@ -707,6 +707,27 @@ CREATE TABLE IF NOT EXISTS chat_pending_messages (
   created_at BIGINT NOT NULL,
   INDEX idx_cpm_pool (pool_owner)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='聊天待分配消息';
+
+-- ==========================================
+-- 10. 商机市场独立库（发布单/成品卡片逐条一行 + 库存同步设置）
+-- ==========================================
+CREATE TABLE IF NOT EXISTS market_listings (
+  listing_key VARCHAR(191) NOT NULL PRIMARY KEY COMMENT '记录键（mkt_*）',
+  publisher VARCHAR(64) NOT NULL DEFAULT '' COMMENT '发布方主账号',
+  ltype VARCHAR(16) NOT NULL DEFAULT 'semi' COMMENT '类型 semi=发包 finished=成品',
+  record_json LONGTEXT NOT NULL COMMENT '完整记录 JSON',
+  delisted TINYINT NOT NULL DEFAULT 0 COMMENT '下架标记',
+  updated_at BIGINT NOT NULL DEFAULT 0 COMMENT '版本时间戳',
+  INDEX idx_ml_publisher (publisher),
+  INDEX idx_ml_type (ltype)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='商机市场发布单/成品卡片（独立库）';
+
+CREATE TABLE IF NOT EXISTS market_inv_sync (
+  publisher VARCHAR(64) NOT NULL COMMENT '供应商主账号',
+  viewer VARCHAR(64) NOT NULL COMMENT '可见实际库存的采购商账号',
+  updated_at BIGINT NOT NULL DEFAULT 0,
+  PRIMARY KEY (publisher, viewer)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='库存同步设置（白名单，无记录不可见）';
 `;
 
 export async function initDatabase() {

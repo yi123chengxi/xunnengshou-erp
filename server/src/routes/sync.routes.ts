@@ -296,6 +296,12 @@ router.put('/dataset', async (req: Request, res: Response) => {
     const { key, updatedAt, baseTs, force } = req.body;
     let json = req.body.json;
     if (!key || typeof json !== 'string') { res.status(400).json({ error: 'missing key or json' }); return; }
+    // 商机市场旧全局键已退役：存量已迁入独立库 market_listings（/api/market/*），
+    // 冻结写入防止旧版客户端全量副本整键覆盖权威数据；返回 saved 使旧客户端不进入重试死循环
+    if (key === 'market_publish_orders') {
+      res.json({ saved: true, ignored: 'market-legacy-frozen', newTs: Number(updatedAt) || Date.now() });
+      return;
+    }
     const user = currentSyncUser(req);
     if (!isKeyAllowed(key, user, 'write')) { denyKey(res, user, key, '写入'); return; }
     // 错桶防线（服务端最后防线，覆盖旧版本客户端）：
