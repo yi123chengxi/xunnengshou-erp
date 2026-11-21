@@ -88,7 +88,7 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
   const [scores, setScores] = useState<Record<string, number>>({})
   const [computing, setComputing] = useState(false)
   const [list, setList] = useState<any[]>([])
-  const [imgFail, setImgFail] = useState<Record<string, boolean>>({})
+  const [imgFail, setImgFail] = useState<Record<string, { url: string; msg: string }>>({})
   const [loaded, setLoaded] = useState(false)
   const [detail, setDetail] = useState<MarketDetail | null>(null)
 
@@ -246,17 +246,36 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
                   <Image
                     src={r.image} mode="aspectFill"
                     style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%' }}
-                    onError={() => setImgFail(v => ({ ...v, [String(r.id)]: true }))}
+                    onError={e => setImgFail(v => ({
+                      ...v,
+                      [String(r.id)]: { url: String(r.image || ''), msg: String((e as any)?.detail?.errMsg || '') },
+                    }))}
                   />
-                ) : (
-                  <View style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', background: 'linear-gradient(135deg,#e6f4ff,#f0f5ff)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', fontSize: 72 }}>
-                    {type === 'mold' ? '🧰' : '🛍️'}
-                    {/* 占位原因区分：无图=发布方未上传（图只存在对方本机）；有地址但加载失败=域名/文件问题 */}
-                    <Text style={{ marginTop: 4, fontSize: '22rpx', color: '#8a94a6', lineHeight: '30rpx' }}>
-                      {imgFail[String(r.id)] ? '图片加载失败' : '发布方未上传图'}
-                    </Text>
-                  </View>
-                )}
+                ) : (() => {
+                  const f = imgFail[String(r.id)]
+                  return (
+                    <View style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', background: 'linear-gradient(135deg,#e6f4ff,#f0f5ff)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+                      {/* 占位原因区分：无图=服务端下发空串（发布方本机图未同步）；有地址但报错=地址形态/云端文件问题 */}
+                      {f ? null : <Text style={{ fontSize: 72 }}>{type === 'mold' ? '🧰' : '🛍️'}</Text>}
+                      <Text style={{ fontSize: '24rpx', color: '#8a94a6', lineHeight: '32rpx' }}>
+                        {f ? '图片加载失败' : '发布方未上传图'}
+                      </Text>
+                      {/* 失败时把归一后的真实地址与微信报错原文摊到卡片上，点一下即可复制：
+                          凭这两行就能分辨「协议/域名白名单问题」与「云端二进制缺失」 */}
+                      {f ? (
+                        <>
+                          <Text style={{ marginTop: 2, fontSize: '20rpx', color: '#ff7875', lineHeight: '26rpx' }}>{f.msg || 'onError'}</Text>
+                          <Text
+                            style={{ marginTop: 2, width: '100%', padding: '0 6px', boxSizing: 'border-box', fontSize: '18rpx', lineHeight: '24rpx', color: '#bfbfbf', textAlign: 'center', wordBreak: 'break-all', whiteSpace: 'normal', overflow: 'hidden', maxHeight: '72rpx' }}
+                            onClick={e => { e.stopPropagation(); void Taro.setClipboardData({ data: `${f.url}${f.msg ? `\n${f.msg}` : ''}` }) }}
+                          >
+                            {f.url}
+                          </Text>
+                        </>
+                      ) : null}
+                    </View>
+                  )
+                })()}
                 {type === 'mold' && modeText(r.mode) ? (
                   <Text style={{ position: 'absolute', top: 0, left: 0, color: '#fff', fontSize: 20, lineHeight: '32px', padding: '0 14px', borderRadius: '12px 0 12px 0', background: modeText(r.mode) === '出租' ? 'linear-gradient(135deg,#1677ff,#69b1ff)' : 'linear-gradient(135deg,#52c41a,#95de64)' }}>
                     {modeText(r.mode)}
