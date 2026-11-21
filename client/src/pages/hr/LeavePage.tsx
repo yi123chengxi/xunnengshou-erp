@@ -22,6 +22,8 @@ interface LeaveRecord {
   status: 'pending' | 'approved' | 'rejected';
   approvedBy: string;
   approvedAt: string;
+  /** 拒绝原因：仅 status==='rejected' 时有值（与小程序 /wx/leaves 审批通道同字段名） */
+  rejectReason?: string;
   createdAt: string;
 }
 
@@ -99,6 +101,9 @@ const LeavePage: React.FC = () => {
   const [searchText, setSearchText] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [employees, setEmployees] = useState<{ username: string; displayName: string }[]>(loadEmployees);
+  // 拒绝弹窗：原因必填（与付款申请/财审驳回同口径），通过则走 Modal.confirm 二次确认防手滑
+  const [rejectTarget, setRejectTarget] = useState<LeaveRecord | null>(null);
+  const [rejectReason, setRejectReason] = useState('');
 
   // 同步落地/窗口重新可见时重读：本页有「leaves 一变就整表写盘」的副作用，
   // 保活期间只要拿陈旧快照做一次审批，就会把其他端刚提交的请假整份擦掉
@@ -160,16 +165,29 @@ const LeavePage: React.FC = () => {
   }, [form, employees]);
 
   const handleApprove = useCallback((key: string) => {
-    const username = localStorage.getItem('username') || '';
-    setLeaves(prev => prev.map(l => l.key === key ? { ...l, status: 'approved' as const, approvedBy: username, approvedAt: new Date().toISOString() } : l));
-    message.success('已通过');
-  }, []);
+    const rec = leaves.find(l => l.key === key);
+    Modal.confirm({
+      title: '确认通过',
+      content: `确定通过 ${rec?.employeeName || rec?.employeeUsername || ''} 的 ${rec?.days ?? ''} 天${rec?.type || ''}吗？通过后不可撤销。`,
+      okText: '通过',
+      cancelText: '取消',
+      onOk: () => {
+        const username = localStorage.getItem('username') || '';
+        setLeaves(prev => prev.map(l => l.key === key ? { ...l, status: 'approved' as const, approvedBy: username, approvedAt: new Date().toISOString(), rejectReason: '' } : l));
+        message.success('已通过');
+      },
+    });
+  }, [leaves]);
 
-  const handleReject = useCallback((key: string) => {
+  const handleRejectConfirm = useCallback(() => {
+    const t = rejectReason.trim();
+    if (!t) { message.warning('请输入拒绝原因'); return; }
+    if (!rejectTarget) return;
     const username = localStorage.getItem('username') || '';
-    setLeaves(prev => prev.map(l => l.key === key ? { ...l, status: 'rejected' as const, approvedBy: username, approvedAt: new Date().toISOString() } : l));
+    setLeaves(prev => prev.map(l => l.key === rejectTarget.key ? { ...l, status: 'rejected' as const, approvedBy: username, approvedAt: new Date().toISOString(), rejectReason: t } : l));
+    setRejectTarget(null); setRejectReason('');
     message.success('已拒绝');
-  }, []);
+  }, [rejectTarget, rejectReason]);
 
   const columns: ColumnsType<LeaveRecord> = useMemo(() => [
     { title: '员工', dataIndex: 'employeeName', width: 100, align: 'center' },
@@ -186,6 +204,11 @@ const LeavePage: React.FC = () => {
         return <Tag color={s.color}>{s.text}</Tag>;
       },
     },
+    { title: '拒绝原因', dataIndex: 'rejectReason', width: 160, align: 'center',
+      render: (v: string, r: LeaveRecord) => (r.status === 'rejected' && v)
+        ? <span style={{ color: '#ff4d4f', fontSize: 12 }}>{v}</span>
+        : <span style={{ color: '#999' }}>-</span>,
+    },
     { title: '审批人', dataIndex: 'approvedBy', width: 100, align: 'center', render: (v: string) => v ? resolveApproverName(v) : '-' },
     { title: '审批时间', dataIndex: 'approvedAt', width: 150, align: 'center',
       render: (v: string) => v ? dayjs(v).format('YYYY-MM-DD HH:mm') : '-',
@@ -197,11 +220,11 @@ const LeavePage: React.FC = () => {
       render: (_: any, r: LeaveRecord) => r.status === 'pending' ? (
         <Space size="small">
           <Button type="link" size="small" icon={<CheckOutlined />} style={{ color: '#52c41a' }} onClick={() => handleApprove(r.key)}>通过</Button>
-          <Button type="link" size="small" danger icon={<CloseOutlined />} onClick={() => handleReject(r.key)}>拒绝</Button>
+          <Button type="link" size="small" danger icon={<CloseOutlined />} onClick={() => { setRejectTarget(r); setRejectReason(''); }}>拒绝</Button>
         </Space>
       ) : <span style={{ color: '#999' }}>-</span>,
     },
-  ], [handleApprove, handleReject]);
+  ], [handleApprove]);
 
   return (
     <div>
@@ -239,7 +262,7 @@ const LeavePage: React.FC = () => {
           pagination={{ pageSize: 15, showTotal: t => `共 ${t} 条` }}
           bordered
           size="middle"
-          scroll={{ x: 1340 }}
+          scroll={{ x: 1500 }}
         />
       </Card>
 
@@ -263,6 +286,12 @@ const LeavePage: React.FC = () => {
             <Input.TextArea rows={3} placeholder="请输入请假事由" />
           </Form.Item>
         </Form>
+      </Modal>
+
+      {/* ==================== 拒绝弹窗（原因必填） ==================== */}
+      <Modal title="拒绝请假申请" open={!!rejectTarget} onCancel={() => setRejectTarget(null)} onOk={handleRejectConfirm} okText="确认拒绝" okButtonProps={{ danger: true }} cancelText="取消" width={420}>
+        <div style={{ marginBottom: 8, fontSize: 12, color: '#5a6d85' }}>拒绝原因 <span style={{ color: '#ff4d4f' }}>*</span></div>
+        <Input.TextArea rows={3} placeholder="请输入拒绝原因（申请人可见）" value={rejectReason} onChange={e => setRejectReason(e.target.value)} />
       </Modal>
     </div>
   );

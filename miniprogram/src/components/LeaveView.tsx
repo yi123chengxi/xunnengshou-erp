@@ -1,9 +1,20 @@
 import { useState, useEffect } from 'react'
-import { View, Text, Input, Picker, Button } from '@tarojs/components'
+import { View, Text, Input, Picker, Button, Textarea } from '@tarojs/components'
 import Taro from '@tarojs/taro'
 import { getLeaves, createLeave, auditLeave } from '../services/api'
 
 const LEAVE_TYPES = ['事假', '病假', '年假', '调休', '婚假', '产假', '丧假']
+
+// —— 行内样式常量（weapp 中行内数字按真实 px 渲染，且全局类尺寸会压过行内，故自带全部视觉属性）——
+// 新增入口：原挂 .btn-primary（84rpx 高）+ 行内 lineHeight 72px（≈144rpx）显得过大，去类后定高 40px
+const ADD_BTN = { height: 40, lineHeight: '40px', fontSize: 15, fontWeight: 500, color: '#ffffff', background: '#1677ff', borderRadius: 8, textAlign: 'center', boxSizing: 'border-box' } as const
+const MASK = { position: 'fixed', left: 0, top: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.45)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' } as const
+const DIALOG = { width: '80%', background: '#ffffff', borderRadius: 12, padding: '18px 16px 14px', boxSizing: 'border-box' } as const
+const DLG_TITLE = { fontSize: 16, fontWeight: 600, color: '#1f2733', display: 'block' } as const
+const DLG_SUB = { marginTop: 6, fontSize: 13, color: '#8a94a6', lineHeight: '19px', display: 'block' } as const
+const DLG_INPUT = { marginTop: 12, height: 76, padding: '8px 10px', background: '#f7f9fb', border: '1px solid #c9d4e3', borderRadius: 8, fontSize: 15, boxSizing: 'border-box' } as const
+const DLG_ROW = { display: 'flex', marginTop: 14 } as const
+const DLG_BTN = { flex: 1, height: 38, lineHeight: '38px', textAlign: 'center', fontSize: 15, borderRadius: 8 } as const
 
 const TABS = [
   { key: 'mine', label: '我的申请' },
@@ -36,6 +47,9 @@ const LeaveView = ({ tick = 0 }: { tick?: number }) => {
   const [end, setEnd] = useState(todayStr())
   const [reason, setReason] = useState('')
   const [busy, setBusy] = useState('')
+  // 拒绝弹层：拒绝必须填原因（与网页版 PaymentRequestPage 拒绝弹窗同口径，字段名统一 rejectReason）
+  const [rejectTarget, setRejectTarget] = useState<any | null>(null)
+  const [rejectReason, setRejectReason] = useState('')
 
   useEffect(() => {
     setLoaded(false)
@@ -69,11 +83,11 @@ const LeaveView = ({ tick = 0 }: { tick?: number }) => {
     }
   }
 
-  const audit = async (key: string, approved: boolean) => {
+  const audit = async (key: string, approved: boolean, reasonText = '') => {
     if (busy) return
     setBusy(key)
     try {
-      await auditLeave(key, approved)
+      await auditLeave(key, approved, reasonText)
       Taro.showToast({ title: approved ? '已通过' : '已拒绝', icon: 'success' })
       const d = await getLeaves(tab)
       setList(d.list)
@@ -82,6 +96,30 @@ const LeaveView = ({ tick = 0 }: { tick?: number }) => {
     } finally {
       setBusy('')
     }
+  }
+
+  /** 通过前二次确认：避免在列表卡片上手滑误操作（审批后不可撤销） */
+  const onApprove = (r: any) => {
+    Taro.showModal({
+      title: '确认通过',
+      content: `确定通过 ${r.employeeName || r.employeeUsername} 的 ${r.days} 天${r.type || ''}吗？通过后不可撤销。`,
+      confirmText: '通过',
+      cancelText: '取消',
+      success: res => { if (res.confirm) void audit(String(r.key), true) },
+    })
+  }
+
+  const openReject = (r: any) => { setRejectTarget(r); setRejectReason('') }
+
+  const confirmReject = async () => {
+    const t = rejectReason.trim()
+    if (!t) {
+      Taro.showToast({ title: '请填写拒绝原因', icon: 'none' })
+      return
+    }
+    const r = rejectTarget
+    setRejectTarget(null)
+    await audit(String(r.key), false, t)
   }
 
   return (
@@ -94,9 +132,9 @@ const LeaveView = ({ tick = 0 }: { tick?: number }) => {
         ))}
       </View>
       <View style={{ padding: '16px 24px 0' }}>
-        <Button className="btn-primary" style={{ lineHeight: '72px' }} onClick={() => setFormVisible(v => !v)}>
+        <View style={{ ...ADD_BTN }} onClick={() => setFormVisible(v => !v)}>
           {formVisible ? '收起表单' : '＋ 新增请假申请'}
-        </Button>
+        </View>
       </View>
 
       {formVisible && (
@@ -143,18 +181,45 @@ const LeaveView = ({ tick = 0 }: { tick?: number }) => {
           {r.status === 'pending' && (
             <View style={{ display: 'flex', marginTop: 12 }}>
               <View style={{ flex: 1, marginRight: 16 }}>
-                <Button size="mini" className="btn-danger" style={{ lineHeight: '56px' }} loading={busy === r.key} onClick={() => audit(r.key, false)}>拒绝</Button>
+                <Button size="mini" className="btn-danger" style={{ lineHeight: '56px' }} loading={busy === r.key} onClick={() => openReject(r)}>拒绝</Button>
               </View>
               <View style={{ flex: 1 }}>
-                <Button size="mini" className="btn-primary" style={{ lineHeight: '56px' }} loading={busy === r.key} onClick={() => audit(r.key, true)}>通过</Button>
+                <Button size="mini" className="btn-primary" style={{ lineHeight: '56px' }} loading={busy === r.key} onClick={() => onApprove(r)}>通过</Button>
               </View>
             </View>
           )}
           {r.status !== 'pending' && r.approvedBy ? (
             <View className="muted" style={{ paddingTop: 4 }}>审批人：{r.approvedBy}　{String(r.approvedAt || '').slice(0, 10)}</View>
           ) : null}
+          {r.status === 'rejected' && r.rejectReason ? (
+            <View style={{ paddingTop: 4, color: '#f5222d' }}>拒绝原因：{r.rejectReason}</View>
+          ) : null}
         </View>
       ))}
+
+      {/* 拒绝弹层：原因必填，不填不提交 */}
+      {rejectTarget && (
+        <View style={{ ...MASK }} onClick={() => setRejectTarget(null)}>
+          <View style={{ ...DIALOG }} onClick={e => e.stopPropagation()}>
+            <Text style={{ ...DLG_TITLE }}>拒绝请假申请</Text>
+            <Text style={{ ...DLG_SUB }}>
+              {`${rejectTarget.employeeName || rejectTarget.employeeUsername}　${rejectTarget.days} 天${rejectTarget.type || ''}`}
+            </Text>
+            <Textarea
+              style={{ ...DLG_INPUT }}
+              placeholder="请输入拒绝原因（必填，申请人可见）"
+              placeholderStyle="color:#9aa3ad;font-size:15px"
+              maxlength={200}
+              value={rejectReason}
+              onInput={e => setRejectReason(e.detail.value)}
+            />
+            <View style={{ ...DLG_ROW }}>
+              <View style={{ ...DLG_BTN, marginRight: 10, color: '#5a6d85', background: '#f2f4f7' }} onClick={() => setRejectTarget(null)}>取消</View>
+              <View style={{ ...DLG_BTN, marginLeft: 10, color: '#ffffff', background: rejectReason.trim() ? '#f5222d' : '#f0a5a5' }} onClick={confirmReject}>确认拒绝</View>
+            </View>
+          </View>
+        </View>
+      )}
     </View>
   )
 }

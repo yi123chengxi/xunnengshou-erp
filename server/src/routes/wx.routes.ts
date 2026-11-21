@@ -1357,12 +1357,17 @@ router.post('/leaves', verifyJWT, async (req: Request, res: Response) => {
   }
 });
 
-/** POST /api/wx/leaves/:key/audit {approved} —— 审批写入字段与 Web 逐字段同名 */
+/** POST /api/wx/leaves/:key/audit {approved, rejectReason?} —— 审批写入字段与 Web 逐字段同名；拒绝必须带原因 */
 router.post('/leaves/:key/audit', verifyJWT, async (req: Request, res: Response) => {
   try {
     const user = (req as any).user as JWTPayload;
     const owner = await ownerOf(user.username);
     const approved = req.body.approved === true;
+    const rejectReason = String(req.body.rejectReason || '').trim();
+    if (!approved && !rejectReason) {
+      res.status(400).json({ code: 400, message: '拒绝时必须填写拒绝原因' });
+      return;
+    }
     const dsKey = `hr_leaves_${owner}`;
     const rows = await readRows(dsKey);
     const rec = rows.find((r: any) => String(r.key) === req.params.key);
@@ -1371,6 +1376,8 @@ router.post('/leaves/:key/audit', verifyJWT, async (req: Request, res: Response)
     rec.status = approved ? 'approved' : 'rejected';
     rec.approvedBy = user.username;
     rec.approvedAt = new Date().toISOString();
+    // 与 Web LeavePage 同一字段名 rejectReason：拒绝写原因，通过则清空旧值避免脏数据
+    rec.rejectReason = approved ? '' : rejectReason;
     await writeRows(dsKey, rows, owner);
     res.json({ code: 200, data: { saved: true, record: rec } });
   } catch (err: any) {

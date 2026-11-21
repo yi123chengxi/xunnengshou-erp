@@ -265,8 +265,8 @@ export const getLeaves = (tab: 'mine' | 'pending' | 'all') =>
 export const createLeave = (body: { type: string; startDate: string; endDate: string; reason?: string }) =>
   request<{ saved: boolean; record: any }>('/wx/leaves', { method: 'POST', data: body })
 
-export const auditLeave = (key: string, approved: boolean) =>
-  request<{ saved: boolean; record: any }>(`/wx/leaves/${encodeURIComponent(key)}/audit`, { method: 'POST', data: { approved } })
+export const auditLeave = (key: string, approved: boolean, rejectReason = '') =>
+  request<{ saved: boolean; record: any }>(`/wx/leaves/${encodeURIComponent(key)}/audit`, { method: 'POST', data: approved ? { approved } : { approved, rejectReason } })
 
 /** 通用列表展示结构（服务端 /wx/lists/:page 按 Web 同口径映射后下发） */
 export interface ListItem {
