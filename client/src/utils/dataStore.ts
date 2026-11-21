@@ -4,7 +4,7 @@
  * 刷新后数据丢失。IndexedDB 容量充足，作为可信存储；localStorage 仅作容量允许时的缓存，
  * 并以 `${key}_ts` 时间戳协调两份存储的新旧。
  */
-import { canCacheDataset, tryCacheDataset, notifyDatasetWrite } from './storageQuota';
+import { cacheDataset, tryCacheDataset, notifyDatasetWrite, getOriginalSetItem } from './storageQuota';
 const DB_NAME = 'factory_erp_data';
 const STORE = 'datasets';
 
@@ -39,6 +39,20 @@ export const saveDataset = (key: string, json: string): void => {
     if (!db) return;
     try {
       db.transaction(STORE, 'readwrite').objectStore(STORE).put({ json, updatedAt: Date.now() }, key);
+    } catch { /* ignore */ }
+  });
+};
+
+/**
+ * 以指定版本号写入数据集。
+ * 用于把服务端刚拉下来的副本原样落地：若用 saveDataset 盖上当下时间，
+ * 本地版本会永远领先服务端，下次比对只能靠内容巧合，宽限期/补传判定都会失真。
+ */
+export const saveDatasetAt = (key: string, json: string, updatedAt: number): void => {
+  openDb().then((db) => {
+    if (!db) return;
+    try {
+      db.transaction(STORE, 'readwrite').objectStore(STORE).put({ json, updatedAt: Number(updatedAt) || Date.now() }, key);
     } catch { /* ignore */ }
   });
 };
@@ -173,8 +187,9 @@ export const writeProductList = (owner: string, list: Record<string, any>[]): vo
   try {
     const json = JSON.stringify(list);
     saveDataset(key, json);
-    const cached = canCacheDataset(key, json.length) && tryCacheDataset(key, json);
-    if (cached) {
+    // 缓存放不下就删掉旧副本（cacheDataset）：留着陈旧清单会被直读 localStorage 的
+    // 页面当成本机最新数据，再整键回写主存/服务端，把本次写入抹掉
+    if (cacheDataset(key, json)) {
       tryCacheDataset(`${key}_ts`, String(Date.now()));
     } else {
       // 大表跳过本地缓存（或配额写不进）时不会触发写入钩子，
@@ -182,6 +197,23 @@ export const writeProductList = (owner: string, list: Record<string, any>[]): vo
       notifyDatasetWrite(key, json);
     }
   } catch { /* ignore */ }
+};
+
+/**
+ * 采用一份权威副本（服务端拉取结果）作为本机商品清单：
+ * 主存按原版本号落地，本地缓存能装就装、装不下就失效，并同步会话内存缓存。
+ * 用原始 setItem 写缓存，避免触发写入钩子把刚拉下来的数据又回传一遍。
+ */
+export const adoptProductList = (owner: string, json: string, serverTs: number): Record<string, any>[] => {
+  const key = productListKey(owner);
+  let list: Record<string, any>[] = [];
+  try { const parsed = JSON.parse(json); if (Array.isArray(parsed)) list = parsed; } catch { return []; }
+  memProductList = { owner, list };
+  saveDatasetAt(key, json, serverTs);
+  if (cacheDataset(key, json)) {
+    try { getOriginalSetItem()(`${key}_ts`, String(Number(serverTs) || Date.now())); } catch { /* ignore */ }
+  }
+  return list;
 };
 
 /**

@@ -397,6 +397,31 @@ export function tryCacheDataset(key: string, value: string): boolean {
 }
 
 /**
+ * 失效某个数据集的本地缓存（连同 _ts 时间戳）。
+ * 语义：缓存里的值必须是「本机最新值的一份副本」，装不下就等于没有缓存——
+ * 留着上一份旧值被页面直接 localStorage.getItem 读走，会把旧清单当成当前数据渲染，
+ * 再经自动持久化整键回写 IndexedDB/服务端，表现为「导入几千条后刷新，数据又变回导入前」。
+ * 删掉后读取方一律回落到 IndexedDB 主存或服务端回灌路径。
+ */
+export function invalidateDatasetCache(key: string): void {
+  try { if (localStorage.getItem(key) !== null) localStorage.removeItem(key); } catch { /* ignore */ }
+  try { if (localStorage.getItem(`${key}_ts`) !== null) localStorage.removeItem(`${key}_ts`); } catch { /* ignore */ }
+}
+
+/**
+ * 尽力缓存数据集并在放不下时失效陈旧副本：能装进本地预算就写缓存返回 true，
+ * 否则删除该键的旧缓存返回 false（调用方仍须自己写 IndexedDB 并上传服务端）。
+ * @returns 本地缓存是否已持有这份最新值
+ */
+export function cacheDataset(key: string, value: string): boolean {
+  let ok = false;
+  try { ok = canCacheDataset(key, value.length) && tryCacheDataset(key, value); } catch { ok = false; }
+  if (ok) return true;
+  invalidateDatasetCache(key);
+  return false;
+}
+
+/**
  * 数据集已落 IndexedDB（但没有写进 localStorage）时的上传通知。
  * 场景：商品清单等大表超过本地缓存预算，跳过 localStorage 直接写 IndexedDB，
  * 此时写入钩子不会触发，必须显式通知同步链路，否则服务端停留在旧数据、

@@ -171,30 +171,34 @@ const productListColumns: ColumnConfig[] = [
   { title: '其它属性5', dataIndex: 'otherProp5', key: 'otherProp5', width: 100, type: 'text', group: '其它', defaultVisible: false },
 ];
 
-// 产品列表共享筛选器
+// 产品列表共享筛选器：搜索框按字段拆分（一个字段一个输入框，同字段包含匹配、跨字段 AND）
+// label 即 dynamicFilterValues 的键，须与 ModuleChildPage 中 directFieldMap 的字段映射一一对应
 const productListFilters: FilterConfig[] = [
-  { type: 'input', placeholder: '搜索款式编码/商品编码/名称', label: '搜索' },
+  { type: 'input', placeholder: '款式编码', label: '款式编码' },
+  { type: 'input', placeholder: '商品编码', label: '商品编码' },
+  { type: 'input', placeholder: '商品名称', label: '商品名称' },
+  { type: 'input', placeholder: '商品简称', label: '商品简称' },
+  { type: 'input', placeholder: '条形码', label: '条形码' },
+  { type: 'input', placeholder: '国标码', label: '国标码' },
+  { type: 'input', placeholder: '辅助码', label: '辅助码' },
+  { type: 'input', placeholder: '模具编号', label: '模具编号' },
+  { type: 'input', placeholder: '商品标签', label: '商品标签' },
+  { type: 'input', placeholder: '颜色', label: '颜色' },
+  { type: 'input', placeholder: '规格', label: '规格' },
+  { type: 'input', placeholder: '品牌', label: '品牌' },
+  { type: 'input', placeholder: '鞋面材质', label: '鞋面材质' },
+  { type: 'input', placeholder: '鞋底材质', label: '鞋底材质' },
+  { type: 'numberRange', label: '成本价' },
   { type: 'select', options: [
     { label: '全部状态', value: '' },
     { label: '在售', value: '在售' },
     { label: '开发', value: '开发' },
-    { label: '下架', value: '下架' },
     { label: '预售', value: '预售' },
+    { label: '停产', value: '停产' },
+    { label: '下架', value: '下架' },
   ], label: '商品状态' },
-  { type: 'select', options: [
-    { label: '全部分类', value: '' },
-    { label: '电子产品', value: '电子产品' },
-    { label: '服装配件', value: '服装配件' },
-    { label: '五金工具', value: '五金工具' },
-    { label: '包装材料', value: '包装材料' },
-    { label: '家居用品', value: '家居用品' },
-  ], label: '分类' },
-  { type: 'select', options: [
-    { label: '全部品牌', value: '' },
-    { label: '自主品牌', value: '自主品牌' },
-    { label: '代工品牌A', value: '代工品牌A' },
-    { label: '代工品牌B', value: '代工品牌B' },
-  ], label: '品牌' },
+  // 分类/品牌改为文本搜索：原下拉选项为预置样例值，与实际数据不符会筛不出记录
+  { type: 'input', placeholder: '分类', label: '分类' },
 ];
 
 // ============ 1. 基础数据模块 ============
@@ -346,7 +350,10 @@ export const basicDataPages: Record<string, ChildPageConfig> = {
       { title: '负责人', dataIndex: 'person', key: 'person', width: 90, type: 'text' },
     ],
     filters: [
-      { type: 'input', placeholder: '搜索工序编号/名称', label: '搜索' },
+      { type: 'input', placeholder: '工序编号', label: '工序编号' },
+      { type: 'input', placeholder: '工序名称', label: '工序名称' },
+      { type: 'input', placeholder: '设备要求', label: '设备要求' },
+      { type: 'input', placeholder: '负责人', label: '负责人' },
       { type: 'select', options: [
         { label: '全部类型', value: '' },
         { label: '自制', value: 'self' },
@@ -354,6 +361,13 @@ export const basicDataPages: Record<string, ChildPageConfig> = {
         { label: '检验', value: 'inspect' },
         { label: '装配', value: 'assembly' },
       ], label: '类型' },
+      { type: 'select', options: [
+        { label: '全部状态', value: '' },
+        { label: '已完成', value: 'completed' },
+        { label: '进行中', value: 'processing' },
+        { label: '待处理', value: 'pending' },
+        { label: '已取消', value: 'cancelled' },
+      ], label: '状态' },
     ],
     mockData: [],
   },

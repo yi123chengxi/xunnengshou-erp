@@ -427,6 +427,13 @@ export function installUploadQueueRetry(): void {
   } catch { /* ignore */ }
   try { setInterval(kick, 30000); } catch { /* ignore */ }
   try { setTimeout(kick, 4000); } catch { /* ignore */ }
+  // 页面即将隐藏/卸载（刷新、关标签、切后台）：抢在最后时刻做一次强制补传（忽略退避时间）。
+  // 来不及送达也不丢：队列条目只在拿到服务端 ack 后删除，下次打开页面/联网恢复会继续送。
+  const flushOnHide = () => { void flushUploadQueue(true); };
+  try { window.addEventListener('pagehide', flushOnHide); } catch { /* ignore */ }
+  try {
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushOnHide(); });
+  } catch { /* ignore */ }
   // 启动自愈：本地副本被异常覆盖/清空时，用上传队列中尚未成功提交的旧值回灌（见 salvageLocalFromUploadQueue）
   try { setTimeout(() => { if (localStorage.getItem('username')) void salvageLocalFromUploadQueue(); }, 1500); } catch { /* ignore */ }
 }
@@ -619,6 +626,14 @@ export async function mergeDatasetFromServer(key: string): Promise<string | null
 }
 
 // ============ 拉取 ============
+/** 登记「本端这份数据是基于服务端哪一版得到的」：后续 PUT 才能走整键替换而不是并集合并。
+ * 仅供采纳服务端副本的通道使用（如商品清单对账）：不采纳服务端数据却误报 baseTs，
+ * 会让一份陈旧本地副本整键替掉服务端较新的行。 */
+export function noteServerVersion(key: string, ts: number): void {
+  if (!key || !(Number(ts) > 0)) return;
+  knownTs.set(key, Number(ts));
+}
+
 export async function fetchServerDataset(key: string): Promise<{ json: string; updatedAt: number } | null> {
   if (!(await serverAvailable())) return null;
   try {

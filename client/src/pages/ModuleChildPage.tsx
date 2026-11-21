@@ -105,10 +105,11 @@ import ScheduleBoard from '../components/ScheduleBoard';
 import MoldPickerModal from '../components/MoldPickerModal';
 import SalesOutboundStatsPage from './inventory/SalesOutboundStatsPage';
 import PendingProductionStatsPage from './production/PendingProductionStatsPage';
-import { safeSetItem, canCacheDataset, tryCacheDataset } from '../utils/storageQuota';
+import { safeSetItem, canCacheDataset, tryCacheDataset, invalidateDatasetCache } from '../utils/storageQuota';
 import { getDataOwner } from '../utils/brandAuth';
 import { getSessionOwner, mergeStrandedTenantDataset } from '../utils/dataOwner';
-import { saveDataset, loadDataset, readFreshDataset } from '../utils/dataStore';
+import { saveDataset, loadDataset, readFreshDataset, setMemProductList } from '../utils/dataStore';
+import { commitProductList, reconcileProductListWithServer, buildStoredProductListJson } from '../utils/productListSync';
 import ReturnRegisterModal from '../components/ReturnRegisterModal';
 import type { ReturnRegisterPayload } from '../components/ReturnRegisterModal';
 import { buildSupplierReturnRow, buildPurchaserReturnBill, writeReturnStockFlows, getOwnCompanyName } from '../utils/returnRegister';
@@ -1440,6 +1441,9 @@ const ModuleChildPage: React.FC = () => {
   // 数据状态 - 支持运行时增删改，持久化到 localStorage
   const [dataSource, setDataSource] = useState<Record<string, any>[]>([]);
   const tableRef = useRef<any>(null);
+  // 已由「权威提交通道」(commitProductList) 落盘并上传过的清单 JSON：
+  // 通用持久化 effect 遇到同一份内容直接跳过，避免同一份大表重复整键上传
+  const justCommittedJsonRef = useRef<string>('');
 
   // localStorage 持久化 key
   const getImgKey = useCallback((recordKey: string) => {
@@ -1625,6 +1629,8 @@ const ModuleChildPage: React.FC = () => {
   const isProductList = moduleKey === 'basic-data' && (childKey === 'product-list' || isProductFamily);
     // 基础数据-全部商品 主列表：按需求隐藏 批量新增/新增 按键
     const isMainProductList = moduleKey === 'basic-data' && childKey === 'product-list';
+    // 基础数据商品族/生产工序：搜索框已按字段拆分、控件数量多，搜索栏沿用账单明细的紧凑尺寸（small + 8px 间距 + 每行 6 个）
+    const isFieldSplitFilter = isProductList || pageConfig?.title === '生产工序';
     // PERM_V2 功能点/字段点执行点（事件驱动实时刷新）
     const permTick = usePermTick();
     const fnOk = (a: string) => canFn('supplier', `${moduleKey}/${childKey}`, a);
@@ -2805,6 +2811,10 @@ const ModuleChildPage: React.FC = () => {
       if (typeFilter && !row.productType) row.productType = typeFilter;
     };
 
+    // 本次导入后的完整清单：商品族各子页面共用同一整表键，
+    // 必须基于全量 dataSource 构建，不能只提交本页过滤后的部分
+    let finalList: Record<string, any>[] = dataSource;
+
     if (importMode === 'add') {
       // 新增模式：商品编码/国标码已存在或校验错误的行跳过，逐行分块上报进度
       const validRows: Record<string, any>[] = [];
@@ -2830,7 +2840,7 @@ const ModuleChildPage: React.FC = () => {
           await tick();
         }
       }
-      if (validRows.length > 0) setDataSource(prev => [...validRows, ...prev]);
+      if (validRows.length > 0) finalList = [...validRows, ...dataSource];
     } else {
       // 更新模式：以商品编码匹配，逐行分块上报进度
       const updateMap = new Map<string, Record<string, any>>();
@@ -2875,19 +2885,42 @@ const ModuleChildPage: React.FC = () => {
         }
       });
       if (updateMap.size > 0) {
-        setDataSource(prev => prev.map(item => {
+        finalList = finalList.map(item => {
           const m = updateMap.get(String(item.productCode || '').trim());
           return m ? { ...item, ...m, key: item.key } : item;
-        }));
+        });
       }
-      if (newRows.length > 0) setDataSource(prev => [...newRows, ...prev]);
+      if (newRows.length > 0) finalList = [...newRows, ...finalList];
     }
 
     setImportErrors(errors);
     setImportProgress({ running: false, done: total, total });
     setImportResult({ added, updated, skipped });
     setImportStep(2);
-  }, [importPreviewData, importErrors, importMode, dataSource, pageConfig, supplierOptions, getDataOwner, importProgress.running]);
+
+    // 全部行均未通过校验：只展示错误清单，不写盘不上传
+    if (finalList === dataSource) return;
+
+    // 商品清单（基础数据）以服务端数据库为主：导入完当场整表权威提交并等待服务端 ack，
+    // 上传没赶上（断网/超时）也不丢——本次写入已登记在 IndexedDB 待上传队列，后台会自动补传
+    if (isProductList) {
+      justCommittedJsonRef.current = buildStoredProductListJson(finalList);
+      setDataSource(finalList);
+      const hideUpload = message.loading(`正在上传 ${finalList.length} 条商品到服务器…`, 0);
+      const summary = `新增 ${added} 条、更新 ${updated} 条`;
+      try {
+        const res = await commitProductList(getDataOwner(), finalList);
+        if (res.uploaded) message.success(`${summary}，已保存到服务器`);
+        else message.warning(`${summary}已存到本机，服务器未确认，将在后台自动继续上传`);
+      } catch {
+        message.warning(`${summary}已存到本机，服务器未确认，将在后台自动继续上传`);
+      } finally {
+        hideUpload();
+      }
+      return;
+    }
+    setDataSource(finalList);
+  }, [importPreviewData, importErrors, importMode, dataSource, pageConfig, supplierOptions, getDataOwner, importProgress.running, isProductList]);
 
   // 重置导入状态
   const resetImport = useCallback(() => {
@@ -5358,6 +5391,43 @@ const ModuleChildPage: React.FC = () => {
     return () => clearTimeout(forcePullTimer);
   }, [isProductList, dataSource.length, sharedDataKey, getImgKey]);
 
+  // 商品清单挂载对账：基础数据以服务端数据库为主，本地只放缓存。
+  // 大清单不进本地缓存（超预算会被作废），刷新后本页只能看到本机主存那份，
+  // 因此进页面时按版本时间戳裁决一次：服务端更新就采用服务端，
+  // 本机更新（上一次上传没赶上就刷新了）就把本机补传服务端
+  React.useEffect(() => {
+    if (!isProductList) return;
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      if (cancelled) return;
+      try {
+        const res = await reconcileProductListWithServer(getDataOwner());
+        if (cancelled || res.status !== 'server') return;
+        const list = Array.isArray(res.list) ? res.list : [];
+        if (list.length === 0) return;
+        // 历史数据补齐 productType（与主加载链路同口径）
+        const repaired = list.map((item: any) => (item && item.productType) ? item : {
+          ...item,
+          productType: (item?.level === '0' || item?.level === 0 || !item?.level) ? '成品' : '半成品',
+        });
+        const data = healActualStockFromLogs(repaired);
+        // 刚从服务端采纳的这份就是权威内容，无需再回传一次（避免自激上传）
+        justCommittedJsonRef.current = buildStoredProductListJson(data);
+        loadedIdsRef.current = new Set(data.map((r: any) => String(r?.id || r?.key || '')).filter(Boolean));
+        // 图片缩略图是本机缓存，只在本体没图时回填，避免盖掉云端图片地址
+        const withImg = data.map((item: any) => {
+          if (item && item.key && !item.image) {
+            try { const img = localStorage.getItem(getImgKey(item.key)); if (img) return { ...item, image: img }; } catch { /* ignore */ }
+          }
+          return item;
+        });
+        setDataSource(withImg);
+        message.info(`已同步服务器上的最新商品清单（${data.length} 条）`);
+      } catch { /* 对账失败保持本机显示，下次进入页面再试 */ }
+    }, 1500);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [isProductList, sharedDataKey, getImgKey, getDataOwner, healActualStockFromLogs]);
+
   React.useEffect(() => {
     try {
       const stored = localStorage.getItem(sharedDataKey);
@@ -5717,6 +5787,14 @@ const ModuleChildPage: React.FC = () => {
             return;
           }
           if (isProductList) {
+            // 主存副本比首屏缓存更新（大清单不进缓存是常态）：
+            // 1) 告知通用持久化 effect 这份内容已在主存/服务端，不必再整键回传一次；
+            // 2) 作废不一致的陈旧缓存，下次刷新不会先读到旧清单当最新数据
+            const idbJson = typeof idb?.json === 'string' ? idb.json : '';
+            if (idbJson) {
+              justCommittedJsonRef.current = idbJson;
+              try { if (localStorage.getItem(sharedDataKey) !== idbJson) invalidateDatasetCache(sharedDataKey); } catch { /* ignore */ }
+            }
             const withImg = applyList.map((item: any) => {
               if (item && item.key) {
                 try {
@@ -5895,12 +5973,20 @@ const ModuleChildPage: React.FC = () => {
       // 清空场景（删除最后一条记录）：延迟确认内存确实为空后写入空数组，
       // 确保删除能落盘并同步到服务端（旧逻辑跳过空列表导致“删不掉”）
       // 注意：延迟 1s，给 IndexedDB 异步恢复充足时间，避免误清空
-      const timer = setTimeout(() => {
+      const timer = setTimeout(async () => {
         if (dataSourceRef.current.length !== 0) return; // 加载后已有数据，跳过
         // 订单键空写门禁：未申报的清空一律不落盘（订单存储被清=订单占用/账单派生全链路失真）
         if (String(sharedDataKey).includes('sales_order-manage') && !allowEmptyOrdersPersistRef.current) return;
         allowEmptyOrdersPersistRef.current = false;
         try {
+          // 主存仍有行 = 页面数据还在异步恢复（大清单不落本地缓存/服务端回灌中），
+          // 此时写空会连同主存一起清空并把空清单上传服务端，一律跳过
+          const idbRows = await loadDataset(sharedDataKey);
+          if (idbRows && typeof idbRows.json === 'string' && idbRows.json !== '' && idbRows.json !== '[]') {
+            let n = -1;
+            try { const parsed = JSON.parse(idbRows.json); if (Array.isArray(parsed)) n = parsed.length; } catch { /* ignore */ }
+            if (n > 0) return;
+          }
           const cur = localStorage.getItem(sharedDataKey);
           if (cur && cur !== '[]') {
             if (safeSetItem(sharedDataKey, '[]')) {
@@ -5966,6 +6052,16 @@ const ModuleChildPage: React.FC = () => {
         } else {
           json = JSON.stringify(outList);
         }
+        // 商品族：同步会话内存缓存（仪表盘/价格策略等同步读取取这份），
+        // 否则本地缓存被预算淘汰后这些页面会停在旧清单
+        if (isProductList) { try { setMemProductList(getDataOwner(), outList); } catch { /* ignore */ } }
+        // 商品清单已由「权威提交通道」（导入/新增即时 commitProductList）落盘并上传过，
+        // 或刚从本机主存采纳而来：本次只是同一份内容的 state 变化，不重复写主存/不重复整键上传
+        if (isProductList && justCommittedJsonRef.current === json) {
+          justCommittedJsonRef.current = '';
+          loadedIdsRef.current = new Set(outList.map((r: any) => String(r?.id || r?.key || '')).filter(Boolean));
+          return;
+        }
         // 内容未变化时跳过写入：避免重复刷新 _ts/重复上传，也避免旧标签页用相同内容空转覆盖
         let cur: string | null = null;
         try { cur = localStorage.getItem(sharedDataKey); } catch { /* ignore */ }
@@ -5974,10 +6070,18 @@ const ModuleChildPage: React.FC = () => {
           // 或他处直写 LS 未同步主存）：不回补主存/服务端，删除与修改会在下次
           // 重载从主存读取时被旧副本复活
           void loadDataset(sharedDataKey).then((idb) => {
-            if (idb && typeof idb.json === 'string' && idb.json !== json) {
-              saveDataset(sharedDataKey, json);
-              flushDatasetUploadAsync(sharedDataKey, json).catch(() => false);
+            if (!idb || typeof idb.json !== 'string' || idb.json === json) return;
+            // 但回补方向必须先核版本：主存比本地缓存更新时，这份 LS 缓存是陈旧副本
+            //（大表写入超预算只进主存、缓存被配额淘汰后残留旧值等），
+            // 把陈旧缓存回写主存并上传会整键抹掉主存/服务端里更新的数据（导入后刷新丢数据的主因）
+            let lsTs = 0;
+            try { lsTs = Number(localStorage.getItem(`${sharedDataKey}_ts`) || 0) || 0; if (!lsTs && cur) lsTs = 1; } catch { /* ignore */ }
+            if (idb.updatedAt > lsTs) {
+              try { console.warn('[持久化] 本地缓存陈旧于主存，已跳过回写（以主存/服务端为准）', sharedDataKey); } catch { /* ignore */ }
+              return;
             }
+            saveDataset(sharedDataKey, json);
+            flushDatasetUploadAsync(sharedDataKey, json).catch(() => false);
           }).catch(() => { /* ignore */ });
           return;
         }
@@ -5987,9 +6091,12 @@ const ModuleChildPage: React.FC = () => {
         // 现在主存固定为 IndexedDB（可信）+ 服务端（跨端真源）+ 持久化上传队列（断网重试），
         // 彻底摆脱 5MB 限制；本地保留的上一次副本只当作首屏加速缓存，不参与正确性。
         if (!canCacheDataset(sharedDataKey, json.length)) {
+          // 装不下新值就必须连旧值一起作废：否则刷新后直读 localStorage 的页面会拿到
+          // 上一份陈旧副本当作最新数据，再经本 effect 整键回写主存/服务端把新数据抹掉
+          invalidateDatasetCache(sharedDataKey);
           saveDataset(sharedDataKey, json);
           // 与本地写盘结果无关的直传通道（离线时自动进队列，联网后补传）
-          flushDatasetUploadAsync(sharedDataKey, json).catch(() => false);
+          uploadDatasetWithRetry(sharedDataKey, json);
           loadedIdsRef.current = new Set(outList.map((r: any) => String(r?.id || r?.key || '')).filter(Boolean));
           return;
         }
@@ -5999,6 +6106,9 @@ const ModuleChildPage: React.FC = () => {
         const writeOk = tryCacheDataset(sharedDataKey, json);
         if (writeOk) {
           tryCacheDataset(`${sharedDataKey}_ts`, String(writeTs));
+        } else {
+          // 写缓存失败（配额真的不够）：同样作废陈旧副本，读取方一律回落到主存/服务端
+          invalidateDatasetCache(sharedDataKey);
         }
         // 立即上传（不依赖 tryCacheDataset 钩子的 800ms 防抖）：新增/编辑/明细变更后用户可能马上刷新，
         // 防抖窗口内的写入若没赶上上传，刷新时会被服务端旧副本拉回覆盖 → 表现为「刷新后数据丢失」。
@@ -6149,15 +6259,26 @@ const ModuleChildPage: React.FC = () => {
           const val = appliedDynamicFilters[f.label] || '';
           if (!val && f.type !== 'productCodePick') continue;
           if (f.type === 'input') {
-            // 按标签名精确映射到单个字段（账单明细/订单管理分字段搜索）
-            const directFieldMap: Record<string, string> = {
-              '订单编号': 'id', '出库单号': 'outboundNo', '辅助单据号': 'auxDocNo',
-              '客户名称': 'customerName', '供应商对账人': 'supplierReconPerson', '采购商对账人': 'purchaserReconPerson',
-              '负责人': 'person', '收货名称': 'receiverName', '唛头': 'shippingMark', '收货地址': 'receiverAddress',
+            // 按标签名映射到数据字段（账单明细/订单管理/基础数据商品页与生产工序分字段搜索）
+            // 同一标签可对应多个候选字段（组内 OR），如商品标签兼容历史字段 tags
+            const directFieldMap: Record<string, string[]> = {
+              '订单编号': ['id'], '出库单号': ['outboundNo'], '辅助单据号': ['auxDocNo'],
+              '客户名称': ['customerName'], '供应商对账人': ['supplierReconPerson'], '采购商对账人': ['purchaserReconPerson'],
+              '负责人': ['person'], '收货名称': ['receiverName'], '唛头': ['shippingMark'], '收货地址': ['receiverAddress'],
+              // 基础数据-商品族（全部商品/成品/半成品/原材料）：搜索框按字段拆分
+              // 商品名称兼容取简称（新增/批量新增只写 shortName、name 为空，与导出/打印的「商品名称」同口径）
+              // 模具编号兼容两套历史字段名（产品列 moldCode / 批量新增与模具档案 moldNumber）
+              '款式编码': ['styleCode'], '商品编码': ['productCode'], '商品名称': ['name', 'shortName'], '商品简称': ['shortName'],
+              '条形码': ['barcode'], '国标码': ['nationalCode'], '辅助码': ['auxCode'], '模具编号': ['moldCode', 'moldNumber'],
+              '商品标签': ['productTags', 'tags'], '颜色': ['color'], '规格': ['spec'], '品牌': ['brand'], '分类': ['category'],
+              '鞋面材质': ['shoeUpper'], '鞋底材质': ['shoeSole'],
+              // 基础数据-生产工序
+              '工序编号': ['id'], '工序名称': ['name'], '设备要求': ['equipment'],
             };
-            // 款式编码/商品编码：拆分自货品明细，按订单明细行匹配（回退货品明细文本）
-            if (f.label === '款式编码' || f.label === '商品编码') {
-              const lv = val.toLowerCase();
+            const lv = val.toLowerCase();
+            // 款式编码/商品编码：仅订单管理下拆分自货品明细，按订单明细行匹配（回退货品明细文本）；
+            // 商品页的同名搜索框按上方字段映射直接匹配 styleCode/productCode
+            if ((f.label === '款式编码' || f.label === '商品编码') && pageConfig?.title === '订单管理') {
               let orderItems: any[] = [];
               try { orderItems = JSON.parse(String((item as any).orderItems || '[]')); } catch { /* ignore */ }
               const key = f.label === '款式编码' ? 'styleCode' : 'productCode';
@@ -6166,9 +6287,9 @@ const ModuleChildPage: React.FC = () => {
               if (!hitItems && !hitDetail) return false;
               continue;
             }
-            const directField = directFieldMap[f.label];
-            if (directField) {
-              if (!String(item[directField] || '').toLowerCase().includes(val.toLowerCase())) return false;
+            const directFields = directFieldMap[f.label];
+            if (directFields) {
+              if (!directFields.some(field => String((item as any)[field] ?? '').toLowerCase().includes(lv))) return false;
             } else {
               // 订单管理综合搜索框按字段拆分：客户名称/负责人/款式/商品编码均已有独立搜索框，综合框仅搜订单编号，删除重复匹配
               const searchFields = (pageConfig?.title === '订单管理' && f.label === '搜索')
@@ -6181,7 +6302,7 @@ const ModuleChildPage: React.FC = () => {
             }
           } else if (f.type === 'numberRange') {
             // 数量/金额区间：最小 ≤ 值 ≤ 最大，留空一侧即不限制；退货负数按带符号比较
-            const rangeFieldMap: Record<string, string> = { '商品总数': 'totalCount', '商品总额': 'totalAmount' };
+            const rangeFieldMap: Record<string, string> = { '商品总数': 'totalCount', '商品总额': 'totalAmount', '成本价': 'costPrice' };
             const rangeField = rangeFieldMap[f.label];
             if (rangeField) {
               const [minS = '', maxS = ''] = val.split('~');
@@ -6211,6 +6332,7 @@ const ModuleChildPage: React.FC = () => {
               '分类': 'category',
               '品牌': 'brand',
               '产品种类': 'productType',
+              '类型': 'type',
               '状态': 'status',
               '生产状态': 'status',
               '订单状态': 'orderStatus',
@@ -14388,10 +14510,10 @@ const handleBatchAttrsConfirm = () => {
 
       {/* 搜索和筛选工具栏（生产排期页隐藏，由 ScheduleBoard 自带工具栏） */}
       {!(moduleKey === 'production' && childKey === 'production-schedule') && (
-      <Card style={{ marginBottom: 16, ...(pageConfig?.title === '订单管理' ? { flexShrink: 0 } : {}) }} bodyStyle={{ padding: pageConfig?.title === '账单明细' || pageConfig?.title === '采购申请单' || pageConfig?.title === '银行账户' || pageConfig?.title === '加工订单' || pageConfig?.title === '财务审核' ? '8px 16px' : '14px 20px' }}>
-        {/* 账单明细/采购申请单/银行账户/加工订单/财务审核：紧凑尺寸 + 缩小行高，保证按键同单行显示 */}
-        <ConfigProvider componentSize={pageConfig?.title === '账单明细' || pageConfig?.title === '采购申请单' || pageConfig?.title === '银行账户' || pageConfig?.title === '加工订单' || pageConfig?.title === '财务审核' ? 'small' : 'middle'}>
-        <Row gutter={pageConfig?.title === '账单明细' || pageConfig?.title === '采购申请单' || pageConfig?.title === '银行账户' || pageConfig?.title === '加工订单' || pageConfig?.title === '财务审核' ? [8, 8] : [16, 12]} align="middle">
+      <Card style={{ marginBottom: 16, ...(pageConfig?.title === '订单管理' ? { flexShrink: 0 } : {}) }} bodyStyle={{ padding: pageConfig?.title === '账单明细' || pageConfig?.title === '采购申请单' || pageConfig?.title === '银行账户' || pageConfig?.title === '加工订单' || pageConfig?.title === '财务审核' || isFieldSplitFilter ? '8px 16px' : '14px 20px' }}>
+        {/* 账单明细/采购申请单/银行账户/加工订单/财务审核/基础数据分字段搜索页：紧凑尺寸 + 缩小行高，保证按键同单行显示 */}
+        <ConfigProvider componentSize={pageConfig?.title === '账单明细' || pageConfig?.title === '采购申请单' || pageConfig?.title === '银行账户' || pageConfig?.title === '加工订单' || pageConfig?.title === '财务审核' || isFieldSplitFilter ? 'small' : 'middle'}>
+        <Row gutter={pageConfig?.title === '账单明细' || pageConfig?.title === '采购申请单' || pageConfig?.title === '银行账户' || pageConfig?.title === '加工订单' || pageConfig?.title === '财务审核' || isFieldSplitFilter ? [8, 8] : [16, 12]} align="middle">
           {pageConfig?.title === '加工订单' ? (
             // 加工订单：六字段分字段搜索（回车弹窗多值输入）
             <>
@@ -14411,7 +14533,7 @@ const handleBatchAttrsConfirm = () => {
           ) : effectivePageConfig?.filters && effectivePageConfig.filters.length > 0 ? (
             // 使用配置的筛选器
             effectivePageConfig.filters.map((f, i) => (
-              <Col xs={12} sm={8} md={pageConfig?.title === '账单明细' ? 4 : pageConfig?.title === '财务审核' ? 4 : pageConfig?.title === '订单管理' ? 2 : 5} key={i}>
+              <Col xs={12} sm={8} md={pageConfig?.title === '账单明细' ? 4 : pageConfig?.title === '财务审核' ? 4 : pageConfig?.title === '订单管理' ? 2 : isFieldSplitFilter ? 4 : 5} key={i}>
                 {f.type === 'input' ? (
                   pageConfig?.title === '订单管理' && (f.label === '款式编码' || f.label === '商品编码') ? (
                     // 款式/商品编码：点击弹窗从商品列表多选，已选编码逗号拼接显示（不完备自动省略）
@@ -14522,11 +14644,11 @@ const handleBatchAttrsConfirm = () => {
                     };
                     const shortLabel = f.label.replace(/^商品/, '');
                     return (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }} title={`${f.label}区间：最小 ~ 最大（留空一侧表示不限）`}>
-                        <InputNumber size="small" controls={false} style={{ flex: 1, minWidth: 0 }} placeholder={`${shortLabel}最小`}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }} title={`${f.label}区间：从 ~ 到（留空一侧表示不限）`}>
+                        <InputNumber size="small" controls={false} style={{ flex: 1, minWidth: 0 }} placeholder={`${shortLabel}从`}
                           value={toNum(minS)} onChange={v => emitRange(v == null ? null : Number(v), toNum(maxS))} onPressEnter={handleSearch} />
                         <span style={{ color: '#bfbfbf', flex: 'none' }}>~</span>
-                        <InputNumber size="small" controls={false} style={{ flex: 1, minWidth: 0 }} placeholder={`${shortLabel}最大`}
+                        <InputNumber size="small" controls={false} style={{ flex: 1, minWidth: 0 }} placeholder={`${shortLabel}到`}
                           value={toNum(maxS)} onChange={v => emitRange(toNum(minS), v == null ? null : Number(v))} onPressEnter={handleSearch} />
                       </div>
                     );
@@ -14737,7 +14859,7 @@ const handleBatchAttrsConfirm = () => {
             </Col>
           )}
           {/* 重置/查询 + 操作按键组：合并为同一列，左对齐，显示不完时换行 */}
-          <Col xs={24} sm={24} md={isProductList || pageConfig?.title === '打单拣货' || pageConfig?.title === '银行账户' ? 24 : pageConfig?.title === '账单明细' ? 12 : pageConfig?.title === '采购申请单' ? 13 : pageConfig?.title === '财务审核' ? 12 : 14}>
+          <Col xs={24} sm={24} md={isFieldSplitFilter || pageConfig?.title === '打单拣货' || pageConfig?.title === '银行账户' ? 24 : pageConfig?.title === '账单明细' ? 12 : pageConfig?.title === '采购申请单' ? 13 : pageConfig?.title === '财务审核' ? 12 : 14}>
             <Space wrap style={{ justifyContent: 'flex-start' }}>
               {/* 打单拣货/生产订单：重置清空分字段搜索 */}
               {(pageConfig?.title === '打单拣货' || pageConfig?.title === '生产订单') ? (
