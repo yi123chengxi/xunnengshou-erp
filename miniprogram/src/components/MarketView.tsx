@@ -249,8 +249,12 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
                     onError={() => setImgFail(v => ({ ...v, [String(r.id)]: true }))}
                   />
                 ) : (
-                  <View style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', background: 'linear-gradient(135deg,#e6f4ff,#f0f5ff)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 72 }}>
+                  <View style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', background: 'linear-gradient(135deg,#e6f4ff,#f0f5ff)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', fontSize: 72 }}>
                     {type === 'mold' ? '🧰' : '🛍️'}
+                    {/* 占位原因区分：无图=发布方未上传（图只存在对方本机）；有地址但加载失败=域名/文件问题 */}
+                    <Text style={{ marginTop: 4, fontSize: '22rpx', color: '#8a94a6', lineHeight: '30rpx' }}>
+                      {imgFail[String(r.id)] ? '图片加载失败' : '发布方未上传图'}
+                    </Text>
                   </View>
                 )}
                 {type === 'mold' && modeText(r.mode) ? (
