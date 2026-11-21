@@ -254,25 +254,21 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
                 ) : (() => {
                   const f = imgFail[String(r.id)]
                   return (
-                    <View style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', background: 'linear-gradient(135deg,#e6f4ff,#f0f5ff)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-                      {/* 占位原因区分：无图=服务端下发空串（发布方本机图未同步）；有地址但报错=地址形态/云端文件问题 */}
-                      {f ? null : <Text style={{ fontSize: 72 }}>{type === 'mold' ? '🧰' : '🛍️'}</Text>}
-                      <Text style={{ fontSize: '24rpx', color: '#8a94a6', lineHeight: '32rpx' }}>
+                    <View
+                      style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', background: 'linear-gradient(135deg,#e6f4ff,#f0f5ff)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', fontSize: 72 }}
+                      onClick={e => {
+                        // 失败时点占位可复制归一后的真实地址与微信报错（排查用），不再把地址原文印在卡片上；
+                        // 无图占位不拦截点击，仍走卡片详情
+                        if (!f) return
+                        e.stopPropagation()
+                        void Taro.setClipboardData({ data: `${f.url}${f.msg ? `\n${f.msg}` : ''}` })
+                      }}
+                    >
+                      {/* 占位原因区分：无图=服务端下发空串；加载失败=服务端有地址但取不到文件 */}
+                      {type === 'mold' ? '🧰' : '🛍️'}
+                      <Text style={{ marginTop: 4, fontSize: '22rpx', color: '#8a94a6', lineHeight: '30rpx' }}>
                         {f ? '图片加载失败' : '发布方未上传图'}
                       </Text>
-                      {/* 失败时把归一后的真实地址与微信报错原文摊到卡片上，点一下即可复制：
-                          凭这两行就能分辨「协议/域名白名单问题」与「云端二进制缺失」 */}
-                      {f ? (
-                        <>
-                          <Text style={{ marginTop: 2, fontSize: '20rpx', color: '#ff7875', lineHeight: '26rpx' }}>{f.msg || 'onError'}</Text>
-                          <Text
-                            style={{ marginTop: 2, width: '100%', padding: '0 6px', boxSizing: 'border-box', fontSize: '18rpx', lineHeight: '24rpx', color: '#bfbfbf', textAlign: 'center', wordBreak: 'break-all', whiteSpace: 'normal', overflow: 'hidden', maxHeight: '72rpx' }}
-                            onClick={e => { e.stopPropagation(); void Taro.setClipboardData({ data: `${f.url}${f.msg ? `\n${f.msg}` : ''}` }) }}
-                          >
-                            {f.url}
-                          </Text>
-                        </>
-                      ) : null}
                     </View>
                   )
                 })()}
