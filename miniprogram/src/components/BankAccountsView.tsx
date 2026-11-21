@@ -13,6 +13,15 @@ const statusTone = (s: string): string => {
   return 'tag-gray'
 }
 
+/** 账户类型底色：逐字照抄网页版 ModuleChildPage 银行账户 accountType 列的 Tag 色板（色底 + 白字） */
+const TYPE_BG: Record<string, string> = {
+  基本账户: '#722ed1',
+  一般账户: '#52c41a',
+  个人账户: '#faad14',
+  支付宝: '#1677ff',
+  微信: '#52c41a',
+}
+
 // —— 行内样式常量（weapp 中类选择器会压过行内样式，精细控件统一纯行内）——
 const SEARCH_BAR = { display: 'flex', padding: '16px 24px 0', alignItems: 'center' } as const
 const SEARCH_INPUT = { flex: 1, marginBottom: 0, height: 36, lineHeight: '36px', fontSize: 17, padding: '0 11px', background: '#ffffff', border: '1px solid #c9d4e3', borderRadius: 8, boxSizing: 'border-box' } as const
@@ -28,6 +37,8 @@ const C_NAME = { flex: 1, minWidth: 0, fontWeight: 600, fontSize: 17, lineHeight
 const C_SUB = { color: '#8a94a6', fontSize: 14, lineHeight: '20px' } as const
 const C_NO = { flex: 1, minWidth: 0, fontSize: 14, lineHeight: '20px', fontFamily: 'monospace', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' } as const
 const C_TAG = { marginLeft: 8, flexShrink: 0, display: 'inline-block', fontSize: 13, lineHeight: '19px', padding: '0 8px', borderRadius: 6 } as const
+// 账户类型小标签：字号与状态标签一致，白字压在色底上（同网页版）
+const C_TYPE = { flexShrink: 0, marginLeft: 10, display: 'inline-block', fontSize: 13, lineHeight: '19px', padding: '0 8px', borderRadius: 6, fontWeight: 500, color: '#ffffff' } as const
 const C_BAL = { flex: 1, minWidth: 0, fontWeight: 700, fontSize: 18, lineHeight: '25px', color: '#1f2733' } as const
 const DETAIL_BTN = { marginLeft: 12, flexShrink: 0, height: 32, lineHeight: '32px', padding: '0 14px', background: '#1677ff', color: '#ffffff', fontSize: 12, borderRadius: 16, textAlign: 'center' } as const
 const MASK = { position: 'fixed', left: 0, top: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.45)', zIndex: 1000 } as const
@@ -145,10 +156,14 @@ const BankAccountsView = ({ tick = 0 }: { tick?: number }) => {
               {acc.bankAccountNo || '—'}
             </Text>
           </View>
-          {/* 第三行：支行名称居左，账户类型靠右对齐（支行可能为空，用 flex:1 + 省略号保证不顶掉右侧类型） */}
+          {/* 第三行：支行名称居左，账户类型靠右（配色同网页版：色底白字，未知类型走浅灰底，空值只显短横） */}
           <View style={{ marginTop: 4, display: 'flex', alignItems: 'center' }}>
             <Text style={{ ...C_SUB, flex: 1, minWidth: 0, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>支行 {acc.branchName || '—'}</Text>
-            <Text style={{ ...C_SUB, flexShrink: 0, marginLeft: 10, color: '#4d6b8a' }}>{acc.accountType || '—'}</Text>
+            {acc.accountType ? (
+              <Text style={{ ...C_TYPE, background: TYPE_BG[acc.accountType] || '#f0f0f0', color: TYPE_BG[acc.accountType] ? '#ffffff' : '#8c8c8c' }}>{acc.accountType}</Text>
+            ) : (
+              <Text style={{ ...C_SUB, flexShrink: 0, marginLeft: 10 }}>—</Text>
+            )}
           </View>
           {/* 第四行：账户余额 + 查看明细按键 */}
           <View style={{ ...C_ROW, marginTop: 8 }}>
