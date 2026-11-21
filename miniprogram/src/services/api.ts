@@ -153,6 +153,8 @@ export interface MarketDetail {
   publisherUsername?: string
   publisherCompany?: string
   canContact?: boolean
+  /** 是否本人发布（决定报价价格是否全量、是否显示报价入口） */
+  isMine?: boolean
   /** 模具租售 */
   title?: string
   moldCode?: string
@@ -167,6 +169,10 @@ export interface MarketDetail {
 
 export const getMarketDetail = (type: string, id: string) =>
   request<{ detail: MarketDetail }>(`/wx/market/${type}/${encodeURIComponent(id)}`)
+
+/** 加工厂对发包单提交报价（同厂重复报价覆盖自身那条） */
+export const submitMarketQuote = (id: string, body: { unitPrice: number; totalPrice?: number; deliveryDays?: number; contactPerson?: string; contactPhone?: string; remark?: string }) =>
+  request<{ saved: boolean; quoteCount: number }>(`/wx/market/${encodeURIComponent(id)}/quote`, { method: 'POST', data: body })
 
 /** 站内消息（与网页版 ChatPage 同一份消息库；手机端 HTTP + 轮询） */
 export interface ChatMsg {

@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { View, Text, Image, Input, ScrollView } from '@tarojs/components'
 import Taro from '@tarojs/taro'
-import { getMarket, getMarketDetail, MarketDetail } from '../services/api'
+import { getMarket, getMarketDetail, MarketDetail, submitMarketQuote } from '../services/api'
 import { computeSubjectFeatures, subjectSimilarity } from '../services/imageSimilarity'
 import { getUser } from '../services/session'
 import { fullImageUrl } from '../utils/imageUrl'
@@ -71,10 +71,11 @@ const detailRows = (d: MarketDetail): [string, string][] => {
 
 // 详情底部弹层（与仓库统计记录详情同写法：遮罩高于 TabBar，面板靠底可滚）
 const SHEET_MASK = { position: 'fixed', left: 0, right: 0, top: 0, bottom: 0, background: 'rgba(0,0,0,0.45)', zIndex: 300 } as const
-const SHEET_PANEL = { position: 'absolute', left: 0, right: 0, bottom: 0, background: '#fff', borderRadius: '16px 16px 0 0', paddingTop: 14, paddingBottom: 'calc(14px + env(safe-area-inset-bottom))', maxHeight: '82vh', boxSizing: 'border-box' } as const
+const SHEET_PANEL = { position: 'absolute', left: 0, right: 0, bottom: 0, width: '100%', background: '#fff', borderRadius: '16px 16px 0 0', paddingTop: 14, paddingBottom: 'calc(14px + env(safe-area-inset-bottom))', maxHeight: '82vh', boxSizing: 'border-box' } as const
 const SHEET_TITLE = { flex: 1, fontSize: 18, fontWeight: 600, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' } as const
 const ROW_LABEL = { fontSize: 15, color: '#8a94a6', flexShrink: 0, marginRight: 12 } as const
-const ROW_VALUE = { flex: 1, fontSize: 17, textAlign: 'right', wordBreak: 'break-all' } as const
+// weapp flex 子项默认 min-width:auto，长值会撑开行超出屏宽，必须 minWidth:0 才能换行自适应
+const ROW_VALUE = { flex: 1, minWidth: 0, fontSize: 17, textAlign: 'right', wordBreak: 'break-all' } as const
 const CONTACT_BTN = { height: 44, lineHeight: '44px', textAlign: 'center', fontSize: 17, color: '#fff', background: '#1677ff', borderRadius: 8, boxSizing: 'border-box' } as const
 
 // 商机市场视图：顶部三切换（默认成品市场），商品双列卡片式展示。
@@ -96,6 +97,10 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
   const b64ingRef = useRef<Set<string>>(new Set())
   const [loaded, setLoaded] = useState(false)
   const [detail, setDetail] = useState<MarketDetail | null>(null)
+  // 报价表单（仅发包市场且非本人发布时提供入口）
+  const [quoteOpen, setQuoteOpen] = useState(false)
+  const [qf, setQf] = useState({ unitPrice: '', totalPrice: '', deliveryDays: '', contactPerson: '', contactPhone: '' })
+  const [qSaving, setQSaving] = useState(false)
 
   useEffect(() => {
     if (fixedType) setType(fixedType)
@@ -215,6 +220,8 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
       const mine = !!me && (pub === me.username || (!!me.company_name && String(base.publisherCompany || '') === me.company_name))
       base.canContact = !!pub && !mine
     }
+    setQuoteOpen(false)
+    setQf({ unitPrice: '', totalPrice: '', deliveryDays: '', contactPerson: '', contactPhone: '' })
     setDetail(base as MarketDetail)
     try {
       const d = await getMarketDetail(type, String(r?.id || ''))
@@ -226,6 +233,26 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
   }
 
   // 与网页版同行为：联系=直接打开与该发布方的站内会话
+  const submitQuote = () => {
+    const up = Number(qf.unitPrice)
+    if (!(up > 0)) { Taro.showToast({ title: '请填写有效的报价单价', icon: 'none' }); return }
+    setQSaving(true)
+    submitMarketQuote(String(detail?.id || ''), {
+      unitPrice: up,
+      totalPrice: Number(qf.totalPrice) || undefined,
+      deliveryDays: Number(qf.deliveryDays) || undefined,
+      contactPerson: qf.contactPerson || undefined,
+      contactPhone: qf.contactPhone || undefined,
+    })
+      .then(() => {
+        Taro.showToast({ title: '报价已提交', icon: 'success' })
+        setQuoteOpen(false)
+        return getMarketDetail(type, String(detail?.id || '')).then(d => { if (d && d.detail) setDetail(d.detail) })
+      })
+      .catch(e => Taro.showToast({ title: e?.message || '报价失败', icon: 'none' }))
+      .finally(() => setQSaving(false))
+  }
+
   const openContact = () => {
     const pub = String(detail?.publisherUsername || '')
     if (!pub) { Taro.showToast({ title: '未获取到供应商标账号', icon: 'none' }); return }
@@ -362,7 +389,7 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
                   {r.status ? <Text className={`tag ${statusTag(r.status)}`}>{r.status}</Text> : null}
                 </View>
                 {type === 'semi' && r.shortName ? (
-                  <Text style={{ fontSize: 26, fontWeight: 600, display: 'block', margin: '8px 0 4px', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
+                  <Text style={{ fontSize: 13, fontWeight: 600, display: 'block', margin: '8px 0 4px', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
                     {r.shortName}
                   </Text>
                 ) : null}
@@ -414,8 +441,9 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
                   <View>
                     <View style={{ position: 'relative', width: '100%', paddingTop: '72%', borderRadius: 10, overflow: 'hidden', background: '#f5f6f8' }}>
                       <Image
-                        src={imgs[0]} mode="aspectFill"
+                        src={imgData[imgs[0]] || imgs[0]} mode="aspectFill"
                         style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%' }}
+                        onError={() => fallbackToBase64(imgs[0], imgs[0])}
                         onClick={() => Taro.previewImage({ urls: imgs, current: imgs[0] })}
                       />
                     </View>
@@ -423,8 +451,9 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
                       <View style={{ display: 'flex', flexWrap: 'wrap', marginTop: 8 }}>
                         {imgs.slice(1).map((u, i) => (
                           <Image
-                            key={i} src={u} mode="aspectFill"
+                            key={i} src={imgData[u] || u} mode="aspectFill"
                             style={{ width: 52, height: 52, borderRadius: 6, margin: '0 8px 8px 0', background: '#f5f6f8' }}
+                            onError={() => fallbackToBase64(u, u)}
                             onClick={() => Taro.previewImage({ urls: imgs, current: u })}
                           />
                         ))}
@@ -474,14 +503,14 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
                     ))}
                   </View>
                 )}
-                {qs.length > 0 && (
+                {detail.type === 'semi' && qs.length > 0 && (
                   <View style={{ marginTop: 12 }}>
                     <Text style={{ fontSize: 15, color: '#8a94a6' }}>报价记录（{qs.length}）</Text>
                     {qs.map((q, i) => (
                       <View key={i} style={{ marginTop: 6, padding: '8px 10px', background: '#fafbfc', borderRadius: 8 }}>
                         <Text style={{ fontSize: 15 }}>{q.company || '—'}</Text>
                         <Text style={{ display: 'block', fontSize: 14, color: '#8a94a6' }}>
-                          单价 {money(q.unitPrice)} · 总价 {money(q.totalPrice)} · 交期 {q.deliveryDays || '—'} 天 · {q.status || '—'}
+                          单价 {q.unitPrice < 0 ? '***' : money(q.unitPrice)} · 总价 {q.totalPrice < 0 ? '***' : money(q.totalPrice)} · 交期 {q.deliveryDays || '—'} 天 · {q.status || '—'}
                         </Text>
                         {(q.contactPerson || q.contactPhone) ? (
                           <Text style={{ display: 'block', fontSize: 14, color: '#8a94a6' }}>{[q.contactPerson, q.contactPhone].filter(Boolean).join(' · ')}</Text>
@@ -491,6 +520,41 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
                   </View>
                 )}
               </ScrollView>
+              {/* 报价入口：仅发包市场且非本人发布；展开后内联表单提交 */}
+              {detail.type === 'semi' && !detail.isMine ? (
+                <View style={{ padding: '12px 20px 0' }}>
+                  {!quoteOpen ? (
+                    <View style={{ ...CONTACT_BTN, background: '#fa8c16' }} onClick={() => setQuoteOpen(true)}>我要报价</View>
+                  ) : (
+                    <View style={{ background: '#fafbfc', borderRadius: 8, padding: 10 }}>
+                      {([
+                        ['报价单价 *', 'unitPrice', '必填，大于 0'],
+                        ['报价总价', 'totalPrice', '留空按 单价×数量'],
+                        ['交期(天)', 'deliveryDays', '选填'],
+                        ['联系人', 'contactPerson', '选填'],
+                        ['联系电话', 'contactPhone', '选填'],
+                      ] as [string, keyof typeof qf, string][]).map(([label, k, ph]) => (
+                        <View key={k} style={{ display: 'flex', alignItems: 'center', padding: '4px 0' }}>
+                          <Text style={{ fontSize: 13, color: '#8a94a6', width: 76, flexShrink: 0 }}>{label}</Text>
+                          <Input
+                            style={{ flex: 1, minWidth: 0, height: 30, fontSize: 13, background: '#fff', border: '1px solid #c9d1da', borderRadius: 6, padding: '0 8px', boxSizing: 'border-box' }}
+                            placeholder={ph} placeholderStyle="color:#b0bcca;font-size:13px"
+                            type={k === 'contactPerson' ? 'text' : (k === 'contactPhone' ? 'number' : 'digit')}
+                            value={qf[k]}
+                            onInput={e => setQf(v => ({ ...v, [k]: e.detail.value }))}
+                          />
+                        </View>
+                      ))}
+                      <View style={{ display: 'flex', marginTop: 8 }}>
+                        <View style={{ flex: 1, height: 36, lineHeight: '36px', textAlign: 'center', fontSize: 14, color: '#5a6d85', background: '#eef1f5', borderRadius: 6 }} onClick={() => setQuoteOpen(false)}>取消</View>
+                        <View style={{ flex: 1, marginLeft: 8, height: 36, lineHeight: '36px', textAlign: 'center', fontSize: 14, color: '#fff', background: qSaving ? '#9ecbff' : '#fa8c16', borderRadius: 6 }} onClick={() => { if (!qSaving) submitQuote() }}>
+                          {qSaving ? '提交中…' : '提交报价'}
+                        </View>
+                      </View>
+                    </View>
+                  )}
+                </View>
+              ) : null}
               {detail.canContact ? (
                 <View style={{ padding: '12px 20px 0' }}>
                   <View style={CONTACT_BTN} onClick={openContact}>联系</View>

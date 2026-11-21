@@ -833,6 +833,13 @@ const moldPriceOf = (r: any): number => {
 const keepImage = (u: any): string => (
   typeof u === 'string' && /^(https?:\/\/|data:|\/uploads\/|\/api\/)/i.test(u) ? u : ''
 );
+/** 报价方名称脱敏（与 Web maskName 同口径：对所有查看者统一掩码中间字符） */
+const maskName = (s: any): string => {
+  const t = String(s || '');
+  if (!t) return '';
+  if (t.length <= 2) return `${t.slice(0, 1)}*`;
+  return `${t[0]}${'*'.repeat(Math.max(1, t.length - 2))}${t[t.length - 1]}`;
+};
 const firstImage = (r: any): string => {
   if (Array.isArray(r.images)) {
     const hit = r.images.map(keepImage).filter(Boolean)[0];
@@ -958,13 +965,53 @@ router.get('/market/:type/:id', verifyJWT, async (req: Request, res: Response) =
       shoeUpper: r.shoeUpper || '', shoeSole: r.shoeSole || '',
       images: Array.from(new Set(images)),
       variants, quoteCount: quotes.length,
-      quotes: isMine ? quotes : [],
+      // 报价记录仅发包市场有意义；公司名/联系人对所有查看者统一脱敏（同 Web maskName），
+      // 联系方式一律不下发（联系走站内会话）；价格仅发布方本人看全量，其余掩码为 -1
+      quotes: type === 'semi' ? quotes.map((q: any) => (isMine ? q : ({
+        ...q, company: maskName(q.company), contactPerson: maskName(q.contactPerson), contactPhone: '', unitPrice: -1, totalPrice: -1,
+      }))) : [],
+      isMine,
       totalStock: variants.reduce((s: number, v: any) => s + v.stock, 0) || Number(r.quantity) || 0,
       publisherUsername: pub, publisherCompany: coOf(pub, r.publisherCompany),
       canContact: !!pub && pub !== me,
     } } });
   } catch (err: any) {
     console.error('[wx] market detail error:', err.message);
+    res.status(500).json({ code: 500, message: '服务器内部错误' });
+  }
+});
+
+/** POST /api/wx/market/:id/quote —— 加工厂对发包单提交报价（与 Web 同口径：同单允许多厂报价，同厂重复报价覆盖自身那条）
+ *  写入全局键 market_publish_orders 的 quotes[]；待报价首报后流转为报价中 */
+router.post('/market/:id/quote', verifyJWT, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user as JWTPayload;
+    const me = await ownerOf(user.username);
+    const id = String(req.params.id || '');
+    const unitPrice = Number(req.body?.unitPrice);
+    if (!id || !(unitPrice > 0)) { res.status(400).json({ code: 400, message: '请填写有效的报价单价' }); return; }
+    const companies = await companyMap();
+    const rows = await readRows('market_publish_orders');
+    const r = rows.find((x: any) => String(x.id || x.key || '') === id && x.type !== 'finished');
+    if (!r || r.delisted === true) { res.status(404).json({ code: 404, message: '该发包单已下架或不存在' }); return; }
+    if (r.status === '已中标' || r.status === '已关闭') { res.status(400).json({ code: 400, message: `该发包单${r.status}，不可报价` }); return; }
+    const quotes = Array.isArray(r.quotes) ? r.quotes : [];
+    const mine: any = {
+      bidderUsername: me, bidderCompany: companies[me] || me,
+      factoryUsername: me, factoryCompany: companies[me] || me,
+      unitPrice, totalPrice: Number(req.body?.totalPrice) || unitPrice * (Number(r.quantity) || 1),
+      quantity: Number(r.quantity) || 0, deliveryDays: Number(req.body?.deliveryDays) || 0,
+      contactPerson: String(req.body?.contactPerson || ''), contactPhone: String(req.body?.contactPhone || ''),
+      remark: String(req.body?.remark || ''), quoteTime: new Date().toISOString(), status: '待确认',
+    };
+    const idx = quotes.findIndex((q: any) => String(q.bidderUsername || q.factoryUsername || '') === me);
+    if (idx >= 0) quotes[idx] = mine; else quotes.push(mine);
+    r.quotes = quotes;
+    if (r.status === '待报价') r.status = '报价中';
+    await writeRows('market_publish_orders', rows, String(pubOf(r) || me));
+    res.json({ code: 200, data: { saved: true, quoteCount: quotes.length } });
+  } catch (err: any) {
+    console.error('[wx] market quote error:', err.message);
     res.status(500).json({ code: 500, message: '服务器内部错误' });
   }
 });
