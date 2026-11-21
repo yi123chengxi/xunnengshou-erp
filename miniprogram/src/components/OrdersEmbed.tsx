@@ -23,14 +23,20 @@ const ITEM_COL_FLEX: Record<string, number> = {
 }
 const ITEM_COL_ALIGN: Record<string, string> = { quantity: 'right', price: 'right', amount: 'right' }
 
-// 订单状态色标（与 Web 端订单状态口径一致）
-const statusColorOf = (s: string): string => {
-  if (['待确认', '待付款', '部分付款', '待处理', '待财务审核'].includes(s)) return '#fa8c16'
-  if (['已付款', '已审核', '生产排期', '进行中', '已拆分'].includes(s)) return '#1677ff'
-  if (['已发货', '已完成', '已入库', '已出库'].includes(s)) return '#52c41a'
-  if (['已取消', '已拒绝', '缺货'].includes(s)) return '#ff4d4f'
-  return '#5a6d85'
+// 订单状态色标：逐条照抄 Web 端 orderStatusColors，并补上审核流转派生标签的实心底色
+// （Web 的「订单状态」列文案由 auditStatus 派生，服务端 /wx/orders 已同口径下发，两端必须同色）
+const STATUS_COLORS: Record<string, string> = {
+  '待付款': '#fa8c16', '部分付款': '#fa8c16', '待处理': '#fa8c16', '待确认': '#fa8c16', '生产完成待收款': '#fa8c16',
+  '待发货': '#faad14', '待打单': '#faad14', '待拣货': '#faad14',
+  '已付款': '#1677ff', '待财务审核': '#1677ff', '进行中': '#1677ff', '已拆分': '#1677ff', '生产排期': '#1677ff',
+  '已发货': '#52c41a', '已完成': '#52c41a', '已入库': '#52c41a', '已出库': '#52c41a', '已财务审核': '#52c41a',
+  '已审核': '#52c41a', '已审核待发货': '#52c41a', '已审核待生产': '#52c41a', '已打单': '#52c41a', '已拣货': '#52c41a',
+  '已审核待财审': '#722ed1',
+  '已取消': '#8c8c8c', '已合并': '#8c8c8c',
+  '已驳回': '#ff4d4f', '驳回': '#ff4d4f', '已拒绝': '#ff4d4f', '缺货': '#ff4d4f',
+  '异常': '#a08050',
 }
+const statusColorOf = (s: string): string => STATUS_COLORS[s] || '#5a6d85'
 
 // 明细字段勾选持久化：读取失败或为空时回默认四列
 const loadItemFields = (): string[] => {

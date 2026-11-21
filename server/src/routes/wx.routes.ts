@@ -626,8 +626,25 @@ router.get('/orders', verifyJWT, async (req: Request, res: Response) => {
     const hit = q
       ? rows.filter((r: any) => `${r.orderNo || ''}${r.id || ''}${r.customerName || ''}${r.productDetail || ''}`.toLowerCase().includes(q))
       : rows;
+    /** 订单状态文案：网页版「订单状态」列并非直出 orderStatus，而是按 auditStatus 派生流转文案
+     *  （ModuleChildPage tag 渲染分支），这里逐条对齐判定顺序：已发货 > 异常 > 驳回 > 审核流转 > 原始值，
+     *  否则同一单小程序显示「已付款」而网页显示「已审核待发货」 */
     const statusTextOf = (r: any): string => {
       const os = String(r.orderStatus || '').trim();
+      const audit = String(r.auditStatus || '').trim();
+      // 已发货优先：Web 里发货后单据不可再操作，不再按审核态改写
+      if (os === '已发货') return '已发货';
+      if (audit === '异常') return '异常';
+      if (audit.includes('驳回')) return '驳回';
+      if (audit === '待财务审核') return '已审核待财审';
+      if (audit === '已审核') return '已审核待发货';
+      if (audit === '生产排期') {
+        // 生产已完成但货款未收清时 Web 显「生产完成待收款」，收清后自动转入打单拣货
+        const done = r.productionCompleted === true || r.productionCompleted === 'true';
+        return done ? '生产完成待收款' : '已审核待生产';
+      }
+      if (audit === '已合并') return '已合并';
+      if (audit === '已取消') return '已取消';
       if (os) return os;
       const s = String(r.status || '').trim();
       if (s === 'pending') return '待处理';
