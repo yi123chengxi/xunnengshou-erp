@@ -2691,7 +2691,7 @@ const CustomerInfo: React.FC = () => {
               >
                 新增客户
               </Button>
-              <Button icon={<LinkOutlined />} onClick={() => { setInviteTarget(null); setInviteBind(false); setInviteModalVisible(true); }}>
+              <Button icon={<LinkOutlined />} style={{ color: '#fff', borderColor: '#ff4d4f', background: '#ff4d4f' }} onClick={() => { setInviteTarget(null); setInviteBind(false); setInviteModalVisible(true); }}>
                 邀约合作
               </Button>
               <Button icon={<SettingOutlined />} onClick={() => setFieldConfigVisible(true)}>显示字段</Button>

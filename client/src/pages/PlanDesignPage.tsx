@@ -14,9 +14,11 @@ import {
   ExclamationCircleOutlined, SettingOutlined, QuestionCircleOutlined, FileTextOutlined, UpOutlined, PrinterOutlined, DownloadOutlined,
 } from '@ant-design/icons';
 import type { ChildPageConfig } from '../config/pageConfig';
-import { saveDataset } from '../utils/dataStore';
+import { saveDataset, readFreshDataset, productListKey, setMemProductList } from '../utils/dataStore';
 import { loadTenantUsers } from '../utils/tenantUsers';
-import { safeSetItem } from '../utils/storageQuota';
+import { cacheDataset } from '../utils/storageQuota';
+import { uploadDatasetNow, reconcileProductListWithServer, resetProductListReconcile } from '../utils/productListSync';
+import { getSessionOwner } from '../utils/dataOwner';
 import { readScopedItem, writeScopedItem } from '../utils/scopedStorage';
 import useResizableColumns from '../hooks/useResizableColumns';
 import BatchAddProductModal from '../components/BatchAddProductModal';
@@ -44,14 +46,121 @@ interface PlanDesignPageProps {
 }
 
 // 获取数据所有者
-const getDataOwner = (): string => {
-  const isSub = localStorage.getItem('isSubAccount') === 'true';
-  if (isSub) return localStorage.getItem('parentAccount') || localStorage.getItem('username') || '';
-  return localStorage.getItem('username') || '';
-};
+// 单一口径复用 getSessionOwner：本页旧实现自读 isSubAccount/parentAccount/username，
+// 缺少服务端确认值与 ownerRoot_ 持久化回落，刷新启动窗口会把子账号判成主账号，
+// 于是读写到错桶键（pageData_..._<子账号>）——表现为“多刷几次才有数据”
+const getDataOwner = (): string => getSessionOwner();
 
 // BOM 存储 key
 const getBomKey = (productKey: string): string => `bom_${productKey}_${getDataOwner()}`;
+
+/**
+ * 数据集本机镜像。
+ * localStorage 只是“能加速首屏的缓存”：大清单超预算时根本不写，
+ * 占用过高时又会被 proactiveQuotaCleanup/emergencyFreeSpace 整键淘汰，
+ * 而本页有几十处同步读取点直读 localStorage —— 缓存缺失时页面就整块空白，
+ * 等后台同步把缓存填回又恢复正常（线上“新款研发刷新时好时坏”的直接成因）。
+ * 因此读取一律“localStorage 优先、镜像回落”，镜像由 IndexedDB/服务端预热。
+ */
+const dsMirror = new Map<string, string>();
+// 上一次落库的序列化内容：内容没变就不再整键 PUT（BOM 自动保存会高频触发清单成本价回写）
+const lastPersisted = new Map<string, string>();
+
+/** 读数据集：优先 localStorage 缓存，回落本机镜像 */
+const readDatasetRaw = (key: string): string | null => {
+  try {
+    const stored = localStorage.getItem(key);
+    if (stored) { dsMirror.set(key, stored); return stored; }
+  } catch { /* ignore */ }
+  return dsMirror.get(key) ?? null;
+};
+
+/** 解析清单 JSON：异常或非数组一律空数组（不留 null 给调用方做分支） */
+const parseListJson = (json: string | null): any[] => {
+  try { const parsed = JSON.parse(json || '[]'); return Array.isArray(parsed) ? parsed : []; } catch { return []; }
+};
+
+/** 空 BOM 序列化值：清空子BOM 用它覆盖而不是 removeItem（删除语义靠整键覆盖传达给服务端） */
+const EMPTY_BOM_JSON = '{"semiProducts":[],"rawMaterials":[],"processes":[]}';
+
+// 本机刚写过镜像的时刻：saveDataset 是异步落 IndexedDB 的，写完立刻回读主存可能还是旧副本，
+// 短时间内以镜像为准，避免本页自身的新增要等下一轮轮询才显示
+const localWriteAt = new Map<string, number>();
+
+/**
+ * 统一落库通道：内存镜像 → IndexedDB 主存 → 尽力本地缓存 → 立即上传服务端。
+ * 旧实现是 safeSetItem + saveDataset 且完全不上传：服务端长期停留在旧副本，
+ * 一旦对账/拉取采纳服务端版本就把本机新增整键吃掉，换电脑也看不到。
+ * 上传失败不算丢数据：待上传队列持有这份最新值，由后台补传链路继续送。
+ */
+const persistDatasetJson = (key: string, json: string): void => {
+  if (lastPersisted.get(key) === json) return;
+  lastPersisted.set(key, json);
+  localWriteAt.set(key, Date.now());
+  dsMirror.set(key, json);
+  saveDataset(key, json);
+  // 缓存写不进属正常降级（超预算时 cacheDataset 会作废该键的旧副本），主存与服务端已有这份
+  try { cacheDataset(key, json); } catch { /* ignore */ }
+  void uploadDatasetNow(key, json).catch(() => { /* 队列补传 */ });
+};
+
+/** 商品清单落库：除通用通道外还要刷新会话内存镜像（仪表盘/价格策略等同步读取那份） */
+const persistProductListJson = (owner: string, json: string): void => {
+  const key = productListKey(owner);
+  // 防线：本页大量“读缓存 → 改几行 → 整键覆盖”的写法，一旦读到空数组就会把
+  // 全量商品抹掉并上传覆盖服务端，因此宁可拒绝这一笔也不能把整张清单写空
+  if (parseListJson(json).length === 0 && parseListJson(dsMirror.get(key) ?? null).length > 0) {
+    message.warning('本次保存会清空商品清单，已拦截；请刷新页面重新加载数据后再操作');
+    return;
+  }
+  persistDatasetJson(key, json);
+  try { setMemProductList(owner, JSON.parse(json)); } catch { /* ignore */ }
+};
+
+/** BOM 落库（bom_ 属同步键：换电脑必须一致） */
+const persistBomJson = (productKey: string, json: string): void => persistDatasetJson(getBomKey(productKey), json);
+
+/** 读 BOM 序列化内容：localStorage 缓存 → 本机镜像 */
+const readBomRaw = (productKey: string): string | null => readDatasetRaw(getBomKey(productKey));
+
+/** 按当前清单批量构建 BOM 映射（右侧成本明细与树形汇总都吃这份） */
+const buildBomMap = (list: any[]): Record<string, any> => {
+  const map: Record<string, any> = {};
+  (list || []).forEach((p: any) => { if (p && p.key) map[p.key] = loadBom(p.key); });
+  return map;
+};
+
+// 已经回源预热过的 BOM 键：确实没有 BOM 的产品不该每轮轮询都去 IndexedDB 找一遍
+const bomProbed = new Set<string>();
+
+/**
+ * 预热缓存里缺失的 BOM：把 IndexedDB 主存的副本填进本机镜像，
+ * 这样几十处同步读取点不会再因为 localStorage 被淘汰而拿到空 BOM（成本明细/子BOM 树整块空白）。
+ * 返回填充条数，调用方据此决定是否重建 BOM 映射。
+ */
+const warmMissingBoms = async (list: any[]): Promise<number> => {
+  const missing: string[] = [];
+  (list || []).forEach((p: any) => {
+    if (!p || !p.key) return;
+    const bk = getBomKey(p.key);
+    if (readDatasetRaw(bk) !== null || bomProbed.has(bk)) return;
+    bomProbed.add(bk);
+    missing.push(p.key);
+  });
+  let filled = 0;
+  for (let i = 0; i < missing.length; i += 25) {
+    const chunk = missing.slice(i, i + 25);
+    const vals = await Promise.all(chunk.map(async (k: string) => {
+      try { return await readFreshDataset(getBomKey(k)); } catch { return null; }
+    }));
+    vals.forEach((v: string | null, idx: number) => {
+      if (!v) return;
+      dsMirror.set(getBomKey(chunk[idx]), v);
+      filled += 1;
+    });
+  }
+  return filled;
+};
 
 // IndexedDB 图片存储（替代 localStorage，容量可达500MB+）
 export const imgDB = {
@@ -177,10 +286,10 @@ const removeImageFromKeys = async (keys: string[]): Promise<void> => {
   }
 };
 
-// 加载 BOM
+// 加载 BOM：localStorage 缓存与本机镜像任一命中即可（镜像由挂载时从 IndexedDB/服务端预热）
 const loadBom = (productKey: string): { semiProducts: any[]; rawMaterials: any[]; processes: any[] } => {
   try {
-    const stored = localStorage.getItem(getBomKey(productKey));
+    const stored = readBomRaw(productKey);
     if (stored) return JSON.parse(stored);
   } catch { /* ignore */ }
   return { semiProducts: [], rawMaterials: [], processes: [] };
@@ -595,28 +704,57 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
     };
   }, []);
 
-  // 加载产品数据
-  const loadProducts = useCallback(() => {
+  // 已渲染的清单序列化内容：轮询/同步事件靠它去抖，内容没变就不重建 state（避免每 3 秒闪一下）
+  const loadedJsonRef = useRef<string | null>(null);
+  // 当前渲染属于哪个归属账号：同一会话内换账号时必须先清空，不能把上一位的数据继续挂在新账号页面上
+  const loadedOwnerRef = useRef<string>('');
+
+  // 加载产品数据：本地主存（IndexedDB）与本地缓存取较新者，两者都缺时回落会话镜像。
+  // 旧实现只读 localStorage —— 清单被配额淘汰或超预算没写进去时这里直接判空，
+  // 页面就整块空白，等后台同步把缓存填回又恢复正常（“刷新时好时坏”的直接表现）
+  const loadProducts = useCallback(async () => {
     const owner = getDataOwner();
-    const plKey = `pageData_basic-data_product-list_${owner}`;
-    try {
-      const stored = localStorage.getItem(plKey);
-      if (stored) {
-        const all = JSON.parse(stored);
-        const finished = all.filter((p: any) => p.productType === '成品');
-        setFinishedProducts(finished);
-        // 加载所有 BOM
-        const map: Record<string, any> = {};
-        finished.forEach((p: any) => {
-          map[p.key] = loadBom(p.key);
-        });
-        setBomMap(map);
-      } else {
-        setFinishedProducts([]);
-        setBomMap({});
-      }
-    } catch { setFinishedProducts([]); setBomMap({}); }
+    const plKey = productListKey(owner);
+    if (loadedOwnerRef.current !== owner) {
+      loadedOwnerRef.current = owner;
+      loadedJsonRef.current = null;
+      setFinishedProducts([]);
+      setBomMap({});
+    }
+    let raw: string | null = null;
+    try { raw = await readFreshDataset(plKey); } catch { raw = null; }
+    if (raw) dsMirror.set(plKey, raw);
+    else raw = dsMirror.get(plKey) ?? null;
+    // 本页刚写过而主存异步落盘未完成（读回来的还是已渲染那份旧值）：短窗口内以镜像为准；
+    // 一旦读到了比当前渲染更新的内容（弹窗新增/后台拉回），一律以读到的为准
+    const mirrored = dsMirror.get(plKey);
+    if (mirrored && mirrored !== raw && raw === loadedJsonRef.current && Date.now() - (localWriteAt.get(plKey) || 0) < 5000) raw = mirrored;
+    if (raw === null) return;                    // 一份都没读到：保持现状，不把已有渲染清空
+    if (loadedJsonRef.current === raw) return;   // 内容未变：不重建 state
+    loadedJsonRef.current = raw;
+    const all = parseListJson(raw);
+    // 历史兼容：早期导入的行没有 productType，按 level=0/空 归为成品，否则整页会过滤成空
+    const finished = all.filter((p: any) => p && (p.productType === '成品'
+      || (!p.productType && String(p.level === undefined || p.level === null ? '0' : p.level) === '0')));
+    setFinishedProducts(finished);
+    setBomMap(buildBomMap(finished));
+    // BOM 缓存同样可能被淘汰：从主存预热缺失项后重建一次，避免成本明细/子BOM 树空白
+    const filled = await warmMissingBoms(finished);
+    if (filled > 0) setBomMap(buildBomMap(finished));
   }, []);
+
+  // 回源对账：以服务端数据库为权威裁决新旧，采纳后重建首屏
+  const syncFromServer = useCallback(async (force = false) => {
+    const owner = getDataOwner();
+    if (!owner) return;
+    try {
+      if (force) resetProductListReconcile();
+      const res = await reconcileProductListWithServer(owner);
+      if (res.status === 'skip') return;
+      loadedJsonRef.current = null;
+      await loadProducts();
+    } catch { /* 离线/服务端不可用：继续用本机副本，不清空页面 */ }
+  }, [loadProducts]);
 
   // 打开添加颜色弹窗
   const handleOpenAddColor = useCallback((styleCode: string, e?: React.MouseEvent) => {
@@ -645,9 +783,9 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
     const specs = addColorSpecs.filter(s => s.trim());
     if (specs.length === 0) { message.warning('请至少添加一种规格'); return; }
     const owner = getDataOwner();
-    const plKey = `pageData_basic-data_product-list_${owner}`;
+    const plKey = productListKey(owner);
     try {
-      const existing: any[] = JSON.parse(localStorage.getItem(plKey) || '[]');
+      const existing: any[] = JSON.parse(readDatasetRaw(plKey) || '[]');
       const newRecords = specs.map((spec, i) => {
         const productCode = `${addColorStyleCode.trim()}-${addColorName.trim()}-${spec}`;
         return {
@@ -682,9 +820,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
       }
       const merged = [...newRecords, ...existing];
       const mergedJson = JSON.stringify(merged);
-      safeSetItem(plKey, mergedJson);
-      localStorage.setItem(`${plKey}_ts`, String(Date.now()));
-      saveDataset(plKey, mergedJson);
+      persistProductListJson(owner, mergedJson);
       // 保存图片到 IndexedDB
       if (addColorImage) {
         const imgKeys = newRecords.map((rec: any) => rec.key);
@@ -710,13 +846,23 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
     } catch { /* ignore */ }
   }, []);
 
-  // 初始加载
-  useEffect(() => { loadProducts(); }, [loadProducts]);
-
-  // 监听 localStorage 变化（当批量新增从外部保存后刷新）
+  // 初始加载：先用本机副本出首屏，再后台回源对账（两者都不能让页面停在空白）
   useEffect(() => {
-    const interval = setInterval(() => { loadProducts(); }, 3000);
+    void loadProducts();
+    void syncFromServer();
+  }, [loadProducts, syncFromServer]);
+
+  // 轮询：仅在副本内容变化时重建（loadProducts 内部按序列化内容去抖）
+  useEffect(() => {
+    const interval = setInterval(() => { void loadProducts(); }, 3000);
     return () => clearInterval(interval);
+  }, [loadProducts]);
+
+  // 后台同步拉回新数据后即时刷新，不等轮询
+  useEffect(() => {
+    const onUpdated = () => { loadedJsonRef.current = null; void loadProducts(); };
+    window.addEventListener('sync-data-updated', onUpdated);
+    return () => window.removeEventListener('sync-data-updated', onUpdated);
   }, [loadProducts]);
 
   // 按款式编码分组
@@ -842,9 +988,9 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
     if (!group) return;
     const [, variants] = group;
     const owner = getDataOwner();
-    const plKey = `pageData_basic-data_product-list_${owner}`;
+    const plKey = productListKey(owner);
     try {
-      const all: any[] = JSON.parse(localStorage.getItem(plKey) || '[]');
+      const all: any[] = JSON.parse(readDatasetRaw(plKey) || '[]');
       const variantKeys = new Set(variants.map((v: any) => v.key));
       let updatedCount = 0;
       const updated = all.map((p: any) => {
@@ -855,8 +1001,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
         return p;
       });
       const json = JSON.stringify(updated);
-      safeSetItem(plKey, json);
-      saveDataset(plKey, json);
+      persistProductListJson(owner, json);
       loadProducts();
       // 检查自动上架开关，若开启则触发成品市场扫描
       try {
@@ -931,10 +1076,9 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
     const getProductField = (key: string, field: string): string => {
       try {
         const owner = getDataOwner();
-        const plKey = `pageData_basic-data_product-list_${owner}`;
-        const stored = localStorage.getItem(plKey);
-        if (stored) {
-          const products = JSON.parse(stored);
+        const plKey = productListKey(owner);
+        const products = parseListJson(readDatasetRaw(plKey));
+        if (products.length) {
           const product = products.find((p: any) => p.key === key);
           return product?.[field] || '';
         }
@@ -952,7 +1096,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
     // 加载BOM数据
     const getBomForTarget = (t: any) => {
       if (bomMap[t.key]) return bomMap[t.key];
-      try { const raw = localStorage.getItem(getBomKey(t.key)); if (raw) return JSON.parse(raw); } catch {}
+      try { const raw = readBomRaw(t.key); if (raw) return JSON.parse(raw); } catch {}
       return { semiProducts: [], rawMaterials: [], processes: [] };
     };
     // 半成品汇总
@@ -1008,7 +1152,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
     setMaterialListRaw(Array.from(rawAgg.values()).map(enrichRow));
     // 工艺清单：匹配生产工序表单，带出工序编号/名称/类型/工时定额
     let procList: any[] = [];
-    try { procList = JSON.parse(localStorage.getItem(`pageData_basic-data_prod-process_${getDataOwner()}`) || '[]'); } catch { procList = []; }
+    try { procList = JSON.parse(readDatasetRaw(`pageData_basic-data_prod-process_${getDataOwner()}`) || '[]'); } catch { procList = []; }
     setMaterialListProc(Array.from(procAgg.values()).map(enrichRow).map((r: any) => {
       const proc = procList.find((p: any) => p.key === r.itemKey || p.id === r.itemKey || p.key === r.code || p.id === r.code);
       if (!proc) return r;
@@ -1021,15 +1165,15 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
   const handleSaveBom = useCallback((silent?: boolean) => {
     if (!selectedProduct || selectedProduct._isGroup) return;
     const bom = { semiProducts: bomSemiProducts, rawMaterials: bomRawMaterials, processes: bomProcesses };
-    // 保存到 localStorage
-    try { localStorage.setItem(getBomKey(selectedProduct.key), JSON.stringify(bom)); } catch { /* ignore */ }
+    // 统一落库（本机主存 + 镜像 + 服务端）
+    persistBomJson(selectedProduct.key, JSON.stringify(bom));
     // 计算成本
     const cost = calcBomCost(bom);
     // 更新产品列表中的成本价（成品 + BOM中的半成品）
     const owner = getDataOwner();
-    const plKey = `pageData_basic-data_product-list_${owner}`;
+    const plKey = productListKey(owner);
     try {
-      const stored = localStorage.getItem(plKey);
+      const stored = readDatasetRaw(plKey);
       if (stored) {
         const all = JSON.parse(stored);
         // 更新成品成本价
@@ -1044,7 +1188,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
             }
           }
         });
-        localStorage.setItem(plKey, JSON.stringify(updated));
+        persistProductListJson(owner, JSON.stringify(updated));
       }
     } catch { /* ignore */ }
     // 刷新本地状态
@@ -1076,12 +1220,12 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
     setBomSelectAppliedSearch('');
     setBomSelectAppliedField(bomSelectField);
     const owner = getDataOwner();
-    const plKey = `pageData_basic-data_product-list_${owner}`;
+    const plKey = productListKey(owner);
     // 先记录本地已有数据的 key，用于保护本地新建记录不被服务端旧数据覆盖
     let localKeys = new Set<string>();
     let data: any[] = [];
     try {
-      const stored = localStorage.getItem(plKey);
+      const stored = readDatasetRaw(plKey);
       if (stored) {
         const parsed = JSON.parse(stored);
         if (Array.isArray(parsed)) {
@@ -1100,6 +1244,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
           const idbList = JSON.parse(idb.json);
           if (Array.isArray(idbList) && idbList.length > data.length) {
             data = idbList;
+            dsMirror.set(plKey, idb.json);   // 主存较新时回填镜像，后续同步读取点不再只看缓存
           }
         }
       }
@@ -1117,7 +1262,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
       // 从生产工序加载
       try {
         const procKey = `pageData_basic-data_prod-process_${owner}`;
-        const procStored = localStorage.getItem(procKey);
+        const procStored = readDatasetRaw(procKey);
         data = procStored ? JSON.parse(procStored) : [];
       } catch { data = []; }
     }
@@ -1178,13 +1323,13 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
     if (batchSubBomTarget) {
       const bomKey = getBomKey(batchSubBomTarget.key);
       let bom = { semiProducts: [] as any[], rawMaterials: [] as any[], processes: [] as any[] };
-      try { const raw = localStorage.getItem(bomKey); if (raw) bom = JSON.parse(raw); } catch {}
+      try { const raw = readDatasetRaw(bomKey); if (raw) bom = JSON.parse(raw); } catch {}
       // 过滤掉自引用（不允许将自己添加到自己的子BOM中）
       const filteredItems = newItems.filter(n => n.key !== batchSubBomTarget.key);
       if (bomSelectType === 'semi') bom.semiProducts = [...(bom.semiProducts || []), ...filteredItems.filter(n => !(bom.semiProducts || []).some((e: any) => e.key === n.key))];
       else if (bomSelectType === 'raw') bom.rawMaterials = [...(bom.rawMaterials || []), ...filteredItems.filter(n => !(bom.rawMaterials || []).some((e: any) => e.key === n.key))];
       else bom.processes = [...(bom.processes || []), ...filteredItems.filter(n => !(bom.processes || []).some((e: any) => e.key === n.key))];
-      try { localStorage.setItem(bomKey, JSON.stringify(bom)); } catch {}
+      persistDatasetJson(bomKey, JSON.stringify(bom));
       // 刷新展开数据，确保已展开的行能显示最新子BOM
       setBatchExpandedBom(prev => {
         if (prev[batchSubBomTarget.key]) {
@@ -1226,7 +1371,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
     // 读取已有子BOM并预加载到选择列表
     const bomKey = getBomKey(semiProduct.key);
     try {
-      const raw = localStorage.getItem(bomKey);
+      const raw = readDatasetRaw(bomKey);
       if (raw) {
         const bom = JSON.parse(raw);
         if (type === 'semi') setBomSemiProducts(bom.semiProducts || []);
@@ -1241,7 +1386,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
   const handleOpenSubBomEditor = useCallback((record: any) => {
     let bom = { semiProducts: [] as any[], rawMaterials: [] as any[], processes: [] as any[] };
     try {
-      const raw = localStorage.getItem(getBomKey(record.key));
+      const raw = readBomRaw(record.key);
       if (raw) bom = JSON.parse(raw);
     } catch {}
     const isRaw = String(record?.code || '').startsWith('RAW-');
@@ -1252,7 +1397,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
   const handlePushSubBomEditor = useCallback((record: any) => {
     let bom = { semiProducts: [] as any[], rawMaterials: [] as any[], processes: [] as any[] };
     try {
-      const raw = localStorage.getItem(getBomKey(record.key));
+      const raw = readBomRaw(record.key);
       if (raw) bom = JSON.parse(raw);
     } catch {}
     const isRaw = String(record?.code || '').startsWith('RAW-');
@@ -1264,7 +1409,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
     const top = subBomEditorStack[subBomEditorStack.length - 1];
     if (!top) return;
     const bom = { semiProducts: top.semi, rawMaterials: top.raw, processes: top.proc };
-    try { localStorage.setItem(getBomKey(top.target.key), JSON.stringify(bom)); } catch {}
+    persistBomJson(top.target.key, JSON.stringify(bom));
     setBatchExpandedBom(prev => ({ ...prev, [top.target.key]: bom }));
     // 同步刷新主编辑器的展开状态（若在主编辑器中展开过该半成品）
     setBomEditorExpandedBom(prev => {
@@ -1282,13 +1427,13 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
     // 半成品：同步更新产品列表中的 costPrice；原材料：不回写成本价（追加工序仅对当前BOM对象有效）
     if (!isRawTarget) {
       const owner = getDataOwner();
-      const plKey = `pageData_basic-data_product-list_${owner}`;
+      const plKey = productListKey(owner);
       try {
-        const stored = localStorage.getItem(plKey);
+        const stored = readDatasetRaw(plKey);
         if (stored) {
           const all = JSON.parse(stored);
           const updated = all.map((p: any) => p.key === top.target.key ? { ...p, costPrice: newCost.toFixed(2) } : p);
-          localStorage.setItem(plKey, JSON.stringify(updated));
+          persistProductListJson(owner, JSON.stringify(updated));
         }
       } catch {}
       message.success(`「${top.target.name}」的子BOM已保存，成本价：¥${newCost.toFixed(2)}`);
@@ -1313,7 +1458,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
       rawMaterials: (sub.rawMaterials || []).filter((i: any) => !(category === '原材料' && i.key === itemKey)),
       processes: (sub.processes || []).filter((i: any) => !(category === '工序' && i.key === itemKey)),
     };
-    try { localStorage.setItem(getBomKey(parentKey), JSON.stringify(next)); } catch {}
+    persistBomJson(parentKey, JSON.stringify(next));
     setBatchExpandedBom(prev => ({ ...prev, [parentKey]: next }));
     message.success('已删除');
   }, [batchExpandedBom]);
@@ -1323,7 +1468,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
     setBatchNestedExpanded(prev => {
       if (prev[key]) { const { [key]: _, ...rest } = prev; return rest; }
       let bom = { semiProducts: [] as any[], rawMaterials: [] as any[], processes: [] as any[] };
-      try { const raw = localStorage.getItem(getBomKey(key)); if (raw) bom = JSON.parse(raw); } catch {}
+      try { const raw = readBomRaw(key); if (raw) bom = JSON.parse(raw); } catch {}
       return { ...prev, [key]: bom };
     });
   }, []);
@@ -1369,7 +1514,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
       // 加载子BOM数据
       let bom = { semiProducts: [] as any[], rawMaterials: [] as any[], processes: [] as any[] };
       try {
-        const raw = localStorage.getItem(getBomKey(key));
+        const raw = readBomRaw(key);
         if (raw) bom = JSON.parse(raw);
       } catch {}
       return { ...prev, [key]: bom };
@@ -1395,7 +1540,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
     imgDB.get(rec.key).then(v => { if (v) setNewSemiImage(v); else { const url = loadImageUrlMap(getDataOwner())[rec.key]; if (url) setNewSemiImage(absoluteImageUrl(url)); } });
     let items: any[] = [];
     try {
-      const bom = JSON.parse(localStorage.getItem(getBomKey(rec.key)) || 'null');
+      const bom = JSON.parse(readBomRaw(rec.key) || 'null');
       if (bom) {
         items = [
           ...(bom.semiProducts || []).map((i: any) => ({ ...i, type: 'semi' })),
@@ -1413,9 +1558,9 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
     const sources = bomSelectData.filter(i => bomSelectKeys.includes(i.key));
     if (sources.length === 0) { message.warning('请先勾选要复制的半成品'); return; }
     const owner = getDataOwner();
-    const plKey = `pageData_basic-data_product-list_${owner}`;
+    const plKey = productListKey(owner);
     let productList: any[] = [];
-    try { productList = JSON.parse(localStorage.getItem(plKey) || '[]'); } catch { /* ignore */ }
+    try { productList = JSON.parse(readDatasetRaw(plKey) || '[]'); } catch { /* ignore */ }
     const codes = new Set([...productList.map((p: any) => String(p.productCode || '').trim()), ...bomSelectData.map((p: any) => String(p.productCode || '').trim())].filter(Boolean));
     const now = new Date();
     const newRecords: any[] = [];
@@ -1440,8 +1585,8 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
       productList = [rec, ...productList];
       // 复制物料清单（子BOM）
       try {
-        const storedBom = localStorage.getItem(getBomKey(src.key));
-        if (storedBom) localStorage.setItem(getBomKey(newKey), storedBom);
+        const storedBom = readBomRaw(src.key);
+        if (storedBom) persistBomJson(newKey, storedBom);
       } catch { /* ignore */ }
       // 复制图片（IndexedDB + 缓存 + 云端绑定）
       try {
@@ -1459,8 +1604,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
       } catch { /* ignore */ }
     }
     const mergedJson = JSON.stringify(productList);
-    safeSetItem(plKey, mergedJson);
-    saveDataset(plKey, mergedJson);
+    persistProductListJson(owner, mergedJson);
     setBomSelectData(prev => [...newRecords, ...prev]);
     setBomSelectKeys(prev => [...prev, ...newRecords.map(r => r.key)]);
     message.success(`已复制创建 ${newRecords.length} 个新半成品，已打开编辑窗口，修改不同处后点“保存修改”`);
@@ -1472,14 +1616,14 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
     if (!newSemiName.trim()) { message.warning('请输入名称'); return; }
     if (!newSemiStyleCode.trim()) { message.warning('请输入款式编码'); return; }
     const owner = getDataOwner();
-    const plKey = `pageData_basic-data_product-list_${owner}`;
+    const plKey = productListKey(owner);
     // 编辑模式（复制并创建/行内编辑）：覆盖保存已有半成品，不新建记录
     if (semiEditKey) {
       const editKey = semiEditKey;
       const editCode = newSemiCode.trim();
       if (!editCode) { message.warning('请输入商品编码'); return; }
       try {
-        const existing0: any[] = JSON.parse(localStorage.getItem(plKey) || '[]');
+        const existing0: any[] = JSON.parse(readDatasetRaw(plKey) || '[]');
         if ([...existing0, ...bomSelectData].some((p: any) => p.key !== editKey && String(p.productCode || '').trim() === editCode)) {
           message.error(`编码 ${editCode} 已存在，请重新生成`);
           return;
@@ -1495,8 +1639,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
         };
         const merged0 = existing0.map((p: any) => p.key === editKey ? { ...p, ...updates } : p);
         const json0 = JSON.stringify(merged0);
-        safeSetItem(plKey, json0);
-        saveDataset(plKey, json0);
+        persistProductListJson(owner, json0);
         // 物料清单覆盖保存（清空则删除子BOM）
         if (newSemiBomItems.length > 0) {
           const bom = { semiProducts: [] as any[], rawMaterials: [] as any[], processes: [] as any[] };
@@ -1506,9 +1649,9 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
             else if (it.type === 'raw') bom.rawMaterials.push(item);
             else bom.processes.push(item);
           });
-          try { localStorage.setItem(getBomKey(editKey), JSON.stringify(bom)); } catch {}
+          persistBomJson(editKey, JSON.stringify(bom));
         } else {
-          try { localStorage.removeItem(getBomKey(editKey)); } catch {}
+          persistBomJson(editKey, EMPTY_BOM_JSON);
         }
         // 图片：有则保存（同时上传图片空间），清除则删除
         if (newSemiImage) {
@@ -1533,7 +1676,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
     }
     try {
       // 写入前重新读取 localStorage，确保拿到最新数据（避免 pullAllDatasets 等异步操作覆盖）
-      const existing: any[] = JSON.parse(localStorage.getItem(plKey) || '[]');
+      const existing: any[] = JSON.parse(readDatasetRaw(plKey) || '[]');
       if (!newSemiCode.trim()) { message.warning('请输入商品编码'); return; }
       const code = newSemiCode.trim();
       // 去重检查：同时检查 localStorage 和 bomSelectData 中已有编码
@@ -1571,11 +1714,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
       const merged = [record, ...existing.filter((e: any) => e.key !== uniqueKey && e.productCode !== code)];
       const mergedJson = JSON.stringify(merged);
       // 写入 localStorage 并检查结果
-      const writeOk = safeSetItem(plKey, mergedJson);
-      if (writeOk) {
-        localStorage.setItem(`${plKey}_ts`, String(Date.now()));
-      }
-      saveDataset(plKey, mergedJson);
+      persistProductListJson(owner, mergedJson);
       // 保存图片到 IndexedDB（key 与产品 key 一致，BOM 表格图片列可读取），同时上传图片空间
       if (newSemiImage) {
         await imgDB.set(uniqueKey, newSemiImage);
@@ -1590,7 +1729,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
           else if (it.type === 'raw') bom.rawMaterials.push(item);
           else bom.processes.push(item);
         });
-        try { localStorage.setItem(getBomKey(record.key), JSON.stringify(bom)); } catch {}
+        persistBomJson(record.key, JSON.stringify(bom));
       }
       // 添加到当前列表并自动选中，同时刷新 bomSelectData 确保切换类型后不丢失
       setBomSelectData(prev => {
@@ -1615,8 +1754,8 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
   // 随机生成半成品编码（确保不与全部商品及当前选择列表中已有编码重复）
   const generateRandomSemiCode = useCallback(() => {
     const owner = getDataOwner();
-    const plKey = `pageData_basic-data_product-list_${owner}`;
-    const existing: any[] = JSON.parse(localStorage.getItem(plKey) || '[]');
+    const plKey = productListKey(owner);
+    const existing: any[] = JSON.parse(readDatasetRaw(plKey) || '[]');
     // 同时检查 bomSelectData 中已创建但可能尚未同步的记录
     const allItems = [...existing, ...bomSelectData];
     const existingCodes = new Set(allItems.map((p: any) => String(p.productCode || '').trim()).filter(Boolean));
@@ -1636,8 +1775,8 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
   // 随机生成原材料编码（检查 localStorage 与 bomSelectData 防重复）
   const generateRandomRawCode = useCallback(() => {
     const owner = getDataOwner();
-    const plKey = `pageData_basic-data_product-list_${owner}`;
-    const existing: any[] = JSON.parse(localStorage.getItem(plKey) || '[]');
+    const plKey = productListKey(owner);
+    const existing: any[] = JSON.parse(readDatasetRaw(plKey) || '[]');
     const allItems = [...existing, ...bomSelectData];
     const existingCodes = new Set(allItems.map((p: any) => String(p.productCode || '').trim()).filter(Boolean));
     let code: string;
@@ -1656,8 +1795,8 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
   // 随机生成款式编码
   const generateRandomRawStyleCode = useCallback(() => {
     const owner = getDataOwner();
-    const plKey = `pageData_basic-data_product-list_${owner}`;
-    const existing: any[] = JSON.parse(localStorage.getItem(plKey) || '[]');
+    const plKey = productListKey(owner);
+    const existing: any[] = JSON.parse(readDatasetRaw(plKey) || '[]');
     const allItems = [...existing, ...bomSelectData];
     const existingCodes = new Set(allItems.map((p: any) => String(p.styleCode || '').trim()).filter(Boolean));
     let code: string;
@@ -1681,9 +1820,9 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
     if (!newRawUnit.trim()) { message.warning('请输入单位'); return; }
     if (newRawPrice === undefined || newRawPrice === null) { message.warning('请输入采购价'); return; }
     const owner = getDataOwner();
-    const plKey = `pageData_basic-data_product-list_${owner}`;
+    const plKey = productListKey(owner);
     try {
-      const existing: any[] = JSON.parse(localStorage.getItem(plKey) || '[]');
+      const existing: any[] = JSON.parse(readDatasetRaw(plKey) || '[]');
       const code = newRawCode.trim() || `RAW-${Date.now()}`;
       const allItems = [...existing, ...bomSelectData];
       if (allItems.some((p: any) => String(p.productCode || '').trim() === code)) {
@@ -1717,11 +1856,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
       };
       const merged = [record, ...existing.filter((e: any) => e.key !== uniqueKey && e.productCode !== code)];
       const mergedJson = JSON.stringify(merged);
-      const writeOk = safeSetItem(plKey, mergedJson);
-      if (writeOk) {
-        localStorage.setItem(`${plKey}_ts`, String(Date.now()));
-      }
-      saveDataset(plKey, mergedJson);
+      persistProductListJson(owner, mergedJson);
       // 保存图片到 IndexedDB（key 与产品 key 一致，BOM 表格图片列可读取），同时上传图片空间
       if (newRawImage) {
         await imgDB.set(uniqueKey, newRawImage);
@@ -1885,7 +2020,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
     const owner = getDataOwner();
     const procKey = `pageData_basic-data_prod-process_${owner}`;
     let existing: any[] = [];
-    try { existing = JSON.parse(localStorage.getItem(procKey) || '[]'); } catch { existing = []; }
+    try { existing = JSON.parse(readDatasetRaw(procKey) || '[]'); } catch { existing = []; }
     const existingIds = new Set(existing.map((p: any) => String(p.id || '').trim()).filter(Boolean));
     let code: string;
     let attempts = 0;
@@ -1909,7 +2044,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
     const owner = getDataOwner();
     const procKey = `pageData_basic-data_prod-process_${owner}`;
     try {
-      const existing: any[] = JSON.parse(localStorage.getItem(procKey) || '[]');
+      const existing: any[] = JSON.parse(readDatasetRaw(procKey) || '[]');
       if (existing.some((p: any) => String(p.id || '').trim() === newProcId.trim())) {
         message.error(`工序编号 ${newProcId.trim()} 已存在，请重新生成`);
         return;
@@ -1936,11 +2071,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
       };
       const merged = [record, ...existing.filter((e: any) => e.key !== uniqueKey && e.id !== record.id)];
       const mergedJson = JSON.stringify(merged);
-      const writeOk = safeSetItem(procKey, mergedJson);
-      if (writeOk) {
-        localStorage.setItem(`${procKey}_ts`, String(Date.now()));
-      }
-      saveDataset(procKey, mergedJson);
+      persistDatasetJson(procKey, mergedJson);
       setBomSelectData(prev => {
         if (prev.some((p: any) => p.key === record.key)) return prev;
         return [record, ...prev];
@@ -1970,11 +2101,11 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
     if (targets.length === 0) { message.warning('没有找到目标变体'); return; }
     // 合并 BOM 到每个变体（追加而非替换）
     const owner = getDataOwner();
-    const plKey = `pageData_basic-data_product-list_${owner}`;
+    const plKey = productListKey(owner);
     let savedCount = 0;
     const mergedBomMap: Record<string, any> = {};
     try {
-      const stored = localStorage.getItem(plKey);
+      const stored = readDatasetRaw(plKey);
       const all = stored ? JSON.parse(stored) : [];
       const updated = all.map((p: any) => {
         const isTarget = targets.some((t: any) => t.key === p.key);
@@ -1982,7 +2113,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
         // 读取已有 BOM
         let existing = { semiProducts: [], rawMaterials: [], processes: [] };
         try {
-          const existRaw = localStorage.getItem(getBomKey(p.key));
+          const existRaw = readBomRaw(p.key);
           if (existRaw) existing = JSON.parse(existRaw);
         } catch { /* ignore */ }
         // 合并（去重）
@@ -1991,13 +2122,13 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
           rawMaterials: [...(existing.rawMaterials || []), ...newRaw.filter(n => !(existing.rawMaterials || []).some((e: any) => e.key === n.key))],
           processes: [...(existing.processes || []), ...newProc.filter(n => !(existing.processes || []).some((e: any) => e.key === n.key))],
         };
-        localStorage.setItem(getBomKey(p.key), JSON.stringify(merged));
+        persistBomJson(p.key, JSON.stringify(merged));
         const cost = calcBomCost(merged);
         mergedBomMap[p.key] = merged;
         savedCount++;
         return { ...p, costPrice: cost.toFixed(2) };
       });
-      localStorage.setItem(plKey, JSON.stringify(updated));
+      persistProductListJson(owner, JSON.stringify(updated));
     } catch { /* ignore */ }
     // 更新状态
     setBomMap(prev => ({ ...prev, ...mergedBomMap }));
@@ -2106,10 +2237,9 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
     const getProductField = (key: string, field: string): string => {
       try {
         const owner = getDataOwner();
-        const plKey = `pageData_basic-data_product-list_${owner}`;
-        const stored = localStorage.getItem(plKey);
-        if (stored) {
-          const products = JSON.parse(stored);
+        const plKey = productListKey(owner);
+        const products = parseListJson(readDatasetRaw(plKey));
+        if (products.length) {
           const product = products.find((p: any) => p.key === key);
           return product?.[field] || '';
         }
@@ -2120,7 +2250,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
     const getProcRecord = (r: any): any => {
       try {
         const owner = getDataOwner();
-        const stored = localStorage.getItem(`pageData_basic-data_prod-process_${owner}`);
+        const stored = readDatasetRaw(`pageData_basic-data_prod-process_${owner}`);
         if (stored) {
           const procs = JSON.parse(stored);
           return procs.find((p: any) =>
@@ -2320,7 +2450,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
         </div>
         <Space>
           <Button type="primary" icon={<PlusOutlined />} onClick={() => setBatchAddVisible(true)}>新增研发产品</Button>
-          <Tooltip title="刷新数据"><Button icon={<ReloadOutlined />} onClick={loadProducts} /></Tooltip>
+          <Tooltip title="刷新数据"><Button icon={<ReloadOutlined />} onClick={() => { void loadProducts(); void syncFromServer(true); }} /></Tooltip>
         </Space>
       </div>
 
@@ -2443,7 +2573,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
                     const getBomForTarget = (t: any) => {
                       if (bomMap[t.key]) return bomMap[t.key];
                       try {
-                        const raw = localStorage.getItem(getBomKey(t.key));
+                        const raw = readBomRaw(t.key);
                         if (raw) return JSON.parse(raw);
                       } catch {}
                       return { semiProducts: [], rawMaterials: [], processes: [] };
@@ -2907,7 +3037,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
                     delete expanded[record.key];
                   } else {
                     let bom = { semiProducts: [] as any[], rawMaterials: [] as any[], processes: [] as any[] };
-                    try { const raw = localStorage.getItem(getBomKey(record.key)); if (raw) bom = JSON.parse(raw); } catch {}
+                    try { const raw = readBomRaw(record.key); if (raw) bom = JSON.parse(raw); } catch {}
                     expanded[record.key] = bom;
                   }
                   return { ...l, expanded };
@@ -2947,7 +3077,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
               rawMaterials: (sub.rawMaterials || []).filter((it: any) => !(category === '原材料' && it.key === itemKey)),
               processes: (sub.processes || []).filter((it: any) => !(category === '工序' && it.key === itemKey)),
             };
-            try { localStorage.setItem(getBomKey(parentKey), JSON.stringify(next)); } catch {}
+            persistBomJson(parentKey, JSON.stringify(next));
             return { ...l, expanded: { ...(l.expanded || {}), [parentKey]: next } };
           }));
           message.success('已删除');
@@ -2963,7 +3093,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
             // 加载子BOM数据
             let bom = { semiProducts: [] as any[], rawMaterials: [] as any[], processes: [] as any[] };
             try {
-              const raw = localStorage.getItem(getBomKey(itemKey));
+              const raw = readBomRaw(itemKey);
               if (raw) bom = JSON.parse(raw);
             } catch {}
             return { ...prev, [idx]: { ...levelState, [itemKey]: bom } };

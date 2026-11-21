@@ -293,6 +293,34 @@ export interface ListItem {
 export const getListPage = (page: string, q: string, extra = '') =>
   request<{ list: ListItem[]; total: number; sums?: string[] }>(`/wx/lists/${page}?q=${encodeURIComponent(q)}${extra ? `&${extra}` : ''}`)
 
+/** 打单拣货列表项（服务端 /wx/picking 下发：卡片三行字段 + 货品明细） */
+export interface PickingItem {
+  key: string
+  id: string
+  outboundNo: string
+  /** 款式编码×汇总数量（同款式合并求和） */
+  styleQty: string
+  receiverName: string
+  receiverCity: string
+  customerName: string
+  orderStatus: string
+  printStatus: string
+  /** 无关联订单的遗留拣货单（只读，不可发货） */
+  legacy: boolean
+  totalQty: number
+  productAmount: number
+  items: { productCode: string; shortName: string; styleCode: string; color: string; spec: string; unit: string; quantity: number; price: number }[]
+}
+
+export const getPicking = (q = '') =>
+  request<{ list: PickingItem[]; total: number }>(`/wx/picking?q=${encodeURIComponent(q)}`)
+
+/** 立即发货（可改数量）：quantities 与订单货品明细顺序对齐，逐项 0..原数量；
+ *  任一项少于原数量则服务端对缺少部分即时缺货拆分（子单号 = 原单号-1、出库单号 = 原出库单号-1） */
+export const shipPicking = (id: string, quantities: number[]) =>
+  request<{ shipped: boolean; docNo: string; splitChildId: string; needSplit: boolean }>(
+    `/wx/picking/${encodeURIComponent(id)}/ship`, { method: 'POST', data: { quantities } })
+
 export const createBookkeeping = (body: {
   bookDate: string; bookType: '收入' | '支出'; mainCategory: string;
   subCategory?: string; amount: number; account?: string; remark?: string;

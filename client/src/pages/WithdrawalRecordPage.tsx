@@ -16,7 +16,7 @@ import FieldConfigModal from '../components/FieldConfigModal';
 import { safeSetItem } from '../utils/storageQuota';
 import { sendPushNotification, showNativeNotification, isNotificationBlocked, isNotificationTypeEnabled } from '../utils/pushNotification';
 import { showRechargeNotification } from '../utils/rechargeNotification';
-import { showTaskNotify, closeTaskNotify } from '../utils/taskNotify';
+import { showTaskNotify, closeTaskNotify, hasWithdrawRecordAroundLaunch, readWithdrawTaskLaunchAt } from '../utils/taskNotify';
 import { applyIfChanged, broadcastLocalDataChange } from '../utils/useDatasetSyncReload';
 import { saveDataset } from '../utils/dataStore';
 import { scopeShopRecords, canEditShopData, isShopPersonMe, isShopScopeAdmin, resolvePersonToUsername } from '../utils/shopScope';
@@ -425,14 +425,14 @@ const WithdrawalRecordPage: React.FC = () => {
   useEffect(() => {
     if (activeTaskNotifs.size === 0) return;
     const interval = setInterval(() => {
-      const threeDaysAgo = dayjs().subtract(3, 'day').startOf('day');
       // 重新加载最新的提现记录
       let latestRecords: WithdrawalRecord[] = [];
       try { latestRecords = JSON.parse(localStorage.getItem(storageKey) || '[]'); } catch { latestRecords = []; }
       const resolved: string[] = [];
       activeTaskNotifs.forEach((shopName, shopKey) => {
-        const hasWithdrawn = latestRecords.some(r =>
-          r.shopName === shopName && dayjs(r.createdAt).isAfter(threeDaysAgo)
+        // 以发布任务时间为锚点：发布前 3 天内起的记录均视为已办理（不设上限，只要提现了就不再催）
+        const hasWithdrawn = hasWithdrawRecordAroundLaunch(
+          latestRecords, shopName, readWithdrawTaskLaunchAt(owner, shopKey)
         );
         if (hasWithdrawn) {
           // 已提现 → 终止并撤下已弹的提醒卡片（只停弹不关闭会造成完成后必须人工关闭）
@@ -498,13 +498,11 @@ const WithdrawalRecordPage: React.FC = () => {
   };
 
   // ========== 提现任务相关 ==========
-  // 检查店铺最近3天是否有提现记录
-  const getShopWithdrawStatus = useCallback((shopName: string): boolean => {
-    const threeDaysAgo = dayjs().subtract(3, 'day').startOf('day');
-    return records.some(r =>
-      r.shopName === shopName && dayjs(r.createdAt).isAfter(threeDaysAgo)
-    );
-  }, [records]);
+  // 检查店铺是否已办理提现：提现记录落在发布任务时间前 3 天内或发布之后任意时间（不设上限）；
+  // 该店铺无在途任务（取不到发布时刻）时退回旧的「最近 3 天」口径
+  const getShopWithdrawStatus = useCallback((shopKey: string, shopName: string): boolean =>
+    hasWithdrawRecordAroundLaunch(records, shopName, readWithdrawTaskLaunchAt(owner, shopKey)),
+  [records, owner]);
 
   // 发起提现任务
   const handleLaunchWithdrawTask = useCallback(() => {
@@ -1923,7 +1921,7 @@ const WithdrawalRecordPage: React.FC = () => {
             selectedRowKeys: withdrawTaskSelected,
             onChange: (keys) => setWithdrawTaskSelected(keys as string[]),
             getCheckboxProps: (r) => {
-              const hasRecent = getShopWithdrawStatus(r.shopName);
+              const hasRecent = getShopWithdrawStatus(r.key, r.shopName);
               return { disabled: hasRecent };
             },
           }}
@@ -1934,7 +1932,7 @@ const WithdrawalRecordPage: React.FC = () => {
               render: (v: string) => v ? <Text>{v}</Text> : <Text type="secondary">—</Text> },
             { title: '提现情况', key: 'status', width: 120, align: 'center' as const,
               render: (_: any, r: ShopInfo) => {
-                const hasRecent = getShopWithdrawStatus(r.shopName);
+                const hasRecent = getShopWithdrawStatus(r.key, r.shopName);
                 return hasRecent
                   ? <Tag style={{ background: '#52c41a', color: '#fff', border: 'none', fontWeight: 500 }}>已提现</Tag>
                   : <Tag style={{ background: '#722ed1', color: '#fff', border: 'none', fontWeight: 500 }}>未提现</Tag>;
@@ -1942,7 +1940,7 @@ const WithdrawalRecordPage: React.FC = () => {
           ]}
         />
         <div style={{ marginTop: 8, color: '#999', fontSize: 12 }}>
-          * 已提现（最近3天有提现记录）的店铺不可重复发起任务
+          * 已提现（提现记录落在任务发布时间前后 3 天内）的店铺不可重复发起任务
         </div>
       </Modal>
     </div>

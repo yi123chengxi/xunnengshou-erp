@@ -16,6 +16,7 @@ import WarehouseStatsView from './WarehouseStatsView'
 import NewStyleProgressView from './NewStyleProgressView'
 import ScheduleBoardView from './ScheduleBoardView'
 import MarketView from './MarketView'
+import PickingView from './PickingView'
 
 // 扫码入口视图：扫码后回调把关键字交给库存查询子菜单
 const ScanLauncher = ({ onScanned }: { onScanned: (code: string) => void }) => {
@@ -91,8 +92,8 @@ const ModuleView = ({
       case 'bank-account': return <BankAccountsView tick={tick} />
       case 'production': return <ListView page="production" tick={tick} />
       case 'purchase': return <ListView page="purchase" tick={tick} />
-      // 打单拣货：订单派生视图（已审核+已付款）；参考订单查询页改用卡片式（card），headers 仅供卡片内配对列名
-      case 'print-picking': return <ListView page="picking" card headers={['订单编号', '出库单号', '拣货数量', '创建时间']} tick={tick} />
+      // 打单拣货：订单派生视图（已审核+已付款），卡片三行 + 订单详情 + 立即发货（可改数量、缺货拆分）
+      case 'print-picking': return <PickingView tick={tick} />
       // 生产管理子菜单（与 Web production 分组同口径）
       case 'production-order': return <ListView page="production" tick={tick} />
       case 'processing-order': return <ListView page="processing-order" headers={['加工单号', '来源生产单号', '款式编码', '需求总数量', '状态']} tick={tick} />

@@ -1549,6 +1549,305 @@ function finishList(items: ListItem[], q: string): { list: ListItem[]; total: nu
 
 const day10 = (v: any): string => pick(v).slice(0, 10);
 
+// ============ 打单拣货（订单派生视图 + 立即发货 / 缺货拆分，与 Web ModuleChildPage 同口径） ============
+
+const round2 = (n: number): number => Math.round((Number(n) || 0) * 100) / 100;
+
+/** 原始货品明细（保留全部字段，仅按需覆盖 quantity）；解析口径与 Web parseOrderItems 一致 */
+function rawItems(order: any): any[] {
+  try {
+    const raw = typeof order?.orderItems === 'string' ? JSON.parse(order.orderItems || '[]')
+      : (Array.isArray(order?.orderItems) ? order.orderItems : []);
+    return Array.isArray(raw) ? raw : [];
+  } catch { return []; }
+}
+const itemQty = (it: any): number => Number(it?.quantity) || 0;
+const itemPrice = (it: any): number => Number(it?.price ?? it?.unitPrice) || 0;
+const itemCode = (it: any): string => String(it?.productCode || it?.styleCode || '');
+const itemsDetailStr = (its: any[]): string => its.map((it: any) => `${it.shortName || it.productName || it.productCode || ''}${it.color ? '-' + it.color : ''}${it.spec ? '-' + it.spec : ''}×${itemQty(it)}`).join('，');
+const itemsTotalQty = (its: any[]): number => its.reduce((s: number, it: any) => s + itemQty(it), 0);
+
+/** 款式编码×汇总数量：同款式（无款式则退商品编码）合并求和，多款式以空格分隔 */
+function styleQtyOf(items: any[]): string {
+  const map = new Map<string, number>();
+  items.forEach((it: any) => {
+    const code = String(it.styleCode || it.productCode || '—');
+    map.set(code, round2((map.get(code) || 0) + itemQty(it)));
+  });
+  return Array.from(map.entries()).map(([c, q]) => `${c}×${q}`).join('  ');
+}
+
+/** GET /api/wx/picking?q= —— 打单拣货列表：与 Web「销售管理→打单拣货」同口径（已审核+已付款订单派生 + 遗留单只读）
+ *  下发卡片三行所需字段：订单编号 / 出库单号 / 款式编码×汇总数量 / 收款人 + 收款人城市，并带货品明细供发货弹层使用 */
+router.get('/picking', verifyJWT, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user as JWTPayload;
+    const owner = await ownerOf(user.username);
+    const q = String(req.query.q || '').trim().toLowerCase();
+    const [orderRows, legacyRows] = await Promise.all([
+      readRows(`pageData_sales_order-manage_${owner}`),
+      readRows(`pageData_sales_print-picking_legacy_${owner}`),
+    ]);
+    const pickRows = [
+      ...orderRows.filter((r: any) => r.auditStatus === '已审核' && String(r.orderStatus || '').trim() === '已付款'),
+      ...legacyRows.map((r: any) => ({ ...r, _legacy: true })),
+    ];
+    const timeOf = (r: any): string => pick(r.pickTime, r.createTime, r.createdAt);
+    pickRows.sort((a: any, b: any) => timeOf(b).localeCompare(timeOf(a)));
+    let list = pickRows.map((r: any) => {
+      const items = rawItems(r);
+      return {
+        key: String(r.key || r.id || ''), id: pick(r.id, r.orderNo, r.key) || '—',
+        outboundNo: pick(r.outboundNo, '') || '', styleQty: styleQtyOf(items),
+        receiverName: pick(r.receiverName, r.person, ''), receiverCity: pick(r.city, ''),
+        customerName: pick(r.customerName, ''), orderStatus: r._legacy ? '遗留单' : pick(r.orderStatus, ''),
+        printStatus: pick(r.printStatus, ''), legacy: !!r._legacy,
+        totalQty: itemsTotalQty(items), productAmount: round2(Number(r.productAmount) || 0),
+        items: items.map((it: any) => ({
+          productCode: itemCode(it), shortName: String(it.shortName || it.productName || ''),
+          styleCode: String(it.styleCode || ''), color: String(it.color || ''), spec: String(it.spec || ''),
+          unit: String(it.unit || ''), quantity: itemQty(it), price: itemPrice(it),
+        })),
+      };
+    });
+    if (q) list = list.filter((it: any) => `${it.id} ${it.outboundNo} ${it.styleQty} ${it.receiverName} ${it.customerName}`.toLowerCase().includes(q));
+    res.json({ code: 200, data: { list: list.slice(0, 100), total: list.length } });
+  } catch (err: any) {
+    console.error('[wx] picking list error:', err.message);
+    res.status(500).json({ code: 500, message: '服务器内部错误' });
+  }
+});
+
+/** POST /api/wx/picking/:id/ship —— 立即发货（可改数量）：body.quantities 与订单货品明细顺序对齐，逐项钳制 0..原数量
+ *  发货部分：生成销售出库单 + 扣减实际库存（出库日志留痕）+ 订单转「已完成」；
+ *  若任一项发货数量 < 订单数量，对缺少部分即时缺货拆分：原单瘦身保留发货部分，拆出子单进入生产，
+ *  子单订单号 = 原单号-序号、出库单号 = 原出库单号-序号（首次拆分即 -1），拆分金额分摊照抄 Web calcSplit */
+router.post('/picking/:id/ship', verifyJWT, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user as JWTPayload;
+    const owner = await ownerOf(user.username);
+    const id = String(req.params.id || '');
+    const operator = await displayNameOf(user.username);
+    const now = new Date().toLocaleString('zh-CN');
+    const omKey = `pageData_sales_order-manage_${owner}`;
+    const soKey = `sales_outbound_${owner}`;
+    const prodKey = `pageData_basic-data_product-list_${owner}`;
+    const stockLogKey = `stock_change_log_${owner}`;
+    const [omList, soList, prodList, stockLogs, users, pushedOrders, tradeOrders] = await Promise.all([
+      readRows(omKey), readRows(soKey), readRows(prodKey), readRows(stockLogKey),
+      readRows('registeredUsers'), readRows('purchaser_pushed_orders'), readRows('market_trade_orders'),
+    ]);
+    const base = omList.find((o: any) => String(o.id) === id || String(o.key) === id);
+    if (!base) { res.status(404).json({ code: 404, message: '订单不存在或已移出打单拣货' }); return; }
+    const os = String(base.orderStatus || '').trim();
+    if (os === '已发货' || os === '已完成' || os === '已取消') {
+      res.status(400).json({ code: 400, message: `订单已${os}，不可重复发货` }); return;
+    }
+    const items = rawItems(base);
+    if (!items.length) { res.status(400).json({ code: 400, message: '该订单无结构化货品明细，无法发货' }); return; }
+    // 发货数量：与 items 顺序对齐，钳制 0..原数量（修改后不能大于订单数量）
+    const reqQ = Array.isArray(req.body?.quantities) ? req.body.quantities : [];
+    const shipQtys = items.map((it: any, i: number) => {
+      const v = Number(reqQ[i]);
+      const q = Number.isFinite(v) ? v : itemQty(it);
+      return Math.max(0, Math.min(round2(q), itemQty(it)));
+    });
+    if (!shipQtys.some(q => q > 0)) { res.status(400).json({ code: 400, message: '发货数量需大于 0' }); return; }
+    const needSplit = items.some((it: any, i: number) => round2(itemQty(it) - shipQtys[i]) > 0);
+
+    // 金额分摊（照抄 Web calcSplit：按商品金额逐行分摊、运费按比例、已付守恒）
+    const freight = round2(Number(base.freight) || 0);
+    const productAmt = round2(items.reduce((s: number, it: any) => s + itemPrice(it) * itemQty(it), 0));
+    const oldTotalRaw = round2(Number(base.productAmount) || 0);
+    const oldTotal = oldTotalRaw > 0 ? oldTotalRaw : round2(productAmt + freight);
+    const paid = round2(Number(base.paidAmount) || 0);
+    const shipAmt = round2(items.reduce((s: number, it: any, i: number) => s + itemPrice(it) * shipQtys[i], 0));
+    const restAmt = round2(productAmt - shipAmt);
+    const freightOrig = productAmt > 0 ? round2(freight * shipAmt / productAmt) : 0;
+    const freightChild = round2(freight - freightOrig);
+    const origTotal = round2(shipAmt + freightOrig);
+    const childTotal = round2(oldTotal - origTotal);
+    const linePaidShip = items.map((it: any, i: number) => {
+      const qty = itemQty(it);
+      const lineAmt = itemPrice(it) * qty;
+      const linePaid = productAmt > 0 ? Math.round(paid * 100 * lineAmt / productAmt) / 100 : 0;
+      return qty > 0 ? Math.round(linePaid * 100 * shipQtys[i] / qty) / 100 : 0;
+    });
+    let origPaid = round2(linePaidShip.reduce((s: number, x: number) => s + x, 0));
+    let childPaid = round2(paid - origPaid);
+    if (paid >= oldTotal - 0.01) { origPaid = origTotal; childPaid = childTotal; }
+
+    // 出库单号：沿用订单审核时生成的 outboundNo（无则用订单号），与既有出库单冲突才重生成
+    const genOutboundNo = (existing: string[]): string => {
+      let prefix = '0000';
+      const u = users.find((x: any) => x && x.username === owner);
+      const digits = String(u?.orderPrefix || '').replace(/\D/g, '');
+      if (digits) prefix = digits.padEnd(4, '0').slice(0, 4);
+      const d = new Date();
+      const head = `${prefix}-${String(d.getFullYear()).slice(2)}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
+      let seq = 0;
+      existing.forEach(s0 => { const s = String(s0 || ''); if (s.startsWith(head)) { const tail = s.slice(head.length); if (/^\d+$/.test(tail)) seq = Math.max(seq, parseInt(tail, 10)); } });
+      return `${head}${seq + 1}`;
+    };
+    const docBase = String(base.outboundNo || base.id || '');
+    const docNo = soList.some((s: any) => s.docNo === docBase) ? genOutboundNo(soList.map((s: any) => s.docNo)) : docBase;
+
+    // 发货明细 + 扣减实际库存（出库日志留痕，允许扣成负数与 Web 强制发货同口径）
+    const origItems = items.map((it: any, i: number) => ({ ...it, quantity: shipQtys[i] })).filter((it: any) => itemQty(it) > 0);
+    const outItems = origItems.map((it: any) => {
+      const prod = prodList.find((p: any) => p.productCode === itemCode(it));
+      const before = Number(prod?.actualStock) || 0;
+      const qty = itemQty(it);
+      const after = round2(before - qty);
+      const code = itemCode(it);
+      if (code && qty > 0) {
+        if (prod) { prod.actualStock = after; }
+        stockLogs.unshift({
+          id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, productCode: code,
+          productName: String(it.shortName || prod?.shortName || prod?.name || code), type: '出库',
+          changeQty: -qty, beforeStock: before, afterStock: after, relatedDocNo: docNo,
+          operator, createTime: now, remark: `销售出库 ${id}`,
+        });
+      }
+      return {
+        code, qty, name: String(it.shortName || prod?.shortName || prod?.name || ''),
+        styleCode: String(it.styleCode || ''), color: String(it.color || ''), spec: String(it.spec || ''),
+        unit: String(it.unit || prod?.unit || ''), productName: String(it.shortName || prod?.shortName || prod?.name || ''),
+        quantity: qty, beforeStock: before, afterStock: after,
+      };
+    });
+    const outbound = {
+      key: `so-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, docNo, orderId: id,
+      customerName: base.customerName || '', shopName: base.shopName || base.shop || '',
+      receiverName: base.receiverName || '', receiverAddress: base.receiverAddress || '',
+      productDetail: itemsDetailStr(origItems), totalQty: itemsTotalQty(origItems),
+      items: outItems, operator, createTime: now, status: '已发货', remark: '',
+    };
+    const nextSo = [outbound, ...soList];
+
+    const addTag = (t: any): string => { const s = String(t || ''); return s.includes('缺货拆分') ? s : (s ? s + ',' : '') + '缺货拆分'; };
+    const addTags = (ts: any): any => Array.isArray(ts) ? (ts.includes('缺货拆分') ? ts : ['缺货拆分', ...ts]) : ts;
+    const parseLogs = (v: any): any[] => { try { const l = typeof v === 'string' ? JSON.parse(v || '[]') : (Array.isArray(v) ? v : []); return Array.isArray(l) ? l : []; } catch { return []; } };
+
+    // 原单瘦身（保留发货部分）+ 发货完成 + 日志
+    const baseLogs = parseLogs(base.orderLog);
+    baseLogs.push({ time: now, action: '订单发货', operator, detail: `打单拣货发货：生成出库单 ${docNo}，订单状态变更为已完成` });
+    baseLogs.push({ time: now, action: '交易完成', operator, detail: '供应商已发货，订单交易自动完成' });
+    const slim: any = {
+      orderStatus: '已完成', auditStatus: '', shipTime: now, completeTime: now, outboundNo: docNo,
+      orderLog: JSON.stringify(baseLogs),
+    };
+
+    // 缺货拆分：拆出子单进入生产（订单号/出库单号 = 原单号-序号）
+    let child: any = null;
+    let childId = '';
+    let nextPushed = pushedOrders;
+    let nextTrades = tradeOrders;
+    if (needSplit) {
+      const idSet = new Set<string>(omList.map((o: any) => String(o.id || '')));
+      pushedOrders.forEach((p: any) => idSet.add(String(p.id || '')));
+      tradeOrders.forEach((p: any) => idSet.add(String(p.id || '')));
+      let seq = (Array.isArray(base.splitChildren) ? base.splitChildren.length : 0) + 1;
+      childId = `${base.id}-${seq}`;
+      while (idSet.has(childId)) { seq += 1; childId = `${base.id}-${seq}`; }
+      const childOutboundNo = `${docBase}-${seq}`;
+      const childItems = items.map((it: any, i: number) => ({ ...it, quantity: round2(itemQty(it) - shipQtys[i]) })).filter((it: any) => itemQty(it) > 0);
+      baseLogs.push({ time: now, action: '缺货拆分', operator, detail: `拆出子单 ${childId}：本次发货货品额 ¥${shipAmt.toFixed(2)}、留后 ¥${restAmt.toFixed(2)}；运费 ${freightOrig.toFixed(2)}/${freightChild.toFixed(2)}；已付 ${origPaid.toFixed(2)}/${childPaid.toFixed(2)}` });
+      // 原单仅保留发货部分（金额/明细/标签同步瘦身）
+      Object.assign(slim, {
+        orderItems: JSON.stringify(origItems), productDetail: itemsDetailStr(origItems), palletCount: itemsTotalQty(origItems),
+        productAmount: origTotal, totalAmount: origTotal, freight: freightOrig, paidAmount: origPaid,
+        splitChildren: [...(Array.isArray(base.splitChildren) ? base.splitChildren : []), childId],
+        orderTag: addTag(base.orderTag), orderTags: addTags(base.orderTags), orderLog: JSON.stringify(baseLogs),
+      });
+      child = {
+        ...base, key: `so-split-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, id: childId,
+        orderItems: JSON.stringify(childItems), productDetail: itemsDetailStr(childItems), palletCount: itemsTotalQty(childItems),
+        productAmount: childTotal, totalAmount: childTotal, freight: freightChild, paidAmount: childPaid,
+        orderStatus: childPaid >= childTotal - 0.01 ? '已付款' : '待付款',
+        auditStatus: '已审核', splitFromId: base.id, splitSeq: seq, splitChildren: undefined,
+        orderTag: addTag(base.orderTag), orderTags: addTags(base.orderTags),
+        createTime: now, creator: operator, printStatus: '', outboundNo: childOutboundNo, shipTime: '',
+        orderLog: JSON.stringify([...parseLogs(base.orderLog), { time: now, action: '拆分生成', operator, detail: `缺货拆分自 ${base.id}：留后货品额 ¥${restAmt.toFixed(2)}、运费 ¥${freightChild.toFixed(2)}、已付分摊 ¥${childPaid.toFixed(2)}` }]),
+      };
+      // 采购商推送单镜像同步拆分（两键同构：原镜像瘦身 + 子镜像生成），仅对来源为采购商推送的订单
+      if (base.orderSource === '采购商推送') {
+        const mirrorLog = (po: any, action: string, detail: string): string => {
+          const logs = parseLogs(po?.orderLog);
+          if (!logs.some((l: any) => l.action === action && l.detail === detail)) logs.push({ time: now, action, operator, detail });
+          return JSON.stringify(logs);
+        };
+        let orderKey = ''; let purchaserUsername = '';
+        if (base.pushRef) { const parts = String(base.pushRef).split('@'); orderKey = parts[0] || ''; purchaserUsername = parts[1] || ''; }
+        if (!purchaserUsername) { const po = pushedOrders.find((x: any) => String(x.id) === id); if (po) { orderKey = po.key || ''; purchaserUsername = po.purchaserUsername || ''; } }
+        if (purchaserUsername) {
+          const hit = pushedOrders.find((p: any) => (orderKey && p.key === orderKey) || String(p.id) === id);
+          const seq2 = child.splitSeq;
+          const childKey = hit ? `${hit.key}-${seq2}` : `${id}-${seq2}`;
+          const childPushed = hit ? {
+            ...hit, key: childKey, id: childId, orderItems: child.orderItems, productDetail: child.productDetail,
+            palletCount: child.palletCount, productAmount: childTotal, totalAmount: childTotal, freight: freightChild, paidAmount: childPaid,
+            splitFromId: id, splitSeq: seq2, pushRef: `${childKey}@${purchaserUsername}`,
+            orderLog: mirrorLog(hit, '供应商缺货拆分', `供应商拆分订单：子单 ${childId} 总额 ¥${childTotal.toFixed(2)}、已付 ¥${childPaid.toFixed(2)}`),
+          } : null;
+          nextPushed = pushedOrders.map((p: any) => (p === hit ? {
+            ...p, orderItems: slim.orderItems, productDetail: slim.productDetail, palletCount: slim.palletCount,
+            productAmount: origTotal, totalAmount: origTotal, freight: freightOrig, paidAmount: origPaid,
+            status: '已完成', shipTime: now, completeTime: now,
+            orderLog: mirrorLog(p, '供应商发货', '供应商平台发货完成，订单状态变更为已完成'),
+          } : p)).concat(childPushed ? [childPushed] : []);
+          const thit = tradeOrders.find((t: any) => String(t.id) === id);
+          const childTrade = thit ? {
+            ...thit, key: `mt-split-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, id: childId,
+            orderItems: child.orderItems, productDetail: child.productDetail, palletCount: child.palletCount,
+            productAmount: childTotal, freight: freightChild, paidAmount: childPaid, totalAmount: childTotal,
+            splitFromId: id, splitSeq: seq2,
+            orderLog: mirrorLog(thit, '供应商缺货拆分', `供应商拆分订单：子单 ${childId} 总额 ¥${childTotal.toFixed(2)}、已付 ¥${childPaid.toFixed(2)}`),
+          } : null;
+          nextTrades = tradeOrders.map((t: any) => (t === thit ? {
+            ...t, orderItems: slim.orderItems, productDetail: slim.productDetail, palletCount: slim.palletCount,
+            productAmount: origTotal, freight: freightOrig, paidAmount: origPaid, totalAmount: origTotal, status: '已完成',
+            orderLog: mirrorLog(t, '供应商发货', '供应商平台发货完成，订单状态变更为已完成'),
+          } : t)).concat(childTrade ? [childTrade] : []);
+        }
+      }
+    }
+
+    // 整单发货（未拆分）也需把采购商推送镜像置为已完成，与 Web handleShipNow 同口径
+    if (!needSplit && base.orderSource === '采购商推送') {
+      const mirrorLog = (po: any, action: string, detail: string): string => {
+        const logs = parseLogs(po?.orderLog);
+        if (!logs.some((l: any) => l.action === action && l.detail === detail)) logs.push({ time: now, action, operator, detail });
+        return JSON.stringify(logs);
+      };
+      let orderKey = ''; let purchaserUsername = '';
+      if (base.pushRef) { const parts = String(base.pushRef).split('@'); orderKey = parts[0] || ''; purchaserUsername = parts[1] || ''; }
+      if (!purchaserUsername) { const po = pushedOrders.find((x: any) => String(x.id) === id); if (po) { orderKey = po.key || ''; purchaserUsername = po.purchaserUsername || ''; } }
+      if (purchaserUsername) {
+        const hit = pushedOrders.find((p: any) => (orderKey && p.key === orderKey) || String(p.id) === id);
+        if (hit) nextPushed = pushedOrders.map((p: any) => (p === hit ? { ...p, status: '已完成', shipTime: now, completeTime: now, orderLog: mirrorLog(p, '供应商发货', '供应商平台发货完成，订单状态变更为已完成') } : p));
+        const thit = tradeOrders.find((t: any) => String(t.id) === id);
+        if (thit) nextTrades = tradeOrders.map((t: any) => (t === thit ? { ...t, status: '已完成', shipTime: now, completeTime: now, orderLog: mirrorLog(t, '供应商发货', '供应商平台发货完成，订单状态变更为已完成') } : t));
+      }
+    }
+
+    // 落库：订单（原单瘦身 + 子单）、出库单、商品库存、库存日志、镜像键
+    const nextOm = omList.map((o: any) => ((String(o.id) === id || String(o.key) === id) ? { ...o, ...slim } : o)).concat(child ? [child] : []);
+    await writeRows(omKey, nextOm, owner);
+    await writeRows(soKey, nextSo, owner);
+    await writeRows(prodKey, prodList, owner);
+    await writeRows(stockLogKey, stockLogs, owner);
+    if (base.orderSource === '采购商推送') {
+      if (nextPushed !== pushedOrders) await writeRows('purchaser_pushed_orders', nextPushed, owner);
+      if (nextTrades !== tradeOrders) await writeRows('market_trade_orders', nextTrades, owner);
+    }
+    res.json({ code: 200, data: { shipped: true, docNo, splitChildId: childId || '', needSplit } });
+  } catch (err: any) {
+    console.error('[wx] picking ship error:', err.message);
+    res.status(500).json({ code: 500, message: '服务器内部错误' });
+  }
+});
+
 /** GET /api/wx/lists/:page?q= —— 空白子菜单补齐：日常记账/生产订单/采购订单/新款进度/店铺/仓库统计/品牌/员工/客户 */
 router.get('/lists/:page', verifyJWT, async (req: Request, res: Response) => {
   try {

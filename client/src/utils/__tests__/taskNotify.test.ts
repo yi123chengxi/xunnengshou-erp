@@ -10,8 +10,10 @@
  * 直接对 antd notification 对象做运行时打桩（taskNotify 每次调用都实时取属性，打桩即生效）。
  */
 import { notification } from 'antd';
+import dayjs from 'dayjs';
 import {
   showTaskNotify, closeTaskNotify, pruneTaskNotifs, isTaskNotifySuppressed,
+  hasWithdrawRecordAroundLaunch, readWithdrawTaskLaunchAt, withdrawTaskStatusKey,
   WITHDRAW_TASK_NOTIF_PREFIXES, INVENTORY_TASK_NOTIF_PREFIXES,
 } from '../taskNotify';
 
@@ -96,5 +98,56 @@ describe('任务提醒弹窗自动撤下', () => {
     pruneTaskNotifs(WITHDRAW_TASK_NOTIF_PREFIXES, new Set());
     expect(destroyKeys).toContain('withdraw-task-shopC');
     expect(destroyKeys).toContain('withdraw-task-remind-shopC');
+  });
+});
+
+/**
+ * 提现任务「已办理」比较口径（对应缺陷：任务提醒拿记录时间与「当前时间-3天」比，
+ * 任务发布满 3 天后哪怕记录就写在发布当天也会被判定未提现，负责人端反复弹窗）。
+ * 需求口径：以「发布任务时间」为锚点只设下限——记录时间 ≥ 发布前 3 天 即视为已办理，
+ * 不设上限（只要提现了就不再催，哪怕发布后过了很久才提）。
+ */
+describe('提现任务已办理判定以发布任务时间为锚点', () => {
+  it('记录与发布同日→已办理（即使该记录距今天已超过 3 天）', () => {
+    const records = [{ shopName: '测试2', createdAt: '2026-11-17 16:13:01' }];
+    expect(hasWithdrawRecordAroundLaunch(records, '测试2', '2026-11-17 09:00')).toBe(true);
+  });
+
+  it('发布前 3 天内的记录（只填了提现日期）同样算已办理', () => {
+    const records = [{ shopName: '测试2', withdrawalDate: '2026-11-15' }];
+    expect(hasWithdrawRecordAroundLaunch(records, '测试2', '2026-11-17 09:00')).toBe(true);
+  });
+
+  it('发布之后任意时间的提现都算已办理（上限已放开，提现了就不再催）', () => {
+    const records = [{ shopName: '测试2', createdAt: '2026-12-20 10:00:00' }];
+    expect(hasWithdrawRecordAroundLaunch(records, '测试2', '2026-11-17 09:00')).toBe(true);
+  });
+
+  it('落在发布前 3 天以外的旧记录不算本任务的提现，仍需提醒', () => {
+    const records = [{ shopName: '测试2', createdAt: '2026-11-10 10:00:00' }];
+    expect(hasWithdrawRecordAroundLaunch(records, '测试2', '2026-11-17 09:00')).toBe(false);
+  });
+
+  it('其他店铺的记录不参与比较', () => {
+    const records = [{ shopName: '测试5', createdAt: '2026-11-17 16:13:01' }];
+    expect(hasWithdrawRecordAroundLaunch(records, '测试2', '2026-11-17 09:00')).toBe(false);
+  });
+
+  it('取不到发布时刻（无在途任务/历史脏数据）→退回旧的「最近 3 天」口径', () => {
+    const fresh = [{ shopName: '测试2', createdAt: dayjs().format('YYYY-MM-DD HH:mm:ss') }];
+    expect(hasWithdrawRecordAroundLaunch(fresh, '测试2', '')).toBe(true);
+    expect(hasWithdrawRecordAroundLaunch(fresh, '测试2', 'not-a-date')).toBe(true);
+    expect(hasWithdrawRecordAroundLaunch(fresh, '测试2', undefined)).toBe(true);
+    const stale = [{ shopName: '测试2', createdAt: '2026-01-01 10:00:00' }];
+    expect(hasWithdrawRecordAroundLaunch(stale, '测试2', '')).toBe(false);
+  });
+
+  it('readWithdrawTaskLaunchAt 从 withdrawal_task_status_<owner> 取发布时刻，异常不抛错', () => {
+    localStorage.setItem(withdrawTaskStatusKey('owner1'), JSON.stringify({ shopA: '2026-11-17 09:00' }));
+    expect(readWithdrawTaskLaunchAt('owner1', 'shopA')).toBe('2026-11-17 09:00');
+    expect(readWithdrawTaskLaunchAt('owner1', 'shopB')).toBe('');
+    expect(readWithdrawTaskLaunchAt('ownerX', 'shopA')).toBe('');
+    localStorage.setItem(withdrawTaskStatusKey('owner2'), '{坏数据');
+    expect(readWithdrawTaskLaunchAt('owner2', 'shopA')).toBe('');
   });
 });

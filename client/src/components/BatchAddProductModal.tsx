@@ -5,7 +5,9 @@ import {
 import {
   PlusOutlined, DeleteOutlined, PictureOutlined, SaveOutlined, CameraOutlined, CopyOutlined, UploadOutlined,
 } from '@ant-design/icons';
-import { saveDataset } from '../utils/dataStore';
+import { loadProductListLatest, readProductListSync } from '../utils/dataStore';
+import { commitProductList } from '../utils/productListSync';
+import { getSessionOwner } from '../utils/dataOwner';
 import { safeSetItem } from '../utils/storageQuota';
 import { saveFullImage } from '../utils/imageStore';
 import { readScopedItem, writeScopedItem } from '../utils/scopedStorage';
@@ -13,12 +15,10 @@ import MoldPickerModal from './MoldPickerModal';
 
 const PRIMARY = '#1e4a7e';
 
-// 获取数据所有者（与主页面口径一致）
-const getDataOwner = (): string => {
-  const isSub = localStorage.getItem('isSubAccount') === 'true';
-  if (isSub) return localStorage.getItem('parentAccount') || localStorage.getItem('username') || '';
-  return localStorage.getItem('username') || '';
-};
+// 获取数据所有者：必须与页面同一口径（getSessionOwner）。
+// 旧实现自读 username/parentAccount，与主页面的确认值不一致时，
+// 弹窗会把新品写进另一个键，页面刷新后读不到（“新增后刷新就空”）
+const getDataOwner = (): string => getSessionOwner();
 
 // 条形码前缀基数：69 + 订单号前缀(4位) + 0000000
 const getBarcodeBase = (): number => {
@@ -166,8 +166,8 @@ const BatchAddProductModal: React.FC<BatchAddProductModalProps> = ({
     const styleCode = batchStyleCode.trim();
     if (!styleCode) { message.warning('请先输入款式编码'); return; }
     const owner = getDataOwner();
-    let existing: any[] = [];
-    try { existing = JSON.parse(localStorage.getItem(`pageData_basic-data_product-list_${owner}`) || '[]'); } catch { /* ignore */ }
+    // 同步读会话内存镜像：刚提交的新品也要参与条形码查重，不能只看会被配额淘汰的 localStorage
+    const existing: any[] = readProductListSync(owner);
     const existingBarcodes = new Set(existing.map((p: any) => p.barcode).filter(Boolean));
     const colors = batchColorChecked ? batchColorValues.filter(v => v.trim()) : [''];
     const specs = batchSpecChecked ? batchSpecValues.filter(v => v.trim()) : [''];
@@ -194,8 +194,8 @@ const BatchAddProductModal: React.FC<BatchAddProductModalProps> = ({
     onClose();
   }, [onClose]);
 
-  // 确认新增
-  const handleConfirm = useCallback(() => {
+  // 确认新增（本机主存 + 立即上传服务端，上传没赶上则由后台队列补传）
+  const handleConfirm = useCallback(async () => {
     if (batchPreviewItems.length === 0) { message.warning('请先生成预览'); return; }
     if (!batchProductStatus) { message.error('请选择商品状态'); return; }
     if (isRaw && !batchSupplier.trim()) { message.error('原材料必须选择供应商'); return; }
@@ -203,9 +203,8 @@ const BatchAddProductModal: React.FC<BatchAddProductModalProps> = ({
     if (isRaw && !batchUnit.trim()) { message.error('原材料必须填写单位'); return; }
     if (isRaw && (!batchCostPrice || batchCostPrice <= 0)) { message.error('原材料必须填写成本价'); return; }
     const owner = getDataOwner();
-    const plKey = `pageData_basic-data_product-list_${owner}`;
     try {
-      const existing: any[] = JSON.parse(localStorage.getItem(plKey) || '[]');
+      const existing: any[] = await loadProductListLatest(owner);
       const existingBarcodes = new Set(existing.map((p: any) => p.barcode).filter(Boolean));
       const dupBarcodes = batchPreviewItems.filter(item => item.barcode && existingBarcodes.has(item.barcode));
       if (dupBarcodes.length > 0) { message.error(`条形码 ${dupBarcodes.map(d => d.barcode).join(', ')} 与已有产品重复，请修改款式编码后重试`); return; }
@@ -249,12 +248,15 @@ const BatchAddProductModal: React.FC<BatchAddProductModalProps> = ({
         }
       });
       setBatchColorImages(['']);
-      safeSetItem(plKey, JSON.stringify(merged));
-      saveDataset(plKey, JSON.stringify(merged));
-      safeSetItem(`${plKey}_ts`, String(Date.now()));
+      // 权威提交：写 IndexedDB 主存与会话内存，剥除 base64 图后整键上传服务端
+      const commit = await commitProductList(owner, merged);
       setBatchPreviewItems([]);
       setBarcodeOffset(0);
-      message.success(`成功新增 ${newRecords.length} 条产品`);
+      if (commit.uploaded) {
+        message.success(`成功新增 ${newRecords.length} 条产品（已同步服务器）`);
+      } else {
+        message.warning(`已新增 ${newRecords.length} 条并存本机，服务器暂时未确认，后台会自动补传`);
+      }
       if (onCreated) onCreated(newRecords);
       onClose();
     } catch { message.error('保存失败'); }

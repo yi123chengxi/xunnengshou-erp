@@ -149,6 +149,19 @@ export function isLocalImageRef(value: string | undefined | null): boolean {
 }
 
 /**
+ * 字段值是否「像一张能显示的图」：base64 / blob / 带协议地址 / 协议相对 // / 以 / 开头的云端相对地址。
+ * 其余形态（Excel 导入的图片文件名、备注文本、本机存储键名等）交给 absoluteImageUrl
+ * 会被拼成 `${API_ORIGIN}/<原文>` 这种必然 404 的地址——列表图片列因此变空白，
+ * 成品市场「有图才自动上架」也因此把无图商品当成有图上架（卡片挂破图）。
+ */
+export function isRenderableImageValue(value: string | undefined | null): boolean {
+  if (!value) return false;
+  const v = String(value).trim();
+  if (!v) return false;
+  return /^(data:image\/|blob:|https?:\/\/|\/\/|\/)/i.test(v);
+}
+
+/**
  * 业务记录里的图片字段值 → 可直接交给 <img src> 的地址。
  * 四种存量形态一律包含：
  * - base64 / blob：原样返回；

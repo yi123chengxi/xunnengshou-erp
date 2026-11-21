@@ -12,6 +12,7 @@
  * antd 页内降级弹窗分支；原生通道（showNativeNotification）仍由各调用点先行尝试。
  */
 import { notification } from 'antd';
+import dayjs from 'dayjs';
 
 /** 关闭后重新弹出的间隔（毫秒） */
 const RESHOW_MS = 30000;
@@ -82,6 +83,58 @@ export const pruneTaskNotifs = (prefixes: string[], keep: Set<string>): void => 
   Array.from(shownKeys).forEach(key => {
     if (keep.has(key)) return;
     if (prefixes.some(p => key.startsWith(p))) closeTaskNotify(key);
+  });
+};
+
+// ===================== 提现任务「已办理」判定（以发布任务时间为锚点） =====================
+
+/** 比较窗口下限：发布任务时间往前 3 天（不设上限——发布之后任意时间的提现都算已办理） */
+const WITHDRAW_MATCH_DAYS = 3;
+
+/** 提现任务发布时刻存储键（发布端 WithdrawalRecordPage 写入 { [店铺key]: 'YYYY-MM-DD HH:mm' }） */
+export const withdrawTaskStatusKey = (owner: string): string => `withdrawal_task_status_${owner}`;
+
+/** 读取某店铺提现任务的发布时刻；无在途任务或数据异常时返回空串 */
+export const readWithdrawTaskLaunchAt = (owner: string, shopKey: string): string => {
+  try {
+    const map = JSON.parse(localStorage.getItem(withdrawTaskStatusKey(owner)) || '{}');
+    const v = map && typeof map === 'object' ? (map as Record<string, any>)[shopKey] : '';
+    return typeof v === 'string' ? v : '';
+  } catch { return ''; }
+};
+
+/** 提现记录参与比较的时间：优先录入时间 createdAt，退回提现日期 withdrawalDate；不可解析则不参与比较 */
+const withdrawRecordTime = (r: any) => {
+  const t = String(r?.createdAt || r?.withdrawalDate || '').trim();
+  if (!t) return null;
+  const d = dayjs(t);
+  return d.isValid() ? d : null;
+};
+
+/**
+ * 该店铺是否「已办理提现」——右下角提现任务提醒据此撤下/不再弹出，发起任务弹窗据此禁用勾选。
+ *
+ * 口径以「发布任务时间」为锚点，只设下限、不设上限：提现记录时间 ≥ 发布时间-3天 即算已办理，
+ * 也就是「只要提现了就不再催」（发布后过多久提的都算），且发布前 3 天内已提过的也视为已提现。
+ * 此前是 [发布-3天, 发布+3天] 双边窗口，发布超 3 天才去提现的反而被判「未提现」→ 反复弹提醒。
+ * 再早一版是拿记录时间与「当前时间-3天」比较，任务发布满 3 天后哪怕记录就写在发布当天也会被判未提现。
+ * launchedAt 缺失/不可解析（历史任务数据、或该店铺本就没有在途任务）时退回旧的「最近 3 天」口径。
+ */
+export const hasWithdrawRecordAroundLaunch = (
+  records: any[],
+  shopName: string,
+  launchedAt?: string,
+): boolean => {
+  const list = Array.isArray(records) ? records : [];
+  const raw = String(launchedAt || '').trim();
+  const anchor = raw ? dayjs(raw) : null;
+  const base = anchor && anchor.isValid() ? anchor : dayjs();
+  const from = base.subtract(WITHDRAW_MATCH_DAYS, 'day').startOf('day');
+  const name = String(shopName || '');
+  return list.some((r: any) => {
+    if (String(r?.shopName || '') !== name) return false;
+    const t = withdrawRecordTime(r);
+    return !!t && !t.isBefore(from);
   });
 };
 

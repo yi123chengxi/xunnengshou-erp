@@ -20,8 +20,8 @@ import MoldMarketTab from './MoldMarketTab';
 import ChatPage from './ChatPage';
 import { triggerOpenChat, fetchUnreadCount, onNewMessage as onChatNewMessage } from '../utils/chatSocket';
 import { getDataOwner } from '../utils/brandAuth';
-import { attachImageToRecord, absoluteImageUrl } from '../utils/imageSpace';
-import { productImgKeyOf, productImgSync, resolveProductImage, shrinkImgForStore } from '../utils/productImage';
+import { attachImageToRecord, absoluteImageUrl, isRenderableImageValue } from '../utils/imageSpace';
+import { productImgKeyOf, productImgSync, resolveProductImage, shrinkImgForStore, probeImagesLoadable, isImageUnloadable, markImageUnloadable } from '../utils/productImage';
 import { copyText } from '../utils/clipboard';
 
 const { Text, Paragraph } = Typography;
@@ -374,10 +374,31 @@ const subjectSimilarity = (ref: SubjectFeatures, cur: SubjectFeatures): number =
   return 0.30 * silSim + 0.30 * hogSim + 0.18 * colorSim + 0.12 * layoutSim + 0.10 * aspectSim;
 };
 
-// 图片解析：优先产品自带 image（URL），回退发布者图片存储键 prodImg_<owner>_<productKey>
-const imgOf = (owner: string, p: any): string => {
-  if (p && p.image) return absoluteImageUrl(String(p.image));
-  try { return localStorage.getItem(`prodImg_${owner}_${p && p.key}`) || ''; } catch { return ''; }
+// 图片解析：优先产品自带 image（必须是真的能显示的地址且未被探测判死），回退发布者图片存储键 prodImg_<owner>_<productKey>
+const imgOf = (owner: string, p: any): string => productImgSync(owner, p && p.key, p && p.image);
+
+// 卡片取图统一口径：记录/内嵌地址必须是可显示形态且没被探测判死，否则回退补充源或发布者缩略图键，
+// 防止 Excel 导入带来的外链脏值在卡片上挂成破图，同时也不会被当成「有图」参与自动上架
+const pickCardImg = (recordImage: any, owner: string, productKey: string, fallback = ''): string => {
+  const raw = String(recordImage || '').trim();
+  if (raw && isRenderableImageValue(raw)) {
+    const abs = absoluteImageUrl(raw);
+    if (abs && !isImageUnloadable(abs)) return abs;
+  }
+  if (fallback) return fallback;
+  return imgOf(owner, { key: productKey });
+};
+
+// 卡片图：地址加载失败（防盗链外链/脏数据/二进制丢失）时不再挂浏览器破图，
+// 顺手登记为不可加载，下一轮自动上架聚合就据此把该款式当无图下架
+const CardImg: React.FC<{ src: string; alt?: string; fit?: 'cover' | 'contain' }> = ({ src, alt, fit = 'cover' }) => {
+  const [failed, setFailed] = useState(false);
+  useEffect(() => { setFailed(false); }, [src]);
+  if (!src || failed) {
+    return <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><ShopOutlined style={{ fontSize: 48, color: '#d9d9d9' }} /></div>;
+  }
+  return <img src={src} alt={alt} style={{ width: '100%', height: '100%', objectFit: fit }}
+    onError={() => { if (typeof navigator === 'undefined' || navigator.onLine !== false) markImageUnloadable(src); setFailed(true); }} />;
 };
 
 // 收集款式下各颜色主图（排除代表产品——其图已记入卡片 image 字段，避免 base64 重复存储），
@@ -386,8 +407,8 @@ const collectVariantImages = (ownerKey: string, prods: any[], styleCode: string,
   const out: { key: string; color: string; src: string }[] = [];
   (prods || []).forEach((p: any) => {
     if (!p || p.styleCode !== styleCode || !p.key || p.key === repKey) return;
-    let src = p.image || '';
-    if (!src) { try { src = localStorage.getItem(`prodImg_${ownerKey}_${p.key}`) || ''; } catch { /* ignore */ } }
+    // 与卡片主图同一口径：不可显示/已探测判死的地址不嵌入，否则卡片直接挂破图
+    const src = productImgSync(ownerKey, p.key, p.image);
     if (src) out.push({ key: p.key, color: p.color || '', src });
   });
   return out;
@@ -557,7 +578,7 @@ const CreateInventoryModal: React.FC<CreateInventoryModalProps> = ({ onCancel, o
           <Row gutter={[12, 12]}>
             {filteredProducts.map((item: any) => {
               const isSelected = selectedKeys.includes(item.key);
-              const imgSrc = absoluteImageUrl(item.image || imgOf(username, { key: item.productKey }));
+              const imgSrc = pickCardImg(item.image, username, item.productKey);
               return (
                 <Col xs={12} sm={8} md={6} key={item.key}>
                   <div
@@ -580,13 +601,7 @@ const CreateInventoryModal: React.FC<CreateInventoryModalProps> = ({ onCancel, o
                     )}
                     {/* 商品图片 */}
                     <div style={{ width: '100%', aspectRatio: '1 / 1', background: '#f5f5f5', overflow: 'hidden' }}>
-                      {imgSrc ? (
-                        <img src={imgSrc} alt={item.shortName} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                      ) : (
-                        <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                          <ShopOutlined style={{ fontSize: 36, color: '#d9d9d9' }} />
-                        </div>
-                      )}
+                      <CardImg src={imgSrc} alt={item.shortName} />
                     </div>
                     {/* 商品信息 */}
                     <div style={{ padding: '8px 10px' }}>
@@ -714,7 +729,7 @@ const AddProductsToInventoryModal: React.FC<AddProductsToInventoryModalProps> = 
           <Row gutter={[12, 12]}>
             {filteredProducts.map((item: any) => {
               const isSelected = selectedKeys.includes(item.key);
-              const imgSrc = absoluteImageUrl(item.image || imgOf(username, { key: item.productKey }));
+              const imgSrc = pickCardImg(item.image, username, item.productKey);
               return (
                 <Col xs={12} sm={8} md={6} key={item.key}>
                   <div
@@ -737,13 +752,7 @@ const AddProductsToInventoryModal: React.FC<AddProductsToInventoryModalProps> = 
                     )}
                     {/* 商品图片 */}
                     <div style={{ width: '100%', aspectRatio: '1 / 1', background: '#f5f5f5', overflow: 'hidden' }}>
-                      {imgSrc ? (
-                        <img src={imgSrc} alt={item.shortName} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                      ) : (
-                        <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                          <ShopOutlined style={{ fontSize: 36, color: '#d9d9d9' }} />
-                        </div>
-                      )}
+                      <CardImg src={imgSrc} alt={item.shortName} />
                     </div>
                     {/* 商品信息 */}
                     <div style={{ padding: '8px 10px' }}>
@@ -991,7 +1000,7 @@ const MarketPage: React.FC = () => {
           if (views.length) { thumbs.push(...views); break; }
         }
         setDetailThumbs(thumbs);
-        setDetailImg(thumbs[0]?.src || rec.image || '');
+        setDetailImg(thumbs[0]?.src || pickCardImg(rec.image, rec.publisherUsername, rec.productKey));
       })();
     } else {
       setDetailVariants([]); setDetailColor('');
@@ -1139,27 +1148,40 @@ const MarketPage: React.FC = () => {
   }, [tab, imgScanned, sweepFinished]);
 
   // 成品图片预扫描：把只存在于 IndexedDB（旧共享库/原图库）或图片空间绑定表里的图片补写进 localStorage 缩略图键，
-  // 供后续同步链路（自动上架聚合、卡片取图）读取；写完才放开 imgScanned 走聚合，避免「有图被判无图」
+  // 供后续同步链路（自动上架聚合、卡片取图）读取；写完才放开 imgScanned 走聚合，避免「有图被判无图」。
+  // 写完后再后台探测「记录自带地址」能不能真加载出来：Excel 导入的图片列常是旧系统外链或文件名，
+  // 防盗链/404 根本显示不了，却因字段非空被当成「有图」自动上架。探测失败的地址登记为不可加载，
+  // 据此重跑一次聚合就会把这类款式当无图下架（探测不阻塞首屏，避免大批量死链时市场长时间空转）
   useEffect(() => {
     if (tab !== 'finished') return;
     let cancelled = false;
+    const resweep = () => setMarket(prev => {
+      const swept = sweepFinished(prev);
+      if (swept.length !== prev.length || swept.some((r, idx) => r !== prev[idx])) { saveJson(MARKET_KEY, swept); return swept; }
+      return prev;
+    });
     (async () => {
       const listKeys: string[] = [];
       for (let i = 0; i < localStorage.length; i++) {
         const k = localStorage.key(i);
         if (k && k.startsWith('pageData_basic-data_product-list_')) listKeys.push(k);
       }
-      let synced = 0;
-      for (const k of listKeys) {
-        const acct = k.slice('pageData_basic-data_product-list_'.length);
+      const sets: { acct: string; prods: any[] }[] = [];
+      listKeys.forEach(k => {
         const raw = loadJson(k, []);
-        const prods: any[] = Array.isArray(raw) ? raw : [];
+        sets.push({ acct: k.slice('pageData_basic-data_product-list_'.length), prods: Array.isArray(raw) ? raw : [] });
+      });
+      let synced = 0;
+      for (const { acct, prods } of sets) {
         for (const p of prods) {
-          // 记录自带 image 时同步链路已能取到，无需占 localStorage 配额
-          if (!p || !p.key || p.image) continue;
+          if (!p || !p.key) continue;
+          const own = String(p.image || '').trim();
+          // 记录自带可用地址时同步链路已能取到，无需占 localStorage 配额；地址已判死的则要重找真图
+          const ownUsable = !!own && isRenderableImageValue(own) && !isImageUnloadable(absoluteImageUrl(own));
+          if (ownUsable) continue;
           const lsKey = productImgKeyOf(acct, p.key);
           if (localStorage.getItem(lsKey)) continue;
-          const src = await resolveProductImage(acct, p.key);
+          const src = await resolveProductImage(acct, p.key, own);
           if (!src) continue;
           // 缩略图键只存小图：旧共享库里可能是未压缩原图，原样写入会直接撞爆 5MB 配额
           const thumb = await shrinkImgForStore(src, 420);
@@ -1171,12 +1193,29 @@ const MarketPage: React.FC = () => {
       setImgScanned(true);
       if (synced > 0) {
         // 同步后重新扫描，让市场卡片获得图片
-        setMarket(prev => {
-          const swept = sweepFinished(prev);
-          if (swept.length !== prev.length || swept.some((r, idx) => r !== prev[idx])) { saveJson(MARKET_KEY, swept); return swept; }
-          return prev;
-        });
+        resweep();
       }
+      // 后台探测外链地址可加载性（去重 + 单次上限，不阻塞页面其他交互）
+      const probeUrls: string[] = [];
+      const seenUrl = new Set<string>();
+      sets.forEach(({ prods }) => prods.forEach((p: any) => {
+        const own = String(p?.image || '').trim();
+        if (!own || !isRenderableImageValue(own)) return;
+        const abs = absoluteImageUrl(own);
+        if (!abs || /^(data:image|blob:)/i.test(abs) || isImageUnloadable(abs) || seenUrl.has(abs)) return;
+        seenUrl.add(abs); probeUrls.push(abs);
+      }));
+      const budget = probeUrls.slice(0, 200);
+      if (budget.length === 0) return;
+      // 离线不探测：断网时所有地址都会 onerror，据此判死会把自家有图商品全部当无图下架
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+      const { dead } = await probeImagesLoadable(budget);
+      if (cancelled || dead.length === 0) return;
+      // 熔断：大批量同时失败更像服务不可达，不登记不重聚合（单个死链才按无图处理）
+      if (dead.length > 5 && dead.length >= budget.length * 0.5) return;
+      // 有地址被判死：登记后重跑聚合，让对应款式退出发包市场以外的成品市场（打墓碑下架）
+      dead.forEach(u => markImageUnloadable(u));
+      resweep();
     })();
     return () => { cancelled = true; };
   }, [tab, sweepFinished]);
@@ -2366,7 +2405,7 @@ const addToCart = useCallback((rec: any, qty?: number) => {
               semiList.length === 0 ? <Empty description="暂无发包订单" /> : (
                 <Row gutter={[12, 12]}>
                   {semiList.map(r => {
-                    const imgSrc = absoluteImageUrl(r.image || localStorage.getItem(`pubImg_${r.publisherUsername}_${r.key}`) || imgOf(r.publisherUsername, { key: r.productKey }));
+                    const imgSrc = pickCardImg(r.image, r.publisherUsername, r.productKey, localStorage.getItem(`pubImg_${r.publisherUsername}_${r.key}`) || '');
                     const minQuote = (r.quotes || []).map((q: any) => Number(q.unitPrice) || 0).filter((n: number) => n > 0);
                     const lowestPrice = minQuote.length ? Math.min(...minQuote) : null;
                     return (
@@ -2377,7 +2416,7 @@ const addToCart = useCallback((rec: any, qty?: number) => {
                         >
                           {/* 图片区 */}
                           <div style={{ width: '100%', aspectRatio: '1 / 1', background: '#f5f5f5', position: 'relative', overflow: 'hidden' }} onClick={() => openDetail(r)}>
-                            {imgSrc ? <img src={imgSrc} alt={r.shortName} style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><ShopOutlined style={{ fontSize: 48, color: '#d9d9d9' }} /></div>}
+                            <CardImg src={imgSrc} alt={r.shortName} />
                             {/* 状态角标 */}
                             {r.status === '已中标' && <div style={{ position: 'absolute', top: 8, right: 8, background: 'linear-gradient(135deg, #52c41a, #389e0d)', color: '#fff', fontSize: 11, padding: '2px 8px', borderRadius: 10, fontWeight: 600 }}>已中标</div>}
                             {r.status === '报价中' && <div style={{ position: 'absolute', top: 8, right: 8, background: 'linear-gradient(135deg, #1890ff, #096dd9)', color: '#fff', fontSize: 11, padding: '2px 8px', borderRadius: 10, fontWeight: 600 }}>报价中</div>}
@@ -2547,7 +2586,7 @@ const addToCart = useCallback((rec: any, qty?: number) => {
               <Row gutter={[12, 12]}>
                 {finishedList.map(r => {
                   const faved = favorites.some(f => f.cardKey === r.key);
-                  const imgSrc = absoluteImageUrl(r.image || imgOf(r.publisherUsername, { key: r.productKey }));
+                  const imgSrc = pickCardImg(r.image, r.publisherUsername, r.productKey);
                   return (
                     <Col xs={12} sm={8} md={6} lg={4} xl={4} key={r.key}>
                       <div style={{ background: '#fff', borderRadius: 12, overflow: 'hidden', boxShadow: '0 2px 12px rgba(0,0,0,0.08)', transition: 'all 0.3s', cursor: 'pointer' }}
@@ -2556,7 +2595,7 @@ const addToCart = useCallback((rec: any, qty?: number) => {
                       >
                         {/* 商品图片区 */}
                         <div style={{ width: '100%', aspectRatio: '1 / 1', background: '#f5f5f5', position: 'relative', overflow: 'hidden' }} onClick={() => openDetail(r)}>
-                          {imgSrc ? <img src={imgSrc} alt={r.shortName} style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><ShopOutlined style={{ fontSize: 48, color: '#d9d9d9' }} /></div>}
+                          <CardImg src={imgSrc} alt={r.shortName} />
                           {/* 图片搜索相似度角标 */}
                           {imageSearchUrl && imgSimScores[r.key] !== undefined && (
                             <div style={{ position: 'absolute', top: 8, left: 8, background: imgSimScores[r.key] > 0.65 ? '#52c41a' : imgSimScores[r.key] > 0.45 ? '#faad14' : '#999', color: '#fff', fontSize: 11, padding: '2px 8px', borderRadius: 10, fontWeight: 600 }}>
@@ -2721,7 +2760,7 @@ const addToCart = useCallback((rec: any, qty?: number) => {
                     <Row gutter={[12, 12]}>
                       {displayProducts.map(r => {
                         const faved = favorites.some(f => f.cardKey === r.key);
-                        const imgSrc = absoluteImageUrl(r.image || imgOf(r.publisherUsername, { key: r.productKey }));
+                        const imgSrc = pickCardImg(r.image, r.publisherUsername, r.productKey);
                         return (
                           <Col xs={12} sm={8} md={6} lg={4} xl={4} key={r.key}>
                             <div style={{ background: '#fff', borderRadius: 12, overflow: 'hidden', boxShadow: '0 2px 12px rgba(0,0,0,0.08)', transition: 'all 0.3s', cursor: 'pointer' }}
@@ -2730,7 +2769,7 @@ const addToCart = useCallback((rec: any, qty?: number) => {
                             >
                               {/* 商品图片区 */}
                               <div style={{ width: '100%', aspectRatio: '1 / 1', background: '#f5f5f5', position: 'relative', overflow: 'hidden' }} onClick={() => openDetail(r)}>
-                                {imgSrc ? <img src={imgSrc} alt={r.shortName} style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><ShopOutlined style={{ fontSize: 48, color: '#d9d9d9' }} /></div>}
+                                <CardImg src={imgSrc} alt={r.shortName} />
                                 {r.auto && r.publisherUsername === owner && <div style={{ position: 'absolute', top: 8, left: 8, background: 'linear-gradient(135deg, #ff6b6b, #ee5a24)', color: '#fff', fontSize: 11, padding: '2px 8px', borderRadius: 10, fontWeight: 600 }}>自动上架</div>}
                               </div>
                               {/* 商品信息区 */}
@@ -3133,7 +3172,7 @@ const addToCart = useCallback((rec: any, qty?: number) => {
                 <Col span={9}>
                   <div style={{ height: 300, background: '#fafafa', border: '1px solid #f0f0f0', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', cursor: detailImg ? 'zoom-in' : 'default' }}
                     onClick={() => { if (detailImg) { setImgPreviewSrc(detailImg); setImgPreviewVisible(true); } }}>
-                    {detailImg ? <img src={absoluteImageUrl(detailImg)} alt={detailRec.shortName} style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} /> : <ShopOutlined style={{ fontSize: 64, color: '#d9d9d9' }} />}
+                    {detailImg ? <CardImg src={absoluteImageUrl(detailImg)} alt={detailRec.shortName} fit="contain" /> : <ShopOutlined style={{ fontSize: 64, color: '#d9d9d9' }} />}
                   </div>
                   <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
                     {detailThumbs.map((t, i) => (
@@ -3404,7 +3443,7 @@ const addToCart = useCallback((rec: any, qty?: number) => {
       <Drawer title={`收藏夹（${liveFavorites.length}）`} open={favVisible} onClose={() => setFavVisible(false)} width={420}>
         {liveFavorites.length === 0 ? <Empty description="暂无收藏" /> : liveFavorites.map(f => {
           const rec = market.find(r => r.key === f.cardKey);
-          const img = rec ? absoluteImageUrl(rec.image || imgOf(rec.publisherUsername, { key: rec.productKey })) : '';
+          const img = rec ? pickCardImg(rec.image, rec.publisherUsername, rec.productKey) : '';
           return (
             <Card size="small" key={f.cardKey} style={{ marginBottom: 8 }}
               extra={<Space><Button size="small" onClick={() => rec && addToCart(rec)}>加购</Button><Button size="small" danger onClick={() => rec && toggleFav(rec)}>取消</Button></Space>}>
@@ -3445,7 +3484,7 @@ const addToCart = useCallback((rec: any, qty?: number) => {
               }>
               {g.items.map((c: any) => {
                 const ck = c._key;
-                const img = absoluteImageUrl(c.sku?.image || imgOf(sup, { key: g.rec.productKey, image: g.rec.image }));
+                const img = pickCardImg(c.sku?.image || g.rec.image, sup, g.rec.productKey);
                 const price = Number(c.sku?.unitPrice ?? g.rec.targetPrice) || 0;
                 return (
                   <div key={ck} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0', borderBottom: '1px dashed #f0f0f0' }}>

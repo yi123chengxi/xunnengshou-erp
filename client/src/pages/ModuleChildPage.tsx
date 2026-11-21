@@ -96,9 +96,10 @@ import type { ChildPageConfig, RecordStatus } from '../config/pageConfig';
 import type { ColumnsType } from 'antd/es/table';
 import * as XLSX from 'xlsx-js-style';
 import { unzipSync, zipSync } from 'fflate';
-import { copyText } from '../utils/clipboard';
+import { copyText, readClipboardImage, clipboardImageFailureText, imageFileFromPasteEvent } from '../utils/clipboard';
 import { getFullImage, saveFullImage, deleteFullImage, batchDeleteFullImages } from '../utils/imageStore';
-import { absoluteImageUrl, registerImageRef, uploadImage, attachImageToRecord, bindImageUrl, bindImageUrls, unbindImageUrl, loadImageUrlMap } from '../utils/imageSpace';
+import { absoluteImageUrl, registerImageRef, uploadImage, attachImageToRecord, bindImageUrl, bindImageUrls, unbindImageUrl, loadImageUrlMap, isRenderableImageValue } from '../utils/imageSpace';
+import { isImageUnloadable, markImageUnloadable } from '../utils/productImage';
 import { readScopedItem, writeScopedItem, readOwnerSuffixItem, writeOwnerSuffixItem, removeOwnerSuffixItem } from '../utils/scopedStorage';
 import BatchAddProductModal from '../components/BatchAddProductModal';
 import ScheduleBoard from '../components/ScheduleBoard';
@@ -117,7 +118,7 @@ import { appendStockLog, updateProductStock } from '../utils/stockUtils';
 import { loadTenantUsers } from '../utils/tenantUsers';
 import { appendBillLogEntry, readBillLog, billLogColor, resolveOperatorName, diffBillRecords, SUPPLIER_BILL_FIELD_MAP, getCurrentUserDisplayName } from '../utils/billLog';
 import { pullAllDatasets, flushDatasetUploadAsync, ensureDatasetFromServer, appendRowsToRemoteKey, declareShrink, isNeverShrinkKey, fetchServerDataset } from '../utils/serverSync';
-import { peekRemovedIds } from '../utils/shrinkRegistry';
+import { removedIdSet, rowIdentities, rowPrimaryId } from '../utils/shrinkRegistry';
 import { PRESET_PRINT_TEMPLATES, seedPresetPrintTemplates } from '../config/presetPrintTemplates';
 import { refreshCustomerPurchase, computeCustomerReceivedCents, toYuan, loadCustomerSummary } from '../utils/paySummary';
 import { resolveLatestCompanyName, resolveCompanyCred, buildCompanyCredMap, buildCredIndex } from '../utils/nameSync';
@@ -142,7 +143,7 @@ import OrderReservedModal from '../components/OrderReservedModal';
 import { buildOrderOccupiedMap, syncOrderReserved, nextOrderIdFrom, collectOrderIdsForAlloc } from '../utils/orderOccupied';
 import {
   RECON_BOOKED, reconStateOf, orderStatusOkForRecon, canInitRecon, canConfirmBill, canWithdrawRecon,
-  resolveBillAmountFields, deriveReconState,
+  resolveBillAmountFields, deriveReconState, isOrderDerived,
 } from '../utils/reconState';
 import { isAccountingMode, writeAutoEntries, removeAutoEntries, loadSubjectOptions, subjectFilterOption } from '../utils/accountingBridge';
 import { isInstallmentOrder, depositAmountOf, sumPayRecords, mergePayRecords, payProgressText, postInstallmentEffects, postShipRevenueEntry, installmentStatusOf } from '../utils/receiptWrite';
@@ -224,7 +225,11 @@ const PrPoImgCell = ({ productCode, owner }: { productCode: string; owner: strin
 // 产品图片共享读取：与新品研发同一图片库（IndexedDB prodImages，key=产品key），
 // 优先记录里的云端地址（刚上传/已迁移）→ 共享库 → 图片空间绑定表 → 记录 image 字段
 const useSharedProductImg = (recKey: string, fallback?: string) => {
-  const resolvedFallback = absoluteImageUrl(fallback) || '';
+  // 记录自带地址得先过「可显示形态」校验且没被探测判死：旧系统导入的图片列常是文件名或失效外链，
+  // 直接交给 absoluteImageUrl 会被拼成一个必然 404 的同源地址，并短路本机图片库查找（图片列整列空白）
+  const raw = String(fallback || '').trim();
+  const usable = isRenderableImageValue(raw) && !isImageUnloadable(absoluteImageUrl(raw));
+  const resolvedFallback = usable ? (absoluteImageUrl(raw) || '') : '';
   const [src, setSrc] = useState(resolvedFallback);
   const [loadFailed, setLoadFailed] = useState(false);
   useEffect(() => {
@@ -240,8 +245,13 @@ const useSharedProductImg = (recKey: string, fallback?: string) => {
     });
     return () => { cancelled = true; };
   }, [recKey, resolvedFallback]);
-  // 加载失败自愈：本地值损坏（配额截断的 base64/失效 blob/二进制缺失）时回退图片空间绑定表云端通道
-  const onError = useCallback(() => setLoadFailed(true), []);
+  // 加载失败自愈：把该地址登记为不可加载（下一轮渲染即回落本机图片库/绑定表，
+  // 市场聚合与自动上架也据此把它当无图），同时回退图片空间绑定表的云端地址
+  const onError = () => {
+    // 断网时图片只会统一报错，不能据此把好图记成永久无图
+    if (src && (typeof navigator === 'undefined' || navigator.onLine !== false)) markImageUnloadable(src);
+    setLoadFailed(true);
+  };
   const finalSrc = loadFailed ? (() => { const c = cloudImageOf(recKey); return c && c !== src ? c : ''; })() : src;
   return { src: finalSrc, onError };
 };
@@ -885,6 +895,35 @@ const uploadDatasetWithRetry = (key: string, json: string, attempt = 0): void =>
   flushDatasetUploadAsync(key, json).then(ok => { if (!ok) retry(); }).catch(retry);
 };
 
+/**
+ * 永不缩水键的「已删行不回流」过滤：本地所有读取入口（首屏 LS、IndexedDB 主存采纳、
+ * 标签激活重载、服务端同步刷新、跨标签页 storage 事件、查询回源并集）拿到的副本可能仍含
+ * 本端刚删掉的行（删除上传未完成、他端陈旧副本并集回灌服务端等）。
+ * 不剪掉这些幽灵行时，它们会进入内存 → 再被当作正常清单落盘并整键上传，经服务端并集
+ * 永久复活（银行账户删了刷新又出现的根因；账单明细同一缺陷）。
+ */
+const dropRemovedRows = (key: string, rows: any[]): any[] => {
+  if (!Array.isArray(rows) || rows.length === 0 || !isNeverShrinkKey(key)) return rows;
+  const rm = removedIdSet(key);
+  if (rm.size === 0) return rows;
+  const kept = rows.filter((r: any) => { const id = rowPrimaryId(r); return !id || !rm.has(id); });
+  return kept.length === rows.length ? rows : kept;
+};
+
+/** 行身份快照：key 与 id 都入集（与删除申报/服务端 idOf=key||id 同口径，避免单取值认错行） */
+const rowIdSnapshot = (rows: any[]): Set<string> => {
+  const s = new Set<string>();
+  (rows || []).forEach((r: any) => rowIdentities(r).forEach((id) => s.add(id)));
+  return s;
+};
+
+/**
+ * 行是否已存在于身份集合（key 与 id 任一命中即视为同一行）。
+ * 合并保护判定用它：任一身份已认则不再当作「本机新建未落盘」并回，
+ * 避免同一行因两端取的身份字段不同被重复并回（账单行 key=bill-<单号>、id=<单号>）。
+ */
+const isRowIn = (row: any, ids: Set<string>): boolean => rowIdentities(row).some((id) => ids.has(id));
+
 const ModuleChildPage: React.FC = () => {
   const { wrapColumns: wrapBankDetailCols } = useResizableColumns<any>('colWidths_bankDetail');
   // 银行流水表格：列宽拖拽自由调整（持久化）
@@ -994,6 +1033,16 @@ const ModuleChildPage: React.FC = () => {
   // 生产订单新增/编辑：图片上传 + 生产备注
   const [poAddImages, setPoAddImages] = useState<string[]>([]);
   const [poEditImages, setPoEditImages] = useState<string[]>([]);
+  // 生产订单新增窗口：计划明细列显示控制（沿用订单管理货品明细「显」的交互口径）
+  const [poPlanFields, setPoPlanFields] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem(`poPlanDisplay_${localStorage.getItem('username') || 'admin'}`);
+      if (saved) { const arr = JSON.parse(saved); if (Array.isArray(arr) && arr.length > 0) return arr; }
+    } catch { /* ignore */ }
+    return ['image', 'name', 'productCode', 'productType', 'moldCode', 'quantity', 'stock'];
+  });
+  // 计划明细「批量填充」的待应用数量（点「应用」才写入各行）
+  const [poPlanFillQty, setPoPlanFillQty] = useState<number | null>(null);
   // 生产管理费表单的计算方式状态
   const [addCalcMode, setAddCalcMode] = useState<'fixed' | 'formula'>('formula');
 
@@ -1949,8 +1998,8 @@ const ModuleChildPage: React.FC = () => {
   const [manualAddText, setManualAddText] = useState('');
   const [manualAddMode, setManualAddMode] = useState<'excel' | 'manual'>('manual');
   const [manualAddUseBasePrice, setManualAddUseBasePrice] = useState(false);
-  // 手动添加弹窗导入目标：订单编辑/新增 or 账单明细新建单据
-  const [manualAddTarget, setManualAddTarget] = useState<'orderEdit' | 'billAdd'>('orderEdit');
+  // 手动添加弹窗导入目标：订单编辑/新增 or 生产订单新增（计划明细） or 账单明细新建单据
+  const [manualAddTarget, setManualAddTarget] = useState<'orderEdit' | 'orderAdd' | 'billAdd'>('orderEdit');
 
   // 编辑窗口列显示控制弹窗
   const [editColumnVisible, setEditColumnVisible] = useState(false);
@@ -2654,6 +2703,8 @@ const ModuleChildPage: React.FC = () => {
 
         const errors: { row: number; field: string; message: string }[] = [];
         const parsedRows: Record<string, any>[] = [];
+        // 图片列里不是有效图片地址的行数（丢弃后提醒用户，避免脏值流入市场「有图」判定）
+        let imgDropped = 0;
 
         jsonData.forEach((row, idx) => {
           const mapped: Record<string, any> = {};
@@ -2663,6 +2714,13 @@ const ModuleChildPage: React.FC = () => {
               mapped[key] = value;
             }
           });
+          // 图片列只接受真正能显示的地址（data:/blob:/http(s)://同源路径）：旧系统导出的文件名、
+          // 带防盗链的外链原样落库后会拼成一个加载不出来的地址，却被当成「有图」自动上架成品市场
+          if (mapped.image !== undefined && mapped.image !== null && String(mapped.image).trim() !== '') {
+            const imgVal = String(mapped.image).trim();
+            if (isRenderableImageValue(imgVal)) mapped.image = imgVal;
+            else { mapped.image = ''; imgDropped++; }
+          }
           mapped.key = `import-${Date.now()}-${idx}`;
 
           // 验证必填字段
@@ -2729,6 +2787,7 @@ const ModuleChildPage: React.FC = () => {
         setImportPreviewData(parsedRows);
         setImportErrors(errors);
         setImportStep(1);
+        if (imgDropped > 0) message.warning(`${imgDropped} 行的「图片」列不是可显示的图片地址，已忽略（如需上图请在列表中重新上传）`);
       } catch (err) {
         message.error('文件解析失败，请确认文件格式为 Excel (.xlsx/.xls)');
       }
@@ -5205,6 +5264,11 @@ const ModuleChildPage: React.FC = () => {
       let serverRows: any[] = [];
       try { serverRows = JSON.parse(rec.json); } catch { return; }
       if (!Array.isArray(serverRows) || serverRows.length === 0) return;
+      // 已删行不并回：服务端仍持有它们只说明删除申报尚未在云端生效（上传失败/他端陈旧副本
+      // 并集回灌），把这份幽灵行并回来并上报会彻底抵消用户的删除（账户删了刷新又出现）
+      const rm = removedIdSet(key);
+      if (rm.size > 0) serverRows = serverRows.filter((r: any) => { const id = rowPrimaryId(r); return !id || !rm.has(id); });
+      if (serverRows.length === 0) return;
       void readFreshDataset(key).then(stored => {
         let localRows: any[] = [];
         try { localRows = JSON.parse(stored || '[]'); } catch { localRows = []; }
@@ -5245,6 +5309,9 @@ const ModuleChildPage: React.FC = () => {
       try {
         let parsed = JSON.parse(e.newValue);
         if (!Array.isArray(parsed)) return;
+        // 其他标签页写入的副本可能仍含本端已删行（删除上传尚未落地/他端陈旧副本回灌）：
+        // 不剪掉就会进入内存并在下次持久化时整键上传，经服务端并集永久复活
+        parsed = dropRemovedRows(sharedDataKey, parsed);
         // 账单明细：必须从订单管理重建，不用跨标签页的旧缓存数据
         if (moduleKey === 'customer' && childKey === 'bill-detail') {
           parsed = buildBillDetailRows(parsed);
@@ -5252,14 +5319,16 @@ const ModuleChildPage: React.FC = () => {
         // 合并保护：仅保护“刚创建尚未落盘”的记录（不在加载快照 loadedIdsRef 中）。
         // 已在快照中的记录若 incoming 缺失，说明已被删除（如排期看板移除），不得复活；
         // 360 等浏览器同标签页也触发 storage 事件，此时 dataSourceRef 尚为旧值，无此检查会把刚删除的记录立即复活
-        const incomingIds = new Set(parsed.map((r: any) => String(r?.id || r?.key || '')).filter(Boolean));
+        const incomingIds = rowIdSnapshot(parsed);
+        const rmSet = removedIdSet(sharedDataKey);
         const extras = dataSourceRef.current.filter((r: any) => {
-          const rid = String(r?.id || r?.key || '');
-          return !!rid && !incomingIds.has(rid) && !loadedIdsRef.current.has(rid);
+          const pid = rowPrimaryId(r);
+          if (pid && rmSet.has(pid)) return false; // 本端已申报删除的行不当作「新建未落盘」保护
+          return !isRowIn(r, incomingIds) && !isRowIn(r, loadedIdsRef.current);
         });
         const merged = extras.length > 0 ? [...parsed, ...extras] : parsed;
 
-        loadedIdsRef.current = new Set(merged.map((r: any) => String(r?.id || r?.key || '')).filter(Boolean));
+        loadedIdsRef.current = rowIdSnapshot(merged);
         try { lastKnownTsRef.current = Number(localStorage.getItem(`${sharedDataKey}_ts`) || 0) || 0; } catch { /* ignore */ }
         if (isProductList) {
           // 产品列表 LS 中不含图片，需按行回填图片，避免其他标签页同步后图片丢失
@@ -5410,10 +5479,10 @@ const ModuleChildPage: React.FC = () => {
           ...item,
           productType: (item?.level === '0' || item?.level === 0 || !item?.level) ? '成品' : '半成品',
         });
-        const data = healActualStockFromLogs(repaired);
+        const data = dropRemovedRows(sharedDataKey, healActualStockFromLogs(repaired));
         // 刚从服务端采纳的这份就是权威内容，无需再回传一次（避免自激上传）
         justCommittedJsonRef.current = buildStoredProductListJson(data);
-        loadedIdsRef.current = new Set(data.map((r: any) => String(r?.id || r?.key || '')).filter(Boolean));
+        loadedIdsRef.current = rowIdSnapshot(data);
         // 图片缩略图是本机缓存，只在本体没图时回填，避免盖掉云端图片地址
         const withImg = data.map((item: any) => {
           if (item && item.key && !item.image) {
@@ -5717,9 +5786,12 @@ const ModuleChildPage: React.FC = () => {
         });
         if (ch2) pushRecordToPage(sharedDataKey, data);
       }
+      // 首屏缓存可能早于本端删除（写入后刷新、上传未完成）：先剪掉已删行再入内存，
+      // 否则陈旧的幽灵行会被当作正常清单落盘并整键上传，经服务端并集永久复活
+      data = dropRemovedRows(sharedDataKey, data);
       setDataSource(data);
       // 记录加载快照，供持久化时防旧覆盖合并使用
-      loadedIdsRef.current = new Set(data.map((r: any) => String(r?.id || r?.key || '')).filter(Boolean));
+      loadedIdsRef.current = rowIdSnapshot(data);
       try { lastKnownTsRef.current = Number(localStorage.getItem(`${sharedDataKey}_ts`) || 0) || 0; } catch { /* ignore */ }
       // 全部页面统一：localStorage 配额不足写入失败时，IndexedDB 保存全量数据，取较新者恢复，防止刷新丢失
       {
@@ -5734,10 +5806,12 @@ const ModuleChildPage: React.FC = () => {
             try {
               const parsed = JSON.parse(idb.json);
               if (Array.isArray(parsed) && parsed.length > 0) {
-                const incomingIds = new Set(parsed.map((r: any) => String(r?.id || r?.key || '')).filter(Boolean));
+                const incomingIds = rowIdSnapshot(parsed);
+                const rmIds = removedIdSet(sharedDataKey);
                 const extras = dataSourceRef.current.filter((r: any) => {
-                  const rid = String(r?.id || r?.key || '');
-                  return !!rid && !incomingIds.has(rid);
+                  const pid = rowPrimaryId(r);
+                  if (pid && rmIds.has(pid)) return false; // 本端已删的行不算「刚新建未落盘」
+                  return !isRowIn(r, incomingIds);
                 });
                 if (extras.length > 0) {
                   // 当前 dataSource 有 incoming 没有的记录，说明用户新建了，不能覆盖
@@ -5753,7 +5827,7 @@ const ModuleChildPage: React.FC = () => {
               if (Array.isArray(parsed) && parsed.length > 0) {
                 const idbSig = isProductList ? `${parsed.length}:${parsed[0]?.key || ''}` : String(parsed.length);
                 if (idbSig !== syncSig) {
-                  applyList = parsed;
+                  applyList = dropRemovedRows(sharedDataKey, parsed);
                 }
               }
             } catch { /* ignore */ }
@@ -5766,7 +5840,7 @@ const ModuleChildPage: React.FC = () => {
                 loadDataset(sharedDataKey).then((retryIdb) => {
                   if (!retryIdb || dataSourceRef.current.length > 0) return;
                   try {
-                    const retryParsed = JSON.parse(retryIdb.json);
+                    const retryParsed = dropRemovedRows(sharedDataKey, JSON.parse(retryIdb.json));
                     if (Array.isArray(retryParsed) && retryParsed.length > 0) {
                       if (isProductList) {
                         const withImg = retryParsed.map((item: any) => {
@@ -5874,8 +5948,10 @@ const ModuleChildPage: React.FC = () => {
         }
         // 商品族：切签重载时实际库存按日志自愈
         if (isProductList) parsed = healActualStockFromLogs(parsed);
+        // 主存/缓存副本仍含本端已删行时剪掉，避免重载把已删账户带回内存再整键上传复活
+        parsed = dropRemovedRows(sharedDataKey, parsed);
         setDataSource(parsed);
-        loadedIdsRef.current = new Set(parsed.map((r: any) => String(r?.id || r?.key || '')).filter(Boolean));
+        loadedIdsRef.current = rowIdSnapshot(parsed);
       } catch { /* ignore */ }
     }).catch(() => { /* ignore */ });
     return () => { cancelled = true; };
@@ -5936,12 +6012,16 @@ const ModuleChildPage: React.FC = () => {
         return item;
       }));
       if (curJson === newJson) return; // 内容相同，跳过
+      // 服务端回写的副本仍含本端已删行（删除申报未在云端生效/他端并集回灌）时先剪掉
+      parsed = dropRemovedRows(sharedDataKey, parsed);
       // 合并：仅保护“刚创建尚未落盘”的记录（不在加载快照 loadedIdsRef 中）。
       // 已在快照中的记录若 localStorage 缺失，说明已被本页其他组件（如排期看板）删除，不得复活（否则多实例/多标签页互用旧 state 拉锯复活已删排期）
-      const localIds = new Set(parsed.map((r: any) => String(r?.id || r?.key || '')).filter(Boolean));
+      const localIds = rowIdSnapshot(parsed);
+      const rmSet = removedIdSet(sharedDataKey);
       const extras = dataSourceRef.current.filter((r: any) => {
-        const rid = String(r?.id || r?.key || '');
-        return !!rid && !localIds.has(rid) && !loadedIdsRef.current.has(rid);
+        const pid = rowPrimaryId(r);
+        if (pid && rmSet.has(pid)) return false; // 本端已删的行不当「新建未落盘」保护回流
+        return !isRowIn(r, localIds) && !isRowIn(r, loadedIdsRef.current);
       });
       const merged = extras.length > 0 ? [...parsed, ...extras] : parsed;
       if (isProductList) {
@@ -5957,7 +6037,7 @@ const ModuleChildPage: React.FC = () => {
         setDataSource(merged);
       }
       // 更新快照
-      loadedIdsRef.current = new Set(merged.map((r: any) => String(r?.id || r?.key || '')).filter(Boolean));
+      loadedIdsRef.current = rowIdSnapshot(merged);
       try { lastKnownTsRef.current = Number(localStorage.getItem(`${sharedDataKey}_ts`) || 0) || 0; } catch {}
     } catch { /* ignore */ }
     }).catch(() => { /* ignore */ });
@@ -6009,10 +6089,14 @@ const ModuleChildPage: React.FC = () => {
             if (lsRaw) {
               const lsList = JSON.parse(lsRaw);
               if (Array.isArray(lsList)) {
-                const myIds = new Set(dataSource.map((r: any) => String(r?.id || r?.key || '')));
+                // 身份口径与删除申报一致（key + id）：陈旧 lsList 里命中删除申报/墓碑的行一律不得
+                // 当作「其他标签页新增」并回本次写入，否则已删账户会随这份写入回到服务端
+                const myIds = rowIdSnapshot(dataSource);
+                const rmSet = removedIdSet(sharedDataKey);
                 const extras = lsList.filter((r: any) => {
-                  const rid = String(r?.id || r?.key || '');
-                  return !!rid && !myIds.has(rid) && !loadedIdsRef.current.has(rid);
+                  const pid = rowPrimaryId(r);
+                  if (pid && rmSet.has(pid)) return false;
+                  return !isRowIn(r, myIds) && !isRowIn(r, loadedIdsRef.current);
                 });
                 if (extras.length > 0) outList = [...dataSource, ...extras];
               }
@@ -6028,11 +6112,20 @@ const ModuleChildPage: React.FC = () => {
           if (prevWrittenRowsRef.current === null) {
             prevWrittenRowsRef.current = outList;
           } else {
-            const declared = new Set(peekRemovedIds(sharedDataKey) || []);
-            const nextIds = new Set(outList.map((r: any) => String(r?.id || r?.key || '')).filter(Boolean));
+            // 申报全集（含持久墓碑）：旧实现只取未消费的一次性申报，刷新/上传成功后
+            // 申报为空，陈旧的 prevWrittenRows 会把已删行再次并回本次写入
+            const declared = removedIdSet(sharedDataKey);
+            // 身份口径与删除申报/服务端合并保持一致：key 与 id 都参与判定。账单行 key=bill-<单号>、
+            // id=<单号> 两值不同，旧实现只取 id||key 一个值比对，已申报删除的行会被当成「意外缩水」
+            // 并回本次写入，落盘/上传的仍是含该行的列表 → 刷新或点击查询立刻复活
+            const idsOf = (r: any): string[] => [String(r?.key || ''), String(r?.id || '')].filter(Boolean);
+            const nextIds = new Set<string>();
+            outList.forEach((r: any) => idsOf(r).forEach((id) => nextIds.add(id)));
             const missingRows = prevWrittenRowsRef.current.filter((r: any) => {
-              const rid = String(r?.id || r?.key || '');
-              return !!rid && !nextIds.has(rid) && !declared.has(rid);
+              const ids = idsOf(r);
+              if (ids.length === 0) return false;
+              if (ids.some((id) => nextIds.has(id))) return false; // 仍在列表中（换主键落地也算）
+              return !ids.some((id) => declared.has(id));          // 已申报删除 = 合法缩水，不并回
             });
             if (missingRows.length > 0) outList = [...outList, ...missingRows];
           }
@@ -6059,7 +6152,7 @@ const ModuleChildPage: React.FC = () => {
         // 或刚从本机主存采纳而来：本次只是同一份内容的 state 变化，不重复写主存/不重复整键上传
         if (isProductList && justCommittedJsonRef.current === json) {
           justCommittedJsonRef.current = '';
-          loadedIdsRef.current = new Set(outList.map((r: any) => String(r?.id || r?.key || '')).filter(Boolean));
+          loadedIdsRef.current = rowIdSnapshot(outList);
           return;
         }
         // 内容未变化时跳过写入：避免重复刷新 _ts/重复上传，也避免旧标签页用相同内容空转覆盖
@@ -6097,7 +6190,7 @@ const ModuleChildPage: React.FC = () => {
           saveDataset(sharedDataKey, json);
           // 与本地写盘结果无关的直传通道（离线时自动进队列，联网后补传）
           uploadDatasetWithRetry(sharedDataKey, json);
-          loadedIdsRef.current = new Set(outList.map((r: any) => String(r?.id || r?.key || '')).filter(Boolean));
+          loadedIdsRef.current = rowIdSnapshot(outList);
           return;
         }
         const writeTs = Date.now();
@@ -6118,7 +6211,7 @@ const ModuleChildPage: React.FC = () => {
         // IndexedDB 作可信存储兜底：localStorage 配额溢出静默失败时，刷新后可从 IndexedDB 恢复
         saveDataset(sharedDataKey, json);
         // 更新加载快照为本次写入内容
-        loadedIdsRef.current = new Set(outList.map((r: any) => String(r?.id || r?.key || '')).filter(Boolean));
+        loadedIdsRef.current = rowIdSnapshot(outList);
         // 仅在 localStorage 写入成功时更新 lastKnownTsRef，避免后续防旧覆盖逻辑失效
         if (writeOk) {
           lastKnownTsRef.current = writeTs;
@@ -6772,6 +6865,9 @@ const ModuleChildPage: React.FC = () => {
       .map((p: any) => String(p.orderId || p.salesOrderId || ''))
       .filter(Boolean));
     const nowStr = new Date().toLocaleString('zh-CN');
+    // 出库单号防重集合：订单已有单号 + 下游出库单历史；本批新生成的单号也并入，避免同批重号
+    const existingNos: string[] = [...readOutboundDocNos()];
+    omList.forEach((o: any) => { if (o && o.outboundNo) existingNos.push(String(o.outboundNo)); });
     let changed = false;
     const updated = omList.map((o: any) => {
       if (!o || o.auditStatus !== '生产排期') return o;
@@ -6787,7 +6883,8 @@ const ModuleChildPage: React.FC = () => {
       if (!logs.some((l: any) => l.action === '生产完成自动审核')) {
         logs.push({ time: nowStr, action: '生产完成自动审核', operator: getCurrentUserDisplayName(), detail: '货款已结清，生产已完成，订单自动转入打单拣货待发货' });
       }
-      return { ...o, auditStatus: '已审核', productionCompleted: true, orderLog: JSON.stringify(logs) };
+      const outboundNo = o.outboundNo || (() => { const no = genOutboundNo(existingNos); existingNos.push(no); return no; })();
+      return { ...o, auditStatus: '已审核', productionCompleted: true, outboundNo, printStatus: o.printStatus || '未打印', pickTime: o.pickTime || nowStr, printer: o.printer || getCurrentUserDisplayName(), orderLog: JSON.stringify(logs) };
     });
     if (!changed) return;
     const json = JSON.stringify(updated);
@@ -6800,6 +6897,50 @@ const ModuleChildPage: React.FC = () => {
       return hit ? { ...r, ...hit } : r;
     }));
     try { window.dispatchEvent(new CustomEvent('order-data-updated', { detail: { owner, key: omKey } })); } catch { /* ignore */ }
+  }, [pageConfig?.title, dataSource, syncVersion, getDataOwner]);
+
+  // 打单拣货：出库单号补齐自愈——进入拣货口径（已审核+货款结清+未终结）却缺 outboundNo 的订单按既有生成器补号。
+  // 审核两条正路在写入时就带单号；生产完工自动审核/补收款转审核等历史漏写路径与存量单（出库单号列显示 —）打开本页即补齐
+  React.useEffect(() => {
+    if (pageConfig?.title !== '打单拣货') return;
+    const owner = getDataOwner();
+    const omKey = `pageData_sales_order-manage_${owner}`;
+    let omList: any[] = [];
+    try { omList = JSON.parse(localStorage.getItem(omKey) || '[]'); } catch { return; }
+    if (!Array.isArray(omList) || omList.length === 0) return;
+    const nowStr = new Date().toLocaleString('zh-CN');
+    const existingNos: string[] = [...readOutboundDocNos()];
+    omList.forEach((o: any) => { if (o && o.outboundNo) existingNos.push(String(o.outboundNo)); });
+    let changed = false;
+    const updated = omList.map((o: any) => {
+      if (!o || o.outboundNo) return o;
+      if (o.auditStatus !== '已审核') return o;
+      const st = String(o.orderStatus || '');
+      if (st === '已发货' || st === '已完成' || st === '已取消') return o;
+      const total = Math.round((Number(o.productAmount) || calcOrderDueAmount(o)) * 100) / 100;
+      const paid = isInstallmentOrder(o) ? sumPayRecords(o.payRecords) : (Number(o.paidAmount) || 0);
+      const settled = st === '已付款' || (total > 0 && paid + 0.01 >= total);
+      if (!settled) return o;
+      changed = true;
+      const no = genOutboundNo(existingNos);
+      existingNos.push(no);
+      let logs: any[] = [];
+      try { logs = JSON.parse(o.orderLog || '[]'); } catch { logs = []; }
+      logs.push({ time: nowStr, action: '出库单号补齐', operator: getCurrentUserDisplayName(), detail: `进入打单拣货时自动生成出库单号 ${no}` });
+      return { ...o, outboundNo: no, printStatus: o.printStatus || '未打印', pickTime: o.pickTime || nowStr, printer: o.printer || getCurrentUserDisplayName(), orderLog: JSON.stringify(logs) };
+    });
+    if (!changed) return;
+    const json = JSON.stringify(updated);
+    safeSetItem(omKey, json);
+    saveDataset(omKey, json);
+    safeSetItem(`${omKey}_ts`, String(Date.now()));
+    setDataSource(prev => prev.map((r: any) => {
+      const hit = updated.find((o: any) => o.id === r.id);
+      return hit ? { ...r, ...hit } : r;
+    }));
+    try { window.dispatchEvent(new CustomEvent('order-data-updated', { detail: { owner, key: omKey } })); } catch { /* ignore */ }
+    // 依赖数组不列 genOutboundNo/readOutboundDocNos：二者定义在本 effect 之后，
+    // 依赖数组在渲染期立即求值会撞 TDZ；函数体内为挂载后延迟求值，不受影响
   }, [pageConfig?.title, dataSource, syncVersion, getDataOwner]);
 
   // 跨页面数据注入助手：同时更新 localStorage + IndexedDB + 时间戳，防止目标页面读取旧数据
@@ -9048,7 +9189,7 @@ const ModuleChildPage: React.FC = () => {
     setEditMode(false);
     setAddVisible(true);
     // 重置生产订单图片状态
-    if (pageConfig?.title === '生产订单') setPoAddImages([]);
+    if (pageConfig?.title === '生产订单') { setPoAddImages([]); setPoPlanFillQty(null); }
   }, [addForm, pageConfig, activeTab, dataSource, getDataOwner]);
 
   // 确认新增
@@ -9116,9 +9257,54 @@ const ModuleChildPage: React.FC = () => {
         updatedAt: now.toISOString().slice(0, 10),
         ...values,
       };
-      // 生产订单：保存图片到记录
-      if (pageConfig?.title === '生产订单' && poAddImages.length > 0) {
-        newRecord.productionImages = [...poAddImages];
+      // 生产订单：手工新增只录入计划明细 + 生产备注 + 生产图片，其余列表字段按明细汇总派生
+      if (pageConfig?.title === '生产订单') {
+        const poOwner = getDataOwner();
+        const planSrc = orderFormItems.filter((it: any) => String(it.productCode || '').trim());
+        if (planSrc.length === 0) { message.error('请添加计划明细'); return; }
+        let poProducts: any[] = [];
+        try { poProducts = JSON.parse(localStorage.getItem(`pageData_basic-data_product-list_${poOwner}`) || '[]'); } catch { /* ignore */ }
+        const planItems = planSrc.map((it: any) => {
+          const p = poProducts.find((x: any) => x.productCode === it.productCode);
+          const cs = resolveItemColorSpec(p || { productCode: it.productCode });
+          const q = Number(it.quantity) || 0;
+          return {
+            productCode: it.productCode,
+            productName: p?.shortName || p?.name || it.productCode,
+            image: p ? (localStorage.getItem(`prodImg_${poOwner}_${p.key}`) || '') : '',
+            quantity: q,
+            productionQty: q,
+            orders: [] as string[],
+            styleCode: p?.styleCode || '',
+            color: cs.color || '',
+            spec: cs.spec || '',
+          };
+        });
+        const planTotalQty = planItems.reduce((s: number, it: any) => s + (Number(it.quantity) || 0), 0);
+        // 单号沿用「安排生产」口径（PO-时间戳后6位），已占用时追加序号防重
+        const poBaseId = `PO-${String(Date.now()).slice(-6)}`;
+        const usedPoIds = new Set(dataSource.map(d => String(d.id || '')));
+        let poSeq = 0;
+        let poId = poBaseId;
+        while (usedPoIds.has(poId)) { poSeq += 1; poId = `${poBaseId}-${poSeq}`; }
+        newRecord.id = poId;
+        newRecord.orderId = '';
+        newRecord.salesOrderId = '';
+        newRecord.planItems = planItems;
+        newRecord.productName = planItems.map((it: any) => it.productName).filter(Boolean).join('、');
+        newRecord.name = newRecord.productName || poId;
+        newRecord.planQuantity = planTotalQty;
+        newRecord.planQty = planTotalQty;
+        newRecord.orderQty = planTotalQty;
+        newRecord.completedQuantity = 0;
+        newRecord.progress = 0;
+        newRecord.person = getCurrentUserDisplayName();
+        newRecord.status = 'pending' as RecordStatus;
+        newRecord.createTime = now.toLocaleString('zh-CN', { hour12: false }).replace(/\//g, '-');
+        newRecord.auditStatus = '生产排期';
+        newRecord.orderLog = JSON.stringify([{ time: new Date().toLocaleString('zh-CN'), action: '创建生产订单', operator: getCurrentUserDisplayName(), detail: `手工新增计划明细 ${planItems.length} 条，共 ${planTotalQty}` }]);
+        // 生产图片上限 5 张（上传/粘贴两条路径均受约束）
+        newRecord.productionImages = [...poAddImages].slice(0, 5);
       }
       // 子页面（成品/半成品/原材料）新增时：强制设置产品种类（防止 ...values 中 undefined/空值覆盖）
       if (pageConfig?.productTypeFilter) {
@@ -9182,7 +9368,7 @@ const ModuleChildPage: React.FC = () => {
           }
           saveDataset(plKey, mergedJson);
           // 更新加载快照和时间戳引用
-          loadedIdsRef.current = new Set(merged.map((r: any) => String(r?.id || r?.key || '')).filter(Boolean));
+          loadedIdsRef.current = rowIdSnapshot(merged);
           lastKnownTsRef.current = writeTs;
 
         } catch { /* ignore */ }
@@ -9887,6 +10073,12 @@ const ModuleChildPage: React.FC = () => {
       message.warning('订单不支持删除，如需终止请在操作列取消订单');
       return;
     }
+    // 账单明细：账单来源=订单 的行是销售订单的派生视图，每次重载都按订单重建，删掉也留不住
+    // （要终止请去订单管理取消订单），故行内不提供删除入口，这里再兜一道防止绕过按钮直接调用
+    if (pageConfig?.title === '账单明细' && isOrderDerived(record)) {
+      message.warning('该账单由订单自动生成，不能在此删除；如需终止请在订单管理中取消对应订单');
+      return;
+    }
     if (!fnOk('delete')) { message.warning('无删除权限'); return; }
     // 银行账户：余额不为0时禁止删除
     if (moduleKey === 'finance' && childKey === 'bank-account') {
@@ -9897,9 +10089,11 @@ const ModuleChildPage: React.FC = () => {
       }
     }
     // 永不缩水键（银行账户/账单明细等）：合法删除必须在写盘前申报 removedIds（须在所有拦截
-    // 校验之后，避免删除被拦时申报仍随下次上传消费、误删未删行）；未申报的缩水一律按意外擦除保护
-    const delRowId = String(record.key || record.id || '');
-    if (delRowId && isNeverShrinkKey(sharedDataKey)) declareShrink(sharedDataKey, [delRowId]);
+    // 校验之后，避免删除被拦时申报仍随下次上传消费、误删未删行）；未申报的缩水一律按意外擦除保护。
+    // 申报同时覆盖 key 与 id：服务端按 key||id 匹配、本地防擦除保护按 id||key 匹配，只报一个
+    // 会让另一侧认不出这行是「合法删除」而把它并回写入（账单删掉刷新即复活的根因）
+    const delIds = Array.from(new Set([String(record.key || ''), String(record.id || '')].filter(Boolean)));
+    if (delIds.length > 0 && isNeverShrinkKey(sharedDataKey)) declareShrink(sharedDataKey, delIds);
     setDataSource(prev => prev.filter(item => item.key !== record.key));
     // 账单明细：删除账单行同时墓碑化关联的存活对账记录（撤回语义），避免采购商平台残留孤儿在途对账
     if (pageConfig?.title === '账单明细') {
@@ -9910,7 +10104,7 @@ const ModuleChildPage: React.FC = () => {
       } catch { /* ignore */ }
     }
     message.success('删除成功');
-  }, [moduleKey, childKey, pageConfig, getDataOwner]);
+  }, [moduleKey, childKey, pageConfig, getDataOwner, sharedDataKey]);
 
   // ============ BOM 管理逻辑 ============
 
@@ -10174,7 +10368,9 @@ const ModuleChildPage: React.FC = () => {
       spec: { title: '规格', dataIndex: 'spec', width: 60, render: (v: string, r: any) => v || getProductField(r.key, 'spec') || '—' },
       image: { title: '图片', dataIndex: 'image', width: 60, render: (v: string, r: any) => {
         const val = v || getProductField(r.key, 'image');
-        return val ? <img src={absoluteImageUrl(val)} alt="" style={{ width: 32, height: 32, objectFit: 'contain', borderRadius: 4 }} /> : '—';
+        // 不是可显示地址（旧系统导入的文件名/已判死外链）一律按无图显示，避免整列破图
+        const abs = isRenderableImageValue(val) ? absoluteImageUrl(val) : '';
+        return abs && !isImageUnloadable(abs) ? <img src={abs} alt="" style={{ width: 32, height: 32, objectFit: 'contain', borderRadius: 4 }} /> : '—';
       } },
       supplierName: { title: '供应商名称', dataIndex: 'supplierName', width: 100, render: (v: string, r: any) => v || getProductField(r.key, 'supplierName') || '—' },
       level: type !== 'process' ? { title: '层级', dataIndex: 'level', width: 60, align: 'center' as const, render: (v: any) => v ? <Tag color="blue">{v}</Tag> : '—' } : null,
@@ -11128,9 +11324,21 @@ const ModuleChildPage: React.FC = () => {
           okType: 'danger',
           cancelText: '取消',
           onOk: () => {
-            setDataSource(prev => prev.filter(item => !selectedRowKeys.includes(item.key)));
+            const picked = dataSourceRef.current.filter((item: any) => selectedRowKeys.some((k: any) => String(k) === String(item.key)));
+            if (picked.length === 0) { message.warning('请先在表格中勾选需要删除的记录'); return; }
+            // 账单明细：订单生成的行与行内删除同口径不可删，勾选了也跳过（删了必被订单重建复活）
+            const targets = picked.filter((r: any) => !isOrderDerived(r));
+            const skipped = picked.length - targets.length;
+            if (targets.length === 0) { message.warning('选中的账单均由订单自动生成，不能删除；如需终止请在订单管理中取消对应订单'); return; }
+            // 永不缩水键的合法删除必须申报（key 与 id 都报，理由同 handleDelete），否则被删行会在
+            // 持久化防擦除保护与服务端并集里双双复活
+            const delIds = Array.from(new Set(targets.flatMap((r: any) => [String(r?.key || ''), String(r?.id || '')].filter(Boolean))));
+            if (delIds.length > 0 && isNeverShrinkKey(sharedDataKey)) declareShrink(sharedDataKey, delIds);
+            // 本地只按勾选行的 key 移除（与表格 rowKey 同口径），申报的 id 只用于服务端删除匹配
+            const delKeys = new Set(targets.map((r: any) => String(r?.key ?? '')));
+            setDataSource(prev => prev.filter(item => !delKeys.has(String(item.key))));
             setSelectedRowKeys([]);
-            message.success('批量删除成功');
+            message.success(skipped > 0 ? `已删除 ${targets.length} 条，另有 ${skipped} 条订单生成的账单不可删除` : '批量删除成功');
           },
         });
         break;
@@ -12978,7 +13186,8 @@ const handleBatchAttrsConfirm = () => {
                     style={{ color: PRIMARY, fontWeight: 500 }}>反取消</Button>
                 </Tooltip>
               )}
-              {(pageConfig?.title !== '账单明细' || !['已发起对账', '确认无误', '对账完成', '按采方入账', '不相符'].includes(record.reconResult)) && pageConfig?.title !== '财务审核' && !(pageConfig?.title === '采购申请单' && ['已拆分', '已完成', '已取消'].includes(record.status)) && pageConfig?.title !== '采购申请单' && pageConfig?.title !== '加工订单' && !(pageConfig?.title === '订单管理' && record.orderSource === '采购商推送') && (
+              {/* 账单来源=订单 的行是订单派生视图（每次重载按订单重建），删除留不住 → 不提供删除入口 */}
+              {(pageConfig?.title !== '账单明细' || !['已发起对账', '确认无误', '对账完成', '按采方入账', '不相符'].includes(record.reconResult)) && pageConfig?.title !== '财务审核' && !(pageConfig?.title === '采购申请单' && ['已拆分', '已完成', '已取消'].includes(record.status)) && pageConfig?.title !== '采购申请单' && pageConfig?.title !== '加工订单' && !(pageConfig?.title === '订单管理' && record.orderSource === '采购商推送') && !isOrderDerived(record) && (
               <Popconfirm
                 title="确认删除"
                 description="删除后不可恢复，确定要删除吗？"
@@ -13606,7 +13815,8 @@ const handleBatchAttrsConfirm = () => {
               appendOrderLog(oid, '生产完成待收款', `货款未结清（应付 ¥${soTotal.toFixed(2)} / 已收 ¥${soPaid.toFixed(2)} / 差额 ¥${diff.toFixed(2)}），订单保持「生产排期」，暂不进入打单拣货；收清后自动转入`);
               message.warning(`生产完成：订单 ${oid} 货款未结清（差额 ¥${diff.toFixed(2)}），暂不进入打单拣货，收清后自动转入`);
             } else {
-              patchOrderInStorage(oid, { auditStatus: '已审核', productionCompleted: true, productionCompleteTime: nowStr, orderTag: tags1.join(','), orderTags: tags2.join(',') });
+              // 出库单号与审核正路同口径：流转进拣货时生成（已有则沿用），并补打印状态/拣货时间/打单人
+              patchOrderInStorage(oid, { auditStatus: '已审核', outboundNo: so.outboundNo || genOrderOutboundNo(owner), printStatus: so.printStatus || '未打印', pickTime: so.pickTime || nowStr, printer: so.printer || getCurrentUserDisplayName(), productionCompleted: true, productionCompleteTime: nowStr, orderTag: tags1.join(','), orderTags: tags2.join(',') });
               appendOrderLog(oid, '生产完成', `生产订单 ${record.id} 生产完成：完工数量已流转至生产入库统计并增加商品实际库存，订单标签更新为「生产完成」`);
               appendOrderLog(oid, '生产完成自动审核', `生产订单 ${record.id} 生产完成，货款已结清，自动审核通过，订单进入打单拣货待发货`);
               // 回写采购商推送订单状态（safeSetItem 触发跨浏览器同步）
@@ -16271,7 +16481,16 @@ const handleBatchAttrsConfirm = () => {
                                       } catch { /* ignore */ }
                                     }
                                     const toAudit = String(selectedRecord.auditStatus || '') === '生产排期' && prodDone;
-                                    if (toAudit) patch.auditStatus = '已审核';
+                                    if (toAudit) {
+                                      patch.auditStatus = '已审核';
+                                      // 与审核正路同口径：转审核进拣货时补出库单号/打印状态/拣货时间/打单人
+                                      if (!selectedRecord.outboundNo) {
+                                        patch.outboundNo = genOrderOutboundNo(getDataOwner());
+                                        patch.printStatus = selectedRecord.printStatus || '未打印';
+                                        patch.pickTime = selectedRecord.pickTime || nowStr;
+                                        patch.printer = selectedRecord.printer || getCurrentUserDisplayName();
+                                      }
+                                    }
                                     patchOrderInStorage(selectedRecord.id, patch);
                                     appendOrderLog(selectedRecord.id, '补录收款', `订单详情补做收款确认：已付金额 ¥${totalDue.toFixed(2)}，订单状态变更为已付款${toAudit ? '，生产已完成，自动转入打单拣货待发货' : ''}`);
                                     if (toAudit) appendOrderLog(selectedRecord.id, '生产完成自动审核', '货款已结清，生产已完成，订单自动转入打单拣货待发货');
@@ -16599,7 +16818,7 @@ const handleBatchAttrsConfirm = () => {
         onCancel={() => setAddVisible(false)}
         okText={pageConfig?.title === '订单管理' ? '确定' : '确认新增'}
         cancelText="取消"
-        width={pageConfig?.title === '订单管理' ? 'calc(100vw - 80px)' : (isProductList ? 820 : 560)}
+        width={pageConfig?.title === '订单管理' ? 'calc(100vw - 80px)' : (pageConfig?.title === '生产订单' ? 1100 : (isProductList ? 820 : 560))}
         destroyOnClose
         styles={pageConfig?.title === '订单管理' ? { body: { padding: '16px 24px', background: '#f7f9fc', borderRadius: 8, overflowX: 'hidden' } } : undefined}
       >
@@ -17236,6 +17455,195 @@ const handleBatchAttrsConfirm = () => {
               ]}
             />
           </Form>
+        ) : pageConfig?.title === '生产订单' ? (
+          // ============ 生产订单新增：仅计划明细 + 生产备注 + 生产图片 ============
+          <Form autoComplete="off" form={addForm} layout="vertical" style={{ marginTop: 4 }}>
+            {(() => {
+              const owner = getDataOwner();
+              let productList: Record<string, any>[] = [];
+              try { productList = JSON.parse(localStorage.getItem(`pageData_basic-data_product-list_${owner}`) || '[]'); } catch { /* ignore */ }
+              const occupied = buildOrderOccupiedMap(owner);
+              const ptColors: Record<string, string> = { '成品': 'blue', '半成品': 'cyan', '原材料': 'orange', '零部件': 'green' };
+              const thStyle: React.CSSProperties = { padding: '6px 10px', borderBottom: '1px solid #f0f0f0', whiteSpace: 'nowrap', background: '#fafafa', position: 'sticky', top: 0, zIndex: 2 };
+              const tdStyle: React.CSSProperties = { padding: '6px 10px', borderBottom: '1px solid #f0f0f0' };
+              const showCol = (k: string) => poPlanFields.includes(k);
+              const totalPlanQty = orderFormItems.reduce((s, it) => s + (Number(it.quantity) || 0), 0);
+              const planFieldItems = [
+                { key: 'image', label: '图片' }, { key: 'name', label: '商品简称' }, { key: 'productCode', label: '商品编码' },
+                { key: 'productType', label: '产品种类' }, { key: 'moldCode', label: '模具编号' }, { key: 'quantity', label: '数量' },
+                { key: 'stock', label: '可用库存' },
+              ];
+              const savePlanFields = (arr: string[]) => {
+                setPoPlanFields(arr);
+                try { localStorage.setItem(`poPlanDisplay_${localStorage.getItem('username') || 'admin'}`, JSON.stringify(arr)); } catch { /* ignore */ }
+              };
+              // 生产图片：上传与粘贴共用同一入列逻辑，最多 5 张
+              const pushPoImage = (file: Blob | File) => {
+                if (poAddImages.length >= 5) { message.warning('生产图片最多上传 5 张'); return; }
+                compressImageFile(file).then(dataUrl => {
+                  if (!dataUrl) return;
+                  setPoAddImages(prev => (prev.length >= 5 ? prev : [...prev, dataUrl]));
+                }).catch(() => message.error('图片处理失败'));
+              };
+              return (
+                <div>
+                  {/* 计划明细（位置与交互对齐订单管理新增订单的货品明细） */}
+                  <Divider orientation="left" style={{ margin: '4px 0 12px', fontSize: 13, fontWeight: 600, color: PRIMARY }}>计划明细</Divider>
+                  <div style={{ border: '1px solid #f0f0f0', borderRadius: 6, maxHeight: 320, overflow: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                      <thead>
+                        <tr>
+                          {showCol('image') && <th style={{ ...thStyle, textAlign: 'center', width: 50 }}>图片</th>}
+                          {showCol('name') && <th style={{ ...thStyle, textAlign: 'left' }}>商品简称</th>}
+                          {showCol('productCode') && <th style={{ ...thStyle, textAlign: 'left', width: 140 }}>商品编码</th>}
+                          {showCol('productType') && <th style={{ ...thStyle, textAlign: 'left', width: 80 }}>产品种类</th>}
+                          {showCol('moldCode') && <th style={{ ...thStyle, textAlign: 'center', width: 90 }}>模具编号</th>}
+                          {showCol('quantity') && <th style={{ ...thStyle, textAlign: 'center', width: 80 }}>数量</th>}
+                          {showCol('stock') && <th style={{ ...thStyle, textAlign: 'center', width: 80 }}>可用库存</th>}
+                          <th style={{ ...thStyle, textAlign: 'center', width: 60 }}>操作</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {orderFormItems.map((item: any, idx: number) => {
+                          const product = productList.find((p: any) => p.productCode === item.productCode);
+                          const stock = product ? ((Number(product.actualStock) || 0) - (occupied[item.productCode] || 0)) : 0;
+                          const imgSrc = product ? localStorage.getItem(`prodImg_${owner}_${product.key}`) : null;
+                          return (
+                            <tr key={idx}>
+                              {showCol('image') && (
+                                <td style={{ ...tdStyle, textAlign: 'center' }}>
+                                  <div style={{ width: 40, height: 40, borderRadius: 4, overflow: 'hidden', background: '#f5f5f5', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+                                    {imgSrc ? <img src={imgSrc} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <PictureOutlined style={{ fontSize: 16, color: '#bbb' }} />}
+                                  </div>
+                                </td>
+                              )}
+                              {showCol('name') && (
+                                <td style={tdStyle}>
+                                  <Text style={{ fontSize: 12 }} ellipsis>{product?.shortName || product?.name || item.productName || '待录入商品'}</Text>
+                                  {product && <div><Text type="secondary" style={{ fontSize: 11 }}>{[product.color, product.spec].filter(Boolean).join('-')}</Text></div>}
+                                </td>
+                              )}
+                              {showCol('productCode') && (
+                                <td style={tdStyle}>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                                    <Input size="small" value={item.productCode} placeholder="商品编码" style={{ width: 130 }}
+                                      onChange={e => setOrderFormItems(prev => prev.map((it, i) => (i === idx ? { ...it, productCode: e.target.value } : it)))} />
+                                    {item.productCode && !product && (
+                                      <Tooltip title="产品列表中未匹配到该商品">
+                                        <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 18, height: 18, borderRadius: '50%', border: '1px solid #ff4d4f', color: '#ff4d4f', fontSize: 10, fontWeight: 600, flexShrink: 0, lineHeight: '18px', cursor: 'default' }}>缺</span>
+                                      </Tooltip>
+                                    )}
+                                  </div>
+                                </td>
+                              )}
+                              {showCol('productType') && (
+                                <td style={tdStyle}>{product?.productType ? <Tag color={ptColors[product.productType] || 'default'} style={{ margin: 0, fontSize: 11 }}>{product.productType}</Tag> : '—'}</td>
+                              )}
+                              {showCol('moldCode') && <td style={{ ...tdStyle, textAlign: 'center' }}>{product?.moldCode || '—'}</td>}
+                              {showCol('quantity') && (
+                                <td style={{ ...tdStyle, textAlign: 'center' }}>
+                                  <InputNumber size="small" min={1} precision={0} controls={false} value={Number(item.quantity) || 1} style={{ width: 70 }}
+                                    onChange={v => setOrderFormItems(prev => prev.map((it, i) => (i === idx ? { ...it, quantity: Number(v) || 1 } : it)))} />
+                                </td>
+                              )}
+                              {showCol('stock') && (
+                                <td style={{ ...tdStyle, textAlign: 'center' }}><Text strong style={{ color: (Number(stock) || 0) > 0 ? '#52c41a' : '#ff4d4f', fontSize: 12 }}>{stock}</Text></td>
+                              )}
+                              <td style={{ ...tdStyle, textAlign: 'center' }}>
+                                <a style={{ color: '#ff4d4f', fontSize: 12 }} onClick={() => setOrderFormItems(prev => prev.filter((_, i) => i !== idx))}>删除</a>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                        {orderFormItems.length === 0 && (
+                          <tr><td colSpan={poPlanFields.length + 1} style={{ ...tdStyle, textAlign: 'center', color: '#999', padding: 16 }}>暂无计划明细，点击下方“添加新的商品”增加</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                  {/* 工具条 + 计划数量合计 */}
+                  <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                    <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => { setProductSelectTarget('add'); setProductSelectKeys([]); setProductSelectSearch(''); setPsSearchCode(''); setPsSearchName(''); setPsSearchStyle(''); setPsSearchColor(''); setPsSearchSpec(''); setPsSearchSupplier(''); setPsSearchTag(''); setPsAppliedCode(''); setPsAppliedName(''); setPsAppliedStyle(''); setPsAppliedColor(''); setPsAppliedSpec(''); setPsAppliedSupplier(''); setPsAppliedTag(''); setProductSelectType('成品'); setProductSelectVisible(true); }}>添加新的商品</Button>
+                    <Button size="small" icon={<PlusOutlined />} onClick={() => { setManualAddTarget('orderAdd'); setManualAddText(''); setManualAddVisible(true); }}>手动添加</Button>
+                    <Divider type="vertical" />
+                    <span style={{ fontSize: 11, color: '#8c8c8c' }}>批量填充：</span>
+                    <InputNumber size="small" controls={false} min={1} precision={0} placeholder="数量" style={{ width: 80 }} value={poPlanFillQty}
+                      onChange={v => setPoPlanFillQty(v === null ? null : Number(v))} />
+                    <Button size="small" onClick={() => {
+                      const q = Number(poPlanFillQty) || 0;
+                      if (q <= 0) { message.warning('请输入填充数量'); return; }
+                      if (orderFormItems.length === 0) { message.warning('请先添加计划明细'); return; }
+                      setOrderFormItems(prev => prev.map(it => ({ ...it, quantity: q })));
+                      message.success(`已对 ${orderFormItems.length} 条明细填充数量 ${q}`);
+                    }}>应用</Button>
+                    <Divider type="vertical" />
+                    <Popover trigger="click" placement="topLeft" title="计划明细显示控制" content={
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        {planFieldItems.map(f => (
+                          <Checkbox key={f.key} checked={poPlanFields.includes(f.key)} onChange={e => {
+                            const arr = e.target.checked ? [...poPlanFields, f.key] : poPlanFields.filter(k => k !== f.key);
+                            if (arr.length === 0) { message.warning('至少保留一列'); return; }
+                            savePlanFields(arr);
+                          }}>{f.label}</Checkbox>
+                        ))}
+                      </div>
+                    }>
+                      <Button size="small" icon={<SettingOutlined />}>显</Button>
+                    </Popover>
+                    <Button size="small" icon={<FileTextOutlined />} onClick={() => setOrderQtyTemplateVisible(true)}>数量模版</Button>
+                    {orderQtyTemplates.map((t, i) => (
+                      <Tag key={`po-oqt-${i}`} color="blue" style={{ cursor: 'pointer', margin: 0 }}
+                        onClick={() => { setOrderQtyFillTemplate(t); setOrderQtyFillMultiplier(1); setOrderQtyFillTarget('add'); setOrderQtyFillVisible(true); }}
+                        closable onClose={(e: any) => { e.preventDefault(); e.stopPropagation(); const arr = orderQtyTemplates.filter((_, idx) => idx !== i); setOrderQtyTemplates(arr); localStorage.setItem(`orderQtyTemplates_${getDataOwner()}`, JSON.stringify(arr)); }}>
+                        {t.name}
+                      </Tag>
+                    ))}
+                    <span style={{ marginLeft: 'auto', fontSize: 12 }}>
+                      <Text type="secondary">计划数量合计：</Text><Text strong style={{ color: '#f5222d', fontSize: 14 }}>{totalPlanQty}</Text>
+                    </span>
+                  </div>
+                  {/* 生产备注 */}
+                  <Divider orientation="left" style={{ margin: '16px 0 12px', fontSize: 13, fontWeight: 600, color: PRIMARY }}>生产备注</Divider>
+                  <Form.Item name="productionRemark" style={{ marginBottom: 10 }}>
+                    <Input.TextArea rows={3} placeholder="请输入生产备注信息（如特殊工艺要求、注意事项等）" />
+                  </Form.Item>
+                  {/* 生产图片：上传 + 粘贴（最多 5 张） */}
+                  <Divider orientation="left" style={{ margin: '4px 0 12px', fontSize: 13, fontWeight: 600, color: PRIMARY }}>生产图片</Divider>
+                  <div tabIndex={0} onPaste={e => { const file = imageFileFromPasteEvent(e); if (!file) return; e.preventDefault(); pushPoImage(file); }} style={{ outline: 'none' }}>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                      {poAddImages.map((img, idx) => (
+                        <div key={idx} style={{ position: 'relative', width: 64, height: 64 }}>
+                          <img src={img} alt="" style={{ width: 64, height: 64, objectFit: 'cover', borderRadius: 6, border: '1px solid #e8e8e8', display: 'block' }} />
+                          <CloseOutlined onClick={() => setPoAddImages(prev => prev.filter((_, j) => j !== idx))}
+                            style={{ position: 'absolute', top: -6, right: -6, background: '#fff', borderRadius: '50%', fontSize: 11, color: '#ff4d4f', boxShadow: '0 1px 3px rgba(0,0,0,0.3)', cursor: 'pointer', padding: 2 }} />
+                        </div>
+                      ))}
+                      {poAddImages.length < 5 && (
+                        <>
+                          <label style={{ width: 64, height: 64, border: '1px dashed #d9d9d9', borderRadius: 6, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', background: '#fafafa', color: '#bfbfbf' }}>
+                            <PlusOutlined style={{ fontSize: 16 }} />
+                            <span style={{ fontSize: 10, marginTop: 2 }}>上传</span>
+                            <input type="file" accept="image/*" style={{ display: 'none' }} onChange={e => {
+                              const file = e.target.files?.[0];
+                              if (file) pushPoImage(file);
+                              e.target.value = '';
+                            }} />
+                          </label>
+                          <Button size="small" icon={<SnippetsOutlined />} onClick={async () => {
+                            if (poAddImages.length >= 5) { message.warning('生产图片最多上传 5 张'); return; }
+                            const res = await readClipboardImage();
+                            if (!res.ok) { message.warning(clipboardImageFailureText(res.reason)); return; }
+                            pushPoImage(res.blob);
+                          }}>粘贴</Button>
+                        </>
+                      )}
+                      <Text type="secondary" style={{ fontSize: 12 }}>已添加 {poAddImages.length}/5 张，支持选择文件、点“粘贴”或直接 Ctrl+V</Text>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+          </Form>
         ) : effectivePageConfig?.columns?.some(c => c.group) ? (
           <Form autoComplete="off" form={addForm} layout="vertical" style={{ marginTop: 16, maxHeight: 540, overflowY: 'auto' }}>
             {(() => {
@@ -17362,37 +17770,6 @@ const handleBatchAttrsConfirm = () => {
               );
             });
             })()}
-            {/* 生产订单：图片上传 + 生产备注 */}
-            {pageConfig?.title === '生产订单' && (
-              <div style={{ marginBottom: 16 }}>
-                <Divider orientation="left" style={{ margin: '4px 0 12px', fontSize: 13, fontWeight: 600, color: PRIMARY }}>生产备注与图片</Divider>
-                <Form.Item name="productionRemark" label={<span style={{ fontSize: 12 }}>生产备注</span>} style={{ marginBottom: 10 }}>
-                  <Input.TextArea rows={3} placeholder="请输入生产备注信息（如特殊工艺要求、注意事项等）" />
-                </Form.Item>
-                <div style={{ marginBottom: 10 }}>
-                  <div style={{ fontSize: 12, color: '#595959', marginBottom: 6 }}>生产图片</div>
-                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-                    {poAddImages.map((img, idx) => (
-                      <div key={idx} style={{ position: 'relative', width: 64, height: 64 }}>
-                        <img src={img} alt="" style={{ width: 64, height: 64, objectFit: 'cover', borderRadius: 6, border: '1px solid #e8e8e8', display: 'block' }} />
-                        <CloseOutlined onClick={() => setPoAddImages(prev => prev.filter((_, j) => j !== idx))}
-                          style={{ position: 'absolute', top: -6, right: -6, background: '#fff', borderRadius: '50%', fontSize: 11, color: '#ff4d4f', boxShadow: '0 1px 3px rgba(0,0,0,0.3)', cursor: 'pointer', padding: 2 }} />
-                      </div>
-                    ))}
-                    <label style={{ width: 64, height: 64, border: '1px dashed #d9d9d9', borderRadius: 6, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', background: '#fafafa', color: '#bfbfbf' }}>
-                      <PlusOutlined style={{ fontSize: 16 }} />
-                      <span style={{ fontSize: 10, marginTop: 2 }}>添加</span>
-                      <input type="file" accept="image/*" style={{ display: 'none' }} onChange={e => {
-                        const file = e.target.files?.[0];
-                        if (!file) return;
-                        compressImageFile(file).then(dataUrl => { if (dataUrl) setPoAddImages(prev => [...prev, dataUrl]); }).catch(() => message.error('图片处理失败'));
-                        e.target.value = '';
-                      }} />
-                    </label>
-                  </div>
-                </div>
-              </div>
-            )}
           </Form>
         ) : (
           <Form autoComplete="off" form={addForm} layout="vertical" style={{ marginTop: 16, maxHeight: 540, overflowY: 'auto' }}>
@@ -23266,6 +23643,9 @@ tr:nth-child(even) { background: #f5f9ff; }
                   quantity: it.quantity, unitPrice: it.price,
                 };
               })]);
+            } else if (manualAddTarget === 'orderAdd') {
+              // 生产订单新增窗口：导入到计划明细草稿（orderFormItems）
+              setOrderFormItems(prev => mergeItemsByCode([...prev, ...newItems]) as any);
             } else {
               setOrderEditItems(prev => mergeItemsByCode([...prev, ...newItems]));
             }
@@ -23332,7 +23712,13 @@ tr:nth-child(even) { background: #f5f9ff; }
                     }
                     newItems.push({ productCode, quantity, price, basePrice: price, note });
                   }
-                  setOrderEditItems(prev => mergeItemsByCode([...prev, ...newItems]));
+                  if (newItems.length === 0) { message.warning('未解析到有效商品编码'); return; }
+                  // 导入目标与手动录入分支保持一致（生产订单新增 → 计划明细草稿）
+                  if (manualAddTarget === 'orderAdd') {
+                    setOrderFormItems(prev => mergeItemsByCode([...prev, ...newItems]) as any);
+                  } else {
+                    setOrderEditItems(prev => mergeItemsByCode([...prev, ...newItems]));
+                  }
                   message.success(`已导入 ${newItems.length} 条商品`);
                   setManualAddVisible(false);
                 } catch { message.error('Excel 解析失败'); }

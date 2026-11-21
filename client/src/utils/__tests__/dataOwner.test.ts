@@ -5,6 +5,7 @@ import {
   tenantMembersOf,
   mergeStrandedTenantDataset,
 } from '../dataOwner';
+import { declareShrink, takeRemovedIds } from '../shrinkRegistry';
 
 /** 造一个只用于读取声明的 JWT（不校验签名） */
 const fakeToken = (payload: Record<string, any>): string => {
@@ -103,6 +104,24 @@ describe('dataOwner', () => {
     expect(JSON.parse(localStorage.getItem('reimbursement_other') || '[]')).toEqual([{ key: 'c' }]);
     expect(shrunk[0]).toBe('reimbursement_sub1:a,b');
     expect(flushed).toContain('reimbursement_boss');
+  });
+
+  it('mergeStrandedTenantDataset 不把主桶已删除的行（墓碑）从错桶并回', () => {
+    // 删除复活链路之一：用户在主桶删了 b，上传成功后申报已消费，
+    // 而子账号错桶里仍持有 b 的陈旧副本，归并时不得把已删行重新塞回主桶
+    setSession('boss', { token: fakeToken({ username: 'boss', owner: 'boss' }) });
+    localStorage.setItem('reimbursement_boss', JSON.stringify([{ key: 'a' }]));
+    localStorage.setItem('reimbursement_sub1', JSON.stringify([{ key: 'b' }]));
+    declareShrink('reimbursement_boss', ['b']);
+    takeRemovedIds('reimbursement_boss');
+    const flushed: string[] = [];
+    mergeStrandedTenantDataset('reimbursement_boss', 'reimbursement_', {
+      safeSetItem: (k, v) => localStorage.setItem(k, v),
+      declareShrink: () => undefined,
+      flush: (k) => flushed.push(k),
+    });
+    expect(JSON.parse(localStorage.getItem('reimbursement_boss') || '[]')).toEqual([{ key: 'a' }]);
+    expect(flushed).not.toContain('reimbursement_boss');
   });
 
   it('mergeStrandedTenantDataset 幂等：来源已清空后不再重复迁移', () => {

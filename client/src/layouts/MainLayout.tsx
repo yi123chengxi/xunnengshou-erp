@@ -60,7 +60,7 @@ import { loadUserNotices, markUserNoticeRead, markAllUserNoticesRead, clearUserN
 import { recoverRechargeNotifications } from '../utils/rechargeNotification';
 import { isShopPersonMe } from '../utils/shopScope';
 import { showNativeNotification, isNotificationBlocked, isNotificationTypeEnabled } from '../utils/pushNotification';
-import { showTaskNotify, closeTaskNotify, pruneTaskNotifs, TASK_NOTIFY_RESHOW_EVENT, WITHDRAW_TASK_NOTIF_PREFIXES, INVENTORY_TASK_NOTIF_PREFIXES } from '../utils/taskNotify';
+import { showTaskNotify, closeTaskNotify, pruneTaskNotifs, hasWithdrawRecordAroundLaunch, TASK_NOTIFY_RESHOW_EVENT, WITHDRAW_TASK_NOTIF_PREFIXES, INVENTORY_TASK_NOTIF_PREFIXES } from '../utils/taskNotify';
 import { getFinancePendingCounts, isFinancePendingStorageKey, FinancePending } from '../utils/financePending';
 
 const { Header, Sider, Content } = Layout;
@@ -502,7 +502,7 @@ const MainLayout: React.FC = () => {
 
   // ===================== 提现任务通知恢复（系统级） =====================
   // 与 PurchaserLayout 同构：发起端写入 withdrawal_task_status_<owner> 后，
-  // 负责人在本平台任意页面周期检查；若本人是店铺负责人且最近 3 天无提现记录则弹窗提醒，直到提现完成。
+  // 负责人在本平台任意页面周期检查；若本人是店铺负责人且发布时刻前 3 天内及之后均无提现记录则弹窗提醒，直到提现完成（提现后不再催，不设上限）。
   useEffect(() => {
     const owner = sessionDataOwner();
     const currentUser = localStorage.getItem('username') || '';
@@ -520,12 +520,11 @@ const MainLayout: React.FC = () => {
         const shops: any[] = JSON.parse(localStorage.getItem(`shop_info_${owner}`) || '[]');
         let wdRecords: any[] = [];
         try { wdRecords = JSON.parse(localStorage.getItem(`withdrawal_record_${owner}`) || '[]'); } catch { wdRecords = []; }
-        const threeDaysAgo = dayjs().subtract(3, 'day').startOf('day');
         shopKeys.forEach(shopKey => {
           const shop = shops.find((s: any) => s.key === shopKey);
           if (!shop || !isShopPersonMe(owner, shop.person)) return; // 仅店铺负责人（shop.person 存显示名，需用别名匹配 username）
-          // 最近 3 天已有该店铺提现记录 → 任务完成，撤下残留弹窗并不再提醒
-          const done = wdRecords.some((r: any) => r.shopName === shop.shopName && dayjs(r.createdAt || r.withdrawalDate).isAfter(threeDaysAgo));
+          // 以发布任务时间（taskMap[shopKey]）为锚点：发布前 3 天内起有该店铺提现记录 → 任务完成，撤下残留弹窗并不再提醒
+          const done = hasWithdrawRecordAroundLaunch(wdRecords, shop.shopName, taskMap[shopKey]);
           if (done) { closeTaskNotify(`wd-task-${shopKey}`); return; }
           keep.add(`wd-task-${shopKey}`);
           const title = '提现任务提醒';

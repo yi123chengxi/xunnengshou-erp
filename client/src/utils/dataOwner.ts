@@ -15,6 +15,7 @@
  * 都不可用时退回当前用户名（与历史行为一致，不会把主账号判成子账号）。
  */
 import { API_BASE } from './apiBase';
+import { isRowRemoved } from './shrinkRegistry';
 
 const TOKEN_KEY = 'token';
 
@@ -237,13 +238,17 @@ export const mergeStrandedTenantDataset = (
   parse(canonicalKey).forEach(r => { const id = idOf(r); if (id) merged.set(id, r); });
   const movedKeys = new Map<string, string[]>();
   let added = 0;
+  // 主桶已申报删除的行（含持久墓碑）不从错桶并回：错桶副本是子账号误写期间的旧状态，
+  // 把主桶里已被用户删掉的行重新塞回去会让删除复活（银行账户删了刷新又出现的一条通路）
   strandedKeys.forEach(k => {
     const ids: string[] = [];
     parse(k).forEach(r => {
       const id = idOf(r);
       if (!id) return;
       ids.push(id);
-      if (!merged.has(id)) { merged.set(id, r); added++; }
+      if (merged.has(id)) return;
+      if (isRowRemoved(canonicalKey, r)) return;
+      merged.set(id, r); added++;
     });
     if (ids.length > 0) movedKeys.set(k, ids);
   });

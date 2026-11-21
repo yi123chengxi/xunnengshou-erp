@@ -17,7 +17,7 @@ import { healReconTerminalLinks } from './reconHeal';
 import { getSessionOwner, tenantMembersOf, mergeStrandedTenantDataset } from './dataOwner';
 import { repairOrderBucket } from './orderRepair';
 import { queuePut, queueDelete, queueAll } from './uploadQueue';
-import { takeRemovedIds, peekRemovedIds, declareShrink } from './shrinkRegistry';
+import { takeRemovedIds, peekRemovedIds, declareShrink, tombstoneIds, removedIdSet, rowIdentities, rowPrimaryId, pruneTombstonesByRows } from './shrinkRegistry';
 export { declareShrink } from './shrinkRegistry';
 
 // 需要同步的业务数据 key 前缀/精确名
@@ -342,11 +342,54 @@ export function takeRegisteredUsersRejections(): { username: string; reason: str
   return out;
 }
 
+/**
+ * 组装一次上传要携带的 removedIds：本次删除申报 + 仍未被服务端确认的持久删除墓碑。
+ *
+ * 为什么需要墓碑随每次上传重发：一次性申报只活到第一次上传成功，而「服务端仍持有已删行」
+ * 是常态——删除 PUT 超时、弱网下走了另一条带旧清单的上传（会把申报白白消费掉）、
+ * 或另一端稍后用陈旧副本并集回灌。没有重发机制时这些情况下被删行永久留在服务端，
+ * 下次拉取/点查询又落回本地（表现为「删了又复活」）。
+ *
+ * 安全约定：待上传清单里真实存在的行不得申报删除（先作废其墓碑），否则会把用户刚重建的
+ * 同号数据从服务端删掉；非数组/不可解析的内容一律不推定墓碑作废，保持原申报。
+ */
+function collectUploadRemovals(key: string, json: string, consumed: string[]): string[] {
+  let ids = consumed.slice();
+  try {
+    const parsed = JSON.parse(json);
+    if (Array.isArray(parsed)) {
+      pruneTombstonesByRows(key, parsed);
+      const present = new Set<string>();
+      parsed.forEach((r: any) => { const p = rowPrimaryId(r); if (p) present.add(p); rowIdentities(r).forEach((id) => present.add(id)); });
+      ids = Array.from(new Set([...ids, ...tombstoneIds(key).filter((id) => !present.has(id))]));
+    }
+  } catch { /* 非数组内容：不附带墓碑，按原样申报 */ }
+  return ids;
+}
+
+/**
+ * 服务端副本落本地前剪掉本端已删行（含持久墓碑）。
+ * 恢复/兜底类通道（本地为空时从服务端拉回）同样不得让已删账户复活：
+ * 落回本地后它会被自动持久化整键上传，经服务端并集变成永久存在。
+ */
+function dropTombstonedJson(key: string, json: string): string {
+  if (!isNeverShrinkKey(key)) return json;
+  const rm = removedIdSet(key);
+  if (rm.size === 0) return json;
+  try {
+    const rows = JSON.parse(json);
+    if (!Array.isArray(rows)) return json;
+    const kept = rows.filter((r: any) => { const p = rowPrimaryId(r); return !p || !rm.has(p); });
+    return kept.length === rows.length ? json : JSON.stringify(kept);
+  } catch { return json; }
+}
+
 async function doUpload(key: string, json: string, ts?: number, baseTs?: number, removedIdsOverride?: string[]): Promise<boolean> {
   if (isEmptyOwnerKey(key)) return false;
   if (!(await serverAvailable())) return false;
   // 队列补传时使用入队那一刻的申报快照，避免与后续新写入的申报串味
-  const removedIds = removedIdsOverride || takeRemovedIds(key);
+  const consumed = removedIdsOverride || takeRemovedIds(key) || [];
+  const removedIds = collectUploadRemovals(key, json, consumed);
   try {
     // 超时 15s：DB 故障期服务端写兜底需先等 MySQL 写超时（约 5s）才落盘返回，5s 默认超时会把兜底成功误判为失败
     const res = await fetchWithTimeout(`${API_BASE}/sync/dataset`, {
@@ -362,12 +405,12 @@ async function doUpload(key: string, json: string, ts?: number, baseTs?: number,
       return true;
     }
     // 未确认落库：把本次消费掉的删除申报放回登记表，下次重传仍能合法删除被删行
-    if (removedIds && !removedIdsOverride) declareShrink(key, removedIds);
+    if (consumed.length && !removedIdsOverride) declareShrink(key, consumed);
     if (res.status === 401) handleSyncAuthRequired();
     return false;
   } catch {
     serverState = { ok: false, at: Date.now() };
-    if (removedIds && !removedIdsOverride) declareShrink(key, removedIds);
+    if (consumed.length && !removedIdsOverride) declareShrink(key, consumed);
     return false;
   }
 }
@@ -467,10 +510,25 @@ export async function salvageLocalFromUploadQueue(): Promise<number> {
       if (localHas) continue; // 本地仍有行：不干预
       const localTs = await localTimestamp(it.key);
       if (localTs >= (Number(it.ts) || 0)) continue;
+      // 队列快照可能早于一次删除（用户把最后几行都删空后本地为空基）：
+      // 已申报删除/已下墓碑的行不得从队列回灌本地，否则刷新后又被恢复
+      let salvageValue = it.value;
+      try {
+        if (isNeverShrinkKey(it.key)) {
+          const rm = removedIdSet(it.key);
+          if (rm.size > 0) {
+            const rows = JSON.parse(it.value);
+            if (Array.isArray(rows)) {
+              const keep = rows.filter((r: any) => { const id = (r && (r.key || r.id)) ? String(r.key || r.id) : ''; return !id || !rm.has(id); });
+              if (keep.length !== rows.length) salvageValue = JSON.stringify(keep);
+            }
+          }
+        }
+      } catch { /* 解析失败保持原值 */ }
       const raw = getOriginalSetItem();
-      raw(it.key, it.value);
+      raw(it.key, salvageValue);
       raw(`${it.key}_ts`, String(it.ts));
-      try { saveDataset(it.key, it.value); } catch { /* ignore */ }
+      try { saveDataset(it.key, salvageValue); } catch { /* ignore */ }
       n++;
       console.warn('[sync] salvage：已从上传队列恢复本地数据集', it.key);
     }
@@ -528,7 +586,8 @@ export async function flushDatasetUploadAsync(key: string, value: string): Promi
   const uploadTs = Date.now();
   enqueueUpload(key, value, uploadTs);
   if (!(await serverAvailable())) return false;
-  const removedIds = takeRemovedIds(key);
+  const consumed = takeRemovedIds(key) || [];
+  const removedIds = collectUploadRemovals(key, value, consumed);
   try {
     // 超时 15s：同 doUpload，覆盖 DB 故障期服务端写兜底的 MySQL 等待耗时
     const res = await fetchWithTimeout(`${API_BASE}/sync/dataset`, {
@@ -544,12 +603,12 @@ export async function flushDatasetUploadAsync(key: string, value: string): Promi
       queueDelete(key, uploadTs);
       return true;
     }
-    if (removedIds) declareShrink(key, removedIds);
+    if (consumed.length) declareShrink(key, consumed);
     warnUploadFailure(key, res.status);
     if (res.status === 401) handleSyncAuthRequired();
     return false;
   } catch {
-    if (removedIds) declareShrink(key, removedIds);
+    if (consumed.length) declareShrink(key, consumed);
     warnUploadFailure(key, -1);
     return false;
   }
@@ -574,10 +633,13 @@ export async function ensureDatasetFromServer(key: string): Promise<boolean> {
     const data = await res.json();
     console.log('[ensureDataset] server data=', data && data.json ? data.json.substring(0, 100) : data);
     if (data && typeof data.json === 'string' && data.json !== '[]' && data.json !== '""') {
+      // 尊重本端删除墓碑：服务端仍挂着已删行时不得把它落回本地再整键上传复活
+      const restoreJson = dropTombstonedJson(key, data.json);
+      if (restoreJson === '[]' || restoreJson === '""') return false;
       // 使用 safeSetItem（配额溢出时自动紧急清理重试），而非裸 setItem 避免 QuotaExceededError
-      safeSetItem(key, data.json);
+      safeSetItem(key, restoreJson);
       safeSetItem(`${key}_ts`, String(data.updatedAt || Date.now()));
-      saveDataset(key, data.json);
+      saveDataset(key, restoreJson);
       console.log('[ensureDataset] restored successfully');
       return true;
     }
@@ -1198,8 +1260,37 @@ export async function pullAllDatasets(): Promise<number> {
         } catch { /* ignore */ }
         if (Array.isArray(localRows) && Array.isArray(serverRows)) {
           const idOfR = (r: any) => (r && (r.key || r.id)) ? String(r.key || r.id) : null;
+          // 删除防回流：已申报删除的行（含刷新后仍然存活的持久删除墓碑）不得随服务端副本
+          // 落回本地，也不得当成「本地独有行」并回服务端——否则「删除上传失败/离线删除/
+          // 他端陈旧副本并集」会让下一次拉取（含点击查询）把已删账户直接复活
+          const rmSet = removedIdSet(key);
+          // 本地副本（LS/主存）里残留的已删行就地清掉：修复上线前落盘的幽灵行不会被
+          // 后续任何读取入口过滤，直接读 LS 回写整表的页面（提现记录页改余额等）会把它
+          // 连同一表上传，经服务端并集重新变成永久存在（删除又失效）
+          if (rmSet.size > 0 && Array.isArray(localRows) && localRows.some((r: any) => { const id = idOfR(r); return !!id && rmSet.has(id); })) {
+            const cleanJson = JSON.stringify(localRows.filter((r: any) => { const id = idOfR(r); return !id || !rmSet.has(id); }));
+            raw(key, cleanJson);
+            saveDataset(key, cleanJson);
+            localRows = JSON.parse(cleanJson);
+          }
+          const kept = rmSet.size > 0
+            ? serverRows.filter((r: any) => { const id = idOfR(r); return !(id && rmSet.has(id)); })
+            : serverRows;
+          if (kept.length !== serverRows.length) {
+            const kIds = new Set(kept.map(idOfR));
+            const onlyLocalKept = localRows.filter((r: any) => { const id = idOfR(r); return !!id && !kIds.has(id) && !rmSet.has(id); });
+            const keptJson = JSON.stringify([...kept, ...onlyLocalKept]);
+            raw(key, keptJson);
+            raw(`${key}_ts`, String(rec.updatedAt));
+            saveDataset(key, keptJson);
+            // 服务端仍持有这些已删行：随本次上传携带墓碑申报把它清掉，
+            // 否则其他端下次拉取依旧会拿到幽灵行（上传携 removedIds，服务端才允许从永不缩水键删行）
+            void doUpload(key, keptJson, Date.now()).catch(() => false);
+            applied++;
+            continue;
+          }
           const sIds = new Set(serverRows.map(idOfR));
-          const onlyLocal = localRows.filter((r: any) => { const id = idOfR(r); return !!id && !sIds.has(id); });
+          const onlyLocal = localRows.filter((r: any) => { const id = idOfR(r); return !!id && !sIds.has(id) && !rmSet.has(id); });
           if (onlyLocal.length > 0) {
             const merged = JSON.stringify([...serverRows, ...onlyLocal]);
             raw(key, merged);

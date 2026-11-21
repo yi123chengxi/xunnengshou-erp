@@ -506,11 +506,16 @@ function mergeWithExplicitRemovals(existingJson: string, incomingJson: string, r
       const id = idOf(r);
       return !!id && !bIds.has(id) && !rm.has(id);
     });
-    let rows: any[] = b;
+    // 删除申报对本次 PUT 自身也要生效：客户端把已申报删除的行仍留在 json 里（陈旧内存态与删除同批
+    // 写盘、上传重试竞态）时，只过滤 keepFromExisting 拦不住——该行随 incoming 原样落回，
+    // 而申报已被消费，表现为「删除命令没传到服务器」（银行账户/账单明细删了刷新又出现）。
+    // rmList 已限定为存量确实存在的 id，因此剔除只作用于「删除尚未生效」的行；
+    // 存量已无该主键时 rm 不会命中，同号重建的新行按并集语义正常保留。
+    let rows: any[] = rm.size > 0 ? b.filter((r: any) => !rm.has(idOf(r) as string)) : b;
     if (coopGuard) {
       const aById = new Map<string, any>();
       a.forEach((r: any) => { const id = idOf(r); if (id) aById.set(id, r); });
-      rows = b.map((r: any) => {
+      rows = rows.map((r: any) => {
         const id = idOf(r);
         const av = id ? aById.get(id) : null;
         return av ? protectStaleStatus(av, r) : r;

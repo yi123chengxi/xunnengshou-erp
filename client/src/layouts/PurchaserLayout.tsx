@@ -38,7 +38,7 @@ import { safeSetItem } from '../utils/storageQuota';
 import { saveDataset } from '../utils/dataStore';
 import { showNativeNotification, sendPushNotification, isNotificationBlocked, isNotificationTypeEnabled } from '../utils/pushNotification';
 import { recoverRechargeNotifications } from '../utils/rechargeNotification';
-import { showTaskNotify, closeTaskNotify, pruneTaskNotifs, TASK_NOTIFY_RESHOW_EVENT, WITHDRAW_TASK_NOTIF_PREFIXES, INVENTORY_TASK_NOTIF_PREFIXES } from '../utils/taskNotify';
+import { showTaskNotify, closeTaskNotify, pruneTaskNotifs, hasWithdrawRecordAroundLaunch, TASK_NOTIFY_RESHOW_EVENT, WITHDRAW_TASK_NOTIF_PREFIXES, INVENTORY_TASK_NOTIF_PREFIXES } from '../utils/taskNotify';
 import { getFinancePendingCounts, isFinancePendingStorageKey, FinancePending } from '../utils/financePending';
 import { isShopPersonMe } from '../utils/shopScope';
 import { useDevPermSet, isPermAllowed } from '../utils/devPerms';
@@ -720,7 +720,7 @@ const PurchaserLayout: React.FC = () => {
 
   // ===================== 全局提现任务通知恢复（负责人电脑） =====================
   // 发起提现任务只在发布端写入 withdrawal_task_status_<owner>，该键已入同步白名单；
-  // 负责人浏览器轮询拉取到任务后，若本人是店铺负责人且最近 3 天无提现记录，则系统级弹窗提醒，
+  // 负责人浏览器轮询拉取到任务后，若本人是店铺负责人且发布时刻前后 3 天内无提现记录，则系统级弹窗提醒，
   // 直到提现完成。此前仅在发布端本地弹窗，负责人在另一台电脑收不到。
   useEffect(() => {
     const owner = getDataOwner();
@@ -738,12 +738,11 @@ const PurchaserLayout: React.FC = () => {
         const shops: any[] = JSON.parse(localStorage.getItem(`shop_info_${owner}`) || '[]');
         let wdRecords: any[] = [];
         try { wdRecords = JSON.parse(localStorage.getItem(`withdrawal_record_${owner}`) || '[]'); } catch { wdRecords = []; }
-        const threeDaysAgo = dayjs().subtract(3, 'day').startOf('day');
         shopKeys.forEach(shopKey => {
           const shop = shops.find((s: any) => s.key === shopKey);
           if (!shop || !isShopPersonMe(owner, shop.person)) return; // 仅店铺负责人（shop.person 存显示名，需用别名匹配 username）
-          // 最近 3 天已有该店铺提现记录 → 任务完成，不再提醒
-          const done = wdRecords.some((r: any) => r.shopName === shop.shopName && dayjs(r.createdAt || r.withdrawalDate).isAfter(threeDaysAgo));
+          // 以发布任务时间（taskMap[shopKey]）为锚点：发布前 3 天内起有该店铺提现记录 → 任务完成，不再提醒（提现后不再催，不设上限）
+          const done = hasWithdrawRecordAroundLaunch(wdRecords, shop.shopName, taskMap[shopKey]);
           if (done) { closeTaskNotify(`wd-task-${shopKey}`); return; }
           keep.add(`wd-task-${shopKey}`);
           const title = '提现任务提醒';
