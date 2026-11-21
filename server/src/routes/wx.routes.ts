@@ -606,11 +606,79 @@ router.get('/inventory', verifyJWT, async (req: Request, res: Response) => {
     const list = hit.slice(0, 50).map((r: any) => ({
       key: r.key, productCode: r.productCode || '', shortName: r.shortName || '',
       styleCode: r.styleCode || '', unit: r.unit || '', productType: r.productType || '',
-      productStatus: r.productStatus || '', stock: typeof r.stock === 'number' ? r.stock : undefined,
+      productStatus: r.productStatus || '', stock: Number(r.actualStock ?? r.stock) || 0,
     }));
     res.json({ code: 200, data: { list, total: hit.length } });
   } catch (err: any) {
     console.error('[wx] inventory error:', err.message);
+    res.status(500).json({ code: 500, message: '服务器内部错误' });
+  }
+});
+
+/** GET /api/wx/product-cost/:key —— 商品成本明细（与 Web ModuleChildPage「物料明细」同口径）
+ *  BOM 键 bom_<货品key>_<owner> 经 serverSync 白名单同步上云，服务端可直接读；
+ *  半成品有效价递归口径照抄 Web getSemiEffectivePrice：子BOM成本>0 则用子BOM成本，否则回落 stored price，visited 防环 */
+router.get('/product-cost/:key', verifyJWT, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user as JWTPayload;
+    const owner = await ownerOf(user.username);
+    const key = String(req.params.key || '');
+    if (!key) { res.status(400).json({ code: 400, message: '缺少商品 key' }); return; }
+    const loadBom = (k: string) => readMap(`bom_${k}_${owner}`);
+    const effPrice = async (item: any, visited: Set<string>): Promise<number> => {
+      if (!item || !item.key || visited.has(item.key)) return 0;
+      visited.add(item.key);
+      const stored = Number(item.price) || 0;
+      const sub = await loadBom(item.key);
+      const semis = Array.isArray(sub.semiProducts) ? sub.semiProducts : [];
+      const raws = Array.isArray(sub.rawMaterials) ? sub.rawMaterials : [];
+      const procs = Array.isArray(sub.processes) ? sub.processes : [];
+      let s = 0;
+      for (const i of semis) {
+        if (visited.has(i.key)) continue;
+        s += (await effPrice(i, new Set(visited))) * (Number(i.qty) || 1);
+      }
+      const line = (arr: any[]) => arr.reduce((a: number, i: any) => a + (Number(i.price) || 0) * (Number(i.qty) || 1), 0);
+      const bomCost = s + line(raws) + line(procs);
+      return bomCost > 0 ? bomCost : stored;
+    };
+    // 名称/单位回查产品列表（与 Web buildBomItemName 同口径：item 自带字段优先）
+    const products = await readRows(`pageData_basic-data_product-list_${owner}`);
+    const prodOf = new Map(products.map((p: any) => [String(p.key), p]));
+    const nameOf = (i: any): string => String(i.name || i.shortName || i.productCode || prodOf.get(String(i.key))?.shortName || prodOf.get(String(i.key))?.productCode || i.key || '—');
+    const bom = await loadBom(key);
+    const semis = Array.isArray(bom.semiProducts) ? bom.semiProducts : [];
+    const raws = Array.isArray(bom.rawMaterials) ? bom.rawMaterials : [];
+    const procs = Array.isArray(bom.processes) ? bom.processes : [];
+    const semi = [] as any[];
+    let semiTotal = 0;
+    for (const i of semis) {
+      const p = await effPrice(i, new Set());
+      const qty = Number(i.qty) || 1;
+      semiTotal += p * qty;
+      semi.push({ name: nameOf(i), unit: i.unit || '', price: p, qty, amount: p * qty });
+    }
+    const line = (arr: any[]) => arr.map((i: any) => {
+      const p = Number(i.price) || 0;
+      const qty = Number(i.qty) || 1;
+      return { name: nameOf(i), unit: i.unit || '', price: p, qty, amount: p * qty };
+    });
+    const raw = line(raws);
+    const proc = line(procs);
+    // 生产费用：仅成品页口径（Web 按 pageConfig.productTypeFilter==='成品'），服务端以商品 productType 判定
+    const me = products.find((p: any) => String(p.key) === key);
+    let fees: any[] = [];
+    if (String(me?.productType || '') === '成品') {
+      const stored = await readRows(`pageData_settings_production-fee_${owner}`);
+      fees = stored.filter((f: any) => f.status !== 'disabled').map((f: any) => ({
+        name: String(f.name || f.feeName || '生产费用'), price: Number(f.unitCost ?? f.amount) || 0, qty: 1, amount: Number(f.unitCost ?? f.amount) || 0, unit: '',
+      }));
+    }
+    const feeTotal = fees.reduce((a, f) => a + f.amount, 0);
+    const totalCost = semiTotal + raw.reduce((a, i) => a + i.amount, 0) + proc.reduce((a, i) => a + i.amount, 0) + feeTotal;
+    res.json({ code: 200, data: { semi, raw, proc, fees, totalCost, hasBom: semis.length + raws.length + procs.length + fees.length > 0 } });
+  } catch (err: any) {
+    console.error('[wx] product-cost error:', err.message);
     res.status(500).json({ code: 500, message: '服务器内部错误' });
   }
 });

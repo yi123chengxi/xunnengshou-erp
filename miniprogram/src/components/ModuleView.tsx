@@ -119,7 +119,7 @@ const ModuleView = ({
       <View
         style={{
           padding: '20px 24px 0', fontWeight: 600,
-          fontSize: moduleKey === 'finance' || moduleKey === 'warehouse' || moduleKey === 'order' ? 16 : (moduleKey === 'ecommerce' ? 22 : 32),
+          fontSize: moduleKey === 'finance' || moduleKey === 'warehouse' || moduleKey === 'order' || moduleKey === 'product' ? 16 : (moduleKey === 'ecommerce' ? 22 : 32),
         }}
       >
         {mod.icon} {moduleKey === 'ecommerce' ? (mod.children.find(c => c.key === child)?.title || mod.title) : mod.title}

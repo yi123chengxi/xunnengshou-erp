@@ -113,6 +113,10 @@ export const createReimbursement = (body: { title: string; category: string; amo
 export const getInventory = (q: string) =>
   request<{ list: any[]; total: number }>(`/wx/inventory?q=${encodeURIComponent(q)}`)
 
+/** 商品成本明细（服务端 /wx/product-cost 与 Web「物料明细」同口径：半成品/原材料/工艺/生产费用 + 合计） */
+export const getProductCost = (key: string) =>
+  request<{ semi: any[]; raw: any[]; proc: any[]; fees: any[]; totalCost: number; hasBom: boolean }>(`/wx/product-cost/${encodeURIComponent(key)}`)
+
 export const getOrders = (q: string) =>
   request<{ list: any[]; total: number }>(`/wx/orders?q=${encodeURIComponent(q)}`)
 
