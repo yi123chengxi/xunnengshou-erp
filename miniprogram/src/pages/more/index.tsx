@@ -7,6 +7,7 @@ import { isFav, toggleFav } from '../../services/favorites'
 import AppTabBar from '../../components/AppTabBar'
 
 // 更多：全部功能卡片式展示；卡片右上角 + 号加入/移出首页常用功能
+// 字号按用户要求整体缩小 30%：行内数字在 weapp 按真实 px 渲染（不挂定义字号的类，否则类会压过行内值）
 const More = () => {
   const [, setTick] = useState(0)
 
@@ -20,7 +21,7 @@ const More = () => {
     <View style={{ paddingBottom: 140 }}>
       {MODULES.map(m => (
         <View key={m.key} style={{ padding: '20px 24px 0' }}>
-          <Text style={{ fontWeight: 600, fontSize: 30 }}>{m.icon} {m.title}</Text>
+          <Text style={{ fontWeight: 600, fontSize: 21 }}>{m.icon} {m.title}</Text>
           <View style={{ display: 'flex', flexWrap: 'wrap', marginTop: 12 }}>
             {m.children.map(c => {
               const id = `${m.key}:${c.key}`
@@ -32,16 +33,16 @@ const More = () => {
                     onClick={() => openMenuChild(m.key, c.key)}
                   >
                     {(CHILD_ICONS[c.key] || '').includes('.') ? (
-                      /* 与表情图标等高对齐：表情行高 48，图形本体 36 居中 */
-                      <View style={{ height: 48, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 4 }}>
-                        <Image src={CHILD_ICONS[c.key]} style={{ width: 36, height: 36, display: 'block' }} mode="aspectFit" />
+                      /* 与表情图标等高对齐：表情行高 34，图形本体 25 居中（随字号同步缩小 30%） */
+                      <View style={{ height: 34, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 4 }}>
+                        <Image src={CHILD_ICONS[c.key]} style={{ width: 25, height: 25, display: 'block' }} mode="aspectFit" />
                       </View>
                     ) : (
-                      <Text style={{ fontSize: 40, display: 'block', lineHeight: '48px' }}>{CHILD_ICONS[c.key] || '📌'}</Text>
+                      <Text style={{ fontSize: 28, display: 'block', lineHeight: '34px' }}>{CHILD_ICONS[c.key] || '📌'}</Text>
                     )}
-                    <Text style={{ fontSize: 24, color: '#5a6d85' }}>{c.title}</Text>
+                    <Text style={{ fontSize: 17, color: '#5a6d85' }}>{c.title}</Text>
                     <Text
-                      style={{ position: 'absolute', top: 4, right: 6, fontSize: 30, lineHeight: '36px', width: 40, textAlign: 'center', color: fav ? '#52c41a' : '#1677ff', fontWeight: 700 }}
+                      style={{ position: 'absolute', top: 4, right: 6, fontSize: 21, lineHeight: '25px', width: 28, textAlign: 'center', color: fav ? '#52c41a' : '#1677ff', fontWeight: 700 }}
                       onClick={(e: any) => { e.stopPropagation(); onToggle(id, c.title) }}
                     >
                       {fav ? '✓' : '+'}

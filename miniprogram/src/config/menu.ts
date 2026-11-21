@@ -18,6 +18,8 @@ export const MODULES: MenuModule[] = [
     key: 'order', title: '订单管理', icon: '📋',
     children: [
       { key: 'orders', title: '订单查询' },
+      // 打单拣货：与 Web「销售管理→打单拣货」同一份订单数据（已审核+已付款的订单派生视图，只读）
+      { key: 'print-picking', title: '打单拣货' },
       { key: 'production', title: '生产订单' },
       { key: 'purchase', title: '采购订单' },
     ],
@@ -93,7 +95,7 @@ export const findModule = (key: string): MenuModule | undefined => MODULES.find(
 import scanCameraOrangeIcon from '../assets/scan-camera-orange.png'
 export const CHILD_ICONS: Record<string, string> = {
   approvals: '✅', reimburse: '🧾', bookkeeping: '📔', 'bank-account': '🏦',
-  orders: '📋', production: '🏭', purchase: '📥',
+  orders: '📋', 'print-picking': '🖨️', production: '🏭', purchase: '📥',
   'production-order': '🏭', 'processing-order': '⚙️', 'purchase-requisition': '📥',
   'workflow-templates': '🧭', 'production-schedule': '📅',
   inventory: '📦', scan: scanCameraOrangeIcon,

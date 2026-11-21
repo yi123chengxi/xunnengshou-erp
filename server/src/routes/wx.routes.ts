@@ -1405,7 +1405,7 @@ router.post('/leaves/:key/audit', verifyJWT, async (req: Request, res: Response)
 
 // ============ 通用列表（只读，与 Web 各页同源同字段口径） ============
 
-interface ListItem { key: string; title: string; sub: string[]; tag?: string; tone?: string; amount?: number }
+interface ListItem { key: string; title: string; sub: string[]; tag?: string; tone?: string; amount?: number; row?: string[] }
 
 /** 取第一个非空值作为展示文本 */
 function pick(...vals: any[]): string {
@@ -1479,6 +1479,32 @@ router.get('/lists/:page', verifyJWT, async (req: Request, res: Response) => {
         tag: r.status,
         sub: [r.supplier, Array.isArray(r.items) && r.items.length ? `${r.items.length} 项物料` : '',
           day10(pick(r.createTime, r.date, r.createDate)), r.person].filter(Boolean) as string[],
+      }));
+    } else if (page === 'picking') {
+      // 打单拣货：与 Web「销售管理→打单拣货」同口径——订单派生视图，仅取已审核+已付款，
+      // 另并上无关联订单的遗留拣货单（只读）；列取 remap 后的 id/outboundNo/palletCount/pickTime
+      const [orderRows, legacyRows] = await Promise.all([
+        readRows(`pageData_sales_order-manage_${owner}`),
+        readRows(`pageData_sales_print-picking_legacy_${owner}`),
+      ]);
+      const pickRows = [
+        ...orderRows.filter((r: any) => r.auditStatus === '已审核' && String(r.orderStatus || '').trim() === '已付款'),
+        ...legacyRows.map((r: any) => ({ ...r, _legacy: true })),
+      ];
+      const timeOf = (r: any): string => pick(r.pickTime, r.createTime, r.createdAt);
+      pickRows.sort((a: any, b: any) => timeOf(b).localeCompare(timeOf(a)));
+      items = pickRows.map((r: any) => ({
+        key: r.key || r.id, title: pick(r.id, r.orderNo, r.key) || '拣货单',
+        tag: r._legacy ? '遗留单' : pick(r.printStatus, '待打单'),
+        tone: r._legacy ? 'gray' : undefined,
+        row: [pick(r.id, r.orderNo, r.key) || '—', pick(r.outboundNo, '—'),
+          String(Number(r.palletCount ?? r.quantity) || 0), day10(timeOf(r)) || '—'],
+        sub: [pick(r.customerName), r.orderTag && `标签：${r.orderTag}`,
+          pick(r.receiverName) && `收货人：${pick(r.receiverName, '')} ${pick(r.province, '')}${pick(r.city, '')}${pick(r.district, '')}${pick(r.receiverDetail, '')}`.trim(),
+          pick(r.productDetail) && `货品：${pick(r.productDetail)}`,
+          [pick(r.printer) && `打单人:${pick(r.printer)}`, pick(r.person) && `拣货人:${pick(r.person)}`].filter(Boolean).join(' '),
+          pick(r.location) && `库位：${pick(r.location)}`, pick(r.rejectReason) && `驳回：${pick(r.rejectReason)}`,
+        ].filter(Boolean) as string[],
       }));
     } else if (page === 'processing-order') {
       // 加工订单（Web 生产管理→加工订单同键）
