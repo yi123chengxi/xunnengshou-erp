@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { View, Text, Image, Input, ScrollView } from '@tarojs/components'
 import Taro from '@tarojs/taro'
 import { getMarket, getMarketDetail, MarketDetail } from '../services/api'
@@ -88,7 +88,9 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
   const [scores, setScores] = useState<Record<string, number>>({})
   const [computing, setComputing] = useState(false)
   const [list, setList] = useState<any[]>([])
-  const [imgFail, setImgFail] = useState<Record<string, { url: string; msg: string }>>({})
+  const [imgFail, setImgFail] = useState<Record<string, { url: string; msg: string; code: string }>>({})
+  // 已探测过的地址，避免同一 URL 重复发探测请求
+  const probedRef = useRef<Set<string>>(new Set())
   const [loaded, setLoaded] = useState(false)
   const [detail, setDetail] = useState<MarketDetail | null>(null)
 
@@ -107,6 +109,32 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
       .catch(e => Taro.showToast({ title: e.message, icon: 'none' }))
       .finally(() => setLoaded(true))
   }, [type, applied, tick])
+
+  /**
+   * 图片加载失败自证：<Image> 走的是微信媒体通道，与 wx.request 不是同一条路，
+   * 组件只报「加载失败」时无法区分「云端文件不存在(404)」与「地址可达但媒体通道被拦」，
+   * 两者现象完全相同、修法相反。这里用已经确认可用的 request 通道（列表数据就走它）
+   * 主动 GET 同一地址，拿真实状态码定性，避免继续靠猜。
+   * 只探前 6 个地址，防止整屏卡片同时发起大量请求。
+   */
+  const probeImage = (url: string, id: string) => {
+    if (!url || /^data:/i.test(url) || probedRef.current.has(url) || probedRef.current.size >= 6) return
+    probedRef.current.add(url)
+    Taro.request({ url, method: 'GET', timeout: 8000, dataType: 'text', responseType: 'text' })
+      .then(r => setImgFail(v => (v[id] ? { ...v, [id]: { ...v[id], code: String(r.statusCode) } } : v)))
+      .catch(() => setImgFail(v => (v[id] ? { ...v, [id]: { ...v[id], code: 'REQ_FAIL' } } : v)))
+  }
+
+  // 诊断文案：只输出定性结论，绝不印完整地址（历史版本把 URL 印在窄卡片上会折成满屏乱码）
+  const failTextOf = (f?: { url: string; msg: string; code: string }): string => {
+    if (!f) return '发布方未上传图'
+    if (!f.code) return '正在检测图片地址…'
+    if (f.code === '404') return '云端图片缺失 404'
+    if (f.code === '403') return '云端图片被拒 403'
+    if (f.code === '200') return '图片可达但组件未显示'
+    if (f.code === 'REQ_FAIL') return '探测请求被拦(域名未授权)'
+    return `图片地址返回 ${f.code}`
+  }
 
   // 关键字兜底过滤：与网页版同口径字段；服务端已部署 q 时双重过滤结果一致
   const filtered = useMemo(() => {
@@ -246,10 +274,15 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
                   <Image
                     src={r.image} mode="aspectFill"
                     style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%' }}
-                    onError={e => setImgFail(v => ({
-                      ...v,
-                      [String(r.id)]: { url: String(r.image || ''), msg: String((e as any)?.detail?.errMsg || '') },
-                    }))}
+                    onError={e => {
+                      const id = String(r.id)
+                      const url = String(r.image || '')
+                      setImgFail(v => ({
+                        ...v,
+                        [id]: { url, msg: String((e as any)?.detail?.errMsg || ''), code: v[id]?.code || '' },
+                      }))
+                      probeImage(url, id)
+                    }}
                   />
                 ) : (() => {
                   const f = imgFail[String(r.id)]
@@ -257,17 +290,19 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
                     <View
                       style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', background: 'linear-gradient(135deg,#e6f4ff,#f0f5ff)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', fontSize: 72 }}
                       onClick={e => {
-                        // 失败时点占位可复制归一后的真实地址与微信报错（排查用），不再把地址原文印在卡片上；
+                        // 点占位复制完整诊断（地址 + 微信 errMsg + 探测状态码）供排查；
                         // 无图占位不拦截点击，仍走卡片详情
                         if (!f) return
                         e.stopPropagation()
-                        void Taro.setClipboardData({ data: `${f.url}${f.msg ? `\n${f.msg}` : ''}` })
+                        void Taro.setClipboardData({
+                          data: `${f.url}\nerrMsg=${f.msg || '-'}\nprobe=${f.code || '-'}`,
+                        })
                       }}
                     >
                       {/* 占位原因区分：无图=服务端下发空串；加载失败=服务端有地址但取不到文件 */}
                       {type === 'mold' ? '🧰' : '🛍️'}
                       <Text style={{ marginTop: 4, fontSize: '22rpx', color: '#8a94a6', lineHeight: '30rpx' }}>
-                        {f ? '图片加载失败' : '发布方未上传图'}
+                        {failTextOf(f)}
                       </Text>
                     </View>
                   )
