@@ -41,6 +41,8 @@ const C_TAG = { marginLeft: 8, flexShrink: 0, display: 'inline-block', fontSize:
 const C_TYPE = { flexShrink: 0, marginLeft: 10, display: 'inline-block', fontSize: 13, lineHeight: '19px', padding: '0 8px', borderRadius: 6, fontWeight: 500, color: '#ffffff' } as const
 const C_BAL = { flex: 1, minWidth: 0, fontWeight: 700, fontSize: 18, lineHeight: '25px', color: '#1f2733' } as const
 const DETAIL_BTN = { marginLeft: 12, flexShrink: 0, height: 32, lineHeight: '32px', padding: '0 14px', background: '#1677ff', color: '#ffffff', fontSize: 12, borderRadius: 16, textAlign: 'center' } as const
+// 复制按键：与查看明细同尺寸的次要样式（白底浅蓝边蓝字）；内边距略紧以免余额位数多时挤掉右侧按键
+const COPY_BTN = { marginLeft: 8, flexShrink: 0, height: 32, lineHeight: '30px', padding: '0 10px', background: '#ffffff', color: '#1677ff', border: '1px solid #91caff', fontSize: 12, borderRadius: 16, textAlign: 'center', boxSizing: 'border-box' } as const
 const MASK = { position: 'fixed', left: 0, top: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.45)', zIndex: 1000 } as const
 const SHEET = { position: 'fixed', left: 0, right: 0, bottom: 0, background: '#f7f9fb', borderTopLeftRadius: 16, borderTopRightRadius: 16, padding: '0 20px 28px', zIndex: 1001, maxHeight: '78%', boxSizing: 'border-box', overflowY: 'scroll' } as const
 const SHEET_HEAD = { display: 'flex', alignItems: 'center', paddingTop: 16 } as const
@@ -64,7 +66,7 @@ const EMPTY_TXN = { padding: '18px 0', textAlign: 'center', fontSize: 13, color:
 
 /**
  * 银行账户视图：与 Web 财务管理→银行账户同源（pageData_finance_bank-account_<owner>），只读。
- * 卡片：账户名称 / 开户银行+银行账号 / 支行名称+账户类型（靠右） / 余额+查看明细；点明细看该账户交易流水。
+ * 卡片：账户名称 / 开户银行+银行账号 / 支行名称+账户类型（靠右） / 余额+复制+查看明细；点明细看该账户交易流水。
  * 搜索为「点查询后生效」双态模式，与通用列表口径一致。
  */
 const BankAccountsView = ({ tick = 0 }: { tick?: number }) => {
@@ -99,6 +101,19 @@ const BankAccountsView = ({ tick = 0 }: { tick?: number }) => {
   const copyNo = (acc: BankAccount) => {
     if (!acc.bankAccountNo) return
     Taro.setClipboardData({ data: acc.bankAccountNo })
+  }
+
+  /** 一键复制账户信息：账户名称/开户银行/银行账号/支行名称四行（无值字段跳过，避免粘贴出一堆空标签） */
+  const copyAll = (acc: BankAccount) => {
+    const pairs: Array<[string, string]> = [
+      ['账户名称', acc.name || ''],
+      ['开户银行', acc.bankName || ''],
+      ['银行账号', acc.bankAccountNo || ''],
+      ['支行名称', acc.branchName || ''],
+    ]
+    const data = pairs.filter(([, v]) => String(v).trim()).map(([k, v]) => `${k}：${String(v).trim()}`).join('\n')
+    if (!data) return
+    Taro.setClipboardData({ data })
   }
 
   const txns: BankTxn[] = Array.isArray(detail?.transactions) ? detail.transactions : []
@@ -165,16 +180,17 @@ const BankAccountsView = ({ tick = 0 }: { tick?: number }) => {
               <Text style={{ ...C_SUB, flexShrink: 0, marginLeft: 10 }}>—</Text>
             )}
           </View>
-          {/* 第四行：账户余额 + 查看明细按键 */}
+          {/* 第四行：账户余额 + 复制按键 + 查看明细按键 */}
           <View style={{ ...C_ROW, marginTop: 8 }}>
             <Text style={{ ...C_BAL, color: acc.balance < 0 ? '#ff4d4f' : '#1f2733' }}>{money(acc.balance)}</Text>
+            <View style={{ ...COPY_BTN }} onClick={() => copyAll(acc)}>复制</View>
             <View style={{ ...DETAIL_BTN }} onClick={() => setDetail(acc)}>查看明细</View>
           </View>
         </View>
       ))}
 
       {loaded && list.length > 0 && (
-        <View style={{ color: '#8a94a6', textAlign: 'center', fontSize: 14, padding: '8px 24px 0' }}>点击银行账号可复制，余额与网页端实时同步</View>
+        <View style={{ color: '#8a94a6', textAlign: 'center', fontSize: 14, padding: '8px 24px 0' }}>点复制可一键拷走账户名称/开户银行/账号/支行，余额与网页端实时同步</View>
       )}
 
       {/* 银行账户明细弹层：账户信息 + 交易流水 */}
