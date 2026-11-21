@@ -157,7 +157,17 @@ const WithdrawalRecordPage: React.FC = () => {
   const [records, setRecords] = useState<WithdrawalRecord[]>([]);
   const [shops, setShops] = useState<ShopInfo[]>([]);
   const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
-  const [searchText, setSearchText] = useState('');
+  // 提现记录搜索（双态：输入态绑控件、已应用态供过滤 memo 读取，点查询/回车才生效，与充值记录同构）
+  const WD_SEARCH_EMPTY = { shopName: '', bankAccountNo: '', operator: '', dateStart: '', dateEnd: '' };
+  const [wdSearch, setWdSearch] = useState({ ...WD_SEARCH_EMPTY });
+  const [wdAppliedSearch, setWdAppliedSearch] = useState({ ...WD_SEARCH_EMPTY });
+  const handleWdSearchApply = useCallback(() => {
+    setWdAppliedSearch({ ...wdSearch });
+  }, [wdSearch]);
+  const handleWdSearchReset = useCallback(() => {
+    setWdSearch({ ...WD_SEARCH_EMPTY });
+    setWdAppliedSearch({ ...WD_SEARCH_EMPTY });
+  }, []);
 
   // 负责人可见范围统一由「店铺管理 → 负责人设置」（shopmgr_managers_）控制，
   // 本页不再维护独立的 withdrawal_recharge_managers_ 名单：两套名单在不同时刻各自生效时，
@@ -1224,17 +1234,28 @@ const WithdrawalRecordPage: React.FC = () => {
   };
 
   // ===================== 过滤 =====================
+  // 逐字段 AND 短路：店铺名称模糊；银行账户按「账户名称+开户银行+账号」合并串包含（Select 选中账号必命中，兼容口径错配）；
+  // 操作人按「登录名+显示名」合并串包含；时间范围按创建时间（回退提现日期）整天区间比较
   const filteredRecords = useMemo(() => {
-    if (!searchText.trim()) return baseRecords;
-    const q = searchText.toLowerCase();
-    return baseRecords.filter(r =>
-      r.shopName.toLowerCase().includes(q) ||
-      r.accountName.toLowerCase().includes(q) ||
-      r.bankName.toLowerCase().includes(q) ||
-      r.bankAccountNo.toLowerCase().includes(q) ||
-      r.inputBy.toLowerCase().includes(q)
-    );
-  }, [baseRecords, searchText]);
+    const qShop = wdAppliedSearch.shopName.trim().toLowerCase();
+    const qBank = wdAppliedSearch.bankAccountNo.trim().toLowerCase();
+    const qOp = wdAppliedSearch.operator.trim().toLowerCase();
+    const ds = wdAppliedSearch.dateStart;
+    const de = wdAppliedSearch.dateEnd;
+    if (!qShop && !qBank && !qOp && !ds && !de) return baseRecords;
+    return baseRecords.filter(r => {
+      if (qShop && !String(r.shopName || '').toLowerCase().includes(qShop)) return false;
+      if (qBank && !`${r.accountName || ''} ${r.bankName || ''} ${r.bankAccountNo || ''}`.toLowerCase().includes(qBank)) return false;
+      if (qOp && !`${r.inputBy || ''} ${getDisplayName(r.inputBy || '')}`.toLowerCase().includes(qOp)) return false;
+      if (ds || de) {
+        const t = dayjs(r.createdAt || r.withdrawalDate || '');
+        if (!t.isValid()) return false;
+        if (ds && t.isBefore(dayjs(ds).startOf('day'))) return false;
+        if (de && t.isAfter(dayjs(de).endOf('day'))) return false;
+      }
+      return true;
+    });
+  }, [baseRecords, wdAppliedSearch]);
 
   // 汇总
   const totalAmount = useMemo(() => filteredRecords.reduce((s, r) => s + (r.amount || 0), 0), [filteredRecords]);
@@ -1373,19 +1394,37 @@ const WithdrawalRecordPage: React.FC = () => {
 
       {/* ============ 提现记录 ============ */}
       {activeTab === 'withdrawal' && (<>
-      <Card size="small" style={{ marginBottom: 12, borderRadius: 8 }} bodyStyle={{ padding: '10px 24px' }}>
-        <Row justify="end" align="middle">
+      <Card size="small" style={{ marginBottom: 12, borderRadius: 8 }} bodyStyle={{ padding: '10px 16px' }}>
+        <Row gutter={[12, 10]} align="middle">
+          <Col xs={12} sm={6} md={4} lg={3}><Input placeholder="店铺名称" allowClear value={wdSearch.shopName} onChange={e => setWdSearch(p => ({ ...p, shopName: e.target.value }))} onPressEnter={handleWdSearchApply} /></Col>
+          <Col xs={12} sm={6} md={4} lg={3}>
+            <Select placeholder="银行账户" allowClear showSearch style={{ width: '100%' }} value={wdSearch.bankAccountNo || undefined}
+              onChange={v => setWdSearch(p => ({ ...p, bankAccountNo: v || '' }))}
+              options={bankAccountOptions} filterOption={(input, option) => String(option?.label || '').toLowerCase().includes(input.toLowerCase())} />
+          </Col>
+          <Col xs={12} sm={6} md={4} lg={3}><Input placeholder="操作人" allowClear value={wdSearch.operator} onChange={e => setWdSearch(p => ({ ...p, operator: e.target.value }))} onPressEnter={handleWdSearchApply} /></Col>
+          <Col xs={12} sm={8} md={6} lg={4}>
+            <DatePicker.RangePicker
+              style={{ width: '100%' }}
+              placeholder={['开始日期', '结束日期']}
+              value={wdSearch.dateStart && wdSearch.dateEnd ? [dayjs(wdSearch.dateStart), dayjs(wdSearch.dateEnd)] : null}
+              onChange={(dates) => {
+                setWdSearch(p => ({
+                  ...p,
+                  dateStart: dates?.[0]?.format('YYYY-MM-DD') || '',
+                  dateEnd: dates?.[1]?.format('YYYY-MM-DD') || '',
+                }));
+              }}
+              onOpenChange={(open) => {
+                if (!open && wdSearch.dateStart && wdSearch.dateEnd) handleWdSearchApply();
+              }}
+            />
+          </Col>
           <Col>
-            <Space>
+            <Space wrap>
+              <Button type="primary" icon={<SearchOutlined />} onClick={handleWdSearchApply}>查询</Button>
+              <Button icon={<ReloadOutlined />} onClick={handleWdSearchReset}>重置</Button>
               {totalAmount > 0 && <Tag color="green">合计 {fmt(totalAmount)}</Tag>}
-              <Input.Search
-                placeholder="搜索店铺/银行/操作人"
-                allowClear
-                style={{ width: 200 }}
-                value={searchText}
-                onChange={e => setSearchText(e.target.value)}
-                onSearch={v => setSearchText(v)}
-              />
               <Button icon={<ReloadOutlined />} onClick={reload}>刷新</Button>
               <Button icon={<ClearOutlined />} onClick={handleClearWithdrawTask}>清空</Button>
               <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增记录</Button>
