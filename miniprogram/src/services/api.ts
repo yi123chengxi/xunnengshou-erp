@@ -362,14 +362,32 @@ export const getWsMaterials = (kind: 'stock' | 'urgent') =>
 export const createNewStyle = (body: Record<string, any>) =>
   request<{ saved: boolean; record: any }>('/wx/newstyle', { method: 'POST', data: body })
 
-/** 生产排期看板：生产线×上午/下午/晚上网格（与 Web ScheduleBoard 同键同口径） */
+/** 待排产订单卡片（与 Web ScheduleBoard 待排产面板同结构） */
+export interface ScheduleOrderItem {
+  id: string
+  moldCode: string
+  styleQty: string
+  image: string
+  productName: string
+  planQty: number
+  pending: number
+  semiText: string
+  fields?: [string, string][]
+}
+
+/** 生产排期看板：生产线×上午/下午/晚上网格 + 待排产订单卡（与 Web ScheduleBoard 同键同口径） */
 export interface ScheduleBoardData {
   date: string
   lines: string[]
   shifts: { key: string; label: string; range: string }[]
   cells: Record<string, { total: number; items: { no: string; qty: number }[] }>
   dayTotal: number
+  orders: ScheduleOrderItem[]
 }
 
 export const getScheduleBoard = (date: string) =>
   request<ScheduleBoardData>(`/wx/schedule-board?date=${date}`)
+
+/** 手机排期登记（与 Web ScheduleBoard 拖拽落库同源：PS- 编号 + 班次 + 待排量钳制） */
+export const postSchedule = (body: { productionOrderId: string; date: string; line: string; shift: string; qty: number }) =>
+  request<{ saved: boolean; record: any }>('/wx/schedule', { method: 'POST', data: body })

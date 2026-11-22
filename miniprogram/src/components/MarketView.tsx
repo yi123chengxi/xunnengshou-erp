@@ -70,8 +70,10 @@ const detailRows = (d: MarketDetail): [string, string][] => {
 }
 
 // 详情底部弹层（与仓库统计记录详情同写法：遮罩高于 TabBar，面板靠底可滚）
+// 面板两侧留 12px 边且不再叠 width:100%（left/right 与 width 过约束在 weapp 下会撑出屏宽导致右侧内容被裁），
+// 宽度由 left/right 内缩唯一确定，保证详情完整可见
 const SHEET_MASK = { position: 'fixed', left: 0, right: 0, top: 0, bottom: 0, background: 'rgba(0,0,0,0.45)', zIndex: 300 } as const
-const SHEET_PANEL = { position: 'absolute', left: 0, right: 0, bottom: 0, width: '100%', background: '#fff', borderRadius: '16px 16px 0 0', paddingTop: 14, paddingBottom: 'calc(14px + env(safe-area-inset-bottom))', maxHeight: '82vh', boxSizing: 'border-box' } as const
+const SHEET_PANEL = { position: 'absolute', left: 12, right: 12, bottom: 12, background: '#fff', borderRadius: 16, paddingTop: 14, paddingBottom: 'calc(14px + env(safe-area-inset-bottom))', maxHeight: '82vh', boxSizing: 'border-box', overflow: 'hidden' } as const
 const SHEET_TITLE = { flex: 1, fontSize: 18, fontWeight: 600, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' } as const
 const ROW_LABEL = { fontSize: 15, color: '#8a94a6', flexShrink: 0, marginRight: 12 } as const
 // weapp flex 子项默认 min-width:auto，长值会撑开行超出屏宽，必须 minWidth:0 才能换行自适应
@@ -439,7 +441,8 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
               <ScrollView scrollY style={{ maxHeight: '58vh', padding: '12px 20px 0' }}>
                 {imgs.length ? (
                   <View>
-                    <View style={{ position: 'relative', width: '100%', paddingTop: '72%', borderRadius: 10, overflow: 'hidden', background: '#f5f6f8' }}>
+                    {/* 主图正方形显示（与成品卡 450×450 正方形口径一致） */}
+                    <View style={{ position: 'relative', width: '100%', paddingTop: '100%', borderRadius: 10, overflow: 'hidden', background: '#f5f6f8' }}>
                       <Image
                         src={imgData[imgs[0]] || imgs[0]} mode="aspectFill"
                         style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%' }}

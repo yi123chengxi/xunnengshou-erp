@@ -1505,15 +1505,129 @@ router.get('/schedule-board', verifyJWT, async (req: Request, res: Response) => 
         items: its.map((r: any) => ({ no: String(r.productionOrderId || r.id || ''), qty: Number(r.planQty) || 0 })),
       };
     }));
+    // 待产订单卡片（与 Web ScheduleBoard 左侧待排产面板同源）：PO 前缀 + 非完成/取消 + 待排>0；
+    // 模具编号按 productCode 回查商品主数据，半成品加工按 poId 聚合，款式编码 X 数量与 production 分支同聚合口径
+    const [poRows, procRows, products] = await Promise.all([
+      readRows(`pageData_production_production-order_${owner}`),
+      readRows(`pageData_production_processing-order_${owner}`),
+      readRows(`pageData_basic-data_product-list_${owner}`),
+    ]);
+    const scheduledByPo = new Map<string, number>();
+    rows.forEach((r: any) => {
+      const k = String(r.productionOrderId || '');
+      if (k) scheduledByPo.set(k, (scheduledByPo.get(k) || 0) + (Number(r.planQty) || 0));
+    });
+    const prefixOf = (code: any): string => {
+      const s = String(code || '');
+      const m = s.match(/^[^-]+(?:-[^-]+)*?(?=\s*-\s*[\u4e00-\u9fff])/);
+      if (m) return m[0];
+      const n = s.match(/^\d+/);
+      return n ? n[0] : s;
+    };
+    const stText: Record<string, string> = { pending: '待排产', processing: '生产中', completed: '已完成', cancelled: '已取消', warning: '异常' };
+    const prodByCode = new Map(products.map((p: any) => [String(p.productCode || ''), p]));
+    const orders = poRows
+      .filter((r: any) => /^PO-/.test(String(r.id || '')) && !['completed', 'cancelled'].includes(String(r.status || '')))
+      .map((r: any) => {
+        const plan = Number(r.planQuantity ?? r.quantity ?? r.productionQty) || 0;
+        const pending = Math.max(0, plan - (scheduledByPo.get(String(r.id)) || 0));
+        const planItems: any[] = Array.isArray(r.planItems) ? r.planItems : [];
+        const first: any = planItems[0] || {};
+        const prod: any = prodByCode.get(String(first.productCode || r.productCode || '')) || {};
+        const moldCode = String(prod.moldCode || first.moldCode || '');
+        const qtyByStyle = new Map<string, number>();
+        if (planItems.length) {
+          planItems.forEach((it: any) => {
+            const code = prefixOf(it.productCode || it.styleCode || '');
+            if (!code) return;
+            qtyByStyle.set(code, (qtyByStyle.get(code) || 0) + (Number(it.productionQty ?? it.quantity) || 0));
+          });
+        } else {
+          const code = prefixOf(r.styleCode || r.productCode || '');
+          if (code) qtyByStyle.set(code, plan);
+        }
+        const styleQty = Array.from(qtyByStyle.entries()).map(([c, q]) => `${c} X ${q}`).join('、');
+        const semis = procRows.filter((p: any) => String(p.poId || '') === String(r.id));
+        const semiDone = semis.filter((p: any) => String(p.status || '') === 'completed').length;
+        const semiText = semis.length ? `${semiDone}/${semis.length} 完成` : '未生成加工单';
+        return {
+          id: String(r.id), moldCode, styleQty,
+          image: String(first.image || prod.image || ''),
+          productName: String(first.productName || prod.shortName || r.productName || ''),
+          planQty: plan, pending, semiText,
+          fields: [
+            ['生产单号', String(r.id)],
+            ['状态', stText[String(r.status || '')] || pick(r.status, '—')],
+            ['客户', pick(r.customerName, '—')],
+            ['计划数量', String(plan)],
+            ['待排', String(pending)],
+            ['模具编号', moldCode || '—'],
+            ['款式编码', styleQty || '—'],
+            ['计划完工', day10(pick(r.planEnd, r.endDate, '')) || '—'],
+            ['负责人', pick(r.person, '—')],
+            ['半成品加工', semiText],
+          ] as [string, string][],
+        };
+      })
+      .filter((o: any) => o.pending > 0);
     res.json({
       code: 200,
       data: {
-        date, lines, shifts, cells,
+        date, lines, shifts, cells, orders,
         dayTotal: day.reduce((s: number, r: any) => s + (Number(r.planQty) || 0), 0),
       },
     });
   } catch (err: any) {
     console.error('[wx] schedule-board error:', err.message);
+    res.status(500).json({ code: 500, message: '服务器内部错误' });
+  }
+});
+
+/** POST /api/wx/schedule —— 手机排期登记：与 Web ScheduleBoard 拖拽落库同源码同键（PS-YYYYMMDD-NN 编号 + shift 字段 + 待排量钳制） */
+router.post('/schedule', verifyJWT, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user as JWTPayload;
+    const owner = await ownerOf(user.username);
+    const schedMenu = await canViewMenus(user.username, ['production/production-schedule']);
+    if (!schedMenu['production/production-schedule']) { res.status(403).json({ code: 403, message: '无该菜单权限（与网页版菜单权限一致）' }); return; }
+    const poId = String(req.body.productionOrderId || '');
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(String(req.body.date || '')) ? String(req.body.date) : localYmd();
+    const line = String(req.body.line || '').trim();
+    const shift = String(req.body.shift || '').trim();
+    const qty = Number(req.body.qty);
+    if (!poId || !line || !['morning', 'afternoon', 'evening'].includes(shift) || !(qty > 0)) {
+      res.status(400).json({ code: 400, message: '订单/生产线/班次/数量(>0)为必填' });
+      return;
+    }
+    const scKey = `pageData_production_production-schedule_${owner}`;
+    const [omRows, scRows] = await Promise.all([
+      readRows(`pageData_production_production-order_${owner}`),
+      readRows(scKey),
+    ]);
+    const order = omRows.find((o: any) => String(o.id || '') === poId);
+    if (!order) { res.status(404).json({ code: 404, message: '生产订单不存在' }); return; }
+    const plan = Number(order.planQuantity ?? order.quantity ?? order.productionQty) || 0;
+    const scheduled = scRows.filter((r: any) => String(r.productionOrderId || '') === poId)
+      .reduce((s: number, r: any) => s + (Number(r.planQty) || 0), 0);
+    const pending = Math.max(0, plan - scheduled);
+    if (qty > pending) { res.status(400).json({ code: 400, message: `超出剩余可排数量（${pending}）` }); return; }
+    // 编号与 Web genScheduleNo 同源：PS-YYYYMMDD-NN 顺序补位
+    const prefix = `PS-${date.replace(/-/g, '')}`;
+    const used = new Set(scRows.map((r: any) => String(r.id || '')).filter((v: string) => v.startsWith(prefix)));
+    let n = used.size + 1;
+    let no = `${prefix}-${String(n).padStart(2, '0')}`;
+    while (used.has(no)) { n += 1; no = `${prefix}-${String(n).padStart(2, '0')}`; }
+    const rec: any = {
+      key: `sc-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      id: no, productionOrderId: poId, salesOrderId: order.salesOrderId || '',
+      productName: order.productName || '', customerName: order.customerName || '',
+      planQty: qty, line, shift, startDate: date, endDate: date,
+      person: order.person || '', status: 'pending', createTime: new Date().toLocaleString('zh-CN'),
+    };
+    await writeRows(scKey, [rec, ...scRows], owner);
+    res.json({ code: 200, data: { saved: true, record: rec } });
+  } catch (err: any) {
+    console.error('[wx] schedule create error:', err.message);
     res.status(500).json({ code: 500, message: '服务器内部错误' });
   }
 });
@@ -2126,8 +2240,7 @@ router.get('/lists/:page', verifyJWT, async (req: Request, res: Response) => {
           const planItems: any[] = Array.isArray(r.planItems) ? r.planItems : [];
           const styleSrc = planItems.length ? planItems.map((it: any) => it.productCode || it.styleCode || '') : [pick(r.styleCode, r.productCode, '')];
           const styles = Array.from(new Set(styleSrc.map(stylePrefixOf).filter(Boolean)));
-          // 款式前缀×总数量（018-2X6双）：明细逐条数量按前缀累加；无明细时单一款式挂整单计划数量；单位优先记录/明细单位，回退双
-          const unit = pick(r.unit, planItems[0] && planItems[0].unit, '') || '双';
+          // 款式前缀×总数量（018-2 X 6：X 前后空格更醒目、不带单位）：明细逐条数量按前缀累加；无明细时单一款式挂整单计划数量
           const qtyByStyle = new Map<string, number>();
           if (planItems.length) {
             planItems.forEach((it: any) => {
@@ -2139,14 +2252,14 @@ router.get('/lists/:page', verifyJWT, async (req: Request, res: Response) => {
             qtyByStyle.set(styles[0], qty);
           }
           const styleQtyStr = qtyByStyle.size
-            ? Array.from(qtyByStyle.entries()).map(([c, q]) => `${c}X${q}${unit}`).join('、')
+            ? Array.from(qtyByStyle.entries()).map(([c, q]) => `${c} X ${q}`).join('、')
             : styles.join('、');
           const schedDates = (schedDatesByPo.get(String(r.id || '')) || []).sort();
           const schedDate = schedDates[0] || day10(pick(r.planStart, ''));
           return {
             key: r.key || r.id, title: pick(r.id, r.orderNo, r.key) || '生产订单',
             tag: statusText,
-            // 卡片副信息两行：首行款式编码X总数量（如 018-2X6双），创建日期同行靠右（ListView 按 subRight 渲染）；次行排产日期
+            // 卡片副信息两行：首行款式编码 X 总数量（如 018-2 X 6），创建日期同行靠右（ListView 按 subRight 渲染）；次行排产日期
             sub: [styleQtyStr, schedDate ? `排产 ${schedDate}` : ''].filter(Boolean) as string[],
             subRight: date,
             subSizes: [14.4, 24],
