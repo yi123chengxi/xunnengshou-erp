@@ -297,6 +297,8 @@ export interface ListItem {
   fields?: [string, string][]
   /** 副信息逐行字号（px，缺省 24）：生产订单首行款式编码行按用户要求缩 40% */
   subSizes?: number[]
+  /** 副信息首行靠右对齐内容（如生产订单创建日期靠右） */
+  subRight?: string
 }
 
 export const getListPage = (page: string, q: string, extra = '') =>

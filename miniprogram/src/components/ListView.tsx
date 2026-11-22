@@ -238,7 +238,15 @@ const ListView = ({
             ) : null
           ) : (
             (it.sub || []).map((s, i) => (
-              <View key={i} className="muted" style={{ paddingTop: 4, fontSize: (it.subSizes || [])[i] || 24 }}>{s}</View>
+              i === 0 && it.subRight ? (
+                /* 首行左右分栏：左主副信息可收缩省略，右靠右对齐内容（如生产订单创建日期），字号同行跟随 subSizes */
+                <View key={i} style={{ display: 'flex', alignItems: 'center', paddingTop: 4 }}>
+                  <Text className="muted" style={{ flex: 1, minWidth: 0, fontSize: (it.subSizes || [])[i] || 24, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>{s}</Text>
+                  <Text className="muted" style={{ flexShrink: 0, marginLeft: 8, fontSize: (it.subSizes || [])[i] || 24 }}>{it.subRight}</Text>
+                </View>
+              ) : (
+                <View key={i} className="muted" style={{ paddingTop: 4, fontSize: (it.subSizes || [])[i] || 24 }}>{s}</View>
+              )
             ))
           )}
           {!compact && typeof it.amount === 'number' && it.amount !== 0 ? (

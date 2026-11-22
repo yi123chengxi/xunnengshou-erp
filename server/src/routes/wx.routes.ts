@@ -1684,7 +1684,7 @@ router.post('/leaves/:key/audit', verifyJWT, async (req: Request, res: Response)
 
 // ============ 通用列表（只读，与 Web 各页同源同字段口径） ============
 
-interface ListItem { key: string; title: string; sub: string[]; tag?: string; tone?: string; amount?: number; row?: string[]; fields?: [string, string][]; subSizes?: number[] }
+interface ListItem { key: string; title: string; sub: string[]; tag?: string; tone?: string; amount?: number; row?: string[]; fields?: [string, string][]; subSizes?: number[]; subRight?: string }
 
 /** 取第一个非空值作为展示文本 */
 function pick(...vals: any[]): string {
@@ -2126,13 +2126,29 @@ router.get('/lists/:page', verifyJWT, async (req: Request, res: Response) => {
           const planItems: any[] = Array.isArray(r.planItems) ? r.planItems : [];
           const styleSrc = planItems.length ? planItems.map((it: any) => it.productCode || it.styleCode || '') : [pick(r.styleCode, r.productCode, '')];
           const styles = Array.from(new Set(styleSrc.map(stylePrefixOf).filter(Boolean)));
+          // 款式前缀×总数量（018-2X6双）：明细逐条数量按前缀累加；无明细时单一款式挂整单计划数量；单位优先记录/明细单位，回退双
+          const unit = pick(r.unit, planItems[0] && planItems[0].unit, '') || '双';
+          const qtyByStyle = new Map<string, number>();
+          if (planItems.length) {
+            planItems.forEach((it: any) => {
+              const code = stylePrefixOf(it.productCode || it.styleCode || '');
+              if (!code) return;
+              qtyByStyle.set(code, (qtyByStyle.get(code) || 0) + (Number(it.productionQty ?? it.quantity) || 0));
+            });
+          } else if (styles.length) {
+            qtyByStyle.set(styles[0], qty);
+          }
+          const styleQtyStr = qtyByStyle.size
+            ? Array.from(qtyByStyle.entries()).map(([c, q]) => `${c}X${q}${unit}`).join('、')
+            : styles.join('、');
           const schedDates = (schedDatesByPo.get(String(r.id || '')) || []).sort();
           const schedDate = schedDates[0] || day10(pick(r.planStart, ''));
           return {
             key: r.key || r.id, title: pick(r.id, r.orderNo, r.key) || '生产订单',
             tag: statusText,
-            // 卡片副信息两行：首行款式编码+创建日期同行（subSizes 缩 40% 字），次行排产日期；计划数量与负责人按用户要求不再显示
-            sub: [[styles.join('、'), date].filter(Boolean).join('　'), schedDate ? `排产 ${schedDate}` : ''].filter(Boolean) as string[],
+            // 卡片副信息两行：首行款式编码X总数量（如 018-2X6双），创建日期同行靠右（ListView 按 subRight 渲染）；次行排产日期
+            sub: [styleQtyStr, schedDate ? `排产 ${schedDate}` : ''].filter(Boolean) as string[],
+            subRight: date,
             subSizes: [14.4, 24],
             // 详情弹层字段（点击卡片展示）：含排产日期与计划明细
             fields: [
