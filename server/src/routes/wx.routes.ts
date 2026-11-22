@@ -725,7 +725,8 @@ router.get('/orders', verifyJWT, async (req: Request, res: Response) => {
     // 订单状态快速筛选：按派生状态文案等值过滤（与列表下发口径一致），空串=全部
     const status = String(req.query.status || '').trim();
     const scoped = status ? hit.filter((r: any) => statusTextOf(r) === status) : hit;
-    const list = scoped.slice(0, 50).map((r: any) => {
+    // 单页上限 20 条（用户指定）：total 仍为筛选后全量数
+    const list = scoped.slice(0, 20).map((r: any) => {
       // 货品明细唯一读取源 orderItems（JSON 字符串），解析口径与 Web 端一致（unitPrice 兼容映射 price）
       let items: any[] = [];
       try {
@@ -1528,7 +1529,7 @@ router.post('/leaves/:key/audit', verifyJWT, async (req: Request, res: Response)
 
 // ============ 通用列表（只读，与 Web 各页同源同字段口径） ============
 
-interface ListItem { key: string; title: string; sub: string[]; tag?: string; tone?: string; amount?: number; row?: string[] }
+interface ListItem { key: string; title: string; sub: string[]; tag?: string; tone?: string; amount?: number; row?: string[]; fields?: [string, string][]; subSizes?: number[] }
 
 /** 取第一个非空值作为展示文本 */
 function pick(...vals: any[]): string {
@@ -1547,12 +1548,12 @@ function toneOf(tag?: string): string {
 }
 
 /** 关键字过滤 + 截断（标题/副行/标签参与匹配） */
-function finishList(items: ListItem[], q: string): { list: ListItem[]; total: number } {
+function finishList(items: ListItem[], q: string, limit = 100): { list: ListItem[]; total: number } {
   const kw = q.trim().toLowerCase();
   const hit = kw
     ? items.filter(it => `${it.title} ${(it.sub || []).join(' ')} ${it.tag || ''}`.toLowerCase().includes(kw))
     : items;
-  return { list: hit.slice(0, 100), total: hit.length };
+  return { list: hit.slice(0, limit), total: hit.length };
 }
 
 const day10 = (v: any): string => pick(v).slice(0, 10);
@@ -1632,7 +1633,8 @@ router.get('/picking', verifyJWT, async (req: Request, res: Response) => {
       };
     });
     if (q) list = list.filter((it: any) => `${it.id} ${it.outboundNo} ${it.styleQty} ${it.receiverName} ${it.customerName}`.toLowerCase().includes(q));
-    res.json({ code: 200, data: { list: list.slice(0, 100), total: list.length } });
+    // 单页上限 20 条（用户指定）：total 仍为全量命中数供计数行展示
+    res.json({ code: 200, data: { list: list.slice(0, 20), total: list.length } });
   } catch (err: any) {
     console.error('[wx] picking list error:', err.message);
     res.status(500).json({ code: 500, message: '服务器内部错误' });
@@ -1900,32 +1902,62 @@ router.get('/lists/:page', verifyJWT, async (req: Request, res: Response) => {
           r.payAccount && `付:${r.payAccount}`, r.recvAccount && `收:${r.recvAccount}`, r.remark].filter(Boolean) as string[],
       }));
     } else if (page === 'production') {
-      const rows = await readRows(`pageData_production_production-order_${owner}`);
+      const [rows, scRows] = await Promise.all([
+        readRows(`pageData_production_production-order_${owner}`),
+        readRows(`pageData_production_production-schedule_${owner}`),
+      ]);
       // 状态英文枚举转中文（与 Web 生产订单状态口径对应）
-      const prodStatusText: Record<string, string> = { pending: '待处理', processing: '进行中', completed: '已完成', cancelled: '已取消', warning: '异常' };
-      items = rows.map((r: any) => {
-        const qty = Number(r.planQuantity ?? r.quantity ?? r.productionQty) || 0;
-        const statusText = prodStatusText[String(r.status || '')] || pick(r.status, '—');
-        const date = day10(pick(r.createTime, r.date, r.createDate));
-        const goods = pick(r.styleCode, r.productCode, r.productName);
-        return {
-          key: r.key || r.id, title: pick(r.id, r.orderNo, r.key) || '生产订单',
-          tag: statusText,
-          // 卡片副信息仅两行：计划数量+日期同行、负责人；款式逗号串与订单标签按用户要求不显示
-          sub: [[qty ? `计划数量 ${qty}` : '', date].filter(Boolean).join('　'), r.person].filter(Boolean) as string[],
-          // 详情弹层字段（点击卡片展示）
-          fields: [
-            ['生产单号', pick(r.id, r.orderNo, r.key) || '—'],
-            ['状态', statusText],
-            ['款式/商品', goods || '—'],
-            ['计划数量', qty ? String(qty) : '—'],
-            ['已完成数量', String(Number(r.completedQuantity ?? r.doneQty) || 0)],
-            ['订单标签', pick(r.orderTag, '—')],
-            ['创建日期', date || '—'],
-            ['负责人', pick(r.person, '—')],
-          ] as [string, string][],
-        };
+      const prodStatusText: Record<string, string> = { pending: '待排产', processing: '生产中', completed: '已完成', cancelled: '已取消', warning: '异常' };
+      // 排产日期：该生产单最早一条排期记录的 startDate（无排期回退计划开始日期 planStart）
+      const schedDatesByPo = new Map<string, string[]>();
+      scRows.forEach((s: any) => {
+        const k = String(s.productionOrderId || '');
+        const d = day10(pick(s.startDate, s.date, ''));
+        if (!k || !d) return;
+        const arr = schedDatesByPo.get(k) || [];
+        arr.push(d);
+        schedDatesByPo.set(k, arr);
       });
+      // 款式编码：与 client ScheduleBoard/OrdersEmbed 同源正则——剥掉商品编码的「-颜色-规格」尾段只留款式前缀
+      const stylePrefixOf = (code: any): string => {
+        const s = String(code || '');
+        const m = s.match(/^[^-]+(?:-[^-]+)*?(?=\s*-\s*[\u4e00-\u9fff])/);
+        if (m) return m[0];
+        const n = s.match(/^\d+/);
+        return n ? n[0] : s;
+      };
+      // 不显示已完成/已取消：小程序生产订单页只展示待生产池（与 Web 展示层过滤口径一致）
+      items = rows
+        .filter((r: any) => { const st = String(r.status || ''); return st !== 'completed' && st !== 'cancelled'; })
+        .map((r: any) => {
+          const qty = Number(r.planQuantity ?? r.quantity ?? r.productionQty) || 0;
+          const statusText = prodStatusText[String(r.status || '')] || pick(r.status, '—');
+          const date = day10(pick(r.createTime, r.date, r.createDate));
+          const planItems: any[] = Array.isArray(r.planItems) ? r.planItems : [];
+          const styleSrc = planItems.length ? planItems.map((it: any) => it.productCode || it.styleCode || '') : [pick(r.styleCode, r.productCode, '')];
+          const styles = Array.from(new Set(styleSrc.map(stylePrefixOf).filter(Boolean)));
+          const schedDates = (schedDatesByPo.get(String(r.id || '')) || []).sort();
+          const schedDate = schedDates[0] || day10(pick(r.planStart, ''));
+          return {
+            key: r.key || r.id, title: pick(r.id, r.orderNo, r.key) || '生产订单',
+            tag: statusText,
+            // 卡片副信息两行：首行款式编码+创建日期同行（subSizes 缩 40% 字），次行排产日期；计划数量与负责人按用户要求不再显示
+            sub: [[styles.join('、'), date].filter(Boolean).join('　'), schedDate ? `排产 ${schedDate}` : ''].filter(Boolean) as string[],
+            subSizes: [14.4, 24],
+            // 详情弹层字段（点击卡片展示）：含排产日期与计划明细
+            fields: [
+              ['生产单号', pick(r.id, r.orderNo, r.key) || '—'],
+              ['状态', statusText],
+              ['款式编码', styles.join('、') || '—'],
+              ['计划数量', qty ? String(qty) : '—'],
+              ['已完成数量', String(Number(r.completedQuantity ?? r.doneQty) || 0)],
+              ['排产日期', schedDate || '—'],
+              ['计划明细', planItems.length ? planItems.map((it: any) => `${it.productCode || it.productName || '—'} ×${Number(it.productionQty ?? it.quantity) || 0}`).join('\n') : '—'],
+              ['订单标签', pick(r.orderTag, '—')],
+              ['创建日期', date || '—'],
+            ] as [string, string][],
+          };
+        });
     } else if (page === 'purchase') {
       const rows = await readRows(`pageData_production_purchase-requisition_${owner}`);
       items = rows.map((r: any) => ({
@@ -2194,7 +2226,8 @@ router.get('/lists/:page', verifyJWT, async (req: Request, res: Response) => {
       return;
     }
     items = items.map(it => ({ ...it, tone: it.tone || toneOf(it.tag) }));
-    const data: { list: ListItem[]; total: number; sums?: string[] } = finishList(items, q);
+    // 生产订单/采购订单单页上限 20 条（用户指定），其余列表页保持 100
+    const data: { list: ListItem[]; total: number; sums?: string[] } = finishList(items, q, page === 'production' || page === 'purchase' ? 20 : 100);
     if (sums) data.sums = sums;
     res.json({ code: 200, data });
   } catch (err: any) {

@@ -292,6 +292,8 @@ export interface ListItem {
   row?: string[]
   /** 详情弹层字段（label/值 对），配合 ListView detail 点击展示 */
   fields?: [string, string][]
+  /** 副信息逐行字号（px，缺省 24）：生产订单首行款式编码行按用户要求缩 40% */
+  subSizes?: number[]
 }
 
 export const getListPage = (page: string, q: string, extra = '') =>

@@ -3,6 +3,7 @@ import { View, Text, Input, ScrollView, Image } from '@tarojs/components'
 import Taro from '@tarojs/taro'
 import { getPicking, shipPicking, PickingItem } from '../services/api'
 import { chooseAndUploadImages } from '../services/upload'
+import scanCameraIcon from '../assets/scan-camera.png'
 
 const fmtMoney = (v: any): string => (Number(v) || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2 })
 const round2 = (n: number): number => Math.round((Number(n) || 0) * 100) / 100
@@ -84,6 +85,18 @@ const PickingView = ({ tick = 0 }: { tick?: number }) => {
 
   const doSearch = () => setKeyword(q.trim())
 
+  // 扫码搜索：扫二维码/条形码，结果回填搜索框并立即查询（码值通常为订单号/出库单号）
+  const scanSearch = () => {
+    Taro.scanCode({ scanType: ['qrCode', 'barCode'] })
+      .then(res => {
+        const code = String(res.result || '').trim()
+        if (!code) { Taro.showToast({ title: '扫码结果为空', icon: 'none' }); return }
+        setQ(code)
+        setKeyword(code)
+      })
+      .catch(() => Taro.showToast({ title: '已取消扫码', icon: 'none' }))
+  }
+
   const openDetail = (r: PickingItem) => {
     setDetail(r)
     setShipMode(false)
@@ -163,6 +176,13 @@ const PickingView = ({ tick = 0 }: { tick?: number }) => {
           confirmType="search"
         />
         <View style={{ ...SEARCH_BTN }} onClick={doSearch}>查询</View>
+        {/* 扫码搜索键：蓝色取景框相机图（扫码语义），方形描边与本页风格一致 */}
+        <View
+          style={{ marginLeft: 8, width: 36, height: 36, flexShrink: 0, borderRadius: 0, background: '#fff', border: '1px solid #c9d4e3', boxSizing: 'border-box', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+          onClick={scanSearch}
+        >
+          <Image src={scanCameraIcon} style={{ width: 24, height: 24, display: 'block' }} mode="aspectFit" />
+        </View>
       </View>
       {loaded && !errMsg && <View style={{ ...COUNT_LINE }}>共 {total} 条，显示前 {list.length} 条</View>}
       {loaded && errMsg ? <View className="empty">{errMsg}</View> : null}

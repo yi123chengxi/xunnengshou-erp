@@ -124,7 +124,7 @@ const ListView = ({
               minWidth: 0, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', flexShrink: quick ? 1 : 0,
             }}
           >
-            共 {total} 条{total > 100 ? '，仅显示前 100 条' : ''}
+            共 {total} 条，显示前 {list.length} 条
           </Text>
           {quick && QUICK_RANGES.map(r => (
             <View
@@ -238,7 +238,7 @@ const ListView = ({
             ) : null
           ) : (
             (it.sub || []).map((s, i) => (
-              <View key={i} className="muted" style={{ paddingTop: 4, fontSize: 24 }}>{s}</View>
+              <View key={i} className="muted" style={{ paddingTop: 4, fontSize: (it.subSizes || [])[i] || 24 }}>{s}</View>
             ))
           )}
           {!compact && typeof it.amount === 'number' && it.amount !== 0 ? (
