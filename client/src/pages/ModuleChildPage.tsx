@@ -8095,12 +8095,17 @@ const ModuleChildPage: React.FC = () => {
     }).map(({ it, i }: any) => ({ idx: i, code: it.productCode, name: it.shortName || it.productName || '', need: Number(it.quantity) || 0, stock: stockMap[it.productCode] ?? 0 }));
   }, []);
 
-  // 缺货拆分血缘：被拆分的原单（存在拆出子单）在订单号下面显示绿色“分”圆标（订单管理/打单拣货共用）
-  const splitBadgeOf = (r: any) => (Array.isArray(r?.splitChildren) && r.splitChildren.length ? (
-    <Tooltip title={`该订单已缺货拆分，拆出子单：${r.splitChildren.join('、')}`}>
-      <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 18, height: 18, borderRadius: '50%', background: '#52c41a', color: '#fff', fontSize: 11, fontWeight: 700, lineHeight: '18px', flexShrink: 0, cursor: 'default' }}>分</span>
-    </Tooltip>
-  ) : null);
+  // 缺货拆分血缘：被拆分的原单（存在拆出子单）与拆分生成的子单（带 splitFromId）均在订单号下面显示绿色“分”圆标（订单管理/打单拣货共用）
+  const splitBadgeOf = (r: any) => {
+    const children = Array.isArray(r?.splitChildren) ? r.splitChildren : [];
+    if (!children.length && !r?.splitFromId) return null;
+    const tip = children.length ? `该订单已缺货拆分，拆出子单：${children.join('、')}` : `该订单为缺货拆分生成的子单，拆自原单：${r.splitFromId}`;
+    return (
+      <Tooltip title={tip}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 18, height: 18, borderRadius: '50%', background: '#52c41a', color: '#fff', fontSize: 11, fontWeight: 700, lineHeight: '18px', flexShrink: 0, cursor: 'default' }}>分</span>
+      </Tooltip>
+    );
+  };
 
   // 拆分分摊：已付按商品编码金额+数量逐行分摊、运费按比例；子单已付=原已付−原单新已付（差额补齐守恒）
   const calcSplit = useCallback((order: any, shipQtys: number[]) => {
@@ -11919,12 +11924,13 @@ const handleBatchAttrsConfirm = () => {
             const displayVal = typeLabels[val] || val;
             // 订单状态：实心背景样式
             const orderStatusColors: Record<string, string> = {
-              '待付款': '#fa8c16', '已付款': '#1890ff', '已发货': '#52c41a', '已完成': '#52c41a', '已取消': '#8c8c8c', '待发货': '#faad14', '已审核': '#52c41a',
+              '待付款': '#fa8c16', '已付款': '#1890ff', '已发货': '#52c41a', '已完成': '#fadb14', '已取消': '#8c8c8c', '待发货': '#faad14', '已审核': '#52c41a',
               '已审核待发货': '#52c41a', '已审核待生产': '#52c41a', '待财务审核': '#1890ff', '已财务审核': '#52c41a', '已驳回': '#ff4d4f',
               '待打单': '#faad14', '已打单': '#52c41a', '待拣货': '#faad14', '已拣货': '#52c41a',
             };
             if (orderStatusColors[val] !== undefined) {
-              return <Tag style={{ background: orderStatusColors[val], color: '#fff', border: 'none', fontWeight: 500 }}>{displayVal}</Tag>;
+              // 已完成：黄底黑字（用户指定）；其余状态保持实心底白字
+              return <Tag style={{ background: orderStatusColors[val], color: val === '已完成' ? '#000' : '#fff', border: 'none', fontWeight: 500 }}>{displayVal}</Tag>;
             }
             // 已拆分：黑字灰底
             if (val === '已拆分') {
