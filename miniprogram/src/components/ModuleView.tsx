@@ -94,11 +94,12 @@ const ModuleView = ({
 
   if (!mod) return <View className="empty">菜单不存在</View>
 
-  const visibleChildren = mod.children.filter(c => !perms || childAllowed(perms, c.key))
+  const visibleChildren = perms ? mod.children.filter(c => childAllowed(perms, c.key)) : []
 
   const renderChild = () => {
-    if (perms && !childAllowed(perms, child)) {
-      return <View className="empty">无该菜单权限（与网页版菜单权限一致）</View>
+    // fail-closed：权限未知（加载/接口异常）与显式无权均不渲染业务内容，前者展示中性加载态
+    if (!perms || !childAllowed(perms, child)) {
+      return <View className="empty">{perms ? '无该菜单权限（与网页版菜单权限一致）' : '菜单权限加载中…'}</View>
     }
     switch (child) {
       case 'approvals': return <ApprovalsEmbed tick={tick} />

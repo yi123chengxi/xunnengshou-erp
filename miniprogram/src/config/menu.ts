@@ -2,6 +2,7 @@
 // 规则：点击主菜单 → 进入第一个子菜单；底部子菜单条切换同模块其他子菜单
 import Taro from '@tarojs/taro'
 import { getWxMenus } from '../services/api'
+import { isPreviewMode } from '../services/auth'
 export interface MenuChild { key: string; title: string }
 export interface MenuModule { key: string; title: string; icon: string; children: MenuChild[] }
 
@@ -129,22 +130,31 @@ export const CHILD_MENU_KEYS: Record<string, string[]> = {
 }
 
 // 菜单权限会话级缓存：首次拉取后复用，避免每个页面重复请求导致菜单栏闪烁；
-// 接口异常/未部署（预览模式回落空态）时 perms 为 {} → 全部可见，与旧版行为一致
-let menuPermCache: Promise<Record<string, boolean>> | null = null
-export function loadMenuPerms(): Promise<Record<string, boolean>> {
+// 正常模式接口异常/perms 未下发 resolve null（权限未知），调用方按 fail-closed 渲染中性态，不再默认全可见；
+// 预览模式（服务端未部署、无真实数据源）按 CHILD_MENU_KEYS 生成全 true 权限表保留布局预览
+let menuPermCache: Promise<Record<string, boolean> | null> | null = null
+export function loadMenuPerms(): Promise<Record<string, boolean> | null> {
   if (!menuPermCache) {
-    menuPermCache = getWxMenus()
-      .then(d => (d && d.perms) || {})
-      .catch(() => ({}))
+    if (isPreviewMode()) {
+      const allowAll: Record<string, boolean> = {}
+      Object.values(CHILD_MENU_KEYS).forEach(ks => ks.forEach(k => { allowAll[k] = true }))
+      menuPermCache = Promise.resolve(allowAll)
+    } else {
+      menuPermCache = getWxMenus()
+        .then(d => (d && d.perms) || null)
+        .catch(() => null)
+    }
   }
   return menuPermCache
 }
 
-/** 子菜单是否可见：perms 缺该菜单点（服务端旧版未下发）时按可见处理，保证部署过渡期不误隐藏 */
-export function childAllowed(perms: Record<string, boolean>, childKey: string): boolean {
+/** 子菜单是否可见（fail-closed）：已映射菜单点须显式允许（perms[k]===true），缺失或权限未知一律不可见；
+ *  未映射子菜单无网页版对应菜单点，不在门禁范围保持可见 */
+export function childAllowed(perms: Record<string, boolean> | null, childKey: string): boolean {
   const keys = CHILD_MENU_KEYS[childKey]
   if (!keys || !keys.length) return true
-  return keys.some(k => perms[k] !== false)
+  if (!perms) return false
+  return keys.some(k => perms[k] === true)
 }
 
 /** 打开某主菜单下的子菜单：若恰为该模块默认子菜单且模块有固定 Tab，则直跳 Tab 页 */

@@ -92,7 +92,7 @@ const Workbench = () => {
   // 常用功能宫格：收藏列表驱动（查看更多里 + 号添加），每行 4 个，末尾固定查看更多
   const favGrid: { id: string; icon: string; label: string; onClick: () => void; badge: number }[] =
     getFavs()
-      .filter(id => childAllowed(perms || {}, id.split(':')[1] || ''))
+      .filter(id => childAllowed(perms, id.split(':')[1] || ''))
       .map(id => {
       const [mk, ck] = id.split(':')
       return {

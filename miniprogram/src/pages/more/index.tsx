@@ -24,8 +24,10 @@ const More = () => {
 
   return (
     <View style={{ paddingBottom: 140 }}>
+      {/* fail-closed：权限未知时不渲染任何功能卡片，展示中性加载态 */}
+      {perms === null && <View className="empty">菜单权限加载中…</View>}
       {MODULES.map(m => {
-        const children = m.children.filter(c => !perms || childAllowed(perms, c.key))
+        const children = perms ? m.children.filter(c => childAllowed(perms, c.key)) : []
         if (!children.length) return null
         return (
         <View key={m.key} style={{ padding: '20px 24px 0' }}>
