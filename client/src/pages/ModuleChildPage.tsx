@@ -8095,6 +8095,13 @@ const ModuleChildPage: React.FC = () => {
     }).map(({ it, i }: any) => ({ idx: i, code: it.productCode, name: it.shortName || it.productName || '', need: Number(it.quantity) || 0, stock: stockMap[it.productCode] ?? 0 }));
   }, []);
 
+  // 缺货拆分血缘：被拆分的原单（存在拆出子单）在订单号下面显示绿色“分”圆标（订单管理/打单拣货共用）
+  const splitBadgeOf = (r: any) => (Array.isArray(r?.splitChildren) && r.splitChildren.length ? (
+    <Tooltip title={`该订单已缺货拆分，拆出子单：${r.splitChildren.join('、')}`}>
+      <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 18, height: 18, borderRadius: '50%', background: '#52c41a', color: '#fff', fontSize: 11, fontWeight: 700, lineHeight: '18px', flexShrink: 0, cursor: 'default' }}>分</span>
+    </Tooltip>
+  ) : null);
+
   // 拆分分摊：已付按商品编码金额+数量逐行分摊、运费按比例；子单已付=原已付−原单新已付（差额补齐守恒）
   const calcSplit = useCallback((order: any, shipQtys: number[]) => {
     const items = parseOrderItems(order);
@@ -12188,25 +12195,28 @@ const handleBatchAttrsConfirm = () => {
       }
       if (pageConfig?.title === '打单拣货' && col.dataIndex === 'orderId') {
         baseCol.render = (val: string, record: any) => (
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-            <a
-              onClick={(e) => { e.stopPropagation(); setOrderItemsRecord({ ...record, id: record.orderId || record.id, _itemsMode: 'order' }); setOrderItemsVisible(true); }}
-              style={{ color: PRIMARY, fontWeight: 500, cursor: 'pointer', textDecoration: 'none' }}
-              title="查看货品明细"
-            >{val || '—'}</a>
-            <a
-              onClick={(e) => { e.stopPropagation(); setOrderItemsRecord({ ...record, id: record.orderId || record.id, _itemsMode: 'order' }); setOrderItemsVisible(true); }}
-              style={{ color: PRIMARY, fontSize: 11, fontWeight: 600, border: `1px solid ${PRIMARY}`, borderRadius: 3, padding: '0 3px', lineHeight: '16px', textDecoration: 'none', cursor: 'pointer', flexShrink: 0 }}
-              title="查看货品明细"
-            >详</a>
-            {(() => {
-              const lines = shortageLinesOf(record, pickStockMap);
-              return lines.length ? (
-                <Tooltip title={lines.map((l: any) => `${l.code} 需${l.need}/库存${l.stock}`).join('；')}>
-                  <span style={{ color: '#ff4d4f', fontSize: 11, fontWeight: 700, border: '1px solid #ff4d4f', borderRadius: 3, padding: '0 3px', lineHeight: '16px', flexShrink: 0 }}>缺</span>
-                </Tooltip>
-              ) : null;
-            })()}
+          <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2 }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+              <a
+                onClick={(e) => { e.stopPropagation(); setOrderItemsRecord({ ...record, id: record.orderId || record.id, _itemsMode: 'order' }); setOrderItemsVisible(true); }}
+                style={{ color: PRIMARY, fontWeight: 500, cursor: 'pointer', textDecoration: 'none' }}
+                title="查看货品明细"
+              >{val || '—'}</a>
+              <a
+                onClick={(e) => { e.stopPropagation(); setOrderItemsRecord({ ...record, id: record.orderId || record.id, _itemsMode: 'order' }); setOrderItemsVisible(true); }}
+                style={{ color: PRIMARY, fontSize: 11, fontWeight: 600, border: `1px solid ${PRIMARY}`, borderRadius: 3, padding: '0 3px', lineHeight: '16px', textDecoration: 'none', cursor: 'pointer', flexShrink: 0 }}
+                title="查看货品明细"
+              >详</a>
+              {(() => {
+                const lines = shortageLinesOf(record, pickStockMap);
+                return lines.length ? (
+                  <Tooltip title={lines.map((l: any) => `${l.code} 需${l.need}/库存${l.stock}`).join('；')}>
+                    <span style={{ color: '#ff4d4f', fontSize: 11, fontWeight: 700, border: '1px solid #ff4d4f', borderRadius: 3, padding: '0 3px', lineHeight: '16px', flexShrink: 0 }}>缺</span>
+                  </Tooltip>
+                ) : null;
+              })()}
+            </span>
+            {splitBadgeOf(record)}
           </span>
         );
       }
@@ -12468,37 +12478,40 @@ const handleBatchAttrsConfirm = () => {
           const canEdit = status === '已付款' || status === '待付款';
           const titleText = canEdit ? '查看/编辑订单' : '查看订单详情（只读）';
           return (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-              <a
-                onClick={(e) => { e.stopPropagation(); handleEdit(record); }}
-                style={{ color: PRIMARY, fontWeight: 500, cursor: 'pointer', textDecoration: 'none' }}
-                title={titleText}
-              >
-                {val}
-              </a>
-              <a
-                onClick={(e) => { e.stopPropagation(); handleEdit(record); }}
-                style={{
-                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                  width: 20, height: 20, borderRadius: '50%', border: `1px solid ${PRIMARY}`,
-                  color: PRIMARY, fontSize: 11, fontWeight: 600, cursor: 'pointer',
-                  textDecoration: 'none', lineHeight: '20px', flexShrink: 0,
-                }}
-                title={titleText}
-              >
-                详
-              </a>
-              {val && (
-                <Tooltip title="复制订单编号">
-                  <CopyOutlined
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      copyText(val).then(ok => (ok ? message.success(`已复制订单编号 ${val}`) : message.error('复制失败，请手动复制')));
-                    }}
-                    style={{ fontSize: 12, color: PRIMARY, cursor: 'pointer', flexShrink: 0 }}
-                  />
-                </Tooltip>
-              )}
+            <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <a
+                  onClick={(e) => { e.stopPropagation(); handleEdit(record); }}
+                  style={{ color: PRIMARY, fontWeight: 500, cursor: 'pointer', textDecoration: 'none' }}
+                  title={titleText}
+                >
+                  {val}
+                </a>
+                <a
+                  onClick={(e) => { e.stopPropagation(); handleEdit(record); }}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                    width: 20, height: 20, borderRadius: '50%', border: `1px solid ${PRIMARY}`,
+                    color: PRIMARY, fontSize: 11, fontWeight: 600, cursor: 'pointer',
+                    textDecoration: 'none', lineHeight: '20px', flexShrink: 0,
+                  }}
+                  title={titleText}
+                >
+                  详
+                </a>
+                {val && (
+                  <Tooltip title="复制订单编号">
+                    <CopyOutlined
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        copyText(val).then(ok => (ok ? message.success(`已复制订单编号 ${val}`) : message.error('复制失败，请手动复制')));
+                      }}
+                      style={{ fontSize: 12, color: PRIMARY, cursor: 'pointer', flexShrink: 0 }}
+                    />
+                  </Tooltip>
+                )}
+              </div>
+              {splitBadgeOf(record)}
             </div>
           );
         };
