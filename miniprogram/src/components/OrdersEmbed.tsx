@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { View, Text, Input, Image } from '@tarojs/components'
+import { View, Text, Input, Image, ScrollView } from '@tarojs/components'
 import Taro from '@tarojs/taro'
 import { getOrders } from '../services/api'
 
@@ -51,10 +51,15 @@ const fmtMoney = (v: any): string => (Number(v) || 0).toLocaleString('zh-CN', { 
 
 // —— 行内样式常量（weapp 中类选择器会压过行内样式，精细控件统一纯行内）——
 const SEARCH_BAR = { display: 'flex', alignItems: 'center', padding: '16px 24px 0' } as const
-const SEARCH_INPUT = { flex: 1, height: 36, background: '#ffffff', border: '1px solid #c9d4e3', borderRadius: 8, padding: '0 12px', fontSize: 15, boxSizing: 'border-box' } as const
-const SEARCH_BTN = { marginLeft: 8, height: 36, lineHeight: '36px', padding: '0 16px', background: '#1677ff', color: '#ffffff', fontSize: 15, borderRadius: 8, textAlign: 'center', flexShrink: 0 } as const
+const SEARCH_INPUT = { flex: 1, height: 36, background: '#ffffff', border: '1px solid #c9d4e3', borderRadius: 0, padding: '0 12px', fontSize: 15, boxSizing: 'border-box' } as const
+const SEARCH_BTN = { marginLeft: 8, height: 36, lineHeight: '36px', padding: '0 16px', background: '#1677ff', color: '#ffffff', fontSize: 15, borderRadius: 0, textAlign: 'center', flexShrink: 0 } as const
 const COUNT_LINE = { padding: '0 24px 8px', fontSize: 12, color: '#86909c' } as const
-const CARD = { background: '#ffffff', borderRadius: 12, margin: '12px 24px 0', padding: '12px 16px', boxShadow: '0 1px 4px rgba(31,39,51,0.04)' } as const
+// 订单状态快速筛选芯片（空串=全部）；取值与服务端 /wx/orders 派生状态文案一致
+const STATUS_CHIPS = ['', '待付款', '已审核待发货', '已发货', '已完成', '已取消'] as const
+const CHIP_ROW = { whiteSpace: 'nowrap', padding: '8px 24px 0' } as const
+const CHIP = { display: 'inline-block', marginRight: 8, padding: '2px 12px', fontSize: 13, lineHeight: '20px', borderRadius: 12, background: '#eef1f5', color: '#5a6d85' } as const
+const CHIP_ON = { background: '#1677ff', color: '#ffffff' } as const
+const CARD = { background: '#ffffff', borderRadius: 0, margin: '12px 24px 0', padding: '12px 16px', boxShadow: '0 1px 4px rgba(31,39,51,0.04)' } as const
 const ROW = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 6, overflow: 'hidden' } as const
 const STYLE_LINE = { flex: 1, minWidth: 0, fontSize: 15, fontWeight: 600, color: '#1f2733' } as const
 const AMT = { flexShrink: 0, marginLeft: 8, fontSize: 15, fontWeight: 600, color: '#e5533c' } as const
@@ -102,16 +107,17 @@ const OrdersEmbed = ({ tick = 0 }: { tick?: number }) => {
   const [total, setTotal] = useState(0)
   const [loaded, setLoaded] = useState(false)
   const [detail, setDetail] = useState<any>(null)
+  const [statusFilter, setStatusFilter] = useState('')
   const [fields, setFields] = useState<string[]>(() => loadItemFields())
   const [fieldPicker, setFieldPicker] = useState(false)
 
   useEffect(() => {
     setLoaded(false)
-    getOrders(keyword)
+    getOrders(keyword, statusFilter)
       .then(d => { setList(d.list); setTotal(d.total) })
       .catch(e => Taro.showToast({ title: e.message, icon: 'none' }))
       .finally(() => setLoaded(true))
-  }, [keyword, tick])
+  }, [keyword, statusFilter, tick])
 
   const doSearch = () => setKeyword(q.trim())
 
@@ -166,6 +172,9 @@ const OrdersEmbed = ({ tick = 0 }: { tick?: number }) => {
   const activeFields = ITEM_FIELDS.filter(f => fields.includes(f.key))
   const detailItems: any[] = Array.isArray(detail?.items) ? detail.items : []
   const detailLogs: any[] = Array.isArray(detail?.logs) ? detail.logs : []
+  // 状态筛选客户端兑底：服务端 status 参数未部署时线上会忽略它返回全量，
+  // 这里按已下发的派生状态 orderStatus 再过滤一次（部署后与服务端过滤叠加仍幂等）
+  const shown = statusFilter ? list.filter((r: any) => String(r.orderStatus || '') === statusFilter) : list
 
   return (
     <View>
@@ -181,20 +190,31 @@ const OrdersEmbed = ({ tick = 0 }: { tick?: number }) => {
         />
         <View style={{ ...SEARCH_BTN }} onClick={doSearch}>查询</View>
       </View>
-      {loaded && <View style={{ ...COUNT_LINE }}>共 {total} 条，显示前 {list.length} 条</View>}
-      {loaded && list.length === 0 && <View className="empty">暂无匹配订单</View>}
-      {list.map((r: any) => (
+      {/* 订单状态快速筛选：点芯片即按派生状态服务端过滤 */}
+      <ScrollView scrollX style={{ ...CHIP_ROW }}>
+        {STATUS_CHIPS.map(s => (
+          <Text key={s || 'all'} style={{ ...CHIP, ...(statusFilter === s ? CHIP_ON : {}) }} onClick={() => setStatusFilter(s)}>
+            {s || '全部'}
+          </Text>
+        ))}
+      </ScrollView>
+      {loaded && <View style={{ ...COUNT_LINE }}>共 {statusFilter ? shown.length : total} 条，显示前 {shown.length} 条</View>}
+      {loaded && shown.length === 0 && <View className="empty">暂无匹配订单</View>}
+      {shown.map((r: any) => (
         <View key={String(r.key)} style={{ ...CARD }} onClick={() => setDetail(r)}>
+          {/* 行1：订单编号（与原款式行位置互换）+ 金额 */}
           <View style={{ ...ROW }}>
-            <Text style={{ ...STYLE_LINE }} numberOfLines={1}>{styleLineOf(r) || '—'}</Text>
+            <Text style={{ ...STYLE_LINE }} numberOfLines={1}>{r.orderNo || '—'}</Text>
             <Text style={{ ...AMT }}>¥{fmtMoney(r.productAmount)}</Text>
           </View>
+          {/* 行2：款式编码×数量 + 收件人（与原客户名称位置互换）+ 日期 */}
           <View style={{ ...ROW }}>
-            <Text style={{ ...SUB, flex: 1, minWidth: 0 }} numberOfLines={1}>{r.orderNo || '—'}{r.customerName ? ` ${r.customerName}` : ''}</Text>
+            <Text style={{ ...SUB, flex: 1, minWidth: 0 }} numberOfLines={1}>{styleLineOf(r) || '—'}{r.receiverName ? `　收件人 ${r.receiverName}` : ''}</Text>
             <Text style={{ ...DATE }}>{String(r.createTime || '').slice(0, 10)}</Text>
           </View>
+          {/* 行3：客户名称（与原收件人位置互换）+ 状态标签 */}
           <View style={{ ...ROW }}>
-            <Text style={{ ...SUB, flex: 1, minWidth: 0 }} numberOfLines={1}>收件人 {r.receiverName || '—'}</Text>
+            <Text style={{ ...SUB, flex: 1, minWidth: 0 }} numberOfLines={1}>{r.customerName || '—'}</Text>
             {r.orderStatus ? <Text style={{ ...STATUS_TAG, background: statusColorOf(String(r.orderStatus)) }}>{r.orderStatus}</Text> : null}
           </View>
         </View>

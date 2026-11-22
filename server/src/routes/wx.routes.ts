@@ -722,7 +722,10 @@ router.get('/orders', verifyJWT, async (req: Request, res: Response) => {
       if (s === 'cancelled') return '已取消';
       return s;
     };
-    const list = hit.slice(0, 50).map((r: any) => {
+    // 订单状态快速筛选：按派生状态文案等值过滤（与列表下发口径一致），空串=全部
+    const status = String(req.query.status || '').trim();
+    const scoped = status ? hit.filter((r: any) => statusTextOf(r) === status) : hit;
+    const list = scoped.slice(0, 50).map((r: any) => {
       // 货品明细唯一读取源 orderItems（JSON 字符串），解析口径与 Web 端一致（unitPrice 兼容映射 price）
       let items: any[] = [];
       try {
@@ -754,7 +757,7 @@ router.get('/orders', verifyJWT, async (req: Request, res: Response) => {
         items, logs,
       };
     });
-    res.json({ code: 200, data: { list, total: hit.length } });
+    res.json({ code: 200, data: { list, total: scoped.length } });
   } catch (err: any) {
     console.error('[wx] orders error:', err.message);
     res.status(500).json({ code: 500, message: '服务器内部错误' });
@@ -1619,6 +1622,7 @@ router.get('/picking', verifyJWT, async (req: Request, res: Response) => {
           || [r.province, r.city, r.district, r.addressDetail || r.receiverDetail].filter(Boolean).map((s: any) => String(s).trim()).join(' '),
         customerName: pick(r.customerName, ''), orderStatus: r._legacy ? '遗留单' : pick(r.orderStatus, ''),
         printStatus: pick(r.printStatus, ''), legacy: !!r._legacy,
+        shipImages: Array.isArray(r.shipImages) ? r.shipImages : [],
         totalQty: itemsTotalQty(items), productAmount: round2(Number(r.productAmount) || 0),
         items: items.map((it: any) => ({
           productCode: itemCode(it), shortName: String(it.shortName || it.productName || ''),
@@ -1897,13 +1901,29 @@ router.get('/lists/:page', verifyJWT, async (req: Request, res: Response) => {
       }));
     } else if (page === 'production') {
       const rows = await readRows(`pageData_production_production-order_${owner}`);
+      // 状态英文枚举转中文（与 Web 生产订单状态口径对应）
+      const prodStatusText: Record<string, string> = { pending: '待处理', processing: '进行中', completed: '已完成', cancelled: '已取消', warning: '异常' };
       items = rows.map((r: any) => {
         const qty = Number(r.planQuantity ?? r.quantity ?? r.productionQty) || 0;
+        const statusText = prodStatusText[String(r.status || '')] || pick(r.status, '—');
+        const date = day10(pick(r.createTime, r.date, r.createDate));
+        const goods = pick(r.styleCode, r.productCode, r.productName);
         return {
           key: r.key || r.id, title: pick(r.id, r.orderNo, r.key) || '生产订单',
-          tag: r.status,
-          sub: [pick(r.styleCode, r.productCode, r.productName), qty ? `计划数量 ${qty}` : '',
-            r.orderTag, day10(pick(r.createTime, r.date, r.createDate)), r.person].filter(Boolean) as string[],
+          tag: statusText,
+          // 卡片副信息仅两行：计划数量+日期同行、负责人；款式逗号串与订单标签按用户要求不显示
+          sub: [[qty ? `计划数量 ${qty}` : '', date].filter(Boolean).join('　'), r.person].filter(Boolean) as string[],
+          // 详情弹层字段（点击卡片展示）
+          fields: [
+            ['生产单号', pick(r.id, r.orderNo, r.key) || '—'],
+            ['状态', statusText],
+            ['款式/商品', goods || '—'],
+            ['计划数量', qty ? String(qty) : '—'],
+            ['已完成数量', String(Number(r.completedQuantity ?? r.doneQty) || 0)],
+            ['订单标签', pick(r.orderTag, '—')],
+            ['创建日期', date || '—'],
+            ['负责人', pick(r.person, '—')],
+          ] as [string, string][],
         };
       });
     } else if (page === 'purchase') {

@@ -1936,6 +1936,8 @@ const ModuleChildPage: React.FC = () => {
 
   // 卖家备注图片上传状态
   const [sellerImages, setSellerImages] = useState<string[]>([]);
+  // 发货凭证图片（仅发货确认弹窗内上传，确认后写入订单 shipImages 与出库单 images）
+  const shipVoucherRef = useRef<string[]>([]);
   const [sellerImageHighlight, setSellerImageHighlight] = useState<number | null>(null);
   const [sellerImagePreview, setSellerImagePreview] = useState<string | null>(null);
 
@@ -8331,15 +8333,61 @@ const ModuleChildPage: React.FC = () => {
     }
     // 发货确认（正常/强制共用）：force=true 时绕过缺货门禁，实际库存允许扣成负数（出库单与库存日志留痕）
     const confirmShip = (force: boolean, shortageText: string) => {
+      shipVoucherRef.current = [];
+      // 发货凭证上传器：仅发货确认弹窗内可用，压缩后暂存 ref，确认时随发货落库
+      const VoucherPicker = () => {
+        const [imgs, setImgs] = useState<string[]>([]);
+        const inputRef = useRef<HTMLInputElement>(null);
+        const commit = (next: string[]) => { shipVoucherRef.current = next; setImgs(next); };
+        const onFile = async (e: any) => {
+          const files = Array.from(e.target.files || []) as File[];
+          e.target.value = '';
+          for (const f of files) {
+            try {
+              const dataUrl = await compressImageFile(f, { maxEdge: 1280, forceJpeg: true });
+              if (!dataUrl) continue;
+              commit([...shipVoucherRef.current, dataUrl].slice(0, 9));
+            } catch { /* 单张失败跳过 */ }
+          }
+        };
+        return (
+          <div style={{ marginTop: 12 }}>
+            <div style={{ fontSize: 12, color: 'rgba(0,0,0,0.65)', marginBottom: 6 }}>发货凭证图片（可选，自动压缩，仅发货时上传）</div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+              {imgs.map((u, i) => (
+                <div key={i} style={{ position: 'relative', width: 64, height: 64 }}>
+                  <img src={u} alt={`凭证${i + 1}`} style={{ width: 64, height: 64, objectFit: 'cover', border: '1px solid #d9d9d9' }} />
+                  <Button size="small" type="text" icon={<DeleteOutlined />} style={{ position: 'absolute', top: -8, right: -8, color: '#ff4d4f', padding: 2 }}
+                    onClick={() => commit(imgs.filter((_, idx) => idx !== i))} />
+                </div>
+              ))}
+              {imgs.length < 9 && (
+                <div onClick={() => inputRef.current?.click()} style={{ width: 64, height: 64, border: '2px dashed #d9d9d9', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#999' }}>
+                  <PlusOutlined style={{ fontSize: 16 }} />
+                </div>
+              )}
+              <input ref={inputRef} type="file" accept="image/*" multiple style={{ display: 'none' }} onChange={onFile} />
+            </div>
+          </div>
+        );
+      };
       Modal.confirm({
         title: force ? '强制发货（缺货放行）' : '立即发货',
-        content: force
-          ? `以下明细库存不足，强制发货后实际库存将扣为负数（可在库存日志追溯）：\n${shortageText}\n仍要将选中的 ${records.length} 条拣货单发货？订单将变更为“已发货”并从打单拣货移除，同时生成销售出库单。`
-          : `确定将选中的 ${records.length} 条拣货单立即发货？订单将变更为“已发货”并从打单拣货移除，同时生成销售出库单并扣减商品实际库存。`,
+        content: (
+          <div>
+            <div style={{ whiteSpace: 'pre-wrap' }}>
+              {force
+                ? `以下明细库存不足，强制发货后实际库存将扣为负数（可在库存日志追溯）：\n${shortageText}\n仍要将选中的 ${records.length} 条拣货单发货？订单将变更为“已发货”并从打单拣货移除，同时生成销售出库单。`
+                : `确定将选中的 ${records.length} 条拣货单立即发货？订单将变更为“已发货”并从打单拣货移除，同时生成销售出库单并扣减商品实际库存。`}
+            </div>
+            <VoucherPicker />
+          </div>
+        ),
         okText: force ? '确认强制发货' : '确定',
         okButtonProps: force ? { danger: true } : undefined,
         cancelText: '取消',
         onOk: () => {
+        const voucherImages = shipVoucherRef.current || [];
         const owner = getDataOwner();
         const omKey = `pageData_sales_order-manage_${owner}`;
         const soKey = `sales_outbound_${owner}`;
@@ -8398,13 +8446,13 @@ const ModuleChildPage: React.FC = () => {
             receiverAddress: order.receiverAddress || rec.receiverDetail || '',
             productDetail: rec.productDetail || order.productDetail || '',
             totalQty: items.reduce((s: number, i: any) => s + (Number(i.quantity) || 0), 0),
-            items, operator, createTime: now, status: '已发货', remark: '',
+            items, operator, createTime: now, status: '已发货', remark: '', images: voucherImages,
           });
         });
         try { localStorage.setItem(soKey, JSON.stringify([...newOutbounds, ...soList])); } catch { /* ignore */ }
         // 订单管理：发货即完成交易（状态直达「已完成」）并清除审核状态，派生视图下拣货列表自动移除
-        pushRecordToPage(omKey, omList.map((o: any) => ids.has(o.id) ? { ...o, orderStatus: '已完成', auditStatus: '', shipTime: now, completeTime: now } : o));
-        setDataSource(prev => prev.map(r => ids.has(r.id) ? { ...r, orderStatus: '已完成', auditStatus: '', shipTime: now, completeTime: now } : r));
+        pushRecordToPage(omKey, omList.map((o: any) => ids.has(o.id) ? { ...o, orderStatus: '已完成', auditStatus: '', shipTime: now, completeTime: now, shipImages: voucherImages } : o));
+        setDataSource(prev => prev.map(r => ids.has(r.id) ? { ...r, orderStatus: '已完成', auditStatus: '', shipTime: now, completeTime: now, shipImages: voucherImages } : r));
         // 写入订单操作日志：发货痕迹（含出库单号）+ 交易完成
         shippedDocs.forEach(d => {
           appendOrderLog(d.id, '订单发货', `打单拣货发货${force ? '（强制·缺货放行）' : ''}：生成出库单 ${d.docNo}，订单状态变更为已完成`);
@@ -16053,6 +16101,20 @@ const handleBatchAttrsConfirm = () => {
                                     )}
                                   </div>
                                 ))}
+                              </div>
+                            </div>
+                          </Col>
+                          {/* 发货凭证图片：置于备注图片右侧；仅发货时上传，详情只读 */}
+                          <Col span={12}>
+                            <div style={{ marginBottom: 24 }}>
+                              <span style={{ fontSize: 12, color: 'rgba(0,0,0,0.85)' }}>发货凭证图片</span>
+                              <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                                {((((selectedRecord as any)?.shipImages) || []) as string[]).filter(Boolean).map((u, i) => (
+                                  <img key={i} src={u} alt={`发货凭证${i + 1}`} style={{ width: 80, height: 80, objectFit: 'cover', border: '1px solid #d9d9d9', cursor: 'pointer' }} onClick={() => setSellerImagePreview(u)} />
+                                ))}
+                                {((((selectedRecord as any)?.shipImages) || []) as string[]).filter(Boolean).length === 0 && (
+                                  <span style={{ fontSize: 12, color: '#999' }}>暂无（仅发货时上传）</span>
+                                )}
                               </div>
                             </div>
                           </Col>

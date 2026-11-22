@@ -90,8 +90,8 @@ const ModuleView = ({
       // 以下子菜单与 Web 同页面同源数据，服务端 /wx/lists/:page 映射展示结构
       case 'bookkeeping': return <BookkeepingView tick={tick} />
       case 'bank-account': return <BankAccountsView tick={tick} />
-      case 'production': return <ListView page="production" tick={tick} />
-      case 'purchase': return <ListView page="purchase" tick={tick} />
+      case 'production': return <ListView page="production" square detail tick={tick} />
+      case 'purchase': return <ListView page="purchase" square tick={tick} />
       // 打单拣货：订单派生视图（已审核+已付款），卡片三行 + 订单详情 + 立即发货（可改数量、缺货拆分）
       case 'print-picking': return <PickingView tick={tick} />
       // 生产管理子菜单（与 Web production 分组同口径）

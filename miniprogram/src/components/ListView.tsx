@@ -30,8 +30,8 @@ const localDay = (offset = 0): string => {
  * 搜索为「点击查询后才生效」的双态模式，减少大列表实时过滤开销。
  */
 const ListView = ({
-  page, extra = '', headers, addLabel, onAdd, tick = 0, quick = false, quickDate, compact = false, onRowClick, padTop = 16, card = false,
-}: { page: string; extra?: string; headers?: string[]; addLabel?: string; onAdd?: () => void; tick?: number; quick?: boolean; quickDate?: 'first' | 'last'; compact?: boolean; onRowClick?: (it: ListItem) => void; padTop?: number; card?: boolean }) => {
+  page, extra = '', headers, addLabel, onAdd, tick = 0, quick = false, quickDate, compact = false, onRowClick, padTop = 16, card = false, square = false, detail = false,
+}: { page: string; extra?: string; headers?: string[]; addLabel?: string; onAdd?: () => void; tick?: number; quick?: boolean; quickDate?: 'first' | 'last'; compact?: boolean; onRowClick?: (it: ListItem) => void; padTop?: number; card?: boolean; square?: boolean; detail?: boolean }) => {
   const [input, setInput] = useState('')
   const [applied, setApplied] = useState('')
   const [range, setRange] = useState('')
@@ -39,6 +39,7 @@ const ListView = ({
   const [total, setTotal] = useState(0)
   const [sums, setSums] = useState<string[]>([])
   const [loaded, setLoaded] = useState(false)
+  const [detailItem, setDetailItem] = useState<ListItem | null>(null)
 
   useEffect(() => {
     setLoaded(false)
@@ -90,7 +91,7 @@ const ListView = ({
       <View style={{ display: 'flex', padding: `${padTop}px 24px 0`, alignItems: 'center' }}>
         {/* 输入框同样不挂 .input 类（类里 font-size:28/padding:18 会压过行内值导致比按键高） */}
         <Input
-          style={{ flex: 1, marginBottom: 0, height: 36, lineHeight: '36px', fontSize: 17, padding: '0 11px', background: '#fff', border: '1px solid #c9d1da', borderRadius: 8, boxSizing: 'border-box' }}
+          style={{ flex: 1, marginBottom: 0, height: 36, lineHeight: '36px', fontSize: 17, padding: '0 11px', background: '#fff', border: '1px solid #c9d1da', borderRadius: square ? 0 : 8, boxSizing: 'border-box' }}
           placeholderStyle="color:#9aa3ad;font-size:17px"
           placeholder="搜索关键字"
           value={input}
@@ -99,14 +100,14 @@ const ListView = ({
         />
         {/* 行内按键：纯行内样式不带 btn-primary 类（类里 84px 行高/30px 字会压过行内覆盖导致按键过大） */}
         <View
-          style={{ marginLeft: 8, height: 36, lineHeight: '36px', padding: '0 16px', fontSize: 15, color: '#fff', background: '#1677ff', borderRadius: 8, flexShrink: 0, boxSizing: 'border-box' }}
+          style={{ marginLeft: 8, height: 36, lineHeight: '36px', padding: '0 16px', fontSize: 15, color: '#fff', background: '#1677ff', borderRadius: square ? 0 : 8, flexShrink: 0, boxSizing: 'border-box' }}
           onClick={() => setApplied(input.trim())}
         >
           查询
         </View>
         {onAdd ? (
           <View
-            style={{ marginLeft: 8, height: 36, lineHeight: '36px', padding: '0 16px', fontSize: 15, color: '#fff', background: '#1677ff', borderRadius: 8, flexShrink: 0, boxSizing: 'border-box' }}
+            style={{ marginLeft: 8, height: 36, lineHeight: '36px', padding: '0 16px', fontSize: 15, color: '#fff', background: '#1677ff', borderRadius: square ? 0 : 8, flexShrink: 0, boxSizing: 'border-box' }}
             onClick={onAdd}
           >
             {addLabel || '新增'}
@@ -147,7 +148,7 @@ const ListView = ({
         /* 横向表格模式：顶部字段名行 + 每条记录一行单元格
            行内 style 数字按真实 px 渲染，故表头 13px、单元格 15px（≈26/30rpx）才是舒适密度；
            列边线按项目表格规范逐格 borderLeft，首列不带，外框整圈灰线 */
-        <View style={{ margin: '8px 24px 0', background: '#fff', borderRadius: 8, overflow: 'hidden', border: '1px solid #e6e9ee' }}>
+        <View style={{ margin: '8px 24px 0', background: '#fff', borderRadius: square ? 0 : 8, overflow: 'hidden', border: '1px solid #e6e9ee' }}>
           <View style={{ display: 'flex', background: '#f2f4f7' }}>
             {headers.map((h, i) => (
               <View
@@ -186,7 +187,7 @@ const ListView = ({
             <View
               key={String(it.key)}
               style={{ display: 'flex', borderTop: '1px solid #e6e9ee', alignItems: 'stretch' }}
-              onClick={onRowClick ? () => onRowClick(it) : undefined}
+              onClick={onRowClick ? () => onRowClick(it) : (detail && (it.fields || []).length ? () => setDetailItem(it) : undefined)}
             >
               {headers.map((_, i) => (
                 <View
@@ -206,8 +207,8 @@ const ListView = ({
         <View
           key={String(it.key)}
           className="card"
-          style={compact ? { padding: '12px 20px' } : undefined}
-          onClick={onRowClick ? () => onRowClick(it) : undefined}
+          style={{ ...(compact ? { padding: '12px 20px' } : {}), ...(square ? { borderRadius: 0 } : {}) }}
+          onClick={onRowClick ? () => onRowClick(it) : (detail && (it.fields || []).length ? () => setDetailItem(it) : undefined)}
         >
           {/* compact：标题与金额同行，副信息合成一行点分隔，降低单条高度 */}
           <View style={{ display: 'flex', alignItems: 'center' }}>
@@ -247,6 +248,24 @@ const ListView = ({
           ) : null}
         </View>
         ))
+      )}
+      {/* 详情弹层：detail 模式点击行展示服务端下发的 fields（label/值） */}
+      {detailItem && (
+        <View>
+          <View style={{ position: 'fixed', left: 0, top: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.45)', zIndex: 1000 }} onClick={() => setDetailItem(null)} />
+          <View style={{ position: 'fixed', left: 0, right: 0, bottom: 0, background: '#fff', padding: '16px 20px 28px', zIndex: 1001, maxHeight: '70%', boxSizing: 'border-box', overflowY: 'scroll' }}>
+            <View style={{ display: 'flex', alignItems: 'center', marginBottom: 8 }}>
+              <Text style={{ flex: 1, minWidth: 0, fontSize: 16, fontWeight: 600 }}>{detailItem.title}</Text>
+              <Text style={{ fontSize: 18, color: '#86909c' }} onClick={() => setDetailItem(null)}>×</Text>
+            </View>
+            {(detailItem.fields || []).map(([label, value]) => (
+              <View key={label} style={{ display: 'flex', alignItems: 'flex-start', padding: '6px 0', borderBottom: '1px solid #f2f4f7' }}>
+                <Text style={{ flexShrink: 0, width: 80, fontSize: 13, color: '#86909c' }}>{label}</Text>
+                <Text style={{ flex: 1, minWidth: 0, fontSize: 13, color: '#1f2733', wordBreak: 'break-all' }}>{value}</Text>
+              </View>
+            ))}
+          </View>
+        </View>
       )}
     </View>
   )

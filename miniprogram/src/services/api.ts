@@ -117,8 +117,8 @@ export const getInventory = (q: string) =>
 export const getProductCost = (key: string) =>
   request<{ semi: any[]; raw: any[]; proc: any[]; fees: any[]; totalCost: number; hasBom: boolean }>(`/wx/product-cost/${encodeURIComponent(key)}`)
 
-export const getOrders = (q: string) =>
-  request<{ list: any[]; total: number }>(`/wx/orders?q=${encodeURIComponent(q)}`)
+export const getOrders = (q: string, status = '') =>
+  request<{ list: any[]; total: number }>(`/wx/orders?q=${encodeURIComponent(q)}${status ? `&status=${encodeURIComponent(status)}` : ''}`)
 
 export const getMarket = (type: 'finished' | 'semi' | 'mold', q = '') =>
   request<{ list: any[] }>(`/wx/market?type=${type}&q=${encodeURIComponent(q)}`)
@@ -290,6 +290,8 @@ export interface ListItem {
   amount?: number
   /** 横向表格行单元格（与列表页 headers 顺序对应） */
   row?: string[]
+  /** 详情弹层字段（label/值 对），配合 ListView detail 点击展示 */
+  fields?: [string, string][]
 }
 
 export const getListPage = (page: string, q: string, extra = '') =>
@@ -309,6 +311,8 @@ export interface PickingItem {
   customerName: string
   orderStatus: string
   printStatus: string
+  /** 发货凭证图片（发货时上传存档） */
+  shipImages: string[]
   /** 无关联订单的遗留拣货单（只读，不可发货） */
   legacy: boolean
   totalQty: number
