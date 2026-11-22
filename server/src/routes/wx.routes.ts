@@ -8,7 +8,7 @@ import { resolveCompanyRoot } from '../services/storageUsage';
 import { makeConvId, getHistory as chatHistory, saveMessage as chatSaveMessage, markConvRead as chatMarkRead, getConversations as chatConvs, getUnreadCount as chatUnread } from '../ws/chat-store';
 import { isUserOnline, pushSavedToRecipient } from '../ws/chat-ws';
 import { checkChatContent, blockReason } from '../utils/chatFilter';
-import { canViewMenus } from '../services/wxPerms';
+import { canViewMenus, SUPPLIER_MENU_KEYS as WX_MENU_KEYS } from '../services/wxPerms';
 import { loadPendingStats, loadSalesMetrics, loadBankMetrics } from '../services/wxDashboard';
 import { listDecoratedListings, mergeQuote } from '../services/market-listings';
 
@@ -141,6 +141,107 @@ async function canAudit(owner: string, username: string, type: 'reimbursement' |
   if (list.some(m => String(m) === username)) return true;
   const name = await displayNameOf(username);
   return list.some(m => String(m) === name);
+}
+
+/** 本租户成员 username 集合（负责人名单有效性过滤：残留的已删除/非本租户账号不算「已设置」，与 Web allUserOptions 同源） */
+async function tenantUsernames(owner: string): Promise<Set<string>> {
+  const users = await readRows('registeredUsers');
+  const resolveOwner = (u: any): string => {
+    if (!u.isSubAccount || !u.parentAccount) return String(u.username);
+    const visited = new Set<string>();
+    let cur = String(u.parentAccount);
+    while (cur && !visited.has(cur)) {
+      visited.add(cur);
+      const parent = users.find((x: any) => x && x.username === cur);
+      if (!parent || !parent.isSubAccount) return cur;
+      cur = String(parent.parentAccount || '');
+    }
+    return cur || String(u.username);
+  };
+  const set = new Set<string>([owner]);
+  users.forEach((u: any) => { if (u && u.username && (resolveOwner(u) === owner || u.username === owner)) set.add(String(u.username)); });
+  return set;
+}
+
+/** 负责人名单读取 + 有效性过滤（名单残留无效账号时不算已设置，否则全体子账号会被空态拦住） */
+async function validManagersOf(owner: string, key: string, field: string): Promise<string[]> {
+  try {
+    const raw = await readMap(key);
+    const list = Array.isArray(raw[field]) ? raw[field].map(String) : [];
+    if (!list.length) return [];
+    const members = await tenantUsernames(owner);
+    return list.filter(un => members.has(un));
+  } catch { return []; }
+}
+
+/** 审批页负责人判定（与 Web isTabManager 同源）：管理员豁免 → 未设置或名单全失效全员放行 → 命中名单 */
+async function isApprovalManager(owner: string, username: string, type: 'reimbursement' | 'payment', tab: string): Promise<boolean> {
+  if (username === owner) return true;
+  const key = type === 'reimbursement' ? `reimbursement_managers_${owner}` : `payment_request_managers_${owner}`;
+  const valid = await validManagersOf(owner, key, tab);
+  if (!valid.length) return true;
+  return valid.includes(username);
+}
+
+/** 仓库统计负责人名单：ws_managers_<owner> = { viewManagers, editManagers }；旧数组格式双灌两侧（与 Web 兼容分支同源） */
+async function wsManagersOf(owner: string): Promise<{ view: string[]; edit: string[] }> {
+  try {
+    const row = await store.getDataset(`ws_managers_${owner}`);
+    const raw = row ? JSON.parse(row.dataset_json || 'null') : null;
+    if (Array.isArray(raw)) return { view: raw.map(String), edit: raw.map(String) };
+    if (raw && typeof raw === 'object') {
+      return {
+        view: Array.isArray(raw.viewManagers) ? raw.viewManagers.map(String) : [],
+        edit: Array.isArray(raw.editManagers) ? raw.editManagers.map(String) : [],
+      };
+    }
+  } catch { /* ignore */ }
+  return { view: [], edit: [] };
+}
+
+/** 仓库统计查看权限（与 Web canViewAll 同源）：管理员 / 两名单均空 / 命中查看或编辑负责人 */
+async function wsCanViewAll(owner: string, username: string): Promise<boolean> {
+  if (username === owner) return true;
+  const { view, edit } = await wsManagersOf(owner);
+  if (!view.length && !edit.length) return true;
+  return view.includes(username) || edit.includes(username);
+}
+
+/** 仓库统计编辑权限（与 Web canEditAll 同源）：管理员 / 编辑负责人（查看负责人不隐含编辑权） */
+async function wsCanEditAll(owner: string, username: string): Promise<boolean> {
+  if (username === owner) return true;
+  const { edit } = await wsManagersOf(owner);
+  return edit.includes(username);
+}
+
+/** 店铺管理可见范围（与 Web shopScope.scopeShops 同源）：管理员 / 未设置 / 勾选查看 → 全部店铺；否则仅本人 + 本组组员的店铺 */
+async function scopeShopsFor<T extends { person?: string }>(owner: string, username: string, shops: T[]): Promise<T[]> {
+  if (username === owner) return shops;
+  let perms: { username: string; view: boolean }[] = [];
+  try {
+    const row = await store.getDataset(`shopmgr_managers_${owner}`);
+    const raw = row ? JSON.parse(row.dataset_json || '[]') : [];
+    if (Array.isArray(raw)) {
+      perms = raw
+        .map((d: any) => typeof d === 'string' ? { username: d, view: true } : { username: String((d && d.username) || ''), view: !!(d && d.view) })
+        .filter(p => p.username);
+    }
+  } catch { /* ignore */ }
+  if (!perms.length) return shops;
+  const me = perms.find(p => p.username === username);
+  if (me && me.view) return shops;
+  const myName = await displayNameOf(username);
+  const allowed = new Set<string>([myName]);
+  // 组长额外含本组组员的店铺（多平台 ops_groups 键合并按 id 去重，与 Web loadOpsGroups 同源）
+  const groupKeys = ['dev_ops_groups', `supplier_analytics_${owner}_ops_groups`, `purchaser_analytics_${owner}_ops_groups`, `factory_analytics_${owner}_ops_groups`];
+  const seen = new Set<string>();
+  const lists = await Promise.all(groupKeys.map(k => readRows(k)));
+  lists.forEach(arr => arr.forEach((g: any) => {
+    if (!g || !g.id || seen.has(g.id)) return;
+    seen.add(g.id);
+    if (g.leader === myName && Array.isArray(g.members)) g.members.forEach((m0: any) => allowed.add(String(m0)));
+  }));
+  return shops.filter(s => allowed.has(String((s && s.person) || '')));
 }
 
 // ============ 登录 / 绑定 ============
@@ -404,11 +505,40 @@ router.get('/approvals', verifyJWT, async (req: Request, res: Response) => {
     const owner = await ownerOf(user.username);
     const type = req.query.type === 'payment' ? 'payment' : 'reimbursement';
     const tab = String(req.query.tab || 'pending');
+    // 菜单点闸：与 Web PERM_V2 菜单可见性一致（finance/reimbursement、finance/payment-request）
+    const menuKey = type === 'reimbursement' ? 'finance/reimbursement' : 'finance/payment-request';
+    const menuPerms = await canViewMenus(user.username, [menuKey]);
+    if (!menuPerms[menuKey]) { res.status(403).json({ code: 403, message: '无该菜单权限（与网页版菜单权限一致）' }); return; }
     const rows = await readRows(type === 'reimbursement' ? `reimbursement_${owner}` : `payment_requests_${owner}`);
     let list = rows.map((r: any) => toApprovalItem(type, r));
     if (tab === 'pending') list = list.filter((it: any) => isPendingItem(type, rows.find((r: any) => r.key === it.key)));
     else if (tab === 'processed') list = list.filter((it: any) => !isPendingItem(type, rows.find((r: any) => r.key === it.key)));
     else if (tab === 'mine') list = list.filter((it: any) => it.applicant === user.username);
+    // 负责人闸（与 Web 页签空态同源）：非负责人看不到对应页签记录；我发起不受限
+    if (tab !== 'mine') {
+      if (type === 'reimbursement') {
+        const [mgrReview, mgrPayment] = await Promise.all([
+          isApprovalManager(owner, user.username, 'reimbursement', 'review'),
+          isApprovalManager(owner, user.username, 'reimbursement', 'payment'),
+        ]);
+        list = list.filter((it: any) => {
+          if (it.status === 'pending_review') return mgrReview;
+          if (it.status === 'pending_payment') return mgrPayment;
+          return mgrReview || mgrPayment;
+        });
+      } else {
+        const [mgrReceipt, mgrReview, mgrPay] = await Promise.all([
+          isApprovalManager(owner, user.username, 'payment', 'receipt'),
+          isApprovalManager(owner, user.username, 'payment', 'review'),
+          isApprovalManager(owner, user.username, 'payment', 'pay'),
+        ]);
+        list = list.filter((it: any) => {
+          if ((it as any).recordType === 'receipt') return mgrReceipt;
+          if (it.status === 'pending_review' || it.status === 'rejected') return mgrReview;
+          return mgrPay;
+        });
+      }
+    }
     res.json({ code: 200, data: { list } });
   } catch (err: any) {
     console.error('[wx] approvals error:', err.message);
@@ -690,6 +820,9 @@ router.get('/orders', verifyJWT, async (req: Request, res: Response) => {
   try {
     const user = (req as any).user as JWTPayload;
     const owner = await ownerOf(user.username);
+    // 菜单点闸：订单查询/打单拣货与 Web「销售管理→订单管理」菜单同权限
+    const orderMenu = await canViewMenus(user.username, ['sales/order-manage']);
+    if (!orderMenu['sales/order-manage']) { res.status(403).json({ code: 403, message: '无该菜单权限（与网页版菜单权限一致）' }); return; }
     const q = String(req.query.q || '').trim().toLowerCase();
     const rows = await readRows(`pageData_sales_order-manage_${owner}`);
     const hit = q
@@ -771,6 +904,8 @@ router.get('/bank-accounts', verifyJWT, async (req: Request, res: Response) => {
   try {
     const user = (req as any).user as JWTPayload;
     const owner = await ownerOf(user.username);
+    const bankMenu = await canViewMenus(user.username, ['finance/bank-account']);
+    if (!bankMenu['finance/bank-account']) { res.status(403).json({ code: 403, message: '无该菜单权限（与网页版菜单权限一致）' }); return; }
     const q = String(req.query.q || '').trim().toLowerCase();
     const rows = await readRows(`pageData_finance_bank-account_${owner}`);
     const textOf = (r: any): string => [
@@ -1146,6 +1281,7 @@ router.get('/ws/:kind/:key', verifyJWT, async (req: Request, res: Response) => {
   try {
     const user = (req as any).user as JWTPayload;
     const owner = await ownerOf(user.username);
+    const name = await displayNameOf(user.username);
     const kind = String(req.params.kind || '');
     if (!WS_KINDS.includes(kind)) {
       res.status(404).json({ code: 404, message: '未知记录类型' });
@@ -1155,6 +1291,11 @@ router.get('/ws/:kind/:key', verifyJWT, async (req: Request, res: Response) => {
     const rec = rows.find((r: any) => String(r.key || '') === String(req.params.key || ''));
     if (!rec) {
       res.status(404).json({ code: 404, message: '记录不存在' });
+      return;
+    }
+    // 查看闸（与 Web 非负责人仅见本人记录同源）；奖惩为配置类页签不受负责人过滤
+    if (kind !== 'note' && !(await wsCanViewAll(owner, user.username)) && String(rec.creator || '') !== name) {
+      res.status(403).json({ code: 403, message: '无权限查看该记录（非负责人仅见本人记录）' });
       return;
     }
     res.json({ code: 200, data: { record: rec } });
@@ -1183,6 +1324,18 @@ router.put('/ws/:kind/:key', verifyJWT, async (req: Request, res: Response) => {
       return;
     }
     const rec: any = { ...rows[idx] };
+    // 编辑闸（与 Web canModify 同源）：创建人本人或编辑负责人（管理员豁免）；奖惩为配置类页签不闸
+    if (kind !== 'note') {
+      if (!(await wsCanViewAll(owner, user.username)) && String(rec.creator || '') !== name) {
+        res.status(403).json({ code: 403, message: '无权限查看该记录（非负责人仅见本人记录）' });
+        return;
+      }
+      const canModify = (await wsCanEditAll(owner, user.username)) || String(rec.creator || '') === name;
+      if (!canModify) {
+        res.status(403).json({ code: 403, message: '无权限编辑该记录（仅创建人或编辑负责人可改）' });
+        return;
+      }
+    }
     const str = (k: string) => String(req.body[k] || '').trim();
     const has = (k: string) => req.body[k] !== undefined;
     if (kind === 'note') {
@@ -1331,6 +1484,8 @@ router.get('/schedule-board', verifyJWT, async (req: Request, res: Response) => 
   try {
     const user = (req as any).user as JWTPayload;
     const owner = await ownerOf(user.username);
+    const schedMenu = await canViewMenus(user.username, ['production/production-schedule']);
+    if (!schedMenu['production/production-schedule']) { res.status(403).json({ code: 403, message: '无该菜单权限（与网页版菜单权限一致）' }); return; }
     const date = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.date || '')) ? String(req.query.date) : localYmd();
     // 生产线集合与 Web 同键；未配置时回退默认三条线（与 ScheduleBoard 初始化同口径）
     let lines = (await readRows(`production_schedule_lines_${owner}`)).map(String).filter(Boolean);
@@ -1558,6 +1713,26 @@ function finishList(items: ListItem[], q: string, limit = 100): { list: ListItem
 
 const day10 = (v: any): string => pick(v).slice(0, 10);
 
+/** /wx/lists 页 → Web 菜单点映射（仅登记两端语义明确的页；purchase 等两端语义分歧的页暂不登记） */
+const LIST_MENU_KEYS: Record<string, string> = {
+  production: 'production/production-order',
+  'processing-order': 'production/processing-order',
+  'workflow-templates': 'production/workflow-templates',
+  'production-schedule': 'production/production-schedule',
+};
+
+/** GET /api/wx/menus —— 菜单点可见性（Web PERM_V2 菜单点链路服务端复算，供小程序菜单栏过滤） */
+router.get('/menus', verifyJWT, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user as JWTPayload;
+    const perms = await canViewMenus(user.username, WX_MENU_KEYS);
+    res.json({ code: 200, data: { perms } });
+  } catch (err: any) {
+    console.error('[wx] menus error:', err.message);
+    res.status(500).json({ code: 500, message: '服务器内部错误' });
+  }
+});
+
 // ============ 打单拣货（订单派生视图 + 立即发货 / 缺货拆分，与 Web ModuleChildPage 同口径） ============
 
 const round2 = (n: number): number => Math.round((Number(n) || 0) * 100) / 100;
@@ -1601,6 +1776,8 @@ router.get('/picking', verifyJWT, async (req: Request, res: Response) => {
   try {
     const user = (req as any).user as JWTPayload;
     const owner = await ownerOf(user.username);
+    const orderMenu = await canViewMenus(user.username, ['sales/order-manage']);
+    if (!orderMenu['sales/order-manage']) { res.status(403).json({ code: 403, message: '无该菜单权限（与网页版菜单权限一致）' }); return; }
     const q = String(req.query.q || '').trim().toLowerCase();
     const [orderRows, legacyRows] = await Promise.all([
       readRows(`pageData_sales_order-manage_${owner}`),
@@ -1881,6 +2058,12 @@ router.get('/lists/:page', verifyJWT, async (req: Request, res: Response) => {
     const owner = await ownerOf(user.username);
     const page = String(req.params.page || '');
     const q = String(req.query.q || '');
+    // 菜单点闸：与 Web PERM_V2 菜单可见性一致，无权限直接 403（小程序侧展示无权限空态）
+    const listMenuKey = LIST_MENU_KEYS[page];
+    if (listMenuKey) {
+      const menuPerms = await canViewMenus(user.username, [listMenuKey]);
+      if (!menuPerms[listMenuKey]) { res.status(403).json({ code: 403, message: '无该菜单权限（与网页版菜单权限一致）' }); return; }
+    }
     // 快速筛选（今日/昨日/本月）：备货/配货/急采按记录日期过滤并下发汇总行
     const range = String(req.query.range || '');
     let sums: string[] | null = null;
@@ -1892,6 +2075,13 @@ router.get('/lists/:page', verifyJWT, async (req: Request, res: Response) => {
     };
     const money = (v: number): string => (v > 0 ? `¥${v.toFixed(2)}` : '—');
     let items: ListItem[] = [];
+    // 仓库统计负责人权限（与 Web WarehouseStatsPage 同源）：非负责人仅见本人创建的记录；奖惩为配置类页签不过滤；工资汇总按人过滤
+    let wsViewAll = true;
+    let wsMyName = '';
+    if (page === 'warehouseStats' || page === 'warehouseStock' || page === 'warehousePick' || page === 'warehouseUrgent' || page === 'warehouseSalary') {
+      wsViewAll = await wsCanViewAll(owner, user.username);
+      wsMyName = await displayNameOf(user.username);
+    }
     if (page === 'bookkeeping') {
       const rows = await readRows(`daily_bookkeeping_${owner}`);
       items = rows.map((r: any) => ({
@@ -2081,14 +2271,14 @@ router.get('/lists/:page', verifyJWT, async (req: Request, res: Response) => {
         sub: [r.dataComplete, Array.isArray(r.platforms) && r.platforms.length ? `上架平台 ${r.platforms.join('/')}` : '', r.creator, day10(r.date)].filter(Boolean) as string[],
       }));
     } else if (page === 'shops') {
-      const rows = await readRows(`shop_info_${owner}`);
-      items = rows.map((r: any) => ({
+      const scoped = await scopeShopsFor(owner, user.username, await readRows(`shop_info_${owner}`));
+      items = scoped.map((r: any) => ({
         key: r.key || r.shopName, title: pick(r.shopName, r.name) || '店铺',
         tag: r.platform,
         sub: [r.brand, r.person && `负责人:${r.person}`, r.status].filter(Boolean) as string[],
       }));
     } else if (page === 'warehouseStats' || page === 'warehouseStock') {
-      const rows = (await readRows(`ws_stock_${owner}`)).filter((r: any) => inRange(day10(r.date)));
+      const rows = (await readRows(`ws_stock_${owner}`)).filter((r: any) => inRange(day10(r.date)) && (wsViewAll || String(r.creator || '') === wsMyName));
       sums = ['', String(rows.reduce((s: number, r: any) => s + (Number(r.quantity) || 0), 0)), '',
         money(rows.reduce((s: number, r: any) => s + (Number(r.qcWage) || 0), 0))];
       items = rows.map((r: any) => ({
@@ -2100,7 +2290,7 @@ router.get('/lists/:page', verifyJWT, async (req: Request, res: Response) => {
           r.material, r.person, r.packer].filter(Boolean) as string[],
       }));
     } else if (page === 'warehousePick') {
-      const rows = (await readRows(`ws_pick_${owner}`)).filter((r: any) => inRange(day10(r.createdAt)));
+      const rows = (await readRows(`ws_pick_${owner}`)).filter((r: any) => inRange(day10(r.createdAt)) && (wsViewAll || String(r.creator || '') === wsMyName));
       sums = ['', String(rows.reduce((s: number, r: any) => s + (Number(r.quantity) || 0), 0)),
         money(rows.reduce((s: number, r: any) => s + (Number(r.wage) || 0), 0))];
       items = rows.map((r: any) => ({
@@ -2112,7 +2302,7 @@ router.get('/lists/:page', verifyJWT, async (req: Request, res: Response) => {
           r.creator, day10(r.createdAt)].filter(Boolean) as string[],
       }));
     } else if (page === 'warehouseUrgent') {
-      const rows = (await readRows(`ws_urgent_${owner}`)).filter((r: any) => inRange(day10(pick(r.date, r.qcDate))));
+      const rows = (await readRows(`ws_urgent_${owner}`)).filter((r: any) => inRange(day10(pick(r.date, r.qcDate))) && (wsViewAll || String(r.creator || '') === wsMyName));
       sums = ['', String(rows.reduce((s: number, r: any) => s + (Number(r.quantity) || 0), 0)), '',
         money(rows.reduce((s: number, r: any) => s + (Number(r.wage) || 0), 0))];
       items = rows.map((r: any) => ({
@@ -2169,7 +2359,9 @@ router.get('/lists/:page', verifyJWT, async (req: Request, res: Response) => {
       });
       const fmt = (v: number) => `¥${v.toFixed(2)}`;
       const persons = Array.from(new Set([...Object.keys(qc), ...Object.keys(pack), ...Object.keys(pickM), ...Object.keys(team), ...Object.keys(noteM)]));
-      items = persons.map(name => {
+      // 与 Web SalaryTab visibleRows 同源：非负责人只留本人一行（合计随可见行重算，避免表格见自己、合计全员的泄露）
+      const visiblePersons = wsViewAll ? persons : persons.filter(n => n === wsMyName);
+      items = visiblePersons.map(name => {
         const stockWage = qc[name]?.s || 0;
         const urgentWage = qc[name]?.u || 0;
         const pickWage = pickM[name] || 0;

@@ -30,7 +30,7 @@ async function readJson(key: string): Promise<any> {
 }
 
 /** 供应商平台菜单点（网页版 config/permRegistry.ts PERM_MENUS.supplier 的看板相关子集） */
-const SUPPLIER_MENU_KEYS = [
+export const SUPPLIER_MENU_KEYS = [
   'production/production-pending-stats', 'production/production-order',
   'production/processing-order', 'production/purchase-requisition',
   'production/workflow-templates', 'production/production-schedule',

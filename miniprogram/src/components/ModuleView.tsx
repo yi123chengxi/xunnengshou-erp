@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { View, Text, ScrollView, Button, Image } from '@tarojs/components'
 import Taro from '@tarojs/taro'
-import { findModule } from '../config/menu'
+import { findModule, loadMenuPerms, childAllowed } from '../config/menu'
 import scanCameraIcon from '../assets/scan-camera.png'
 import ApprovalsEmbed from './ApprovalsEmbed'
 import InventoryEmbed from './InventoryEmbed'
@@ -51,6 +51,11 @@ const ModuleView = ({
   const [child, setChild] = useState(() =>
     initialChild && mod?.children.some(c => c.key === initialChild) ? initialChild : (mod?.children[0]?.key || ''))
   const [scanQ, setScanQ] = useState(initialQ || '')
+  // 菜单点权限（服务端按网页版 PERM_V2 复算）：无权限的子菜单从底部子菜单条隐藏，直达时展示无权限空态
+  const [perms, setPerms] = useState<Record<string, boolean> | null>(null)
+  useEffect(() => {
+    loadMenuPerms().then(setPerms)
+  }, [])
   // 底部子菜单条须钉在 Tab 栏正上方：Tab 栏实际高度受字号/安全区影响，
   // 硬编码偏移会在部分端被遮挡，改为挂载后实测 .app-tab-bar 高度再定位
   const [tabBarH, setTabBarH] = useState(0)
@@ -75,9 +80,26 @@ const ModuleView = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [moduleKey, initialChild, initialQ])
 
+  // 权限到达后若当前子菜单被隐藏，回落到第一个可见子菜单（避免停在无权限空态）
+  useEffect(() => {
+    if (!perms) return
+    const m = findModule(moduleKey)
+    if (!m) return
+    if (!childAllowed(perms, child)) {
+      const first = m.children.find(c => childAllowed(perms, c.key))
+      setChild(first ? first.key : '')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [perms, moduleKey])
+
   if (!mod) return <View className="empty">菜单不存在</View>
 
+  const visibleChildren = mod.children.filter(c => !perms || childAllowed(perms, c.key))
+
   const renderChild = () => {
+    if (perms && !childAllowed(perms, child)) {
+      return <View className="empty">无该菜单权限（与网页版菜单权限一致）</View>
+    }
     switch (child) {
       case 'approvals': return <ApprovalsEmbed tick={tick} />
       case 'reimburse': return <ReimburseForm embedded />
@@ -134,7 +156,7 @@ const ModuleView = ({
         }}
       >
         <ScrollView scrollX style={{ whiteSpace: 'nowrap', padding: '6px 16px' }}>
-          {mod.children.map(c => (
+          {visibleChildren.map(c => (
             <Text
               key={c.key}
               className={`tag ${child === c.key ? 'tag-blue' : 'tag-gray'}`}

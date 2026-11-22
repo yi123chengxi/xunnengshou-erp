@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import './index.scss'
 import { View, Text, Image } from '@tarojs/components'
 import Taro, { useDidShow } from '@tarojs/taro'
@@ -6,7 +6,7 @@ import { getSummary, getDashboard, SummaryData, DashboardData, BoardMetrics } fr
 import { getUser, getToken } from '../../services/session'
 import { isPreviewMode } from '../../services/auth'
 import { getFavs } from '../../services/favorites'
-import { CHILD_ICONS, childTitle, openMenuChild } from '../../config/menu'
+import { CHILD_ICONS, childTitle, openMenuChild, loadMenuPerms, childAllowed } from '../../config/menu'
 import AppTabBar from '../../components/AppTabBar'
 import PendingStatsCard from '../../components/PendingStatsCard'
 
@@ -54,6 +54,11 @@ const Workbench = () => {
   const [dash, setDash] = useState<DashboardData | null>(null)
   const [moreOpen, setMoreOpen] = useState(false)
   const [updatedAt, setUpdatedAt] = useState('')
+  // 菜单点权限：常用功能宫格中无权限的收藏入口隐藏（与网页版菜单可见性同源）
+  const [perms, setPerms] = useState<Record<string, boolean> | null>(null)
+  useEffect(() => {
+    loadMenuPerms().then(setPerms)
+  }, [])
   const user = getUser()
 
   useDidShow(() => {
@@ -86,7 +91,9 @@ const Workbench = () => {
 
   // 常用功能宫格：收藏列表驱动（查看更多里 + 号添加），每行 4 个，末尾固定查看更多
   const favGrid: { id: string; icon: string; label: string; onClick: () => void; badge: number }[] =
-    getFavs().map(id => {
+    getFavs()
+      .filter(id => childAllowed(perms || {}, id.split(':')[1] || ''))
+      .map(id => {
       const [mk, ck] = id.split(':')
       return {
         id,

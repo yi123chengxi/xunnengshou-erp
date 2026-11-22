@@ -1,6 +1,7 @@
 // 小程序主菜单配置（与 Web 端主菜单同语义的精简移动映射）
 // 规则：点击主菜单 → 进入第一个子菜单；底部子菜单条切换同模块其他子菜单
 import Taro from '@tarojs/taro'
+import { getWxMenus } from '../services/api'
 export interface MenuChild { key: string; title: string }
 export interface MenuModule { key: string; title: string; icon: string; children: MenuChild[] }
 
@@ -110,6 +111,40 @@ export const childTitle = (id: string): string => {
   const [mk, ck] = id.split(':')
   const m = findModule(mk)
   return m?.children.find(c => c.key === ck)?.title || ck
+}
+
+/** 子菜单 → 网页版菜单点映射（服务端 /wx/menus 按 PERM_V2 复算下发）；未映射的子菜单默认可见。
+ *  多个菜单点取「任一可见即可见」（如审批中心同时承载报销与收付款两类单据） */
+export const CHILD_MENU_KEYS: Record<string, string[]> = {
+  approvals: ['finance/reimbursement', 'finance/payment-request'],
+  'bank-account': ['finance/bank-account'],
+  orders: ['sales/order-manage'],
+  'print-picking': ['sales/order-manage'],
+  production: ['production/production-order'],
+  'production-order': ['production/production-order'],
+  'processing-order': ['production/processing-order'],
+  'purchase-requisition': ['production/purchase-requisition'],
+  'workflow-templates': ['production/workflow-templates'],
+  'production-schedule': ['production/production-schedule'],
+}
+
+// 菜单权限会话级缓存：首次拉取后复用，避免每个页面重复请求导致菜单栏闪烁；
+// 接口异常/未部署（预览模式回落空态）时 perms 为 {} → 全部可见，与旧版行为一致
+let menuPermCache: Promise<Record<string, boolean>> | null = null
+export function loadMenuPerms(): Promise<Record<string, boolean>> {
+  if (!menuPermCache) {
+    menuPermCache = getWxMenus()
+      .then(d => (d && d.perms) || {})
+      .catch(() => ({}))
+  }
+  return menuPermCache
+}
+
+/** 子菜单是否可见：perms 缺该菜单点（服务端旧版未下发）时按可见处理，保证部署过渡期不误隐藏 */
+export function childAllowed(perms: Record<string, boolean>, childKey: string): boolean {
+  const keys = CHILD_MENU_KEYS[childKey]
+  if (!keys || !keys.length) return true
+  return keys.some(k => perms[k] !== false)
 }
 
 /** 打开某主菜单下的子菜单：若恰为该模块默认子菜单且模块有固定 Tab，则直跳 Tab 页 */

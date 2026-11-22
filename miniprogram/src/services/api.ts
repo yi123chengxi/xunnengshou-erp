@@ -98,6 +98,9 @@ export interface DashboardData {
 
 export const getDashboard = () => request<DashboardData>('/wx/dashboard')
 
+/** 菜单点可见性（服务端按网页版 PERM_V2 复算）：用于小程序菜单栏与网页版同权限隐藏 */
+export const getWxMenus = () => request<{ perms: Record<string, boolean> }>('/wx/menus')
+
 export const getApprovals = (type: 'reimbursement' | 'payment', tab: string) =>
   request<{ list: ApprovalItem[] }>(`/wx/approvals?type=${type}&tab=${tab}`)
 

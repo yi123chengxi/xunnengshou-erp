@@ -1,8 +1,8 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import './index.scss'
 import { View, Text, Image } from '@tarojs/components'
 import Taro from '@tarojs/taro'
-import { MODULES, CHILD_ICONS, openMenuChild } from '../../config/menu'
+import { MODULES, CHILD_ICONS, openMenuChild, loadMenuPerms, childAllowed } from '../../config/menu'
 import { isFav, toggleFav } from '../../services/favorites'
 import AppTabBar from '../../components/AppTabBar'
 
@@ -10,6 +10,11 @@ import AppTabBar from '../../components/AppTabBar'
 // 字号按用户要求整体缩小 30%：行内数字在 weapp 按真实 px 渲染（不挂定义字号的类，否则类会压过行内值）
 const More = () => {
   const [, setTick] = useState(0)
+  // 菜单点权限（与网页版 PERM_V2 同源）：无权限的子菜单卡片不渲染，整模块无可见子菜单时隐藏模块块
+  const [perms, setPerms] = useState<Record<string, boolean> | null>(null)
+  useEffect(() => {
+    loadMenuPerms().then(setPerms)
+  }, [])
 
   const onToggle = (id: string, title: string) => {
     const added = toggleFav(id)
@@ -19,11 +24,14 @@ const More = () => {
 
   return (
     <View style={{ paddingBottom: 140 }}>
-      {MODULES.map(m => (
+      {MODULES.map(m => {
+        const children = m.children.filter(c => !perms || childAllowed(perms, c.key))
+        if (!children.length) return null
+        return (
         <View key={m.key} style={{ padding: '20px 24px 0' }}>
           <Text style={{ fontWeight: 600, fontSize: 21 }}>{m.icon} {m.title}</Text>
           <View style={{ display: 'flex', flexWrap: 'wrap', marginTop: 12 }}>
-            {m.children.map(c => {
+            {children.map(c => {
               const id = `${m.key}:${c.key}`
               const fav = isFav(id)
               return (
@@ -53,7 +61,8 @@ const More = () => {
             })}
           </View>
         </View>
-      ))}
+        )
+      })}
       <View className="muted" style={{ textAlign: 'center', padding: '8px 0 0' }}>
         点卡片打开功能；点右上角 + 加入/移出首页常用
       </View>
