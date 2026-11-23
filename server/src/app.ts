@@ -38,6 +38,7 @@ import enterpriseRoutes from './routes/enterprise.routes';
 import systemRoutes from './routes/system.routes';
 import imageRoutes from './routes/image.routes';
 import marketRoutes from './routes/market.routes';
+import moldRoutes from './routes/mold.routes';
 import { migrateLegacyMarketKey } from './services/market-listings';
 import { startEnterprisePatrol } from './services/enterprisePatrol';
 import { initPrintWebSocket } from './ws/print-ws';
@@ -71,6 +72,8 @@ app.use('/api/sync', rateLimit({ name: 'sync', windowMs: 60_000, max: 2400, mess
 app.use('/api/images', rateLimit({ name: 'images', windowMs: 60_000, max: 300, message: '图片操作过于频繁，请稍后再试' }));
 // 商机市场独立库：列表/批量写入/报价，按登录轮询与发布峰值给额度
 app.use('/api/market', rateLimit({ name: 'market', windowMs: 60_000, max: 600, message: '市场请求过于频繁，请稍后再试' }));
+// 模具管理权威真表：列表/增删改，低频业务按常规额度
+app.use('/api/molds', rateLimit({ name: 'molds', windowMs: 60_000, max: 300, message: '模具请求过于频繁，请稍后再试' }));
 
 app.use('/api/auth', authRoutes);
 app.use('/api/wx', wxRoutes);
@@ -97,6 +100,7 @@ app.use('/api/chat', chatRoutes);
 app.use('/api/system', systemRoutes);
 app.use('/api/images', imageRoutes);
 app.use('/api/market', marketRoutes);
+app.use('/api/molds', moldRoutes);
 
 // 健康检查
 app.get('/api/health', (_req, res) => {

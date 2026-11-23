@@ -98,7 +98,7 @@ import * as XLSX from 'xlsx-js-style';
 import { unzipSync, zipSync } from 'fflate';
 import { copyText, readClipboardImage, clipboardImageFailureText, imageFileFromPasteEvent } from '../utils/clipboard';
 import { getFullImage, saveFullImage, deleteFullImage, batchDeleteFullImages } from '../utils/imageStore';
-import { absoluteImageUrl, registerImageRef, uploadImage, attachImageToRecord, bindImageUrl, bindImageUrls, unbindImageUrl, loadImageUrlMap, isRenderableImageValue } from '../utils/imageSpace';
+import { absoluteImageUrl, registerImageRef, uploadImage, attachImageToRecord, bindImageUrl, bindImageUrls, unbindImageUrl, loadImageUrlMap, isRenderableImageValue, invalidateImageUrlMap } from '../utils/imageSpace';
 import { isImageUnloadable, markImageUnloadable } from '../utils/productImage';
 import { readScopedItem, writeScopedItem, readOwnerSuffixItem, writeOwnerSuffixItem, removeOwnerSuffixItem } from '../utils/scopedStorage';
 import BatchAddProductModal from '../components/BatchAddProductModal';
@@ -118,7 +118,8 @@ import { buildSupplierReturnRow, buildPurchaserReturnBill, writeReturnStockFlows
 import { appendStockLog, updateProductStock } from '../utils/stockUtils';
 import { loadTenantUsers } from '../utils/tenantUsers';
 import { appendBillLogEntry, readBillLog, billLogColor, resolveOperatorName, diffBillRecords, SUPPLIER_BILL_FIELD_MAP, getCurrentUserDisplayName } from '../utils/billLog';
-import { pullAllDatasets, flushDatasetUploadAsync, ensureDatasetFromServer, appendRowsToRemoteKey, declareShrink, isNeverShrinkKey, fetchServerDataset } from '../utils/serverSync';
+import { pullAllDatasets, flushDatasetUploadAsync, ensureDatasetFromServer, appendRowsToRemoteKey, declareShrink, isNeverShrinkKey, fetchServerDataset, serverAvailable } from '../utils/serverSync';
+import { reconcileServerFirst, shouldSkipServerFirst } from '../utils/serverFirstDataset';
 import { removedIdSet, rowIdentities, rowPrimaryId } from '../utils/shrinkRegistry';
 import { PRESET_PRINT_TEMPLATES, seedPresetPrintTemplates } from '../config/presetPrintTemplates';
 import { refreshCustomerPurchase, computeCustomerReceivedCents, toYuan, loadCustomerSummary } from '../utils/paySummary';
@@ -5483,6 +5484,10 @@ const ModuleChildPage: React.FC = () => {
     const timer = setTimeout(async () => {
       if (cancelled) return;
       try {
+        if (!(await serverAvailable())) {
+          message.warning('无法连接服务器：当前展示本地缓存商品清单，网络恢复后刷新将自动回到服务端权威数据');
+          return;
+        }
         const res = await reconcileProductListWithServer(getDataOwner());
         if (cancelled || res.status !== 'server') return;
         const list = Array.isArray(res.list) ? res.list : [];
@@ -5509,6 +5514,67 @@ const ModuleChildPage: React.FC = () => {
     }, 1500);
     return () => { cancelled = true; clearTimeout(timer); };
   }, [isProductList, sharedDataKey, getImgKey, getDataOwner, healActualStockFromLogs]);
+
+  // 服务端为主通用对账（生产工序 / 打印模板 / 图片空间绑定表）：挂载时裁决服务端与本机，
+  // 采纳服务端副本并失效陈旧缓存；离线时提示当前为本地缓存
+  React.useEffect(() => {
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      if (cancelled) return;
+      const owner = getDataOwner();
+      const keys: string[] = [];
+      if (moduleKey === 'basic-data' && childKey === 'prod-process') keys.push(`pageData_basic-data_prod-process_${owner}`);
+      try {
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (k && !k.endsWith('_ts') && (/^print_template_/.test(k) || /^prodImgUrl_/.test(k))) keys.push(k);
+        }
+      } catch { /* ignore */ }
+      let offlineNoted = false;
+      for (const k of keys) {
+        if (cancelled) return;
+        const res = await reconcileServerFirst(k);
+        if (cancelled) return;
+        if (res.status === 'offline' && !offlineNoted) {
+          offlineNoted = true;
+          message.warning('无法连接服务器：当前展示本地缓存数据，网络恢复后刷新将自动回到服务端权威数据');
+        }
+        if (res.status === 'server') {
+          if (k.startsWith('prodImgUrl_')) invalidateImageUrlMap(k.slice('prodImgUrl_'.length));
+          if (k === `pageData_basic-data_prod-process_${owner}`) {
+            try { const list = JSON.parse(res.json); if (Array.isArray(list)) setDataSource(list); } catch { /* ignore */ }
+          }
+        }
+      }
+    }, 600);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [moduleKey, childKey]);
+
+  // 服务端为主：本页主数据集键挂载时对账（商品清单/永不缩水键等专用通道键跳过），
+  // 采纳服务端副本重建首屏；离线时提示当前为本地缓存
+  React.useEffect(() => {
+    const key = sharedDataKey || dataStorageKey;
+    if (!key || shouldSkipServerFirst(key)) return;
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      if (cancelled) return;
+      try {
+        const res = await reconcileServerFirst(key);
+        if (cancelled) return;
+        if (res.status === 'offline') {
+          message.warning('无法连接服务器：当前展示本地缓存数据，网络恢复后刷新将自动回到服务端权威数据');
+          return;
+        }
+        if (res.status === 'server') {
+          try {
+            const list = JSON.parse(res.json);
+            if (Array.isArray(list)) setDataSource(list);
+          } catch { /* ignore */ }
+        }
+      } catch { /* 对账失败保持本机显示 */ }
+    }, 800);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [sharedDataKey, dataStorageKey]);
 
   React.useEffect(() => {
     try {

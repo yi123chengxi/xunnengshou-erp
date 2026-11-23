@@ -1,8 +1,9 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Modal, Table, Input, Tag, Space, Button, Empty, Image } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { SearchOutlined, PlusOutlined } from '@ant-design/icons';
 import type { MoldRecord } from '../pages/MoldPage';
+import { loadMolds, readMoldCache } from '../utils/moldApi';
 
 const PRIMARY = '#1e4a7e';
 
@@ -24,10 +25,19 @@ const getDataOwner = (): string => {
 const MoldPickerModal: React.FC<MoldPickerModalProps> = ({ open, value, onSelect, onCancel, onAddNew, zIndex }) => {
   const [search, setSearch] = useState('');
 
-  const records: MoldRecord[] = useMemo(() => {
-    try {
-      return JSON.parse(localStorage.getItem(`molds_${getDataOwner()}`) || '[]');
-    } catch { return []; }
+  // 模具数据以服务端真表为权威源：打开时先显 IndexedDB 缓存，再以服务端数据收敛
+  const [records, setRecords] = useState<MoldRecord[]>([]);
+  useEffect(() => {
+    if (!open) return;
+    let alive = true;
+    (async () => {
+      const owner = getDataOwner();
+      const cached = await readMoldCache(owner);
+      if (alive && cached.length) setRecords(cached);
+      const { records: list } = await loadMolds(owner);
+      if (alive) setRecords(list);
+    })();
+    return () => { alive = false; };
   }, [open]);
 
   const filtered = useMemo(() => {

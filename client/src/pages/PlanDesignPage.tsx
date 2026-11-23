@@ -18,6 +18,7 @@ import { saveDataset, readFreshDataset, productListKey, setMemProductList } from
 import { loadTenantUsers } from '../utils/tenantUsers';
 import { cacheDataset } from '../utils/storageQuota';
 import { uploadDatasetNow, reconcileProductListWithServer, resetProductListReconcile } from '../utils/productListSync';
+import { reconcileServerFirst } from '../utils/serverFirstDataset';
 import { getSessionOwner } from '../utils/dataOwner';
 import { readScopedItem, writeScopedItem } from '../utils/scopedStorage';
 import useResizableColumns from '../hooks/useResizableColumns';
@@ -1229,6 +1230,10 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
     setBomSelectQName(''); setBomSelectQStyle(''); setBomSelectQCode(''); setBomSelectQSupplier('');
     setBomSelectAppliedQ({ name: '', style: '', code: '', supplier: '' });
     const owner = getDataOwner();
+    // 生产工序服务端为主：先对账采纳权威副本，再加载选择列表
+    if (type === 'process') {
+      try { await reconcileServerFirst(`pageData_basic-data_prod-process_${owner}`); } catch { /* 失败回落本地缓存 */ }
+    }
     const plKey = productListKey(owner);
     // 先记录本地已有数据的 key，用于保护本地新建记录不被服务端旧数据覆盖
     let localKeys = new Set<string>();
@@ -1397,8 +1402,9 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
   }, []);
 
   // 打开子BOM编辑弹窗（复用批量添加BOM组件，位置错开）
-  const handleOpenSubBomEditor = useCallback((record: any) => {
+  const handleOpenSubBomEditor = useCallback(async (record: any) => {
     let bom = { semiProducts: [] as any[], rawMaterials: [] as any[], processes: [] as any[] };
+    try { await reconcileServerFirst(getBomKey(record.key)); } catch { /* 失败回落本地缓存 */ }
     try {
       const raw = readBomRaw(record.key);
       if (raw) bom = JSON.parse(raw);
@@ -1408,8 +1414,9 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
   }, []);
 
   // 在编辑弹窗内再打开下一层子BOM编辑弹窗（复用同一组件）
-  const handlePushSubBomEditor = useCallback((record: any) => {
+  const handlePushSubBomEditor = useCallback(async (record: any) => {
     let bom = { semiProducts: [] as any[], rawMaterials: [] as any[], processes: [] as any[] };
+    try { await reconcileServerFirst(getBomKey(record.key)); } catch { /* 失败回落本地缓存 */ }
     try {
       const raw = readBomRaw(record.key);
       if (raw) bom = JSON.parse(raw);
@@ -1542,7 +1549,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
   };
 
   // 打开半成品编辑弹窗（复用新增半成品弹窗）：回显简称/款式编码/商品编码/层级/单位/成本价 + 图片 + 物料清单
-  const openSemiEditForm = useCallback((rec: any) => {
+  const openSemiEditForm = useCallback(async (rec: any) => {
     setSemiEditKey(rec.key);
     setNewSemiName(rec.shortName || rec.name || '');
     setNewSemiStyleCode(rec.styleCode || '');
@@ -1554,6 +1561,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
     setNewSemiImage('');
     imgDB.get(rec.key).then(v => { if (v) setNewSemiImage(v); else { const url = loadImageUrlMap(getDataOwner())[rec.key]; if (url) setNewSemiImage(absoluteImageUrl(url)); } });
     let items: any[] = [];
+    try { await reconcileServerFirst(getBomKey(rec.key)); } catch { /* 失败回落本地缓存 */ }
     try {
       const bom = JSON.parse(readBomRaw(rec.key) || 'null');
       if (bom) {

@@ -1,17 +1,17 @@
 import React, { useEffect, useMemo, useState, useRef, useCallback } from 'react';
 import {
-  Table, Button, Space, Input, InputNumber, Modal, Form, Row, Col, Tag, message, Popconfirm, Tooltip, AutoComplete, Image as AntdImage, Select, Card,
+  Table, Button, Space, Input, InputNumber, Modal, Form, Row, Col, Tag, message, Popconfirm, Tooltip, AutoComplete, Image as AntdImage, Select, Card, Alert,
 } from 'antd';
-import { reloadAfterPull } from '../utils/serverSync';
+import { loadMolds, createMold, updateMold, deleteMoldByKey, importMolds } from '../utils/moldApi';
 import type { ColumnsType } from 'antd/es/table';
 import {
   PlusOutlined, EditOutlined, DeleteOutlined, ReloadOutlined, SearchOutlined, ToolOutlined, PictureOutlined, SnippetsOutlined,
-  SettingOutlined, UndoOutlined, EyeOutlined,
+  SettingOutlined, UndoOutlined, EyeOutlined, ImportOutlined,
 } from '@ant-design/icons';
+import * as XLSX from 'xlsx-js-style';
 import { compressImageFile } from '../utils/imageCompress';
 import { absoluteImageUrl } from '../utils/imageSpace';
 import { readClipboardImage, imageFileFromPasteEvent, clipboardImageFailureText } from '../utils/clipboard';
-import { safeSetItem } from '../utils/storageQuota';
 import useResizableColumns from '../hooks/useResizableColumns';
 import FieldConfigModal from '../components/FieldConfigModal';
 
@@ -62,11 +62,10 @@ const emptyRecord = (): MoldRecord => ({
 
 const MoldPage: React.FC = () => {
   const owner = getDataOwner();
-  const storageKey = `molds_${owner}`;
 
-  const [records, setRecords] = useState<MoldRecord[]>(() => {
-    try { return JSON.parse(localStorage.getItem(storageKey) || '[]'); } catch { return []; }
-  });
+  // 模具数据以服务端真表为权威源：挂载时服务端优先加载，本地仅 IndexedDB 只读缓存
+  const [records, setRecords] = useState<MoldRecord[]>([]);
+  const [moldOffline, setMoldOffline] = useState(false);
   const [visible, setVisible] = useState(false);
   const [editing, setEditing] = useState<MoldRecord | null>(null);
   const [form] = Form.useForm();
@@ -132,14 +131,23 @@ const MoldPage: React.FC = () => {
     try { localStorage.setItem(`moldFieldOrder_${owner}`, JSON.stringify(o)); localStorage.setItem(`moldFieldVis_${owner}`, JSON.stringify(v)); } catch { /* ignore */ }
   }, [owner]);
 
+  // 服务端优先加载：成功更新页面与 IndexedDB 缓存；失败读缓存并提示离线
+  const refresh = useCallback(async () => {
+    const { records: list, offline } = await loadMolds(owner);
+    setRecords(list);
+    setMoldOffline(offline);
+  }, [owner]);
+
+  useEffect(() => { void refresh(); }, [refresh]);
+
   // ===================== 多字段搜索 =====================
   const [searchFields, setSearchFields] = useState({ moldCode: '', moldName: '', spec: '', status: '', creator: '' });
   const [appliedSearch, setAppliedSearch] = useState({ moldCode: '', moldName: '', spec: '', status: '', creator: '' });
   const handleSearch = useCallback(() => {
-    // 查询时自动刷新表单数据（本地+服务端拉取）
-    reloadAfterPull(() => { try { setRecords(JSON.parse(localStorage.getItem(storageKey) || '[]')); } catch { /* ignore */ } });
+    // 查询时顺带从服务端刷新权威数据（失败回落离线缓存）
+    void refresh();
     setAppliedSearch({ ...searchFields });
-  }, [searchFields, storageKey]);
+  }, [searchFields, refresh]);
   const handleReset = useCallback(() => {
     const empty = { moldCode: '', moldName: '', spec: '', status: '', creator: '' };
     setSearchFields(empty); setAppliedSearch(empty);
@@ -180,15 +188,6 @@ const MoldPage: React.FC = () => {
     void compressImageFile(file).then(url => setMoldImages(prev => [...prev, url])).catch(() => message.error('图片处理失败'));
   };
 
-  const save = (list: MoldRecord[]) => {
-    setRecords(list);
-    safeSetItem(storageKey, JSON.stringify(list));
-  };
-
-  const reload = () => {
-    try { setRecords(JSON.parse(localStorage.getItem(storageKey) || '[]')); } catch { /* ignore */ }
-  };
-
   const openAdd = () => {
     setEditing(null);
     form.setFieldsValue({ ...emptyRecord(), creator: getDisplayName() });
@@ -206,26 +205,74 @@ const MoldPage: React.FC = () => {
   };
 
   const handleSave = () => {
-    form.validateFields().then(v => {
+    form.validateFields().then(async v => {
       const today = new Date().toISOString().slice(0, 10);
       const totalQuantity = moldSpecs.reduce((sum, s) => sum + (Number(s.quantity) || 0), 0);
       const specStr = moldSpecs.filter(s => s.specName).map(s => s.specName).join('、');
       if (editing) {
         const rec = { ...editing, ...v, spec: specStr || v.spec, images: moldImages, specs: moldSpecs, totalQuantity };
-        save(records.map(r => r.key === editing.key ? rec : r));
+        const list = await updateMold(owner, rec);
+        if (!list) { message.error('保存失败：无法连接服务器，请检查网络后重试'); return; }
+        setRecords(list);
         message.success('模具信息已更新');
       } else {
         const rec: MoldRecord = { key: genKey('ML'), ...v, spec: specStr || v.spec, images: moldImages, specs: moldSpecs, totalQuantity, createdAt: today };
-        save([rec, ...records]);
+        const list = await createMold(owner, rec);
+        if (!list) { message.error('新增失败：无法连接服务器，请检查网络后重试'); return; }
+        setRecords(list);
         message.success('模具已新增');
       }
       setVisible(false);
     });
   };
 
-  const handleDelete = (key: string) => {
-    save(records.filter(r => r.key !== key));
+  const handleDelete = async (key: string) => {
+    const list = await deleteMoldByKey(owner, key);
+    if (!list) { message.error('删除失败：无法连接服务器，请检查网络后重试'); return; }
+    setRecords(list);
     message.success('已删除');
+  };
+
+  const importInputRef = useRef<HTMLInputElement>(null);
+
+  // 导入 Excel/CSV：按列名映射（兼容别名），编号已存在/文件内重复/编号名称皆空逐行跳过
+  const handleImportFile = async (file: File) => {
+    try {
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: 'array' });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows: any[] = ws ? XLSX.utils.sheet_to_json(ws, { defval: '' }) : [];
+      if (!rows.length) { message.warning('文件中没有数据行'); return; }
+      const pick = (r: any, names: string[]) => {
+        for (const n of names) { if (r[n] !== undefined && String(r[n]).trim() !== '') return String(r[n]).trim(); }
+        return '';
+      };
+      const seen = new Set<string>();
+      const skipReasons: string[] = [];
+      const fresh: MoldRecord[] = [];
+      rows.forEach((r, i) => {
+        const moldCode = pick(r, ['模具编号', '编号', 'moldCode']);
+        const moldName = pick(r, ['模具名称', '名称', 'moldName']);
+        const spec = pick(r, ['规格型号', '规格', 'spec']);
+        const qtyRaw = pick(r, ['模具数量', '数量', 'totalQuantity']);
+        const status = pick(r, ['状态', 'status']) || '在用';
+        const remark = pick(r, ['备注', 'remark']);
+        const creator = pick(r, ['创建人', 'creator']) || getDisplayName();
+        const createdAt = pick(r, ['创建时间', 'createdAt']) || new Date().toISOString().slice(0, 10);
+        if (!moldCode && !moldName) { skipReasons.push(`第${i + 2}行：编号与名称均为空，已跳过`); return; }
+        if (moldCode && records.some(x => x.moldCode === moldCode)) { skipReasons.push(`第${i + 2}行（${moldCode}）：编号已存在，已跳过`); return; }
+        if (moldCode && seen.has(moldCode)) { skipReasons.push(`第${i + 2}行（${moldCode}）：文件内重复，已跳过`); return; }
+        if (moldCode) seen.add(moldCode);
+        fresh.push({ key: genKey('ML'), moldCode, moldName, spec, status, remark, creator, createdAt, images: [], totalQuantity: Number(qtyRaw) || 0 });
+      });
+      if (!fresh.length) { Modal.warning({ title: '导入跳过', content: skipReasons.join('\n') || '无有效数据行' }); return; }
+      const res = await importMolds(owner, fresh);
+      if (!res) { message.error('导入失败：无法连接服务器，请检查网络后重试'); return; }
+      setRecords(res.list);
+      message.success(`已导入 ${res.imported} 条模具`);
+      const allSkips = [...skipReasons, ...res.skipReasons];
+      if (allSkips.length) Modal.warning({ title: '部分行已跳过', content: allSkips.join('\n') });
+    } catch { message.error('文件解析失败，请使用 Excel/CSV 格式'); }
   };
 
   const handleExport = () => {
@@ -322,10 +369,19 @@ const MoldPage: React.FC = () => {
         </div>
       </div>
 
+      {moldOffline && (
+        <Alert type="warning" showIcon message="当前为离线缓存"
+          description="无法连接服务器，当前展示本地缓存数据；网络恢复后刷新将自动回到服务端权威数据。"
+          style={{ marginBottom: 12 }} />
+      )}
+
       <Space wrap style={{ marginBottom: 12 }}>
         <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>新增模具</Button>
+        <Button icon={<ImportOutlined />} onClick={() => importInputRef.current?.click()}>导入</Button>
+        <input ref={importInputRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }}
+          onChange={e => { const f = e.target.files?.[0]; if (f) void handleImportFile(f); e.target.value = ''; }} />
         <Button icon={<SettingOutlined />} onClick={() => setFieldCfgVisible(true)}>显示字段</Button>
-        <Button icon={<ReloadOutlined />} onClick={reload}>刷新</Button>
+        <Button icon={<ReloadOutlined />} onClick={() => void refresh()}>刷新</Button>
         <Button onClick={handleExport}>导出CSV</Button>
       </Space>
 

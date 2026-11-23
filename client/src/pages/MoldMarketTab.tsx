@@ -9,7 +9,9 @@ import {
 import { compressImageFile } from '../utils/imageCompress';
 import { attachImageToRecord, prepareImageFile, resolveImageValue, uploadImage } from '../utils/imageSpace';
 import { safeSetItem } from '../utils/storageQuota';
-import { flushDatasetUpload, reloadAfterPull } from '../utils/serverSync';
+import { flushDatasetUpload } from '../utils/serverSync';
+import { loadMolds } from '../utils/moldApi';
+import { reconcileServerFirst } from '../utils/serverFirstDataset';
 import { computeSubjectFeatures, subjectSimilarity } from '../utils/imageSimilarity';
 import { triggerOpenChat } from '../utils/chatSocket';
 import { copyText } from '../utils/clipboard';
@@ -288,15 +290,35 @@ const MoldMarketTab: React.FC<{ onContact?: (username: string, subject: string) 
     try { return JSON.parse(localStorage.getItem(cartKey) || '[]'); } catch { return []; }
   });
 
-  // 加载模具列表
-  const [molds, setMolds] = useState<MoldRecord[]>(() => {
-    try { return JSON.parse(localStorage.getItem(`molds_${owner}`) || '[]'); } catch { return []; }
-  });
+  // 加载模具列表（服务端真表为权威源，挂载时服务端优先加载）
+  const [molds, setMolds] = useState<MoldRecord[]>([]);
+  useEffect(() => {
+    let alive = true;
+    void loadMolds(owner).then(r => { if (alive) setMolds(r.records); });
+    return () => { alive = false; };
+  }, [owner]);
 
-  // 监听同步更新事件，确保跨浏览器数据实时刷新
+  // 市场列表服务端为主对账：挂载时裁决服务端与本机，采纳服务端副本；离线时提示本地缓存
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const res = await reconcileServerFirst(STORAGE_KEY());
+      if (!alive) return;
+      if (res.status === 'offline') {
+        message.warning('无法连接服务器：模具租/售市场当前展示本地缓存数据，网络恢复后刷新将自动回到服务端权威数据');
+        return;
+      }
+      if (res.status === 'server') {
+        try { const raw: MoldListing[] = JSON.parse(res.json); setListings(raw.map(resolveImageKeys)); } catch { /* ignore */ }
+      }
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  // 监听同步更新事件，确保跨浏览器数据实时刷新（市场列表仍走本地全局键）
   useEffect(() => {
     const handler = () => {
-      try { setMolds(JSON.parse(localStorage.getItem(`molds_${owner}`) || '[]')); } catch { /* ignore */ }
+      void loadMolds(owner).then(r => setMolds(r.records));
       try {
         const raw: MoldListing[] = JSON.parse(localStorage.getItem(STORAGE_KEY()) || '[]');
         setListings(raw.map(resolveImageKeys));
@@ -306,10 +328,10 @@ const MoldMarketTab: React.FC<{ onContact?: (username: string, subject: string) 
     return () => window.removeEventListener('sync-data-updated', handler);
   }, [owner]);
 
-  // 每次打开弹窗时重新加载
+  // 每次打开弹窗时重新加载（服务端优先）
   useEffect(() => {
     if (pickerVisible) {
-      try { setMolds(JSON.parse(localStorage.getItem(`molds_${owner}`) || '[]')); } catch { /* ignore */ }
+      void loadMolds(owner).then(r => setMolds(r.records));
     }
   }, [pickerVisible, owner]);
 
@@ -759,12 +781,9 @@ const MoldMarketTab: React.FC<{ onContact?: (username: string, subject: string) 
             </Tooltip>
           )}
           <Button type="primary" icon={<SearchOutlined />} onClick={() => {
-                        // 查询时自动刷新表单数据（本地+服务端拉取）
-                        const rl = () => {
-                          try { setMolds(JSON.parse(localStorage.getItem(`molds_${owner}`) || '[]')); } catch { /* ignore */ }
-                          try { const raw: MoldListing[] = JSON.parse(localStorage.getItem(STORAGE_KEY()) || '[]'); setListings(raw.map(resolveImageKeys)); } catch { /* ignore */ }
-                        };
-                        reloadAfterPull(rl);
+                        // 查询时顺带刷新权威数据（模具走服务端，市场列表读本地缓存）
+                        void loadMolds(owner).then(r => setMolds(r.records));
+                        try { const raw: MoldListing[] = JSON.parse(localStorage.getItem(STORAGE_KEY()) || '[]'); setListings(raw.map(resolveImageKeys)); } catch { /* ignore */ }
                         setAppliedSearch(searchInput);
                       }}>查询</Button>
           <Button icon={<ReloadOutlined />} onClick={() => { setSearchInput(''); setAppliedSearch(''); setModeFilter(''); setImageSearchUrl(''); }}>重置</Button>

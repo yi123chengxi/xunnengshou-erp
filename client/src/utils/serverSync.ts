@@ -24,8 +24,8 @@ export { declareShrink } from './shrinkRegistry';
 // 注意：customer_pay_summary_/supplier_pay_summary_ 为本地派生快照（由订单/账单/台账重算），禁止跨端同步——
 // 否则任一端在源数据未拉全时算出 0 快照上传，会经 pull 宽限期覆盖其他端的正确快照，表现为采购总额跳动/归 0
 const SYNC_PREFIXES = [
-  // ==== 原有业务数据 ====
-  'pageData_', 'custom_', 'warehouses_', 'purchaser_suppliers_', 'boundPurchasers_', 'accounts_', 'shop_info_', 'shop_profit_', 'month_end_check_', 'withdrawal_record_', 'dev_', 'hr_', 'newstyle_', 'brandauth_', 'molds_', 'credit_adjustments_', 'published_credit_', 'payment_requests_', 'payment_request_managers_', 'notification_settings_', 'print_template_', 'price_strategy_', 'user_notice_', 'invoice_record_', 'invoice_apply_requests_', 'purchaser_bills_', 'recon_db_', 'roles_', 'preset_role_overrides_', 'role_permsettings_', 'user_perm_overrides_', 'customers_', 'supplier_payments_', 'customerReceipts_', 'inventory_check_', 'inventory_outbound_', 'purchase_receiving_', 'stock_change_log_', 'sales_outbound_',
+  // ==== 原有业务数据 ====（molds_ 已迁服务端权威真表 /api/molds/*，退出全局键同步，本地仅 IndexedDB 只读缓存）
+  'pageData_', 'custom_', 'warehouses_', 'purchaser_suppliers_', 'boundPurchasers_', 'accounts_', 'shop_info_', 'shop_profit_', 'month_end_check_', 'withdrawal_record_', 'dev_', 'hr_', 'newstyle_', 'brandauth_', 'credit_adjustments_', 'published_credit_', 'payment_requests_', 'payment_request_managers_', 'notification_settings_', 'print_template_', 'price_strategy_', 'user_notice_', 'invoice_record_', 'invoice_apply_requests_', 'purchaser_bills_', 'recon_db_', 'roles_', 'preset_role_overrides_', 'role_permsettings_', 'user_perm_overrides_', 'customers_', 'supplier_payments_', 'customerReceipts_', 'inventory_check_', 'inventory_outbound_', 'purchase_receiving_', 'stock_change_log_', 'sales_outbound_',
   // ==== 财务/账务（此前仅存本机，换电脑即丢）====
   'reimbursement_',            // 报销单 + 报销付款 + 报销负责人（三者同前缀）
   'receiving_accounts_',       // 报销/日常记账-本人垫付收款账户库（键后缀为登录账号，子账号各自独立）

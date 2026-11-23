@@ -249,6 +249,11 @@ export const imageUrlMapKey = (owner: string): string => `prodImgUrl_${owner}`;
 // 每次 JSON.parse 整张表会随商品数线性变慢，这里按账号缓存解析结果
 const memUrlMaps = new Map<string, Record<string, string>>();
 
+/** 服务端副本被采纳后失效内存解析缓存，下次读取回源新副本 */
+export function invalidateImageUrlMap(owner: string): void {
+  memUrlMaps.delete(owner);
+}
+
 function readLocalUrlMap(owner: string): Record<string, string> | null {
   try {
     const raw = localStorage.getItem(imageUrlMapKey(owner));

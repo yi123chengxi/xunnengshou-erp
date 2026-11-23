@@ -155,6 +155,16 @@ db.exec(`
     updated_at INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (publisher, viewer)
   );
+
+  -- 模具管理权威真表：每条模具一行（替代 molds_ 全局 JSON 同步键，写路径只改目标行，
+  -- 杜绝整键替换/陈旧副本互相覆盖导致的模具记录跨设备丢失）
+  CREATE TABLE IF NOT EXISTS molds (
+    owner TEXT NOT NULL,
+    mold_key TEXT NOT NULL,
+    record_json TEXT NOT NULL,
+    updated_at INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (owner, mold_key)
+  );
 `);
 
 // 兼容旧库：企业认证表增量列（法人身份证号 / 最近刷脸 CertifyId / 最近变更认证时间）
@@ -360,5 +370,13 @@ export const stmtMarketInvAdd: Statement = db.prepare(`
   INSERT INTO market_inv_sync (publisher, viewer, updated_at) VALUES (?, ?, ?)
   ON CONFLICT(publisher, viewer) DO UPDATE SET updated_at = excluded.updated_at
 `);
+
+// ============ 模具管理权威真表（molds） ============
+export const stmtMoldList: Statement = db.prepare('SELECT owner, mold_key, record_json, updated_at FROM molds WHERE owner = ? ORDER BY updated_at ASC');
+export const stmtMoldUpsert: Statement = db.prepare(`
+  INSERT INTO molds (owner, mold_key, record_json, updated_at) VALUES (?, ?, ?, ?)
+  ON CONFLICT(owner, mold_key) DO UPDATE SET record_json = excluded.record_json, updated_at = excluded.updated_at
+`);
+export const stmtMoldDelete: Statement = db.prepare('DELETE FROM molds WHERE owner = ? AND mold_key = ?');
 
 export default db;

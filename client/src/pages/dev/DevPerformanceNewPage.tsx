@@ -48,6 +48,12 @@ const BIND_TO_SCORE_KEY: Record<string, string> = {
 };
 
 const DEFAULT_RANKS: RankItem[] = [];
+// 系统预设职级（内置参考值）：从未配置过职级的租户自动种入，也可通过「系统预设」按钮手动载入参考
+const PRESET_RANKS: RankItem[] = [
+  { id: 'preset_p1', rank: 1, name: '实习运营', baseSalary: 3500, targetValue: 3000, targetBindKey: 'salesQty', commissionRate: 0.03, performanceSalary: 500 },
+  { id: 'preset_p2', rank: 2, name: '初级运营', baseSalary: 3600, targetValue: 3000, targetBindKey: 'salesQty', commissionRate: 0.02, performanceSalary: 500 },
+  { id: 'preset_p3', rank: 3, name: '入门运营', baseSalary: 3800, targetValue: 3000, targetBindKey: 'salesQty', commissionRate: 0.02, performanceSalary: 500 },
+];
 const RANK_COLORS = ['#1d4ed8', '#047857', '#b45309', '#6d28d9', '#be185d', '#0e7490', '#c2410c', '#4d7c0f'];
 const RANK_BG_COLORS = ['#eff6ff', '#ecfdf5', '#fffbeb', '#faf5ff', '#fdf2f8', '#ecfeff', '#fff7ed', '#f7fee7'];
 const DEFAULT_COLUMNS = ['sales-amount', 'sales-qty', 'profit', 'listing-qty'];
@@ -221,8 +227,10 @@ const DevPerformanceNewPage: React.FC<{ platform?: AnalyticsPlatform }> = ({ pla
 
   const load = useCallback(() => {
     let loadedRanks: RankItem[] = [];
-    try { const parsed = JSON.parse(localStorage.getItem(RANK_KEY) || ''); if (Array.isArray(parsed)) loadedRanks = parsed; } catch { /* */ }
+    const rankStored = localStorage.getItem(RANK_KEY);
+    try { const parsed = JSON.parse(rankStored || ''); if (Array.isArray(parsed)) loadedRanks = parsed; } catch { /* */ }
     if (loadedRanks.length) setRanks(loadedRanks);
+    else if (rankStored === null) { setRanks(PRESET_RANKS); localStorage.setItem(RANK_KEY, JSON.stringify(PRESET_RANKS)); }
     try {
       const saved = JSON.parse(localStorage.getItem(SCORE_KEY) || '');
       if (saved && Array.isArray(saved.rows)) {
@@ -488,11 +496,21 @@ const DevPerformanceNewPage: React.FC<{ platform?: AnalyticsPlatform }> = ({ pla
         <div style={{ marginBottom: 16 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
             <span style={{ fontWeight: 700 }}>职级设置</span>
-            <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => {
-              setEditIdx(null);
-              setRankForm({ rank: String(ranks.length ? Math.max(...ranks.map(r => r.rank)) + 1 : 1), name: '', baseSalary: '', targetValue: '', targetBindKey: '', commissionRate: '', performanceSalary: '' });
-              setRankModal(true);
-            }}>新增职级</Button>
+            <Space size={8}>
+              <Tooltip title="载入系统预设职级（P1 实习运营 / P2 初级运营 / P3 入门运营）供参考，已存在同名职级时跳过">
+                <Button size="small" icon={<SaveOutlined />} onClick={() => {
+                  const missing = PRESET_RANKS.filter(p => !ranks.some(r => r.name === p.name));
+                  if (!missing.length) { message.info('系统预设职级已存在'); return; }
+                  saveRanks([...ranks, ...missing]);
+                  message.success(`已载入 ${missing.length} 个系统预设职级供参考`);
+                }}>系统预设</Button>
+              </Tooltip>
+              <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => {
+                setEditIdx(null);
+                setRankForm({ rank: String(ranks.length ? Math.max(...ranks.map(r => r.rank)) + 1 : 1), name: '', baseSalary: '', targetValue: '', targetBindKey: '', commissionRate: '', performanceSalary: '' });
+                setRankModal(true);
+              }}>新增职级</Button>
+            </Space>
           </div>
           <Table rowKey="id" size="small" bordered pagination={false} dataSource={ranks}
             columns={[
@@ -503,7 +521,7 @@ const DevPerformanceNewPage: React.FC<{ platform?: AnalyticsPlatform }> = ({ pla
                 const bindLabel = COMMISSION_TYPE_OPTIONS.find(o => o.key === r.targetBindKey)?.label;
                 return <span>¥{v.toLocaleString()}{bindLabel ? <Tag color="blue" style={{ marginLeft: 4 }}>绑定{bindLabel}</Tag> : null}</span>;
               }},
-              { title: tip('提成系数', '功能说明：手动配置，用于工资表中提成金额的计算'), dataIndex: 'commissionRate', width: 100, align: 'center', render: (v: number) => `${(v * 100).toFixed(0)}%` },
+              { title: tip('提成系数', '功能说明：手动配置，用于工资表中提成金额的计算'), dataIndex: 'commissionRate', width: 100, align: 'center', render: (v: number) => `${(v * 100).toFixed(2)}%` },
               { title: tip('绩效工资', '功能说明：手动配置，该职级的绩效工资基数'), dataIndex: 'performanceSalary', width: 110, align: 'center', render: (v: number) => `¥${v}` },
               {
                 title: tip('操作', '功能说明：编辑或删除当前职级配置'), key: 'op', width: 110, align: 'center',
@@ -703,7 +721,7 @@ const DevPerformanceNewPage: React.FC<{ platform?: AnalyticsPlatform }> = ({ pla
                         </div>
                       </td>
                       <td style={{ padding: 6, border: '1px solid #f0f0f0', textAlign: 'right' }}>{cal.commItem}</td>
-                      <td style={{ padding: 6, border: '1px solid #f0f0f0', textAlign: 'center' }}>{(cal.commRate * 100).toFixed(0)}%</td>
+                      <td style={{ padding: 6, border: '1px solid #f0f0f0', textAlign: 'center' }}>{(cal.commRate * 100).toFixed(2)}%</td>
                       <td style={{ padding: 6, border: '1px solid #f0f0f0', textAlign: 'right' }}>¥{cal.commissionAmount.toFixed(2)}</td>
                       <td style={{ padding: 4, border: '1px solid #f0f0f0' }}><InputNumber size="small" style={{ width: 80 }} disabled={!salaryEditing} value={extra.otherDeduction} onChange={v => updateSalaryExtra(s.id, 'otherDeduction', Number(v) || 0)} /></td>
                       <td style={{ padding: 4, border: '1px solid #f0f0f0' }}><InputNumber size="small" style={{ width: 80 }} disabled={!salaryEditing} value={extra.otherAllowance} onChange={v => updateSalaryExtra(s.id, 'otherAllowance', Number(v) || 0)} /></td>
@@ -734,7 +752,7 @@ const DevPerformanceNewPage: React.FC<{ platform?: AnalyticsPlatform }> = ({ pla
             </Form.Item>
           </Space>
           <Space style={{ display: 'flex' }} size={12} wrap>
-            <Form.Item label="提成系数" style={{ width: 120 }}><InputNumber style={{ width: '100%' }} step={1} min={0} max={1000} addonAfter="%" value={Number(rankForm.commissionRate) * 100 || null} onChange={v => setRankForm(f => ({ ...f, commissionRate: String((Number(v) || 0) / 100) }))} /></Form.Item>
+            <Form.Item label="提成系数" style={{ width: 120 }}><InputNumber style={{ width: '100%' }} step={0.01} min={0} max={1000} addonAfter="%" value={Math.round(Number(rankForm.commissionRate) * 10000) / 100 || null} onChange={v => setRankForm(f => ({ ...f, commissionRate: String((Number(v) || 0) / 100) }))} /></Form.Item>
             <Form.Item label="绩效工资" style={{ width: 120 }}><InputNumber style={{ width: '100%' }} value={Number(rankForm.performanceSalary) || null} onChange={v => setRankForm(f => ({ ...f, performanceSalary: String(v ?? '') }))} /></Form.Item>
           </Space>
           <div style={{ fontSize: 12, color: '#888', marginTop: -8, marginBottom: 8 }}>

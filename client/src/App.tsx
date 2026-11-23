@@ -1,7 +1,8 @@
 import React from 'react';
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
-import { Skeleton } from 'antd';
+import { Skeleton, message } from 'antd';
 import { pullAllDatasets, pullPermDatasets, isPermSyncKey, isTodoNotifyKey } from './utils/serverSync';
+import { reconcileAllLocalDatasets } from './utils/serverFirstDataset';
 import { syncOwnerFromToken } from './utils/dataOwner';
 import { startNewVersionWatch } from './utils/newVersionWatch';
 import { PRESET_PRINT_TEMPLATES, seedPresetPrintTemplates } from './config/presetPrintTemplates';
@@ -108,6 +109,7 @@ const SyncGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [ready, setReady] = React.useState(false);
   const location = useLocation();
   const startedRef = React.useRef(false);
+  const sweepStartedRef = React.useRef(false);
   const intervalRef = React.useRef<any>(null);
 
   const gatedPull = React.useCallback(() => {
@@ -135,6 +137,18 @@ const SyncGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
       if (!startedRef.current) { startedRef.current = true; gatedPull(); }
       if (!intervalRef.current) {
         intervalRef.current = setInterval(() => { void pullAllDatasets(); }, 60000); // 60秒轮询，降低竞争
+      }
+      // 服务端为主全键对账：登录拉取完成后的空闲期对本机全部同步键逐个与服务端裁决，
+      // 采纳服务端副本并广播重载使已挂载页面收敛；离线时全局提示一次（每会话仅扫一轮）
+      if (!sweepStartedRef.current) {
+        sweepStartedRef.current = true;
+        setTimeout(() => {
+          void reconcileAllLocalDatasets(() => {
+            message.warning('无法连接服务器：各页面当前展示本地缓存数据，网络恢复后将自动回到服务端权威数据');
+          }).then(n => {
+            if (n > 0) { try { window.dispatchEvent(new Event('sync-data-updated')); } catch { /* ignore */ } }
+          }).catch(() => { /* 对账失败保持本机副本 */ });
+        }, 4000);
       }
       // 登录后初始化聊天 WebSocket
       connectChatWS();
