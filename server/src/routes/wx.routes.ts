@@ -2,7 +2,6 @@ import { Router, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import dotenv from 'dotenv';
 import { store } from '../database/store';
-import { filterLedgerRows } from '../services/deleteLedger';
 import { listMolds } from '../database/mold-store';
 import { verifyJWT, verifyCredentials, issueToken, JWTPayload } from './auth.routes';
 import { getJwtSecret } from '../utils/jwtSecret';
@@ -39,9 +38,7 @@ async function readRows(key: string): Promise<any[]> {
     const row = await store.getDataset(key);
     if (!row) return [];
     const parsed = JSON.parse(row.dataset_json || '[]');
-    const rows = Array.isArray(parsed) ? parsed : [];
-    // 永不缩水键跨端删除收敛：按服务端删除账本过滤已删行（主账号删除后小程序不再看到幽灵行）
-    return await filterLedgerRows(key, rows);
+    return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
   }
