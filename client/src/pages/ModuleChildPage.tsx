@@ -6,7 +6,7 @@ import {
   DatePicker, Select, Input, Tag, Tooltip, Empty, Alert, Breadcrumb,
   Modal, Form, message, Dropdown, Popconfirm, Descriptions, Drawer,
   Popover, Checkbox, Badge, Divider, Upload, Steps, Image, Tabs,
-  InputNumber, Collapse, Radio, Progress, AutoComplete, ConfigProvider, Pagination, Switch,
+  InputNumber, Collapse, Radio, Progress, AutoComplete, ConfigProvider, Pagination, Switch, Spin,
 } from 'antd';
 import type { MenuProps } from 'antd';
 import dayjs from 'dayjs';
@@ -109,7 +109,7 @@ import PendingProductionStatsPage from './production/PendingProductionStatsPage'
 import { safeSetItem, canCacheDataset, tryCacheDataset, invalidateDatasetCache } from '../utils/storageQuota';
 import { getDataOwner } from '../utils/brandAuth';
 import { getSessionOwner, mergeStrandedTenantDataset } from '../utils/dataOwner';
-import { saveDataset, loadDataset, readFreshDataset, setMemProductList } from '../utils/dataStore';
+import { saveDataset, loadDataset, readFreshDataset, setMemProductList, loadProductListLatest } from '../utils/dataStore';
 import { pushMarketRecords, deleteMarketRecords, fetchMarketListings, writeMarketCache } from '../utils/marketApi';
 import { commitProductList, reconcileProductListWithServer, buildStoredProductListJson } from '../utils/productListSync';
 import ReturnRegisterModal from '../components/ReturnRegisterModal';
@@ -1209,6 +1209,10 @@ const ModuleChildPage: React.FC = () => {
   const [productSelectAnchor, setProductSelectAnchor] = useState<number | null>(null);
   const [productSelectPage, setProductSelectPage] = useState(1);
   const [productSelectPageSize, setProductSelectPageSize] = useState(() => Number(localStorage.getItem(`productSelectPageSize_${localStorage.getItem('username') || 'admin'}`)) || 10);
+  // 选择产品弹窗数据源：打开时当场加载（localStorage 只是尽力缓存，大表可能被预算淘汰，
+  // 直读会首开空列表），加载结果入 state 供渲染/确认共用
+  const [psProducts, setPsProducts] = useState<Record<string, any>[]>([]);
+  const [psLoading, setPsLoading] = useState(false);
   // 选择产品弹窗：应用按字段搜索（「查询」按钮与各输入框回车共用）
   const applyPsSearch = useCallback(() => {
     setPsAppliedCode(psSearchCode); setPsAppliedName(psSearchName); setPsAppliedStyle(psSearchStyle);
@@ -9703,8 +9707,27 @@ const ModuleChildPage: React.FC = () => {
     }
   }, [editForm, pageConfig, readOrderLatest]);
 
-  // 选择产品弹窗：打开时重置到第1页
-  useEffect(() => { if (productSelectVisible) setProductSelectPage(1); }, [productSelectVisible]);
+  // 选择产品弹窗：打开时重置到第1页，并当场加载商品列表
+  // （localStorage/IndexedDB 按时间戳取较新者；本地全空时回退服务端对账采纳，避免首开空列表）
+  useEffect(() => {
+    if (!productSelectVisible) return;
+    setProductSelectPage(1);
+    let cancelled = false;
+    (async () => {
+      const owner = getDataOwner();
+      setPsLoading(true);
+      try {
+        let list = await loadProductListLatest(owner);
+        if ((!list || list.length === 0) && (await serverAvailable())) {
+          const res = await reconcileProductListWithServer(owner);
+          if (res.status === 'server' && Array.isArray(res.list)) list = res.list;
+        }
+        if (!cancelled) setPsProducts(Array.isArray(list) ? list : []);
+      } catch { /* 加载失败保持空列表，下次打开重试 */ }
+      if (!cancelled) setPsLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, [productSelectVisible, getDataOwner]);
 
   // 订单管理编辑窗口：货品总额默认填充应付总金额（商品总成交金额+运费），用户手动修改后不再自动覆盖
   useEffect(() => {
@@ -23324,8 +23347,7 @@ tr:nth-child(even) { background: #f5f9ff; }
           <Button key="cancel" onClick={() => setProductSelectVisible(false)}>取消</Button>,
           <Button key="confirm" type="primary" onClick={() => {
             const owner = getDataOwner();
-            let allProducts: Record<string, any>[] = [];
-            try { allProducts = JSON.parse(localStorage.getItem(`pageData_basic-data_product-list_${owner}`) || '[]'); } catch {}
+            const allProducts = psProducts;
             const selected = allProducts.filter(p => productSelectKeys.includes(p.key));
             if (selected.length === 0) { message.warning('请选择至少一个产品'); return; }
             // 采购价策略：订单新增/编辑/换货加商品时，命中策略则单价取策略价（basePrice 仍为基础售价供优惠折算，手动改价可覆盖）
@@ -23432,8 +23454,7 @@ tr:nth-child(even) { background: #f5f9ff; }
           {productSelectTarget === 'exchange' && exchangeItemIdx !== null && (() => {
             const oldItem = orderEditItems[exchangeItemIdx];
             if (!oldItem) return null;
-            let allProds: any[] = [];
-            try { allProds = JSON.parse(localStorage.getItem(`pageData_basic-data_product-list_${getDataOwner()}`) || '[]'); } catch {}
+            const allProds = psProducts;
             const oldProd = allProds.find((p: any) => p.productCode === oldItem.productCode);
             return (
               <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 12, padding: '4px 12px', background: '#fff7e6', border: '1px solid #ffd591', borderRadius: 6, fontSize: 12 }}>
@@ -23460,9 +23481,10 @@ tr:nth-child(even) { background: #f5f9ff; }
         </div>
         {/* 产品列表（分页，默认每页10行，每页行数可调并自动记住） */}
         {(() => {
-            const owner = getDataOwner();
-            let products: Record<string, any>[] = [];
-            try { products = JSON.parse(localStorage.getItem(`pageData_basic-data_product-list_${owner}`) || '[]'); } catch {}
+            if (psLoading) {
+              return <div style={{ textAlign: 'center', padding: 40 }}><Spin /></div>;
+            }
+            const products = psProducts;
             const filtered = products
               .filter(p => p.productType === productSelectType)
               .filter(p => {

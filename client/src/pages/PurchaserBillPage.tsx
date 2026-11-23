@@ -2037,6 +2037,14 @@ const PurchaserBillPage: React.FC = () => {
           return (
             <Table size="small" rowKey="key" pagination={{ pageSize: 8, showTotal: (t: number) => `共 ${t} 件商品` }}
               dataSource={ownProducts}
+              onRow={(r: any) => ({
+                style: { cursor: 'pointer' },
+                onClick: (e: any) => {
+                  // 行内点击即选中/取消该行；输入框/复选框等交互控件不触发
+                  if ((e.target as HTMLElement).closest('input, button, .ant-checkbox-wrapper')) return;
+                  setAddCheckedKeys(prev => { const next = new Set(prev); if (next.has(r.key)) next.delete(r.key); else next.add(r.key); return next; });
+                },
+              })}
               rowSelection={{
                 selectedRowKeys: Array.from(addCheckedKeys),
                 onChange: (keys) => setAddCheckedKeys(new Set(keys as string[])),
@@ -2054,35 +2062,7 @@ const PurchaserBillPage: React.FC = () => {
                 { title: '颜色', dataIndex: 'color', key: 'color', width: 60 },
                 { title: '规格', dataIndex: 'spec', key: 'spec', width: 70 },
                 { title: '成本价', dataIndex: 'costPrice', key: 'costPrice', width: 80, render: (v: number) => <Text style={{ color: '#f5222d' }}>¥{Number(v || 0).toFixed(2)}</Text> },
-                { title: '操作', key: 'op', width: 70, render: (_: any, r: any) => (
-                  <Button type="primary" size="small" onClick={() => {
-                    const qty = Number(addQtyMap[r.key]) || 1;
-                    const newItem: BillItem = { styleCode: r.styleCode || '', productCode: r.productCode || '', color: r.color || '', spec: r.spec || '', quantity: qty, unitPrice: Number(r.costPrice) || Number(r.basePrice) || 0, amount: 0, productType: '成品', unit: String((r && r.unit) || '') };
-                    newItem.amount = Math.round(newItem.quantity * newItem.unitPrice * 100) / 100;
-                    const currentItems = (addProductTarget === 'create' ? items : eItems).filter(hasData);
-                    const { merged, dupCodes } = mergeWithDuplicateInfo([...currentItems, newItem]);
-                    if (addProductTarget === 'create') setItems([...merged, ...emptyRows().slice(0, Math.max(0, 5 - merged.length))]);
-                    else setEItems([...merged, ...emptyRows().slice(0, Math.max(0, 5 - merged.length))]);
-                    setAddProductVisible(false);
-                    if (dupCodes.length > 0) {
-                      Modal.warning({
-                        title: '已存在相同商品编码，已汇总显示',
-                        centered: true,
-                        width: 420,
-                        content: (
-                          <div style={{ minHeight: 80, paddingTop: 8 }}>
-                            <div style={{ marginBottom: 8, color: '#888' }}>以下商品编码已自动合并数量：</div>
-                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                              {dupCodes.map(c => <Tag key={c} color="red">{c}</Tag>)}
-                            </div>
-                          </div>
-                        ),
-                        okText: '知道了',
-                      });
-                      flashHighlight(dupCodes);
-                    } else { message.success(`已添加 ${r.name || r.productCode}`); }
-                  }}>添加</Button>
-                ) },
+                { title: '供应商', dataIndex: 'supplierName', key: 'supplier', width: 100, render: (v: string) => v || '-' },
               ] as any} />
           );
         })()}
@@ -2093,6 +2073,14 @@ const PurchaserBillPage: React.FC = () => {
           return (
             <Table size="small" rowKey="key" pagination={{ pageSize: 8, showTotal: (t: number) => `共 ${t} 件商品` }}
               dataSource={rawProducts}
+              onRow={(r: any) => ({
+                style: { cursor: 'pointer' },
+                onClick: (e: any) => {
+                  // 行内点击即选中/取消该行；输入框/复选框等交互控件不触发
+                  if ((e.target as HTMLElement).closest('input, button, .ant-checkbox-wrapper')) return;
+                  setAddCheckedKeys(prev => { const next = new Set(prev); if (next.has(r.key)) next.delete(r.key); else next.add(r.key); return next; });
+                },
+              })}
               rowSelection={{
                 selectedRowKeys: Array.from(addCheckedKeys),
                 onChange: (keys) => setAddCheckedKeys(new Set(keys as string[])),
@@ -2110,35 +2098,7 @@ const PurchaserBillPage: React.FC = () => {
                 { title: '颜色', dataIndex: 'color', key: 'color', width: 60 },
                 { title: '规格', dataIndex: 'spec', key: 'spec', width: 70 },
                 { title: '成本价', dataIndex: 'costPrice', key: 'costPrice', width: 80, render: (v: number) => <Text style={{ color: '#f5222d' }}>¥{Number(v || 0).toFixed(2)}</Text> },
-                { title: '操作', key: 'op', width: 70, render: (_: any, r: any) => (
-                  <Button type="primary" size="small" onClick={() => {
-                    const qty = Number(addQtyMap[r.key]) || 1;
-                    const newItem: BillItem = { styleCode: r.styleCode || '', productCode: r.productCode || '', color: r.color || '', spec: r.spec || '', quantity: qty, unitPrice: Number(r.costPrice) || Number(r.basePrice) || 0, amount: 0, productType: '原材料', unit: String((r && r.unit) || '') };
-                    newItem.amount = Math.round(newItem.quantity * newItem.unitPrice * 100) / 100;
-                    const currentItems = (addProductTarget === 'create' ? items : eItems).filter(hasData);
-                    const { merged, dupCodes } = mergeWithDuplicateInfo([...currentItems, newItem]);
-                    if (addProductTarget === 'create') setItems([...merged, ...emptyRows().slice(0, Math.max(0, 5 - merged.length))]);
-                    else setEItems([...merged, ...emptyRows().slice(0, Math.max(0, 5 - merged.length))]);
-                    setAddProductVisible(false);
-                    if (dupCodes.length > 0) {
-                      Modal.warning({
-                        title: '已存在相同商品编码，已汇总显示',
-                        centered: true,
-                        width: 420,
-                        content: (
-                          <div style={{ minHeight: 80, paddingTop: 8 }}>
-                            <div style={{ marginBottom: 8, color: '#888' }}>以下商品编码已自动合并数量：</div>
-                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                              {dupCodes.map(c => <Tag key={c} color="red">{c}</Tag>)}
-                            </div>
-                          </div>
-                        ),
-                        okText: '知道了',
-                      });
-                      flashHighlight(dupCodes);
-                    } else { message.success(`已添加 ${r.name || r.productCode}`); }
-                  }}>添加</Button>
-                ) },
+                { title: '供应商', dataIndex: 'supplierName', key: 'supplier', width: 100, render: (v: string) => v || '-' },
               ] as any} />
           );
         })()}
@@ -2189,6 +2149,14 @@ const PurchaserBillPage: React.FC = () => {
               </div>
               <Table size="small" rowKey="key"
                 dataSource={spFilteredData}
+                onRow={(r: any) => ({
+                  style: { cursor: 'pointer' },
+                  onClick: (e: any) => {
+                    // 行内点击即选中/取消该行；输入框/复选框等交互控件不触发
+                    if ((e.target as HTMLElement).closest('input, button, .ant-checkbox-wrapper')) return;
+                    setAddCheckedKeys(prev => { const next = new Set(prev); if (next.has(r.key)) next.delete(r.key); else next.add(r.key); return next; });
+                  },
+                })}
                 pagination={{
                   current: spPage, pageSize: spPageSize, total: spFilteredData.length,
                   showSizeChanger: true, showQuickJumper: true, pageSizeOptions: ['10', '20', '50', '100'],
@@ -2221,36 +2189,7 @@ const PurchaserBillPage: React.FC = () => {
                       const c = map[v] || { color: 'default', text: v || '-' };
                       return <Tag color={c.color}>{c.text}</Tag>;
                     } },
-                  { title: '操作', key: 'op', width: 70, render: (_: any, r: any) => (
-                    <Button type="primary" size="small" onClick={() => {
-                      const qty = Number(addQtyMap[r.key]) || 1;
-                      const price = Number(r.suggestedPrice) || 0;
-                      const newItem: BillItem = { styleCode: r.styleCode || '', productCode: r.productCode || '', color: r.color || '', spec: r.spec || '', quantity: qty, unitPrice: price, amount: 0, unit: String((r && r.unit) || '') };
-                      newItem.amount = Math.round(newItem.quantity * newItem.unitPrice * 100) / 100;
-                      const currentItems = (addProductTarget === 'create' ? items : eItems).filter(hasData);
-                      const { merged, dupCodes } = mergeWithDuplicateInfo([...currentItems, newItem]);
-                      if (addProductTarget === 'create') setItems([...merged, ...emptyRows().slice(0, Math.max(0, 5 - merged.length))]);
-                      else setEItems([...merged, ...emptyRows().slice(0, Math.max(0, 5 - merged.length))]);
-                      setAddProductVisible(false);
-                      if (dupCodes.length > 0) {
-                        Modal.warning({
-                          title: '已存在相同商品编码，已汇总显示',
-                          centered: true,
-                          width: 420,
-                          content: (
-                            <div style={{ minHeight: 80, paddingTop: 8 }}>
-                              <div style={{ marginBottom: 8, color: '#888' }}>以下商品编码已自动合并数量：</div>
-                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                                {dupCodes.map(c => <Tag key={c} color="red">{c}</Tag>)}
-                              </div>
-                            </div>
-                          ),
-                          okText: '知道了',
-                        });
-                        flashHighlight(dupCodes);
-                      } else { message.success(`已添加 ${r.productCode || r.styleCode}`); }
-                    }}>添加</Button>
-                  ) },
+                  { title: '供应商', key: 'supplier', width: 100, render: () => cs || '-' },
                 ] as any} />
             </>
           );
