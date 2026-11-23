@@ -66,6 +66,8 @@ const Workbench = () => {
       Taro.redirectTo({ url: '/pages/login/index' })
       return
     }
+    // 菜单权限首载失败（失败不入缓存）时回首页自愈重拉，避免常用宫格入口一直缺失
+    if (!perms) loadMenuPerms().then(setPerms)
     // 待办数沿用 /wx/summary；经营看板走 /wx/dashboard（服务端按网页版同口径计算并做权限裁剪）
     getSummary()
       .then(d => {

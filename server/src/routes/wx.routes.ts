@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import dotenv from 'dotenv';
 import { store } from '../database/store';
+import { listMolds } from '../database/mold-store';
 import { verifyJWT, verifyCredentials, issueToken, JWTPayload } from './auth.routes';
 import { getJwtSecret } from '../utils/jwtSecret';
 import { resolveCompanyRoot } from '../services/storageUsage';
@@ -1497,26 +1498,12 @@ router.get('/schedule-board', verifyJWT, async (req: Request, res: Response) => 
     ];
     const rows = await readRows(`pageData_production_production-schedule_${owner}`);
     const day = rows.filter((r: any) => String(r.startDate || '').slice(0, 10) === date);
-    const cells: Record<string, { total: number; items: { no: string; qty: number }[] }> = {};
-    lines.forEach(l => shifts.forEach(s => {
-      const its = day.filter((r: any) => r.line === l && r.shift === s.key);
-      cells[`${l}|${s.key}`] = {
-        total: its.reduce((sum: number, r: any) => sum + (Number(r.planQty) || 0), 0),
-        items: its.map((r: any) => ({ no: String(r.productionOrderId || r.id || ''), qty: Number(r.planQty) || 0 })),
-      };
-    }));
-    // 待产订单卡片（与 Web ScheduleBoard 左侧待排产面板同源）：PO 前缀 + 非完成/取消 + 待排>0；
-    // 模具编号按 productCode 回查商品主数据，半成品加工按 poId 聚合，款式编码 X 数量与 production 分支同聚合口径
+    // 订单/加工/商品数据先读：排期格内「款式编码×数量」需按 productionOrderId 回查订单计划明细做款式前缀聚合
     const [poRows, procRows, products] = await Promise.all([
       readRows(`pageData_production_production-order_${owner}`),
       readRows(`pageData_production_processing-order_${owner}`),
       readRows(`pageData_basic-data_product-list_${owner}`),
     ]);
-    const scheduledByPo = new Map<string, number>();
-    rows.forEach((r: any) => {
-      const k = String(r.productionOrderId || '');
-      if (k) scheduledByPo.set(k, (scheduledByPo.get(k) || 0) + (Number(r.planQty) || 0));
-    });
     const prefixOf = (code: any): string => {
       const s = String(code || '');
       const m = s.match(/^[^-]+(?:-[^-]+)*?(?=\s*-\s*[\u4e00-\u9fff])/);
@@ -1524,6 +1511,29 @@ router.get('/schedule-board', verifyJWT, async (req: Request, res: Response) => 
       const n = s.match(/^\d+/);
       return n ? n[0] : s;
     };
+    // 款式前缀按生产单聚合（与订单卡 styleQty 同源正则）：排期格内改显示「款式编码×数量」替代生产单号
+    const stylePrefixByPo = new Map<string, string>();
+    poRows.forEach((r: any) => {
+      const planItems: any[] = Array.isArray(r.planItems) ? r.planItems : [];
+      const src = planItems.length ? planItems.map((it: any) => it.productCode || it.styleCode || '') : [r.styleCode || r.productCode || ''];
+      const prefixes = Array.from(new Set(src.map(prefixOf).filter(Boolean)));
+      if (prefixes.length) stylePrefixByPo.set(String(r.id || ''), prefixes.join('、'));
+    });
+    const cells: Record<string, { total: number; items: { no: string; qty: number }[] }> = {};
+    lines.forEach(l => shifts.forEach(s => {
+      const its = day.filter((r: any) => r.line === l && r.shift === s.key);
+      cells[`${l}|${s.key}`] = {
+        total: its.reduce((sum: number, r: any) => sum + (Number(r.planQty) || 0), 0),
+        items: its.map((r: any) => ({ no: stylePrefixByPo.get(String(r.productionOrderId || '')) || String(r.productionOrderId || r.id || ''), qty: Number(r.planQty) || 0 })),
+      };
+    }));
+    // 待产订单卡片（与 Web ScheduleBoard 左侧待排产面板同源）：PO 前缀 + 非完成/取消；
+    // 模具编号按 productCode 回查商品主数据，半成品加工按 poId 聚合，款式编码 X 数量与 production 分支同聚合口径
+    const scheduledByPo = new Map<string, number>();
+    rows.forEach((r: any) => {
+      const k = String(r.productionOrderId || '');
+      if (k) scheduledByPo.set(k, (scheduledByPo.get(k) || 0) + (Number(r.planQty) || 0));
+    });
     const stText: Record<string, string> = { pending: '待排产', processing: '生产中', completed: '已完成', cancelled: '已取消', warning: '异常' };
     const prodByCode = new Map(products.map((p: any) => [String(p.productCode || ''), p]));
     const orders = poRows
@@ -1550,11 +1560,19 @@ router.get('/schedule-board', verifyJWT, async (req: Request, res: Response) => 
         const semis = procRows.filter((p: any) => String(p.poId || '') === String(r.id));
         const semiDone = semis.filter((p: any) => String(p.status || '') === 'completed').length;
         const semiText = semis.length ? `${semiDone}/${semis.length} 完成` : '未生成加工单';
+        // 排期记录与派生状态：有排期记录即「已排产」，修复「排过仍显示待排产」
+        const mySched = rows.filter((r0: any) => String(r0.productionOrderId || '') === String(r.id));
         return {
           id: String(r.id), moldCode, styleQty,
           image: String(first.image || prod.image || ''),
           productName: String(first.productName || prod.shortName || r.productName || ''),
           planQty: plan, pending, semiText,
+          scheduledQty: scheduledByPo.get(String(r.id)) || 0,
+          statusText: mySched.length ? '已排产' : '待排产',
+          schedules: mySched.map((r0: any) => ({
+            key: String(r0.key || ''), id: String(r0.id || ''), line: String(r0.line || ''),
+            shift: String(r0.shift || ''), startDate: day10(r0.startDate), planQty: Number(r0.planQty) || 0,
+          })),
           fields: [
             ['生产单号', String(r.id)],
             ['状态', stText[String(r.status || '')] || pick(r.status, '—')],
@@ -1569,7 +1587,8 @@ router.get('/schedule-board', verifyJWT, async (req: Request, res: Response) => 
           ] as [string, string][],
         };
       })
-      .filter((o: any) => o.pending > 0);
+      .filter((o: any) => !['completed', 'cancelled'].includes(o.statusText === '已排产' ? '' : ''));
+    // 注：不再按 pending>0 过滤——待排产区由小程序客户端筛 pending>0，下方全量列表含已排产订单供搜索/改排期
     res.json({
       code: 200,
       data: {
@@ -1628,6 +1647,40 @@ router.post('/schedule', verifyJWT, async (req: Request, res: Response) => {
     res.json({ code: 200, data: { saved: true, record: rec } });
   } catch (err: any) {
     console.error('[wx] schedule create error:', err.message);
+    res.status(500).json({ code: 500, message: '服务器内部错误' });
+  }
+});
+
+/** PUT /api/wx/schedule/:key —— 手机修改排期：与新增同闸同钳制（可排量 = 计划 − 同单其他排期记录合计） */
+router.put('/schedule/:key', verifyJWT, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user as JWTPayload;
+    const owner = await ownerOf(user.username);
+    const schedMenu = await canViewMenus(user.username, ['production/production-schedule']);
+    if (!schedMenu['production/production-schedule']) { res.status(403).json({ code: 403, message: '无该菜单权限（与网页版菜单权限一致）' }); return; }
+    const scKey = `pageData_production_production-schedule_${owner}`;
+    const rows = await readRows(scKey);
+    const idx = rows.findIndex((r: any) => String(r.key || '') === String(req.params.key || ''));
+    if (idx < 0) { res.status(404).json({ code: 404, message: '排期记录不存在' }); return; }
+    const rec: any = { ...rows[idx] };
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(String(req.body.date || '')) ? String(req.body.date) : day10(pick(rec.startDate, ''));
+    const line = String(req.body.line || rec.line || '').trim();
+    const shift = ['morning', 'afternoon', 'evening'].includes(String(req.body.shift || '')) ? String(req.body.shift) : String(rec.shift || '');
+    const qty = Number(req.body.qty);
+    if (!line || !shift || !date) { res.status(400).json({ code: 400, message: '日期/生产线/班次不合法' }); return; }
+    const [omRows] = await Promise.all([readRows(`pageData_production_production-order_${owner}`)]);
+    const order = omRows.find((o: any) => String(o.id || '') === String(rec.productionOrderId || ''));
+    const plan = order ? (Number(order.planQuantity ?? order.quantity ?? order.productionQty) || 0) : 0;
+    const others = rows.filter((r: any, i: number) => i !== idx && String(r.productionOrderId || '') === String(rec.productionOrderId || ''))
+      .reduce((s: number, r: any) => s + (Number(r.planQty) || 0), 0);
+    const cap = Math.max(0, plan - others);
+    if (!(qty > 0) || qty > cap) { res.status(400).json({ code: 400, message: `排期数量需在 1~${cap} 之间` }); return; }
+    rec.startDate = date; rec.endDate = date; rec.line = line; rec.shift = shift; rec.planQty = qty;
+    const next = rows.map((r: any, i: number) => (i === idx ? rec : r));
+    await writeRows(scKey, next, owner);
+    res.json({ code: 200, data: { saved: true, record: rec } });
+  } catch (err: any) {
+    console.error('[wx] schedule update error:', err.message);
     res.status(500).json({ code: 500, message: '服务器内部错误' });
   }
 });
@@ -2196,6 +2249,8 @@ router.get('/lists/:page', verifyJWT, async (req: Request, res: Response) => {
       wsViewAll = await wsCanViewAll(owner, user.username);
       wsMyName = await displayNameOf(user.username);
     }
+    // 金额展示统一 ¥ 千分位两位小数（客户卡/账单明细/对账同源）
+    const yuan = (v: number) => `¥${(Math.round((Number(v) || 0) * 100) / 100).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
     if (page === 'bookkeeping') {
       const rows = await readRows(`daily_bookkeeping_${owner}`);
       items = rows.map((r: any) => ({
@@ -2212,16 +2267,17 @@ router.get('/lists/:page', verifyJWT, async (req: Request, res: Response) => {
       ]);
       // 状态英文枚举转中文（与 Web 生产订单状态口径对应）
       const prodStatusText: Record<string, string> = { pending: '待排产', processing: '生产中', completed: '已完成', cancelled: '已取消', warning: '异常' };
-      // 排产日期：该生产单最早一条排期记录的 startDate（无排期回退计划开始日期 planStart）
-      const schedDatesByPo = new Map<string, string[]>();
+      // 排期记录按生产单分组（按日期排序）：派生排产状态、卡片副行排期明细（日期+班次+生产线）与详情字段同源
+      const SHIFT_TEXT: Record<string, string> = { morning: '上午', afternoon: '下午', evening: '晚上' };
+      const schedByPo = new Map<string, any[]>();
       scRows.forEach((s: any) => {
         const k = String(s.productionOrderId || '');
-        const d = day10(pick(s.startDate, s.date, ''));
-        if (!k || !d) return;
-        const arr = schedDatesByPo.get(k) || [];
-        arr.push(d);
-        schedDatesByPo.set(k, arr);
+        if (!k) return;
+        const arr = schedByPo.get(k) || [];
+        arr.push(s);
+        schedByPo.set(k, arr);
       });
+      const dayOfSched = (s: any) => day10(pick(s.startDate, s.date, ''));
       // 款式编码：与 client ScheduleBoard/OrdersEmbed 同源正则——剥掉商品编码的「-颜色-规格」尾段只留款式前缀
       const stylePrefixOf = (code: any): string => {
         const s = String(code || '');
@@ -2254,23 +2310,36 @@ router.get('/lists/:page', verifyJWT, async (req: Request, res: Response) => {
           const styleQtyStr = qtyByStyle.size
             ? Array.from(qtyByStyle.entries()).map(([c, q]) => `${c} X ${q}`).join('、')
             : styles.join('、');
-          const schedDates = (schedDatesByPo.get(String(r.id || '')) || []).sort();
+          const mySched = (schedByPo.get(String(r.id || '')) || [])
+            .slice().sort((a: any, b: any) => dayOfSched(a).localeCompare(dayOfSched(b)));
+          const schedDates = mySched.map(dayOfSched).filter(Boolean);
           const schedDate = schedDates[0] || day10(pick(r.planStart, ''));
+          // 副行排期明细：逐条「日期 班次 生产线」，多条顿号分隔；无排期记录回退计划开始日期
+          const schedDetailStr = mySched
+            .map((s: any) => [dayOfSched(s), SHIFT_TEXT[String(s.shift || '')] || String(s.shift || ''), String(s.line || '').trim()].filter(Boolean).join(' '))
+            .join('、');
+          const scheduled = mySched.length > 0;
           return {
             key: r.key || r.id, title: pick(r.id, r.orderNo, r.key) || '生产订单',
-            tag: statusText,
-            // 卡片副信息两行：首行款式编码 X 总数量（如 018-2 X 6），创建日期同行靠右（ListView 按 subRight 渲染）；次行排产日期
-            sub: [styleQtyStr, schedDate ? `排产 ${schedDate}` : ''].filter(Boolean) as string[],
+            // 右侧 tag 显示排产状态：有排期记录即「已排产」（修复排过仍显示待排产）
+            tag: scheduled ? '已排产' : statusText,
+            // 已排产绿底白字（行内样式覆盖 tag 类浅底色）
+            tagStyle: scheduled ? { color: '#fff', background: '#52c41a', borderColor: '#52c41a' } : undefined,
+            // 卡片副信息两行：首行款式编码 X 总数量（如 018-2 X 6），创建日期同行靠右（ListView 按 subRight 渲染）；次行排产日期+班次+生产线
+            sub: [styleQtyStr, (schedDetailStr || schedDate) ? `排产 ${schedDetailStr || schedDate}` : ''].filter(Boolean) as string[],
             subRight: date,
-            subSizes: [14.4, 24],
+            // 排产行字号缩小 50%（24→12）并改绿色字体（subColors 逐行下发）
+            subSizes: [14.4, 12],
+            subColors: ['', '#52c41a'],
             // 详情弹层字段（点击卡片展示）：含排产日期与计划明细
             fields: [
               ['生产单号', pick(r.id, r.orderNo, r.key) || '—'],
               ['状态', statusText],
+              ['排产状态', scheduled ? '已排产' : '待排产'],
               ['款式编码', styles.join('、') || '—'],
               ['计划数量', qty ? String(qty) : '—'],
               ['已完成数量', String(Number(r.completedQuantity ?? r.doneQty) || 0)],
-              ['排产日期', schedDate || '—'],
+              ['排产明细', schedDetailStr || schedDate || '—'],
               ['计划明细', planItems.length ? planItems.map((it: any) => `${it.productCode || it.productName || '—'} ×${Number(it.productionQty ?? it.quantity) || 0}`).join('\n') : '—'],
               ['订单标签', pick(r.orderTag, '—')],
               ['创建日期', date || '—'],
@@ -2536,12 +2605,121 @@ router.get('/lists/:page', verifyJWT, async (req: Request, res: Response) => {
         };
       });
     } else if (page === 'customers') {
-      const rows = await readRows(`customers_${owner}`);
-      items = rows.map((r: any) => ({
-        key: r.key || r.id || r.name, title: pick(r.name, r.customerName) || '客户',
-        tag: r.level,
-        sub: [r.id, r.contact, r.phone, r.region].filter(Boolean) as string[],
+      // 全量客户：直接客户档案 + 未关联直接客户的绑定采购商（与 Web loadAllCustomersFromStorage 同源，关联判定简化为同名）
+      const [custRows, bpRows, adjRows, billRows, receiptRows, orderRows] = await Promise.all([
+        readRows(`customers_${owner}`),
+        readRows(`boundPurchasers_${owner}`),
+        readRows(`credit_adjustments_${owner}`),
+        readRows(`pageData_customer_bill-detail_${owner}`),
+        readRows(`customerReceipts_${owner}`),
+        readRows(`pageData_sales_order-manage_${owner}`),
+      ]);
+      const nm = (v: any) => String(v || '').trim();
+      // 财务口径与 Web CustomerInfo 同源：采购总额=Σ账单明细 totalAmount；已收=Σ手工收款台账；
+      // 订单占用=未发货完成且余额支付订单 Σ productAmount；剩余额度=有效信用+已收−采购−占用；应收欠款=max(0,采购−已收)
+      const purchaseOf = (name: string) => billRows.reduce((s: number, r: any) => s + (nm(r.customerName) === name ? (Number(r.totalAmount) || 0) : 0), 0);
+      const receivedOf = (name: string) => receiptRows.reduce((s: number, r: any) => s + (nm(r.customerName) === name ? (Number(r.amount) || 0) : 0), 0);
+      const occupiedOf = (name: string) => orderRows.reduce((s: number, o: any) => {
+        if (nm(o.customerName) !== name) return s;
+        if (['待付款', '已发货', '已完成', '已取消'].includes(String(o.orderStatus || ''))) return s;
+        if (!(String(o.payMethod || '') === '余额支付' || String(o.orderTags || '').includes('余额支付') || String(o.orderTag || '').includes('余额支付'))) return s;
+        return s + (Number(o.productAmount) || 0);
+      }, 0);
+      const effectiveCredit = (id: string, name: string, base: number) => Math.round((base + adjRows
+        .filter((a: any) => String(a.customerId || '') === String(id || '') || nm(a.customerName) === name)
+        .reduce((s: number, a: any) => s + (a.type === 'increase' ? (Number(a.amount) || 0) : -(Number(a.amount) || 0)), 0)) * 100) / 100;
+      // 不同客户不同底色：浅色调色板按下标循环
+      const CARD_BGS = ['#e6f4ff', '#f6ffed', '#fff7e6', '#fff1f0', '#f9f0ff', '#e6fffb'];
+      const direct = custRows.map((r: any) => ({
+        id: r.id, name: nm(pick(r.name, r.customerName)) || '客户', level: r.level,
+        contact: r.contact, phone: r.phone, region: r.region, credit: Number(r.credit) || 0,
       }));
+      const directNames = new Set(direct.map(d => d.name));
+      const purchasers = bpRows
+        .filter((bp: any) => !directNames.has(nm(bp.purchaserName)))
+        .map((bp: any) => ({
+          id: bp.id, name: nm(bp.purchaserName) || '客户', level: bp.level || 'B',
+          contact: bp.purchaserContact, phone: bp.purchaserPhone, region: bp.region,
+          credit: bp.credit !== undefined && bp.credit !== null ? Number(bp.credit) || 0 : 0,
+        }));
+      items = [...direct, ...purchasers].map((c: any, idx: number) => {
+        const purchase = purchaseOf(c.name);
+        const received = receivedOf(c.name);
+        const occupied = occupiedOf(c.name);
+        const credit = effectiveCredit(String(c.id || ''), c.name, c.credit);
+        const remain = Math.round((credit + received - purchase - occupied) * 100) / 100;
+        const debt = Math.max(0, Math.round((purchase - received) * 100) / 100);
+        return {
+          key: c.id || c.name, title: c.name,
+          tag: c.level,
+          cardBg: CARD_BGS[idx % CARD_BGS.length],
+          // 第二行信用/剩余额度、第三行采购总额/应收欠款（用户指定）
+          sub: [`信用额度 ${yuan(credit)}　剩余额度 ${yuan(remain)}`, `采购总额 ${yuan(purchase)}　应收欠款 ${yuan(debt)}`],
+          subSizes: [13, 13],
+          fields: [
+            ['客户名称', c.name], ['等级', pick(c.level, '—')], ['客户编号', String(c.id || '—')],
+            ['联系人', pick(c.contact, '—')], ['电话', pick(c.phone, '—')], ['地区', pick(c.region, '—')],
+            ['信用额度', yuan(credit)], ['剩余额度', yuan(remain)],
+            ['采购总额', yuan(purchase)], ['已收货款', yuan(received)], ['订单占用', yuan(occupied)], ['应收欠款', yuan(debt)],
+          ] as [string, string][],
+        };
+      });
+    } else if (page === 'bill-detail' || page === 'reconciliation') {
+      // 账单明细/对账管理：与 Web 账单明细同键（pageData_customer_bill-detail）；extra=客户名时按客户过滤（客户卡入口带入）
+      const rows = await readRows(`pageData_customer_bill-detail_${owner}`);
+      const extraCust = String(req.query.extra || '').trim();
+      items = rows
+        .filter((r: any) => !extraCust || String(r.customerName || '').trim() === extraCust)
+        .map((r: any) => {
+          const amt = Number(r.totalAmount) || 0;
+          return page === 'bill-detail' ? {
+            key: r.key || r.id, title: r.outboundNo || r.id || '账单',
+            tag: r.reconResult || '待对账',
+            sub: [String(r.customerName || ''), day10(r.outboundDate), `商品总额 ${yuan(amt)}`].filter(Boolean) as string[],
+            subSizes: [13, 13, 13],
+            fields: [
+              ['出库单号', r.outboundNo || '—'], ['关联订单', r.id || '—'], ['客户', r.customerName || '—'],
+              ['出库日期', day10(r.outboundDate) || '—'], ['总数量', String(Number(r.totalCount) || 0)],
+              ['商品总额', yuan(amt)], ['货品明细', String(r.productDetail || '—')],
+              ['对账结果', r.reconResult || '待对账'], ['差异说明', r.diffDesc || '—'],
+            ] as [string, string][],
+          } : {
+            key: r.key || r.id, title: String(r.customerName || '客户'),
+            tag: r.reconResult || '待对账',
+            sub: [r.outboundNo || r.id, day10(r.outboundDate), yuan(amt)].filter(Boolean) as string[],
+            subSizes: [13, 13, 13],
+            fields: [
+              ['客户', r.customerName || '—'], ['出库单号', r.outboundNo || '—'], ['关联订单', r.id || '—'],
+              ['出库日期', day10(r.outboundDate) || '—'], ['商品总额', yuan(amt)],
+              ['对账结果', r.reconResult || '待对账'], ['差异说明', r.diffDesc || '—'],
+              ['供应商对账人', r.supplierReconPerson || '—'], ['采购商对账人', r.purchaserReconPerson || '—'],
+              ['确认时间', r.confirmTime || '—'],
+            ] as [string, string][],
+          };
+        });
+    } else if (page === 'molds') {
+      // 模具管理：与 Web MoldPage 同源服务端权威真表（molds 表，/api/molds 同库同记录结构）
+      const moldRows = await listMolds(owner);
+      items = moldRows.map((row: any) => {
+        let r: any = {};
+        try { r = JSON.parse(row.record_json || '{}'); } catch { r = {}; }
+        const imgCount = Array.isArray(r.images) ? r.images.length : 0;
+        return {
+          key: r.key || row.mold_key, title: pick(r.moldName, r.moldCode) || '模具',
+          tag: r.status,
+          sub: [
+            [r.moldCode, r.spec].filter(Boolean).join('　'),
+            `数量 ${Number(r.totalQuantity) || 0}　创建人 ${pick(r.creator, '—')}`,
+          ].filter(Boolean) as string[],
+          subSizes: [13, 13],
+          fields: [
+            ['模具编号', r.moldCode || '—'], ['模具名称', r.moldName || '—'], ['规格型号', r.spec || '—'],
+            ['模具数量', String(Number(r.totalQuantity) || 0)], ['状态', r.status || '—'],
+            ['图片数', String(imgCount)], ['备注', r.remark || '—'],
+            ['创建人', r.creator || '—'], ['创建时间', String(r.createdAt || '—')],
+          ] as [string, string][],
+        };
+      });
     } else {
       res.status(404).json({ code: 404, message: '未知列表页' });
       return;

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { View, Text, ScrollView, Button, Image } from '@tarojs/components'
 import Taro from '@tarojs/taro'
-import { findModule, loadMenuPerms, childAllowed } from '../config/menu'
+import { findModule, loadMenuPerms, invalidateMenuPerms, childAllowed } from '../config/menu'
 import scanCameraIcon from '../assets/scan-camera.png'
 import ApprovalsEmbed from './ApprovalsEmbed'
 import InventoryEmbed from './InventoryEmbed'
@@ -15,6 +15,7 @@ import BankAccountsView from './BankAccountsView'
 import WarehouseStatsView from './WarehouseStatsView'
 import NewStyleProgressView from './NewStyleProgressView'
 import ScheduleBoardView from './ScheduleBoardView'
+import CustomersView from './CustomersView'
 import MarketView from './MarketView'
 import PickingView from './PickingView'
 
@@ -45,16 +46,23 @@ const ScanLauncher = ({ onScanned }: { onScanned: (code: string) => void }) => {
  * 子菜单条固定在底部 Tab 栏上方，任何子菜单页面都在同一容器内切换。
  */
 const ModuleView = ({
-  moduleKey, initialChild, initialQ, tick = 0,
-}: { moduleKey: string; initialChild?: string; initialQ?: string; tick?: number }) => {
+  moduleKey, initialChild, initialQ, initialExtra, tick = 0,
+}: { moduleKey: string; initialChild?: string; initialQ?: string; initialExtra?: string; tick?: number }) => {
   const mod = findModule(moduleKey)
   const [child, setChild] = useState(() =>
     initialChild && mod?.children.some(c => c.key === initialChild) ? initialChild : (mod?.children[0]?.key || ''))
   const [scanQ, setScanQ] = useState(initialQ || '')
   // 菜单点权限（服务端按网页版 PERM_V2 复算）：无权限的子菜单从底部子菜单条隐藏，直达时展示无权限空态
   const [perms, setPerms] = useState<Record<string, boolean> | null>(null)
+  // 加载失败与加载中区分：失败展示重试入口，避免偶发失败后永久卡「加载中」
+  const [permFailed, setPermFailed] = useState(false)
+  const loadPerms = () => {
+    setPermFailed(false)
+    loadMenuPerms().then(p => { setPerms(p); if (!p) setPermFailed(true) })
+  }
   useEffect(() => {
-    loadMenuPerms().then(setPerms)
+    loadPerms()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   // 底部子菜单条须钉在 Tab 栏正上方：Tab 栏实际高度受字号/安全区影响，
   // 硬编码偏移会在部分端被遮挡，改为挂载后实测 .app-tab-bar 高度再定位
@@ -97,9 +105,22 @@ const ModuleView = ({
   const visibleChildren = perms ? mod.children.filter(c => childAllowed(perms, c.key)) : []
 
   const renderChild = () => {
-    // fail-closed：权限未知（加载/接口异常）与显式无权均不渲染业务内容，前者展示中性加载态
+    // fail-closed：权限未知（加载/接口异常）与显式无权均不渲染业务内容；加载中/加载失败区分展示，失败可重试
     if (!perms || !childAllowed(perms, child)) {
-      return <View className="empty">{perms ? '无该菜单权限（与网页版菜单权限一致）' : '菜单权限加载中…'}</View>
+      if (perms) return <View className="empty">无该菜单权限（与网页版菜单权限一致）</View>
+      return (
+        <View className="empty" style={{ textAlign: 'center' }}>
+          <View>{permFailed ? '菜单权限加载失败' : '菜单权限加载中…'}</View>
+          {permFailed && (
+            <View
+              style={{ display: 'inline-block', marginTop: 10, padding: '6px 24px', fontSize: 14, color: '#fff', background: '#1677ff', borderRadius: 8 }}
+              onClick={() => { invalidateMenuPerms(); loadPerms() }}
+            >
+              重试
+            </View>
+          )}
+        </View>
+      )
     }
     switch (child) {
       case 'approvals': return <ApprovalsEmbed tick={tick} />
@@ -128,7 +149,12 @@ const ModuleView = ({
       case 'warehouse-stats': return <WarehouseStatsView tick={tick} />
       case 'manage': return <ListView page="brands" tick={tick} />
       case 'staff': return <ListView page="staff" tick={tick} />
-      case 'customers': return <ListView page="customers" tick={tick} />
+      case 'customers': return <CustomersView tick={tick} />
+      // 账单明细/对账管理：与 Web 账单明细同键；客户卡入口带 extra=客户名按客过滤；方形卡片与客户列表同风格
+      case 'bill-detail': return <ListView page="bill-detail" extra={initialExtra ? `extra=${encodeURIComponent(initialExtra)}` : ''} square detail tick={tick} />
+      case 'reconciliation': return <ListView page="reconciliation" extra={initialExtra ? `extra=${encodeURIComponent(initialExtra)}` : ''} square detail tick={tick} />
+      // 模具管理：与 Web MoldPage 同源服务端 molds 真表
+      case 'molds': return <ListView page="molds" detail tick={tick} />
       case 'opportunity': return <MarketView tick={tick} />
       case 'finished':
       case 'semi':
@@ -143,10 +169,10 @@ const ModuleView = ({
       <View
         style={{
           padding: '20px 24px 0', fontWeight: 600,
-          fontSize: moduleKey === 'finance' || moduleKey === 'warehouse' || moduleKey === 'order' || moduleKey === 'product' || moduleKey === 'production-mgmt' ? 16 : (moduleKey === 'ecommerce' ? 22 : 32),
+          fontSize: moduleKey === 'finance' || moduleKey === 'warehouse' || moduleKey === 'order' || moduleKey === 'product' || moduleKey === 'production-mgmt' || moduleKey === 'customer' ? 16 : (moduleKey === 'ecommerce' ? 22 : 32),
         }}
       >
-        {mod.icon} {moduleKey === 'ecommerce' || moduleKey === 'order' ? (mod.children.find(c => c.key === child)?.title || mod.title) : mod.title}
+        {mod.icon} {moduleKey === 'ecommerce' || moduleKey === 'order' ? (mod.children.find(c => c.key === child)?.title || mod.title) : (moduleKey === 'production-mgmt' && child === 'production-schedule' ? '生产排期' : (moduleKey === 'customer' ? (mod.children.find(c => c.key === child)?.title || '客户列表') : mod.title))}
       </View>
       {renderChild()}
       {/* 底部子菜单条：固定在 Tab 栏上方（实测高度定位，未测得前用 96px 兜底） */}

@@ -207,7 +207,7 @@ const ListView = ({
         <View
           key={String(it.key)}
           className="card"
-          style={{ ...(compact ? { padding: '12px 20px' } : {}), ...(square ? { borderRadius: 0 } : {}) }}
+          style={{ ...(compact ? { padding: '12px 20px' } : {}), ...(square ? { borderRadius: 0 } : {}), ...(it.cardBg ? { background: it.cardBg } : {}) }}
           onClick={onRowClick ? () => onRowClick(it) : (detail && (it.fields || []).length ? () => setDetailItem(it) : undefined)}
         >
           {/* compact：标题与金额同行，副信息合成一行点分隔，降低单条高度 */}
@@ -220,7 +220,7 @@ const ListView = ({
                 {it.amount >= 0 ? '+' : '-'}¥{Math.abs(it.amount).toFixed(2)}
               </Text>
             ) : null}
-            {it.tag ? <Text className={`tag ${TONE_CLASS[it.tone || 'blue'] || 'tag-blue'}`} style={{ marginLeft: 12, flexShrink: 0 }}>{it.tag}</Text> : null}
+            {it.tag ? <Text className={`tag ${TONE_CLASS[it.tone || 'blue'] || 'tag-blue'}`} style={{ marginLeft: 12, flexShrink: 0, ...(it.tagStyle || {}) }}>{it.tag}</Text> : null}
           </View>
           {/* card 模式（参考订单查询页）：把 headers 与 row 配对成「列名 值」行，首列与标题重复故跳过 */}
           {card && headers && headers.length && (it.row || []).length ? (
@@ -241,11 +241,11 @@ const ListView = ({
               i === 0 && it.subRight ? (
                 /* 首行左右分栏：左主副信息可收缩省略，右靠右对齐内容（如生产订单创建日期），字号同行跟随 subSizes */
                 <View key={i} style={{ display: 'flex', alignItems: 'center', paddingTop: 4 }}>
-                  <Text className="muted" style={{ flex: 1, minWidth: 0, fontSize: (it.subSizes || [])[i] || 24, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>{s}</Text>
+                  <Text className="muted" style={{ flex: 1, minWidth: 0, fontSize: (it.subSizes || [])[i] || 24, color: (it.subColors || [])[i] || undefined, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>{s}</Text>
                   <Text className="muted" style={{ flexShrink: 0, marginLeft: 8, fontSize: (it.subSizes || [])[i] || 24 }}>{it.subRight}</Text>
                 </View>
               ) : (
-                <View key={i} className="muted" style={{ paddingTop: 4, fontSize: (it.subSizes || [])[i] || 24 }}>{s}</View>
+                <View key={i} className="muted" style={{ paddingTop: 4, fontSize: (it.subSizes || [])[i] || 24, color: (it.subColors || [])[i] || undefined }}>{s}</View>
               )
             ))
           )}

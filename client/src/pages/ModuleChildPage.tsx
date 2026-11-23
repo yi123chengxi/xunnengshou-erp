@@ -1037,14 +1037,23 @@ const ModuleChildPage: React.FC = () => {
   const [poEditImages, setPoEditImages] = useState<string[]>([]);
   // 生产订单新增窗口：计划明细列显示控制（沿用订单管理货品明细「显」的交互口径）
   const [poPlanFields, setPoPlanFields] = useState<string[]>(() => {
+    const defaults = ['image', 'name', 'productCode', 'styleCode', 'color', 'spec', 'productType', 'moldCode', 'quantity', 'stock'];
     try {
       const saved = localStorage.getItem(`poPlanDisplay_${localStorage.getItem('username') || 'admin'}`);
-      if (saved) { const arr = JSON.parse(saved); if (Array.isArray(arr) && arr.length > 0) return arr; }
+      if (saved) {
+        const raw = JSON.parse(saved);
+        // v2 结构（上线后保存）：原样回显勾选态，不做回填以免复活用户主动取消的列
+        if (raw && raw.v === 2 && Array.isArray(raw.fields) && raw.fields.length > 0) return raw.fields;
+        // v1 旧数组（不含新增的款式编码/颜色/规格）：一次性补为可见——旧存档不可能主动取消过未上线的列
+        if (Array.isArray(raw) && raw.length > 0) return [...raw, ...defaults.filter(k => !raw.includes(k))];
+      }
     } catch { /* ignore */ }
-    return ['image', 'name', 'productCode', 'productType', 'moldCode', 'quantity', 'stock'];
+    return defaults;
   });
   // 计划明细「批量填充」的待应用数量（点「应用」才写入各行）
   const [poPlanFillQty, setPoPlanFillQty] = useState<number | null>(null);
+  // 计划明细行选中下标（复选框列 + 删除选中）；新增窗口打开重置与行删除时同步维护
+  const [poPlanSelIdx, setPoPlanSelIdx] = useState<number[]>([]);
   // 生产管理费表单的计算方式状态
   const [addCalcMode, setAddCalcMode] = useState<'fixed' | 'formula'>('formula');
 
@@ -9300,6 +9309,7 @@ const ModuleChildPage: React.FC = () => {
     }
     addForm.resetFields();
     setOrderFormItems([]); // 重置订单商品明细
+    setPoPlanSelIdx([]); // 明细清空同步清空行选中，避免残留下标越界
     // 重置省市区级联状态
     setAddSelectedProvince('');
     setAddSelectedCity('');
@@ -17628,12 +17638,14 @@ const handleBatchAttrsConfirm = () => {
               const totalPlanQty = orderFormItems.reduce((s, it) => s + (Number(it.quantity) || 0), 0);
               const planFieldItems = [
                 { key: 'image', label: '图片' }, { key: 'name', label: '商品简称' }, { key: 'productCode', label: '商品编码' },
+                { key: 'styleCode', label: '款式编码' }, { key: 'color', label: '颜色' }, { key: 'spec', label: '规格' },
                 { key: 'productType', label: '产品种类' }, { key: 'moldCode', label: '模具编号' }, { key: 'quantity', label: '数量' },
                 { key: 'stock', label: '可用库存' },
               ];
               const savePlanFields = (arr: string[]) => {
                 setPoPlanFields(arr);
-                try { localStorage.setItem(`poPlanDisplay_${localStorage.getItem('username') || 'admin'}`, JSON.stringify(arr)); } catch { /* ignore */ }
+                // v2 结构携带版本号：加载端据此区分旧数组存档（需补新列）与新存档（原样回显）
+                try { localStorage.setItem(`poPlanDisplay_${localStorage.getItem('username') || 'admin'}`, JSON.stringify({ v: 2, fields: arr })); } catch { /* ignore */ }
               };
               // 生产图片：上传与粘贴共用同一入列逻辑，最多 5 张
               const pushPoImage = (file: Blob | File) => {
@@ -17651,9 +17663,19 @@ const handleBatchAttrsConfirm = () => {
                     <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                       <thead>
                         <tr>
+                          <th style={{ ...thStyle, textAlign: 'center', width: 36 }}>
+                            <Checkbox
+                              checked={orderFormItems.length > 0 && poPlanSelIdx.length === orderFormItems.length}
+                              indeterminate={poPlanSelIdx.length > 0 && poPlanSelIdx.length < orderFormItems.length}
+                              onChange={e => setPoPlanSelIdx(e.target.checked ? orderFormItems.map((_, i) => i) : [])}
+                            />
+                          </th>
                           {showCol('image') && <th style={{ ...thStyle, textAlign: 'center', width: 50 }}>图片</th>}
                           {showCol('name') && <th style={{ ...thStyle, textAlign: 'left' }}>商品简称</th>}
                           {showCol('productCode') && <th style={{ ...thStyle, textAlign: 'left', width: 140 }}>商品编码</th>}
+                          {showCol('styleCode') && <th style={{ ...thStyle, textAlign: 'left', width: 90 }}>款式编码</th>}
+                          {showCol('color') && <th style={{ ...thStyle, textAlign: 'left', width: 70 }}>颜色</th>}
+                          {showCol('spec') && <th style={{ ...thStyle, textAlign: 'left', width: 70 }}>规格</th>}
                           {showCol('productType') && <th style={{ ...thStyle, textAlign: 'left', width: 80 }}>产品种类</th>}
                           {showCol('moldCode') && <th style={{ ...thStyle, textAlign: 'center', width: 90 }}>模具编号</th>}
                           {showCol('quantity') && <th style={{ ...thStyle, textAlign: 'center', width: 80 }}>数量</th>}
@@ -17668,6 +17690,12 @@ const handleBatchAttrsConfirm = () => {
                           const imgSrc = product ? localStorage.getItem(`prodImg_${owner}_${product.key}`) : null;
                           return (
                             <tr key={idx}>
+                              <td style={{ ...tdStyle, textAlign: 'center' }}>
+                                <Checkbox
+                                  checked={poPlanSelIdx.includes(idx)}
+                                  onChange={e => setPoPlanSelIdx(prev => (e.target.checked ? [...prev, idx] : prev.filter(i => i !== idx)))}
+                                />
+                              </td>
                               {showCol('image') && (
                                 <td style={{ ...tdStyle, textAlign: 'center' }}>
                                   <div style={{ width: 40, height: 40, borderRadius: 4, overflow: 'hidden', background: '#f5f5f5', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -17694,6 +17722,9 @@ const handleBatchAttrsConfirm = () => {
                                   </div>
                                 </td>
                               )}
+                              {showCol('styleCode') && <td style={tdStyle}>{product?.styleCode || item.styleCode || '—'}</td>}
+                              {showCol('color') && <td style={tdStyle}>{product?.color || item.color || '—'}</td>}
+                              {showCol('spec') && <td style={tdStyle}>{product?.spec || item.spec || '—'}</td>}
                               {showCol('productType') && (
                                 <td style={tdStyle}>{product?.productType ? <Tag color={ptColors[product.productType] || 'default'} style={{ margin: 0, fontSize: 11 }}>{product.productType}</Tag> : '—'}</td>
                               )}
@@ -17708,13 +17739,17 @@ const handleBatchAttrsConfirm = () => {
                                 <td style={{ ...tdStyle, textAlign: 'center' }}><Text strong style={{ color: (Number(stock) || 0) > 0 ? '#52c41a' : '#ff4d4f', fontSize: 12 }}>{stock}</Text></td>
                               )}
                               <td style={{ ...tdStyle, textAlign: 'center' }}>
-                                <a style={{ color: '#ff4d4f', fontSize: 12 }} onClick={() => setOrderFormItems(prev => prev.filter((_, i) => i !== idx))}>删除</a>
+                                <a style={{ color: '#ff4d4f', fontSize: 12 }} onClick={() => {
+                                  setOrderFormItems(prev => prev.filter((_, i) => i !== idx));
+                                  // 单行删除后下标前移：选中集合同步平移避免错位
+                                  setPoPlanSelIdx(prev => prev.filter(i => i !== idx).map(i => (i > idx ? i - 1 : i)));
+                                }}>删除</a>
                               </td>
                             </tr>
                           );
                         })}
                         {orderFormItems.length === 0 && (
-                          <tr><td colSpan={poPlanFields.length + 1} style={{ ...tdStyle, textAlign: 'center', color: '#999', padding: 16 }}>暂无计划明细，点击下方“添加新的商品”增加</td></tr>
+                          <tr><td colSpan={poPlanFields.length + 2} style={{ ...tdStyle, textAlign: 'center', color: '#999', padding: 16 }}>暂无计划明细，点击下方“添加新的商品”增加</td></tr>
                         )}
                       </tbody>
                     </table>
@@ -17723,6 +17758,14 @@ const handleBatchAttrsConfirm = () => {
                   <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
                     <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => { setProductSelectTarget('add'); setProductSelectKeys([]); setProductSelectSearch(''); setPsSearchCode(''); setPsSearchName(''); setPsSearchStyle(''); setPsSearchColor(''); setPsSearchSpec(''); setPsSearchSupplier(''); setPsSearchTag(''); setPsAppliedCode(''); setPsAppliedName(''); setPsAppliedStyle(''); setPsAppliedColor(''); setPsAppliedSpec(''); setPsAppliedSupplier(''); setPsAppliedTag(''); setProductSelectType('成品'); setProductSelectVisible(true); }}>添加新的商品</Button>
                     <Button size="small" icon={<PlusOutlined />} onClick={() => { setManualAddTarget('orderAdd'); setManualAddText(''); setManualAddVisible(true); }}>手动添加</Button>
+                    {poPlanSelIdx.length > 0 && (
+                      <Button size="small" danger onClick={() => {
+                        const sel = new Set(poPlanSelIdx);
+                        setOrderFormItems(prev => prev.filter((_, i) => !sel.has(i)));
+                        setPoPlanSelIdx([]);
+                        message.success(`已删除选中的 ${sel.size} 条明细`);
+                      }}>删除选中({poPlanSelIdx.length})</Button>
+                    )}
                     <Divider type="vertical" />
                     <span style={{ fontSize: 11, color: '#8c8c8c' }}>批量填充：</span>
                     <InputNumber size="small" controls={false} min={1} precision={0} placeholder="数量" style={{ width: 80 }} value={poPlanFillQty}

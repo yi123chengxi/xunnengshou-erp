@@ -299,6 +299,12 @@ export interface ListItem {
   subSizes?: number[]
   /** 副信息首行靠右对齐内容（如生产订单创建日期靠右） */
   subRight?: string
+  /** 副信息逐行字体颜色（空串=保持默认灰）：生产订单排产行绿色 */
+  subColors?: string[]
+  /** tag 行内样式覆盖（如已排产绿底白字），优先于 tone 浅色底 */
+  tagStyle?: { color?: string; background?: string; borderColor?: string }
+  /** 卡片底色（客户列表逐客不同底色） */
+  cardBg?: string
 }
 
 export const getListPage = (page: string, q: string, extra = '') =>
@@ -362,6 +368,16 @@ export const getWsMaterials = (kind: 'stock' | 'urgent') =>
 export const createNewStyle = (body: Record<string, any>) =>
   request<{ saved: boolean; record: any }>('/wx/newstyle', { method: 'POST', data: body })
 
+/** 单条排期记录（服务端下发，用于详情弹层展示与修改） */
+export interface ScheduleRec {
+  key: string
+  id: string
+  line: string
+  shift: string
+  startDate: string
+  planQty: number
+}
+
 /** 待排产订单卡片（与 Web ScheduleBoard 待排产面板同结构） */
 export interface ScheduleOrderItem {
   id: string
@@ -372,6 +388,9 @@ export interface ScheduleOrderItem {
   planQty: number
   pending: number
   semiText: string
+  scheduledQty: number
+  statusText: string
+  schedules: ScheduleRec[]
   fields?: [string, string][]
 }
 
@@ -391,3 +410,7 @@ export const getScheduleBoard = (date: string) =>
 /** 手机排期登记（与 Web ScheduleBoard 拖拽落库同源：PS- 编号 + 班次 + 待排量钳制） */
 export const postSchedule = (body: { productionOrderId: string; date: string; line: string; shift: string; qty: number }) =>
   request<{ saved: boolean; record: any }>('/wx/schedule', { method: 'POST', data: body })
+
+/** 手机修改排期（按记录 key，与新增同闸同钳制） */
+export const putSchedule = (key: string, body: { date: string; line: string; shift: string; qty: number }) =>
+  request<{ saved: boolean; record: any }>(`/wx/schedule/${key}`, { method: 'PUT', data: body })

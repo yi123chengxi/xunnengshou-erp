@@ -73,12 +73,15 @@ export const MODULES: MenuModule[] = [
     key: 'customer', title: '客户管理', icon: '🤝',
     children: [
       { key: 'customers', title: '客户列表' },
+      { key: 'bill-detail', title: '账单明细' },
+      { key: 'reconciliation', title: '对账管理' },
     ],
   },
   {
     key: 'product', title: '商品资料', icon: '🏷️',
     children: [
       { key: 'products', title: '商品列表' },
+      { key: 'molds', title: '模具管理' },
     ],
   },
 ]
@@ -105,6 +108,8 @@ export const CHILD_ICONS: Record<string, string> = {
   progress: '📈', 'shop-management': '🏪', opportunity: '🛒', 'warehouse-stats': '📊', manage: '🏅',
   attendance: '⏰', staff: '🧑‍💼', leave: '📝',
   customers: '🤝', products: '🏷️',
+  'bill-detail': '🧾', reconciliation: '⚖️',
+  molds: '🧰',
 }
 
 /** 收藏 id（module:child）→ 子菜单标题 */
@@ -140,12 +145,20 @@ export function loadMenuPerms(): Promise<Record<string, boolean> | null> {
       Object.values(CHILD_MENU_KEYS).forEach(ks => ks.forEach(k => { allowAll[k] = true }))
       menuPermCache = Promise.resolve(allowAll)
     } else {
+      // 失败自动重试一次吸收瞬时网络抖动；且失败结果（null）不入缓存——
+      // 旧实现把偶发失败的 null 钉死在会话级缓存里，后续每个页面复用后 fail-closed 永久卡「加载中」
       menuPermCache = getWxMenus()
         .then(d => (d && d.perms) || null)
-        .catch(() => null)
+        .catch(() => getWxMenus().then(d => (d && d.perms) || null).catch(() => null))
+        .then(p => { if (!p) menuPermCache = null; return p })
     }
   }
   return menuPermCache
+}
+
+/** 清空菜单权限缓存：页面重试按钮在加载失败后重新拉取用 */
+export function invalidateMenuPerms(): void {
+  menuPermCache = null
 }
 
 /** 子菜单是否可见（fail-closed）：已映射菜单点须显式允许（perms[k]===true），缺失或权限未知一律不可见；

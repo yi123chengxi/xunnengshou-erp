@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import './index.scss'
 import { View, Text, Image } from '@tarojs/components'
 import Taro from '@tarojs/taro'
-import { MODULES, CHILD_ICONS, openMenuChild, loadMenuPerms, childAllowed } from '../../config/menu'
+import { MODULES, CHILD_ICONS, openMenuChild, loadMenuPerms, invalidateMenuPerms, childAllowed } from '../../config/menu'
 import { isFav, toggleFav } from '../../services/favorites'
 import AppTabBar from '../../components/AppTabBar'
 
@@ -12,8 +12,15 @@ const More = () => {
   const [, setTick] = useState(0)
   // 菜单点权限（与网页版 PERM_V2 同源）：无权限的子菜单卡片不渲染，整模块无可见子菜单时隐藏模块块
   const [perms, setPerms] = useState<Record<string, boolean> | null>(null)
+  // 加载失败与加载中区分：失败展示重试入口，避免旧实现永久卡「加载中」
+  const [failed, setFailed] = useState(false)
+  const loadPerms = () => {
+    setFailed(false)
+    loadMenuPerms().then(p => { setPerms(p); if (!p) setFailed(true) })
+  }
   useEffect(() => {
-    loadMenuPerms().then(setPerms)
+    loadPerms()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const onToggle = (id: string, title: string) => {
@@ -24,8 +31,19 @@ const More = () => {
 
   return (
     <View style={{ paddingBottom: 140 }}>
-      {/* fail-closed：权限未知时不渲染任何功能卡片，展示中性加载态 */}
-      {perms === null && <View className="empty">菜单权限加载中…</View>}
+      {/* fail-closed：权限未知时不渲染任何功能卡片；加载中/加载失败区分展示，失败可重试 */}
+      {perms === null && !failed && <View className="empty">菜单权限加载中…</View>}
+      {perms === null && failed && (
+        <View className="empty" style={{ textAlign: 'center' }}>
+          <View>菜单权限加载失败</View>
+          <View
+            style={{ display: 'inline-block', marginTop: 10, padding: '6px 24px', fontSize: 14, color: '#fff', background: '#1677ff', borderRadius: 8 }}
+            onClick={() => { invalidateMenuPerms(); loadPerms() }}
+          >
+            重试
+          </View>
+        </View>
+      )}
       {MODULES.map(m => {
         const children = perms ? m.children.filter(c => childAllowed(perms, c.key)) : []
         if (!children.length) return null
