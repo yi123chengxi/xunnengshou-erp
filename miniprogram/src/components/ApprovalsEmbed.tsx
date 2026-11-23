@@ -63,7 +63,7 @@ const ApprovalsEmbed = ({ tick = 0 }: { tick?: number }) => {
         <View
           key={`${it.type}-${it.key}`}
           className="card"
-          style={{ padding: '16px 24px' }}
+          style={{ padding: '16px 24px', borderRadius: 0 }}
           onClick={() => Taro.navigateTo({ url: `/pages/approval-detail/index?type=${it.type}&key=${encodeURIComponent(it.key)}` })}
         >
           {/* 两行卡：第一行 标题左（最多5个中文字，多余隐藏）+ 金额右；第二行 时间·申请人·单号 + 状态标签；字体缩小30%（21→15） */}
@@ -77,7 +77,7 @@ const ApprovalsEmbed = ({ tick = 0 }: { tick?: number }) => {
             <Text className="muted" style={{ flex: 1, minWidth: 0, fontSize: 15, lineHeight: '20px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {it.time}{(it.applicantName || it.applicant) ? ` · ${it.applicantName || it.applicant}` : ''}{it.no ? ` · ${it.no}` : ''}
             </Text>
-            <Text className={`tag ${statusTag(it.status)}`} style={{ marginLeft: 12, flexShrink: 0, fontSize: 15, lineHeight: '20px', padding: '0 8px' }}>{it.statusText}</Text>
+            <Text className={`tag ${statusTag(it.status)}`} style={{ marginLeft: 12, flexShrink: 0, fontSize: 12, lineHeight: '16px', padding: '0 8px' }}>{it.statusText}</Text>
           </View>
         </View>
       ))}

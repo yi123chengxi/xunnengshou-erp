@@ -16,6 +16,7 @@ import WarehouseStatsView from './WarehouseStatsView'
 import NewStyleProgressView from './NewStyleProgressView'
 import ScheduleBoardView from './ScheduleBoardView'
 import CustomersView from './CustomersView'
+import ReconView from './ReconView'
 import MarketView from './MarketView'
 import PickingView from './PickingView'
 
@@ -152,7 +153,8 @@ const ModuleView = ({
       case 'customers': return <CustomersView tick={tick} />
       // 账单明细/对账管理：与 Web 账单明细同键；客户卡入口带 extra=客户名按客过滤；方形卡片与客户列表同风格
       case 'bill-detail': return <ListView page="bill-detail" extra={initialExtra ? `extra=${encodeURIComponent(initialExtra)}` : ''} square detail tick={tick} />
-      case 'reconciliation': return <ListView page="reconciliation" extra={initialExtra ? `extra=${encodeURIComponent(initialExtra)}` : ''} square detail tick={tick} />
+      // 对账管理：recon_db_supplier 真值记录 + 小程序内确认对账（不再复用账单明细行）
+      case 'reconciliation': return <ReconView tick={tick} />
       // 模具管理：与 Web MoldPage 同源服务端 molds 真表
       case 'molds': return <ListView page="molds" detail tick={tick} />
       case 'opportunity': return <MarketView tick={tick} />
@@ -165,14 +167,14 @@ const ModuleView = ({
 
   return (
     <View style={{ paddingBottom: 340 }}>
-      {/* 页头标题：财务管理/仓库管理/订单管理按用户要求缩小 50%；电商常用显示当前子菜单名称并缩小 30%；其余模块维持原字号 */}
+      {/* 页头标题：财务管理/仓库管理/订单管理/人事管理按用户要求缩小 50%；电商常用显示当前子菜单名称并缩小 30%；其余模块维持原字号 */}
       <View
         style={{
           padding: '20px 24px 0', fontWeight: 600,
-          fontSize: moduleKey === 'finance' || moduleKey === 'warehouse' || moduleKey === 'order' || moduleKey === 'product' || moduleKey === 'production-mgmt' || moduleKey === 'customer' ? 16 : (moduleKey === 'ecommerce' ? 22 : 32),
+          fontSize: moduleKey === 'finance' || moduleKey === 'warehouse' || moduleKey === 'order' || moduleKey === 'product' || moduleKey === 'production-mgmt' || moduleKey === 'customer' || moduleKey === 'hr' ? 16 : (moduleKey === 'ecommerce' ? 22 : 32),
         }}
       >
-        {mod.icon} {moduleKey === 'ecommerce' || moduleKey === 'order' ? (mod.children.find(c => c.key === child)?.title || mod.title) : (moduleKey === 'production-mgmt' && child === 'production-schedule' ? '生产排期' : (moduleKey === 'customer' ? (mod.children.find(c => c.key === child)?.title || '客户列表') : mod.title))}
+        {mod.icon} {moduleKey === 'ecommerce' || moduleKey === 'order' || moduleKey === 'hr' || moduleKey === 'finance' || (moduleKey === 'product' && child === 'molds') ? (mod.children.find(c => c.key === child)?.title || mod.title) : (moduleKey === 'production-mgmt' && child === 'production-schedule' ? '生产排期' : (moduleKey === 'customer' ? (mod.children.find(c => c.key === child)?.title || '客户列表') : mod.title))}
       </View>
       {renderChild()}
       {/* 底部子菜单条：固定在 Tab 栏上方（实测高度定位，未测得前用 96px 兜底） */}

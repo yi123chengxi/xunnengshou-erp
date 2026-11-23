@@ -267,12 +267,26 @@ export interface BankAccount {
 export const getBankAccounts = (q = '') =>
   request<{ list: BankAccount[]; total: number; totalBalance: number }>(`/wx/bank-accounts?q=${encodeURIComponent(q)}`)
 
-export interface AttendanceRecord { key: string; username: string; name?: string; date: string; in: string; out: string }
+export interface AttendanceRecord { key: string; username: string; name?: string; date: string; in: string; out: string; photoIn?: string; photoOut?: string }
 
-export const getAttendance = () => request<{ record: AttendanceRecord | null; date: string }>('/wx/attendance')
+/** 班次打卡配置（服务端 GET /wx/attendance 下发，驱动小程序范围/拍照打卡） */
+export interface AttendanceShift {
+  name: string
+  startTime: string
+  endTime: string
+  punchLat: number | null
+  punchLng: number | null
+  punchRadius: number
+  requirePhoto: boolean
+  clockInLocation: string
+  clockInAddress: string
+}
 
-export const postAttendance = (type: 'in' | 'out') =>
-  request<{ saved: boolean; record: AttendanceRecord }>('/wx/attendance', { method: 'POST', data: { type } })
+export const getAttendance = () => request<{ record: AttendanceRecord | null; date: string; shift: AttendanceShift | null }>('/wx/attendance')
+
+/** 打卡：type 上/下班；lat/lng 为 wgs84 定位（班次设了范围时必传）；photo 为拍照上传后的 URL（requirePhoto 时必传） */
+export const postAttendance = (body: { type: 'in' | 'out'; lat?: number; lng?: number; photo?: string }) =>
+  request<{ saved: boolean; record: AttendanceRecord }>('/wx/attendance', { method: 'POST', data: body })
 
 export const getLeaves = (tab: 'mine' | 'pending' | 'all') =>
   request<{ list: any[] }>(`/wx/leaves?tab=${tab}`)
@@ -414,3 +428,23 @@ export const postSchedule = (body: { productionOrderId: string; date: string; li
 /** 手机修改排期（按记录 key，与新增同闸同钳制） */
 export const putSchedule = (key: string, body: { date: string; line: string; shift: string; qty: number }) =>
   request<{ saved: boolean; record: any }>(`/wx/schedule/${key}`, { method: 'PUT', data: body })
+
+/** 对账记录精简形状（服务端 recon_db_supplier_<owner> 存活记录下发） */
+export interface ReconRecordBrief {
+  key: string
+  docNo: string
+  customerName: string
+  supplierName: string
+  ourAmount: number
+  theirAmount: number
+  initiator: string
+  createdAt: string
+  reconResult: string
+}
+
+/** 对账管理列表（与 Web ReconciliationManage 供应商平台同库同源） */
+export const getReconRecords = () => request<{ list: ReconRecordBrief[] }>('/wx/recon-records')
+
+/** 供方确认对账（与 Web completeRecon('confirmSupplier') 同口径落库） */
+export const confirmRecon = (key: string) =>
+  request<{ saved: boolean }>(`/wx/recon/${encodeURIComponent(key)}/confirm`, { method: 'POST' })

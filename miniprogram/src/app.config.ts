@@ -21,4 +21,11 @@ export default defineAppConfig({
     navigationBarTextStyle: 'white',
     backgroundColor: '#f5f6f8',
   },
+  // 打卡定位（企业微信式范围打卡）：getLocation 需在 requiredPrivateInfos 声明并配置授权文案
+  requiredPrivateInfos: ['getLocation'],
+  permission: {
+    'scope.userLocation': {
+      desc: '用于上下班打卡时判断是否在打卡范围内',
+    },
+  },
 })

@@ -30,6 +30,11 @@ interface Shift {
   // 打卡位置
   clockInLocation: string;
   clockInAddress: string;
+  // 打卡范围与拍照（企业微信式：范围内才可打卡，可要求拍照）
+  punchLat?: number;      // 打卡中心点纬度（wgs84，与小程序 getLocation 同坐标系）
+  punchLng?: number;      // 打卡中心点经度
+  punchRadius?: number;   // 允许打卡半径（米），缺省 300
+  requirePhoto?: boolean; // 打卡是否必须拍照
   // 加班规则
   overtimeEnabled: boolean; // 是否启用加班计费
   standardHours: number; // 标准工作时长（小时）
@@ -196,6 +201,8 @@ const DEFAULT_SHIFT: Shift = {
   holidays: [],
   clockInLocation: '',
   clockInAddress: '',
+  punchRadius: 300,
+  requirePhoto: false,
   overtimeEnabled: false,
   standardHours: 8,
   overtimeThreshold: 0,
@@ -218,6 +225,10 @@ const loadShifts = (): Shift[] => {
         holidays: s.holidays || [],
         clockInLocation: s.clockInLocation || '',
         clockInAddress: s.clockInAddress || '',
+        punchLat: s.punchLat ?? undefined,
+        punchLng: s.punchLng ?? undefined,
+        punchRadius: s.punchRadius ?? 300,
+        requirePhoto: s.requirePhoto ?? false,
         overtimeEnabled: s.overtimeEnabled || false,
         standardHours: s.standardHours || 8,
         overtimeThreshold: s.overtimeThreshold || 0,
@@ -310,7 +321,7 @@ const ShiftPage: React.FC = () => {
   const handleAdd = useCallback(() => {
     setEditingKey('');
     form.resetFields();
-    form.setFieldsValue({ shiftType: 'fixed', lateThreshold: 10, isCrossDay: false, assignedGroups: [], assignedUsers: [], restDays: [], holidays: [], clockInLocation: '', clockInAddress: '', overtimeEnabled: false, standardHours: 8, overtimeThreshold: 0, workdayOvertimeRate: 0, restDayOvertimeRate: 0, holidayOvertimeRate: 0 });
+    form.setFieldsValue({ shiftType: 'fixed', lateThreshold: 10, isCrossDay: false, assignedGroups: [], assignedUsers: [], restDays: [], holidays: [], clockInLocation: '', clockInAddress: '', punchRadius: 300, requirePhoto: false, overtimeEnabled: false, standardHours: 8, overtimeThreshold: 0, workdayOvertimeRate: 0, restDayOvertimeRate: 0, holidayOvertimeRate: 0 });
     setModalVisible(true);
   }, [form]);
 
@@ -329,6 +340,10 @@ const ShiftPage: React.FC = () => {
       holidays: record.holidays || [],
       clockInLocation: record.clockInLocation || '',
       clockInAddress: record.clockInAddress || '',
+      punchLat: record.punchLat,
+      punchLng: record.punchLng,
+      punchRadius: record.punchRadius ?? 300,
+      requirePhoto: record.requirePhoto ?? false,
       overtimeEnabled: record.overtimeEnabled || false,
       standardHours: record.standardHours || 8,
       overtimeThreshold: record.overtimeThreshold || 0,
@@ -400,6 +415,10 @@ const ShiftPage: React.FC = () => {
         holidays: values.holidays || [],
         clockInLocation: values.clockInLocation || '',
         clockInAddress: values.clockInAddress || '',
+        punchLat: values.punchLat != null && values.punchLat !== '' ? Number(values.punchLat) : undefined,
+        punchLng: values.punchLng != null && values.punchLng !== '' ? Number(values.punchLng) : undefined,
+        punchRadius: values.punchRadius != null && values.punchRadius !== '' ? Number(values.punchRadius) : 300,
+        requirePhoto: values.requirePhoto || false,
         overtimeEnabled: values.overtimeEnabled || false,
         standardHours: values.standardHours || 8,
         overtimeThreshold: values.overtimeThreshold || 0,
@@ -1045,6 +1064,49 @@ const ShiftPage: React.FC = () => {
               <Form.Item name="clockInAddress" label="详细地址">
                 <Input placeholder="如：浙江省台州市椒江区XX路XX号" />
               </Form.Item>
+            </Col>
+          </Row>
+
+          {/* ===== 打卡范围与拍照（企业微信式） ===== */}
+          <Row gutter={16}>
+            <Col span={8}>
+              <Form.Item name="punchLat" label="打卡中心纬度" tooltip="与小程序定位同为 wgs84 坐标系；留空则不限制打卡地点">
+                <InputNumber style={{ width: '100%' }} placeholder="如：28.6563" step={0.000001} precision={6} />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="punchLng" label="打卡中心经度" tooltip="与小程序定位同为 wgs84 坐标系；留空则不限制打卡地点">
+                <InputNumber style={{ width: '100%' }} placeholder="如：121.4208" step={0.000001} precision={6} />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="punchRadius" label="打卡半径(米)" tooltip="员工定位与中心点距离在此范围内才可打卡">
+                <InputNumber min={0} max={100000} style={{ width: '100%' }} placeholder="300" />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Row gutter={16}>
+            <Col span={12}>
+              <Form.Item name="requirePhoto" label="打卡需拍照" valuePropName="checked" tooltip="开启后员工必须拍照才能完成打卡">
+                <Switch checkedChildren="需拍照" unCheckedChildren="无需" />
+              </Form.Item>
+            </Col>
+            <Col span={12} style={{ display: 'flex', alignItems: 'center' }}>
+              <Button
+                icon={<EnvironmentOutlined />}
+                onClick={() => {
+                  if (!navigator.geolocation) { message.error('当前浏览器不支持定位'); return; }
+                  message.loading({ content: '定位中…', key: 'geo', duration: 0 });
+                  navigator.geolocation.getCurrentPosition(
+                    (pos) => {
+                      form.setFieldsValue({ punchLat: Number(pos.coords.latitude.toFixed(6)), punchLng: Number(pos.coords.longitude.toFixed(6)) });
+                      message.success({ content: '已填入当前位置坐标', key: 'geo' });
+                    },
+                    () => message.error({ content: '定位失败，请检查定位权限或手动填写', key: 'geo' }),
+                    { enableHighAccuracy: true, timeout: 10000 },
+                  );
+                }}
+              >获取当前位置</Button>
             </Col>
           </Row>
 

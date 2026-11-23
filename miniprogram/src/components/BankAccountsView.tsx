@@ -24,13 +24,13 @@ const TYPE_BG: Record<string, string> = {
 
 // —— 行内样式常量（weapp 中类选择器会压过行内样式，精细控件统一纯行内）——
 const SEARCH_BAR = { display: 'flex', padding: '16px 24px 0', alignItems: 'center' } as const
-const SEARCH_INPUT = { flex: 1, marginBottom: 0, height: 36, lineHeight: '36px', fontSize: 17, padding: '0 11px', background: '#ffffff', border: '1px solid #c9d4e3', borderRadius: 8, boxSizing: 'border-box' } as const
-const SEARCH_BTN = { marginLeft: 8, height: 36, lineHeight: '36px', padding: '0 16px', fontSize: 15, color: '#ffffff', background: '#1677ff', borderRadius: 8, textAlign: 'center', flexShrink: 0, boxSizing: 'border-box' } as const
-// 汇总条：浅蓝底色圆角条，字体缩小 30%（22→15 / 24→17）
-const SUMMARY = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', margin: '12px 24px 0', padding: '10px 16px', borderRadius: 10, background: '#e6f4ff' } as const
+const SEARCH_INPUT = { flex: 1, marginBottom: 0, height: 36, lineHeight: '36px', fontSize: 17, padding: '0 11px', background: '#ffffff', border: '1px solid #c9d4e3', borderRadius: 0, boxSizing: 'border-box' } as const
+const SEARCH_BTN = { marginLeft: 8, height: 36, lineHeight: '36px', padding: '0 16px', fontSize: 15, color: '#ffffff', background: '#1677ff', borderRadius: 0, textAlign: 'center', flexShrink: 0, boxSizing: 'border-box' } as const
+// 汇总条：浅蓝底色方形条，字体缩小 30%（22→15 / 24→17）
+const SUMMARY = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', margin: '12px 24px 0', padding: '10px 16px', borderRadius: 0, background: '#e6f4ff' } as const
 const SUMMARY_LBL = { color: '#4d6b8a', fontSize: 15 } as const
 const SUMMARY_AMT = { fontSize: 17, fontWeight: 700, color: '#1f2733' } as const
-const CARD = { background: '#ffffff', borderRadius: 16, margin: '16px 24px', padding: '16px 24px', boxShadow: '0 2px 8px rgba(31,39,51,0.04)' } as const
+const CARD = { background: '#ffffff', borderRadius: 0, margin: '16px 24px', padding: '16px 24px', boxShadow: '0 2px 8px rgba(31,39,51,0.04)' } as const
 const C_ROW = { display: 'flex', alignItems: 'center' } as const
 const C_ROW2 = { display: 'flex', alignItems: 'center', marginTop: 4, overflow: 'hidden' } as const
 const C_NAME = { flex: 1, minWidth: 0, fontWeight: 600, fontSize: 17, lineHeight: '24px', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' } as const
@@ -44,16 +44,16 @@ const DETAIL_BTN = { marginLeft: 12, flexShrink: 0, height: 32, lineHeight: '32p
 // 复制按键：与查看明细同尺寸的次要样式（白底浅蓝边蓝字）；内边距略紧以免余额位数多时挤掉右侧按键
 const COPY_BTN = { marginLeft: 8, flexShrink: 0, height: 32, lineHeight: '30px', padding: '0 10px', background: '#ffffff', color: '#1677ff', border: '1px solid #91caff', fontSize: 12, borderRadius: 16, textAlign: 'center', boxSizing: 'border-box' } as const
 const MASK = { position: 'fixed', left: 0, top: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.45)', zIndex: 1000 } as const
-const SHEET = { position: 'fixed', left: 0, right: 0, bottom: 0, background: '#f7f9fb', borderTopLeftRadius: 16, borderTopRightRadius: 16, padding: '0 20px 28px', zIndex: 1001, maxHeight: '78%', boxSizing: 'border-box', overflowY: 'scroll' } as const
+const SHEET = { position: 'fixed', left: 0, right: 0, bottom: 0, background: '#f7f9fb', borderTopLeftRadius: 0, borderTopRightRadius: 0, padding: '0 20px 28px', zIndex: 1001, maxHeight: '78%', boxSizing: 'border-box', overflowY: 'scroll' } as const
 const SHEET_HEAD = { display: 'flex', alignItems: 'center', paddingTop: 16 } as const
 const SHEET_TITLE = { flex: 1, minWidth: 0, fontSize: 16, fontWeight: 600, color: '#1f2733', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' } as const
 const CLOSE_X = { flexShrink: 0, marginLeft: 12, fontSize: 20, color: '#86909c', lineHeight: '22px' } as const
-const INFO_BLOCK = { marginTop: 12, background: '#ffffff', borderRadius: 10, padding: '4px 12px', overflow: 'hidden' } as const
+const INFO_BLOCK = { marginTop: 12, background: '#ffffff', borderRadius: 0, padding: '4px 12px', overflow: 'hidden' } as const
 const INFO_ROW = { display: 'flex', alignItems: 'flex-start', padding: '6px 0', borderBottom: '1px solid #f2f4f7' } as const
 const INFO_LBL = { flexShrink: 0, width: 66, fontSize: 13, color: '#86909c', lineHeight: '19px' } as const
 const INFO_VAL = { flex: 1, minWidth: 0, fontSize: 13, color: '#1f2733', lineHeight: '19px', wordBreak: 'break-all' } as const
 const SEC_TITLE = { margin: '14px 0 8px', fontSize: 14, fontWeight: 600, color: '#1f2733' } as const
-const TXN_BOX = { background: '#ffffff', borderRadius: 10, overflow: 'hidden' } as const
+const TXN_BOX = { background: '#ffffff', borderRadius: 0, overflow: 'hidden' } as const
 const TXN_ROW = { padding: '8px 12px', borderBottom: '1px solid #f2f4f7' } as const
 const TXN_L1 = { display: 'flex', alignItems: 'center' } as const
 const TXN_TYPE = { flexShrink: 0, marginRight: 8, padding: '0 8px', borderRadius: 8, fontSize: 11, lineHeight: '18px', color: '#ffffff' } as const

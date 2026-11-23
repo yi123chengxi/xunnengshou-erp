@@ -1685,6 +1685,120 @@ router.put('/schedule/:key', verifyJWT, async (req: Request, res: Response) => {
   }
 });
 
+/** GET /api/wx/recon-records —— 对账管理真值：供应商平台分平台库 recon_db_supplier_<owner> 存活记录（墓碑不入列） */
+router.get('/recon-records', verifyJWT, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user as JWTPayload;
+    const owner = await ownerOf(user.username);
+    const rows = await readRows(`recon_db_supplier_${owner}`);
+    const list = rows.filter((r: any) => r && !r.delisted).map((r: any) => ({
+      key: String(r.key || ''), docNo: String(r.docNo || ''),
+      customerName: String(r.customerName || (String(r.initiator || '') === 'supplier' ? (r.counterparty || '') : '') || ''),
+      supplierName: String(r.supplierName || (String(r.initiator || '') === 'purchaser' ? (r.counterparty || '') : '') || ''),
+      ourAmount: Number(r.ourAmount) || 0, theirAmount: Number(r.theirAmount) || 0,
+      initiator: String(r.initiator || ''), createdAt: String(r.createdAt || r.initiatedAt || ''),
+      reconResult: String(r.reconResult || ''),
+    }));
+    res.json({ code: 200, data: { list } });
+  } catch (err: any) {
+    console.error('[wx] recon-records error:', err.message);
+    res.status(500).json({ code: 500, message: '服务器内部错误' });
+  }
+});
+
+/** POST /api/wx/recon/:key/confirm —— 小程序供方确认对账：与 Web completeRecon('confirmSupplier') 同口径——
+ *  供方账单明细回写「对账完成」+ 采方账单回写「已对账」+ 双方对账库落完成墓碑（防复活、对方端经同步收敛） */
+router.post('/recon/:key/confirm', verifyJWT, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user as JWTPayload;
+    const owner = await ownerOf(user.username);
+    const operator = await displayNameOf(user.username);
+    const dbKey = `recon_db_supplier_${owner}`;
+    const rows = await readRows(dbKey);
+    const idx = rows.findIndex((r: any) => String(r.key || '') === String(req.params.key || '') && !r.delisted);
+    if (idx < 0) { res.status(404).json({ code: 404, message: '对账记录不存在或已完成' }); return; }
+    const r: any = { ...rows[idx] };
+    const supDiff = '金额一致，双方对账完成';
+    const purDiff = supDiff;
+    const logAction = '确认对账';
+    const nowIso = new Date().toISOString();
+    const todayStr = nowIso.slice(0, 10);
+    // billLog 为 JSON 字符串数组（与 Web appendBillLogEntry 同结构）
+    const appendLog = (existing: any, detail: string) => {
+      let logs: any[] = [];
+      try { const p = existing ? JSON.parse(existing) : []; if (Array.isArray(p)) logs = p; } catch { logs = []; }
+      logs.push({ time: new Date().toLocaleString('zh-CN'), action: logAction, operator, detail });
+      return JSON.stringify(logs);
+    };
+    // 1) 供方账单明细回写（凭证 orderNo 优先、单号唯一回退，与 Web 同判据）
+    const billKey = `pageData_customer_bill-detail_${owner}`;
+    const billRows = await readRows(billKey);
+    const cpOkRow = (x: any) => (!String(r.customerName || '').trim() || String(x.customerName || '').trim() === String(r.customerName || '').trim() || (!!r.customerUsername && x.customerUsername === r.customerUsername) || (!!r.customerNo && x.customerNo === r.customerNo));
+    let bIdx = -1;
+    if (r.orderNo) bIdx = billRows.findIndex((x: any) => x.id === r.orderNo && cpOkRow(x));
+    if (bIdx < 0 && r.orderNo) bIdx = billRows.findIndex((x: any) => x.id === r.orderNo);
+    if (bIdx < 0 && r.docNo) {
+      const hits = billRows.map((x: any, i: number) => ({ x, i })).filter(e => !!e.x.outboundNo && String(e.x.outboundNo).trim() === String(r.docNo || '').trim() && cpOkRow(e.x));
+      if (hits.length === 1) bIdx = hits[0].i;
+    }
+    if (bIdx >= 0) {
+      billRows[bIdx] = {
+        ...billRows[bIdx], reconResult: '对账完成', diffDesc: supDiff,
+        totalAmount: Number(r.ourAmount) || billRows[bIdx].totalAmount,
+        supplierReconPerson: operator || billRows[bIdx].supplierReconPerson || '',
+        billLog: appendLog(billRows[bIdx].billLog, supDiff),
+      };
+      await writeRows(billKey, billRows, owner);
+    }
+    // 2) 采方账单回写（matchedBillKey 优先、单号唯一回退）
+    const regUsers = await readRows('registeredUsers');
+    const byCo = (n: any) => {
+      const t = String(n || '').trim();
+      return t ? regUsers.find((u: any) => u && (String(u.companyName || '').trim() === t || String(u.companyShortName || '').trim() === t || String(u.companyNo || '').trim() === t)) || null : null;
+    };
+    const purOwner = String(r.customerUsername || '') || (byCo(r.customerName)?.username || '') || (r.customerNo ? (byCo(r.customerNo)?.username || '') : '');
+    if (purOwner) {
+      const pbKey = `purchaser_bills_${purOwner}`;
+      const bills = await readRows(pbKey);
+      const cpOk = (b: any) => (!String(r.supplierName || '').trim() || String(b.supplier || '').trim() === String(r.supplierName || '').trim() || (!!r.supplierUsername && b.supplierUsername === r.supplierUsername));
+      let pIdx = -1;
+      if (r.matchedBillKey) { const i = bills.findIndex((b: any) => b.key === r.matchedBillKey && cpOk(b)); if (i >= 0) pIdx = i; }
+      if (pIdx < 0 && r.docNo) {
+        const hits = bills.map((b: any, i: number) => ({ b, i })).filter(e => !!e.b.outboundNo && String(e.b.outboundNo).trim() === String(r.docNo || '').trim() && cpOk(e.b));
+        if (hits.length === 1) pIdx = hits[0].i;
+      }
+      if (pIdx >= 0) {
+        const cur = String(bills[pIdx].reconcileResult || '');
+        const update: any = { diffNote: purDiff, supplierReconciler: operator, billLog: appendLog(bills[pIdx].billLog, purDiff) };
+        if (!['按供方入账', '不相符'].includes(cur)) update.reconcileResult = '已对账';
+        bills[pIdx] = { ...bills[pIdx], ...update };
+        await writeRows(pbKey, bills, purOwner);
+      }
+    }
+    // 3) 完成墓碑落双方对账库（delisted+supResult+confirmedAt，对方端经同步/自愈收敛）
+    const tomb: any = {
+      ...r, delisted: true, delistedAt: nowIso, reconResult: 'matched',
+      theirEntryDate: !r.theirEntryDate || r.theirEntryDate === '-' ? todayStr : r.theirEntryDate,
+      ourEntryDate: !r.ourEntryDate || r.ourEntryDate === '-' ? todayStr : r.ourEntryDate,
+      confirmedBy: operator || r.confirmedBy, confirmedAt: nowIso.slice(0, 19).replace('T', ' '),
+      supResult: '对账完成', supDiff, supPerson: operator, purPerson: r.purPerson || '',
+    };
+    rows[idx] = tomb;
+    await writeRows(dbKey, rows, owner);
+    if (purOwner) {
+      const pDb = `recon_db_purchaser_${purOwner}`;
+      const pRows = await readRows(pDb);
+      const pi = pRows.findIndex((x: any) => String(x.key || '') === String(tomb.key || ''));
+      if (pi >= 0) pRows[pi] = { ...pRows[pi], ...tomb }; else pRows.unshift(tomb);
+      await writeRows(pDb, pRows, purOwner);
+    }
+    res.json({ code: 200, data: { saved: true } });
+  } catch (err: any) {
+    console.error('[wx] recon confirm error:', err.message);
+    res.status(500).json({ code: 500, message: '服务器内部错误' });
+  }
+});
+
 // ============ 上下班打卡（与 Web AttendancePage 同库同口径：hr_attendance_<owner>） ============
 
 const hmMin = (t: string): number => {
@@ -1710,7 +1824,22 @@ function toMiniAttendance(rec: any) {
   return {
     key: rec.key, username: rec.employeeUsername, name: rec.employeeName,
     date: rec.date, in: rec.clockIn || '', out: rec.clockOut || '',
+    photoIn: rec.photoIn || '', photoOut: rec.photoOut || '',
   };
+}
+/** 两点间球面距离（米），wgs84 经纬度；与小程序 getLocation 同坐标系 */
+function haversineMeters(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6371000;
+  const toRad = (d: number) => d * Math.PI / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+/** 取默认班次（与 Web defaultShift 同口径：isDefault 优先，否则首个） */
+function pickDefaultShift(shifts: any[]): any {
+  return (Array.isArray(shifts) ? shifts : []).find((s: any) => s && s.isDefault)
+    || (Array.isArray(shifts) ? shifts[0] : null) || null;
 }
 
 /** GET /api/wx/attendance —— 本人今日打卡记录 */
@@ -1721,7 +1850,18 @@ router.get('/attendance', verifyJWT, async (req: Request, res: Response) => {
     const ymd = localYmd();
     const rows = await readRows(`hr_attendance_${owner}`);
     const rec = rows.find((r: any) => r.employeeUsername === user.username && r.date === ymd) || null;
-    res.json({ code: 200, data: { record: toMiniAttendance(rec), date: ymd } });
+    const shifts = await readRows(`hr_shifts_${owner}`);
+    const shift = pickDefaultShift(shifts);
+    const shiftCfg = shift ? {
+      name: shift.name || '标准班',
+      startTime: shift.startTime || '', endTime: shift.endTime || '',
+      punchLat: typeof shift.punchLat === 'number' ? shift.punchLat : null,
+      punchLng: typeof shift.punchLng === 'number' ? shift.punchLng : null,
+      punchRadius: Number(shift.punchRadius) || 300,
+      requirePhoto: !!shift.requirePhoto,
+      clockInLocation: shift.clockInLocation || '', clockInAddress: shift.clockInAddress || '',
+    } : null;
+    res.json({ code: 200, data: { record: toMiniAttendance(rec), date: ymd, shift: shiftCfg } });
   } catch (err: any) {
     console.error('[wx] attendance get error:', err.message);
     res.status(500).json({ code: 500, message: '服务器内部错误' });
@@ -1734,6 +1874,25 @@ router.post('/attendance', verifyJWT, async (req: Request, res: Response) => {
     const user = (req as any).user as JWTPayload;
     const owner = await ownerOf(user.username);
     const type = req.body.type === 'out' ? 'out' : 'in';
+    const shifts = await readRows(`hr_shifts_${owner}`);
+    const shift = pickDefaultShift(shifts);
+    // 打卡范围校验：班次配置了中心点坐标时，必须提供定位且在半径内（企业微信式）
+    if (shift && typeof shift.punchLat === 'number' && typeof shift.punchLng === 'number') {
+      const lat = req.body.lat != null && req.body.lat !== '' ? Number(req.body.lat) : NaN;
+      const lng = req.body.lng != null && req.body.lng !== '' ? Number(req.body.lng) : NaN;
+      if (!isFinite(lat) || !isFinite(lng)) {
+        return res.status(400).json({ code: 400, message: '需要获取定位后才能打卡，请开启定位权限' });
+      }
+      const radius = Number(shift.punchRadius) || 300;
+      const dist = haversineMeters(lat, lng, shift.punchLat, shift.punchLng);
+      if (dist > radius) {
+        return res.status(400).json({ code: 400, message: `不在打卡范围内（距打卡点约 ${Math.round(dist)} 米，允许 ${radius} 米）` });
+      }
+    }
+    // 拍照校验：班次要求拍照时必须携带 photo
+    if (shift && shift.requirePhoto && !req.body.photo) {
+      return res.status(400).json({ code: 400, message: '本次打卡需要拍照，请拍照后重试' });
+    }
     const dsKey = `hr_attendance_${owner}`;
     const rows = await readRows(dsKey);
     const ymd = localYmd();
@@ -1750,11 +1909,13 @@ router.post('/attendance', verifyJWT, async (req: Request, res: Response) => {
       };
       rows.unshift(rec);
     }
-    if (type === 'in') { if (!rec.clockIn) rec.clockIn = hm; }
-    else { rec.clockOut = hm; }
-    // 班次取默认班（与 Web defaultShift 同口径），微信打卡同样参与迟到/早退判定与工时计算
-    const shifts = await readRows(`hr_shifts_${owner}`);
-    const shift = shifts.find((s: any) => s && s.isDefault) || shifts[0] || null;
+    if (type === 'in') { if (!rec.clockIn) rec.clockIn = hm; if (req.body.photo) rec.photoIn = req.body.photo; }
+    else { rec.clockOut = hm; if (req.body.photo) rec.photoOut = req.body.photo; }
+    // 记录本次打卡坐标（如提供），便于事后核查
+    if (req.body.lat != null && req.body.lat !== '' && req.body.lng != null && req.body.lng !== '') {
+      rec.punchLat = Number(req.body.lat); rec.punchLng = Number(req.body.lng);
+    }
+    // 班次已在上方取得（与 Web defaultShift 同口径），微信打卡同样参与迟到/早退判定与工时计算
     rec.workHours = workHoursOf(rec.clockIn, rec.clockOut);
     rec.status = attendanceStatusOf(rec.clockIn, rec.clockOut, shift);
     rec.source = 'wechat';
@@ -2251,6 +2412,8 @@ router.get('/lists/:page', verifyJWT, async (req: Request, res: Response) => {
     }
     // 金额展示统一 ¥ 千分位两位小数（客户卡/账单明细/对账同源）
     const yuan = (v: number) => `¥${(Math.round((Number(v) || 0) * 100) / 100).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    // 客户列表应收欠款总额（全量客户求和，不随筛选变化）
+    let customersDebtTotal: number | null = null;
     if (page === 'bookkeeping') {
       const rows = await readRows(`daily_bookkeeping_${owner}`);
       items = rows.map((r: any) => ({
@@ -2642,6 +2805,7 @@ router.get('/lists/:page', verifyJWT, async (req: Request, res: Response) => {
           contact: bp.purchaserContact, phone: bp.purchaserPhone, region: bp.region,
           credit: bp.credit !== undefined && bp.credit !== null ? Number(bp.credit) || 0 : 0,
         }));
+      let debtAll = 0;
       items = [...direct, ...purchasers].map((c: any, idx: number) => {
         const purchase = purchaseOf(c.name);
         const received = receivedOf(c.name);
@@ -2649,12 +2813,11 @@ router.get('/lists/:page', verifyJWT, async (req: Request, res: Response) => {
         const credit = effectiveCredit(String(c.id || ''), c.name, c.credit);
         const remain = Math.round((credit + received - purchase - occupied) * 100) / 100;
         const debt = Math.max(0, Math.round((purchase - received) * 100) / 100);
+        debtAll += debt;
         return {
           key: c.id || c.name, title: c.name,
           tag: c.level,
           cardBg: CARD_BGS[idx % CARD_BGS.length],
-          // 临时字段：供计数行汇总应收欠款总额后剥离，不下发前端
-          _debt: debt,
           // 第二行信用/剩余额度、第三行采购总额/应收欠款（用户指定）
           sub: [`信用额度 ${yuan(credit)}　剩余额度 ${yuan(remain)}`, `采购总额 ${yuan(purchase)}　应收欠款 ${yuan(debt)}`],
           subSizes: [13, 13],
@@ -2666,6 +2829,8 @@ router.get('/lists/:page', verifyJWT, async (req: Request, res: Response) => {
           ] as [string, string][],
         };
       });
+      // 应收欠款总额 = 所有客户该字段之和（用户口径：全量而非当前筛选）
+      customersDebtTotal = Math.round(debtAll * 100) / 100;
     } else if (page === 'bill-detail' || page === 'reconciliation') {
       // 账单明细/对账管理：与 Web 账单明细同键（pageData_customer_bill-detail）；extra=客户名时按客户过滤（客户卡入口带入）
       const rows = await readRows(`pageData_customer_bill-detail_${owner}`);
@@ -2730,11 +2895,8 @@ router.get('/lists/:page', verifyJWT, async (req: Request, res: Response) => {
     // 生产订单/采购订单单页上限 20 条（用户指定），其余列表页保持 100
     const data: { list: ListItem[]; total: number; sums?: string[] } = finishList(items, q, page === 'production' || page === 'purchase' ? 20 : 100);
     if (sums) data.sums = sums;
-    // 客户列表：计数行靠右展示应收欠款总额（与当前筛选列表联动），汇总后剥离 _debt 临时字段
-    if (page === 'customers') {
-      (data as any).debtTotal = Math.round(data.list.reduce((s: number, it: any) => s + (Number(it._debt) || 0), 0) * 100) / 100;
-      data.list.forEach((it: any) => { delete it._debt; });
-    }
+    // 客户列表：应收欠款总额（全量客户求和）随响应下发，计数行靠右展示
+    if (customersDebtTotal !== null) (data as any).debtTotal = customersDebtTotal;
     res.json({ code: 200, data });
   } catch (err: any) {
     console.error('[wx] lists error:', err.message);

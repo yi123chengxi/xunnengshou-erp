@@ -79,7 +79,7 @@ const BookkeepingView = ({ tick = 0 }: { tick?: number }) => {
     <View>
       {formVisible ? (
         /* 填单态：整页只呈现记账表单（下方列表隐藏），保存或点「返回列表」后回到列表 */
-        <View className="card">
+        <View className="card" style={{ borderRadius: 0 }}>
           <View style={{ display: 'flex', alignItems: 'center', marginBottom: '20rpx' }}>
             <Text style={{ flex: 1, fontSize: '30rpx', fontWeight: 600 }}>新增记账</Text>
             <Text style={{ fontSize: '26rpx', color: '#1677ff' }} onClick={() => setFormVisible(false)}>返回列表 ›</Text>
@@ -145,13 +145,13 @@ const BookkeepingView = ({ tick = 0 }: { tick?: number }) => {
           {/* 保存拆两键：左「保存并返回」存完回列表，右「保存并继续」存完留在本页接着记 */}
           <View style={{ display: 'flex' }}>
             <View
-              style={{ flex: 1, height: '72rpx', lineHeight: '72rpx', textAlign: 'center', fontSize: '28rpx', color: '#fff', background: '#1677ff', borderRadius: '8rpx', boxSizing: 'border-box', opacity: busy ? 0.6 : 1 }}
+              style={{ flex: 1, height: '72rpx', lineHeight: '72rpx', textAlign: 'center', fontSize: '28rpx', color: '#fff', background: '#1677ff', borderRadius: 0, boxSizing: 'border-box', opacity: busy ? 0.6 : 1 }}
               onClick={() => submit('back')}
             >
               保存并返回
             </View>
             <View
-              style={{ flex: 1, marginLeft: '20rpx', height: '72rpx', lineHeight: '72rpx', textAlign: 'center', fontSize: '28rpx', color: '#1677ff', background: '#e6f4ff', borderRadius: '8rpx', boxSizing: 'border-box', opacity: busy ? 0.6 : 1 }}
+              style={{ flex: 1, marginLeft: '20rpx', height: '72rpx', lineHeight: '72rpx', textAlign: 'center', fontSize: '28rpx', color: '#1677ff', background: '#e6f4ff', borderRadius: 0, boxSizing: 'border-box', opacity: busy ? 0.6 : 1 }}
               onClick={() => submit('stay')}
             >
               保存并继续
@@ -160,7 +160,7 @@ const BookkeepingView = ({ tick = 0 }: { tick?: number }) => {
         </View>
       ) : (
         /* 紧凑列表模式；新增入口为查询行（查询右侧）的「新增记账」小按键 */
-        <ListView page="bookkeeping" tick={tick + reload} compact addLabel="新增记账" onAdd={() => setFormVisible(true)} />
+        <ListView page="bookkeeping" tick={tick + reload} compact square addLabel="新增记账" onAdd={() => setFormVisible(true)} />
       )}
     </View>
   )

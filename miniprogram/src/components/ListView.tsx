@@ -120,7 +120,7 @@ const ListView = ({
           <Text
             className="muted"
             style={{
-              fontSize: quick ? 13 : (compact ? 15 : 22),
+              fontSize: quick ? 13 : (compact ? 11 : 22),
               minWidth: 0, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', flexShrink: quick ? 1 : 0,
             }}
           >
@@ -212,11 +212,11 @@ const ListView = ({
         >
           {/* compact：标题与金额同行，副信息合成一行点分隔，降低单条高度 */}
           <View style={{ display: 'flex', alignItems: 'center' }}>
-            <Text style={{ fontWeight: 600, fontSize: compact ? 17 : undefined, flex: 1, minWidth: 0, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
+            <Text style={{ fontWeight: 600, fontSize: compact ? 12 : undefined, flex: 1, minWidth: 0, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
               {it.title}
             </Text>
             {compact && typeof it.amount === 'number' && it.amount !== 0 ? (
-              <Text style={{ marginLeft: 12, flexShrink: 0, fontWeight: 700, fontSize: 17, color: it.amount >= 0 ? '#52c41a' : '#ff4d4f' }}>
+              <Text style={{ marginLeft: 12, flexShrink: 0, fontWeight: 700, fontSize: 12, color: it.amount >= 0 ? '#52c41a' : '#ff4d4f' }}>
                 {it.amount >= 0 ? '+' : '-'}¥{Math.abs(it.amount).toFixed(2)}
               </Text>
             ) : null}
@@ -232,7 +232,7 @@ const ListView = ({
           ) : null}
           {compact ? (
             (it.sub && it.sub.length > 0) ? (
-              <View className="muted" style={{ paddingTop: 4, fontSize: 15, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
+              <View className="muted" style={{ paddingTop: 4, fontSize: 11, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
                 {it.sub.join(' · ')}
               </View>
             ) : null

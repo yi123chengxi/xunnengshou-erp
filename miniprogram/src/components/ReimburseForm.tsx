@@ -7,8 +7,8 @@ import { createReimbursement } from '../services/api'
 const FORM_ROW = { display: 'flex', alignItems: 'center', marginTop: 12 } as const
 const FORM_ROW_TOP = { display: 'flex', alignItems: 'flex-start', marginTop: 12 } as const
 const FORM_LBL = { flexShrink: 0, width: 84, fontSize: 15, color: '#1f2733', lineHeight: '40px' } as const
-const FIELD_INPUT = { flex: 1, minWidth: 0, height: 40, background: '#ffffff', border: '1px solid #c9d4e3', borderRadius: 8, padding: '0 12px', fontSize: 15, boxSizing: 'border-box' } as const
-const FIELD_TEXTAREA = { flex: 1, minWidth: 0, height: 88, background: '#ffffff', border: '1px solid #c9d4e3', borderRadius: 8, padding: '10px 12px', fontSize: 15, boxSizing: 'border-box' } as const
+const FIELD_INPUT = { flex: 1, minWidth: 0, height: 40, background: '#ffffff', border: '1px solid #c9d4e3', borderRadius: 0, padding: '0 12px', fontSize: 15, boxSizing: 'border-box' } as const
+const FIELD_TEXTAREA = { flex: 1, minWidth: 0, height: 88, background: '#ffffff', border: '1px solid #c9d4e3', borderRadius: 0, padding: '10px 12px', fontSize: 15, boxSizing: 'border-box' } as const
 
 // 报销申请表单（内嵌/独立页共用）：手机填单 + 微信相册/拍照传票据；字段名在左、描边输入框在右
 const ReimburseForm = ({ embedded = false }: { embedded?: boolean }) => {
@@ -77,12 +77,12 @@ const ReimburseForm = ({ embedded = false }: { embedded?: boolean }) => {
         <Textarea style={{ ...FIELD_TEXTAREA }} placeholder="选填" placeholderStyle="color:#b0bcca" value={description} onInput={e => setDescription(e.detail.value)} />
       </View>
 
-      <View className="card" style={{ margin: '20px 0' }}>
+      <View className="card" style={{ margin: '20px 0', borderRadius: 0 }}>
         <View className="card-title">票据（{receipts.length}/9）</View>
         <View style={{ display: 'flex', flexWrap: 'wrap' }}>
           {receipts.map((src, i) => (
             <View key={i} style={{ position: 'relative', marginRight: 12, marginBottom: 12 }}>
-              <Image src={src} mode="aspectFill" style={{ width: 160, height: 160, borderRadius: 8 }} />
+              <Image src={src} mode="aspectFill" style={{ width: 160, height: 160, borderRadius: 0 }} />
               <Text
                 style={{ position: 'absolute', top: -12, right: -12, background: '#f5222d', color: '#fff', borderRadius: 20, fontSize: 20, padding: '0 10px' }}
                 onClick={() => setReceipts(prev => prev.filter((_, idx) => idx !== i))}
@@ -93,7 +93,7 @@ const ReimburseForm = ({ embedded = false }: { embedded?: boolean }) => {
           ))}
           {receipts.length < 9 && (
             <View
-              style={{ width: 160, height: 160, border: '1px dashed #91a7c9', borderRadius: 8, textAlign: 'center', lineHeight: '160px', color: '#5a6d85' }}
+              style={{ width: 160, height: 160, border: '1px dashed #91a7c9', borderRadius: 0, textAlign: 'center', lineHeight: '160px', color: '#5a6d85' }}
               onClick={pickImages}
             >
               + 拍照/相册
