@@ -17,7 +17,7 @@ import { healReconTerminalLinks } from './reconHeal';
 import { getSessionOwner, tenantMembersOf, mergeStrandedTenantDataset } from './dataOwner';
 import { repairOrderBucket } from './orderRepair';
 import { queuePut, queueDelete, queueAll } from './uploadQueue';
-import { takeRemovedIds, peekRemovedIds, declareShrink, tombstoneIds, removedIdSet, rowIdentities, rowPrimaryId, pruneTombstonesByRows } from './shrinkRegistry';
+import { takeRemovedIds, peekRemovedIds, declareShrink, tombstoneIds, removedIdSet, rowIdentities, rowPrimaryId, pruneTombstonesByRows, recordTombstones } from './shrinkRegistry';
 export { declareShrink } from './shrinkRegistry';
 
 // 需要同步的业务数据 key 前缀/精确名
@@ -103,7 +103,10 @@ const SYNC_EXACT = ['registeredUsers', 'subscription_orders', 'storage_orders', 
 const EXCLUDE_PREFIXES = ['prodImg_', 'thumb_', 'payShot_', 'mold_img_',
   // 新款进度四个数据键已迁服务端权威真表 /api/newstyle/*（行级存储），
   // 退出全局键同步；本地 localStorage 同名键仅作统计页同步读的镜像缓存
-  'newstyle_progress_', 'newstyle_photo_', 'newstyle_arrival_', 'newstyle_listing_'];
+  'newstyle_progress_', 'newstyle_photo_', 'newstyle_arrival_', 'newstyle_listing_',
+  // 供应商菜单/合作握手三键已迁服务端权威真表 /api/cooperation/*（行级存储 + 授权跨租户代写），
+  // 退出全局键同步；本地同名键退化为只读镜像，由 cooperationApi 水合/推送
+  'purchaser_suppliers_', 'boundPurchasers_', 'cooperation_applications'];
 // 仅上传不拉取的键前缀（这类键有独立的恢复机制，避免 pullAllDatasets 的宽限期竞态覆盖本地新数据）
 const UPLOAD_ONLY_PREFIXES = ['credit_adjustments_'];
 // 只增不删的全局列表键（无删除 UI）：允许愈合回传修复服务端缩水，且不会复活已删除记录
@@ -118,7 +121,7 @@ const SALVAGE_UNION_PREFIXES = ['purchaser_bills_', 'pageData_customer_bill-deta
 // 服务端「永不缩水」键（与 server/src/routes/sync.routes.ts 的 NEVER_SHRINK_PREFIXES 同构）：
 // 这些键的权威副本只增不减，拉取时不得整键覆盖本地——否则「本地新增但尚未上传成功」的行
 // 会被服务端旧版本抹掉（报销新增后过一会自动消失的另一半原因）。
-const NEVER_SHRINK_PREFIXES = ['purchaser_bills_', 'pageData_customer_bill-detail_', 'pageData_sales_order-manage_', 'purchaser_suppliers_', 'boundPurchasers_', 'accounts_', 'reimbursement_', 'pageData_finance_bank-account_'];
+const NEVER_SHRINK_PREFIXES = ['purchaser_bills_', 'pageData_customer_bill-detail_', 'pageData_sales_order-manage_', 'accounts_', 'reimbursement_', 'pageData_finance_bank-account_'];
 // 导出供页面在删除点申报 removedIds（永不缩水键的合法删除必须显式申报，否则被服务端并集复活）
 export const isNeverShrinkKey = (key: string): boolean => NEVER_SHRINK_PREFIXES.some(p => key.startsWith(p));
 
@@ -710,6 +713,11 @@ export async function fetchServerDataset(key: string): Promise<{ json: string; u
     if (res.status === 401) { handleSyncAuthRequired(); return null; }
     if (!res.ok) return null;
     const data = await res.json();
+    // 跨端删除收敛：服务端删除账本随 GET 下发 removedIds，本端同步写持久墓碑——
+    // 否则未执行删除的端会把「他端已删行」当本地独有新增行并回服务端复活
+    if (data && typeof data.json === 'string' && isNeverShrinkKey(key) && Array.isArray(data.removedIds) && data.removedIds.length) {
+      try { recordTombstones(key, data.removedIds.map((x: any) => String(x)).filter(Boolean)); } catch { /* ignore */ }
+    }
     return data && typeof data.json === 'string' ? { json: data.json, updatedAt: Number(data.updatedAt) || 0 } : null;
   } catch {
     return null;

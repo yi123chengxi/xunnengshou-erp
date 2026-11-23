@@ -3077,6 +3077,8 @@ const ModuleChildPage: React.FC = () => {
           auxDocNo: prev?.auxDocNo || '',
           // 人工改客户标记随重建保留，名称自愈持续跳过该行客户名改写
           ...(prev?._custEdited ? { _custEdited: true } : {}),
+          // 作废标记随重建保留：派生行每次按订单重建，不显式带回 voided 会在重建后丢失作废态
+          ...(prev?.voided ? { voided: true, voidedAt: prev?.voidedAt || '' } : {}),
           // 订单金额漂移标记：仅在终态行且订单值≠锁定值时写入，否则不残留旧标记
           ...(af._orderDiff !== undefined ? { _orderAmount: af._orderAmount, _orderDiff: af._orderDiff } : {}),
           outboundDate: normBillDay(prev?.outboundDate || o.payTime || o.createTime),
@@ -10274,6 +10276,29 @@ const ModuleChildPage: React.FC = () => {
     message.success('删除成功');
   }, [moduleKey, childKey, pageConfig, getDataOwner, sharedDataKey]);
 
+  // 账单明细作废/取消作废：不删除行，仅打/清 voided 标记；作废行不计入商品总额/数量统计并划线灰字。
+  // 账单明细行由 buildBillDetailRows 从订单派生重建，故除 setDataSource 外必须手工落库（LS+IDB+服务端），
+  // 且重建处已显式保留 voided，保证刷新后作废标记不丢。
+  const voidBillDetail = useCallback((record: Record<string, any>, next: boolean) => {
+    const owner = getDataOwner();
+    const storageKey = `pageData_customer_bill-detail_${owner}`;
+    const nowIso = new Date().toISOString();
+    const hit = (r: any) => r.key === record.key || (!!record.id && r.id === record.id);
+    const patch = (r: any) => ({ ...r, ...(next ? { voided: true, voidedAt: nowIso } : { voided: false, voidedAt: '' }) });
+    let list: Record<string, any>[] = [];
+    try {
+      list = JSON.parse(localStorage.getItem(storageKey) || '[]');
+      if (!Array.isArray(list)) list = [];
+    } catch { list = []; }
+    const updated = list.map((r: any) => (hit(r) ? patch(r) : r));
+    const json = JSON.stringify(updated);
+    safeSetItem(storageKey, json);
+    saveDataset(storageKey, json);
+    flushDatasetUploadAsync(storageKey, json).catch(() => false);
+    setDataSource(prev => prev.map((r: any) => (hit(r) ? patch(r) : r)));
+    message.success(next ? '已作废：该行保留但不再计入统计' : '已取消作废');
+  }, [getDataOwner, setDataSource]);
+
   // ============ BOM 管理逻辑 ============
 
   // 生产管理费公式面板状态
@@ -11644,6 +11669,7 @@ const handleBatchAttrsConfirm = () => {
     if (cache.size > 5000) cache.clear(); // 防缓存无限增长
     let sum = 0;
     filteredData.forEach((r: any) => {
+      if (r.voided) return; // 作废行不计入商品总额统计
       const k = String(r.key ?? r.id ?? '');
       const hit = cache.get(k);
       if (hit && hit.row === r) { sum += hit.val; return; }
@@ -11653,8 +11679,8 @@ const handleBatchAttrsConfirm = () => {
     });
     return sum;
   }, [filteredData, isBillDetail]);
-  const billUnreconCount = useMemo(() => (isBillDetail ? filteredData.filter((r: any) => !BILL_RECON_DONE.includes(String(r.reconResult || ''))).length : 0), [filteredData, isBillDetail]);
-  const billQtyTotal = useMemo(() => (isBillDetail ? filteredData.reduce((s: number, r: any) => s + (Number(r.totalCount) || 0), 0) : 0), [filteredData, isBillDetail]);
+  const billUnreconCount = useMemo(() => (isBillDetail ? filteredData.filter((r: any) => !r.voided && !BILL_RECON_DONE.includes(String(r.reconResult || ''))).length : 0), [filteredData, isBillDetail]);
+  const billQtyTotal = useMemo(() => (isBillDetail ? filteredData.reduce((s: number, r: any) => (r.voided ? s : s + (Number(r.totalCount) || 0)), 0) : 0), [filteredData, isBillDetail]);
 
   // 获取记录的可编辑字段
   const getEditableFields = (record: Record<string, any>) => {
@@ -12259,14 +12285,15 @@ const handleBatchAttrsConfirm = () => {
         const money = col.dataIndex === 'totalAmount';
         baseCol.render = (val: any, record: any) => {
           const n = Number(val) || 0;
-          const color = n > 0 ? '#52c41a' : n < 0 ? '#ff4d4f' : '#1a2b45';
+          const voided = !!record?.voided;
+          const color = voided ? '#999' : (n > 0 ? '#52c41a' : n < 0 ? '#ff4d4f' : '#1a2b45');
           const node = (
-            <Text style={{ fontFamily: 'monospace', color, fontWeight: 'bold' }}>
+            <Text style={{ fontFamily: 'monospace', color, fontWeight: 'bold', ...(voided ? { textDecoration: 'line-through' } : {}) }}>
               {money ? `¥${n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : n}
             </Text>
           );
-          // 已入账行金额锁定时，订单侧后续改数不覆盖账面，仅挂“差”标提示双方不一致
-          const diff = money ? Number(record?._orderDiff) || 0 : 0;
+          // 已入账行金额锁定时，订单侧后续改数不覆盖账面，仅挂“差”标提示双方不一致（作废行不提示）
+          const diff = (!voided && money) ? Number(record?._orderDiff) || 0 : 0;
           if (!diff) return node;
           const orderAmt = Number(record?._orderAmount) || 0;
           return (
@@ -13361,8 +13388,8 @@ const handleBatchAttrsConfirm = () => {
                     style={{ color: PRIMARY, fontWeight: 500 }}>反取消</Button>
                 </Tooltip>
               )}
-              {/* 账单来源=订单 的行是订单派生视图（每次重载按订单重建），删除留不住 → 不提供删除入口 */}
-              {(pageConfig?.title !== '账单明细' || !['已发起对账', '确认无误', '对账完成', '按采方入账', '不相符'].includes(record.reconResult)) && pageConfig?.title !== '财务审核' && !(pageConfig?.title === '采购申请单' && ['已拆分', '已完成', '已取消'].includes(record.status)) && pageConfig?.title !== '采购申请单' && pageConfig?.title !== '加工订单' && !(pageConfig?.title === '订单管理' && record.orderSource === '采购商推送') && !isOrderDerived(record) && (
+              {/* 账单明细改为「作废」（不删除、仅不计入统计，见下方作废按钮），故不渲染通用删除入口 */}
+              {pageConfig?.title !== '账单明细' && pageConfig?.title !== '财务审核' && !(pageConfig?.title === '采购申请单' && ['已拆分', '已完成', '已取消'].includes(record.status)) && pageConfig?.title !== '采购申请单' && pageConfig?.title !== '加工订单' && !(pageConfig?.title === '订单管理' && record.orderSource === '采购商推送') && !isOrderDerived(record) && (
               <Popconfirm
                 title="确认删除"
                 description="删除后不可恢复，确定要删除吗？"
@@ -13389,6 +13416,33 @@ const handleBatchAttrsConfirm = () => {
                 </Tooltip>
               </Popconfirm>
               )}
+              {/* 账单明细：作废/取消作废（不删除，仅不计入统计；商品总额/数量划线灰字） */}
+              {pageConfig?.title === '账单明细' && !isViewOnly && (record.voided ? (
+                <Popconfirm
+                  title="确认取消作废"
+                  description="取消作废后该行将重新计入统计，确定取消作废吗？"
+                  onConfirm={() => voidBillDetail(record, false)}
+                  okText="确定"
+                  cancelText="取消"
+                >
+                  <Tooltip title="取消作废，恢复计入统计">
+                    <Button type="link" size="small" icon={<RollbackOutlined />}>取消作废</Button>
+                  </Tooltip>
+                </Popconfirm>
+              ) : (
+                <Popconfirm
+                  title="确认作废"
+                  description="作废后该行保留但不再计入统计，确定作废吗？"
+                  onConfirm={() => voidBillDetail(record, true)}
+                  okText="确定"
+                  cancelText="取消"
+                  okType="danger"
+                >
+                  <Tooltip title="作废（不删除，仅不计入统计）">
+                    <Button type="link" size="small" danger icon={<StopOutlined />}>作废</Button>
+                  </Tooltip>
+                </Popconfirm>
+              ))}
             </>
           )}
           {/* 订单管理：编辑按钮（已取消订单禁用） */}
@@ -19097,6 +19151,54 @@ const handleBatchAttrsConfirm = () => {
                   const tableEl = sortedElements.find((e: any) => e.type === 'table');
                   const tableThresholdY = tableEl ? (tableEl.y || 0) - 0.5 : Infinity;
                   const tableBottomYmm = tableEl ? (tableEl.y || 0) + (tableEl.height || 120) : Infinity;
+                  // 横向表格（矩阵表）：打印时自动汇总订单明细——固定列款式/颜色，规格列取订单规格并集，
+                  // 数量格按「款式+颜色+规格」聚合；同模板多实例渲染同一份数据（多联单撕联留底）
+                  const matrixEls = sortedElements.filter((e: any) => e.type === 'matrixTable');
+                  const matrixData = (() => {
+                    const rawItems = detailRowsOf(r);
+                    let mProdList: any[] = [];
+                    try { mProdList = JSON.parse(localStorage.getItem(`pageData_basic-data_product-list_${owner}`) || '[]'); } catch { /* ignore */ }
+                    const sizes: string[] = [];
+                    const rowMap = new Map<string, { styleCode: string; color: string; qty: Record<string, number> }>();
+                    rawItems.forEach((it: any) => {
+                      const prod = mProdList.find((pp: any) => pp.productCode === it.productCode);
+                      const styleCode = it.styleCode || prod?.styleCode || it.productCode || '—';
+                      const color = it.color || prod?.color || '—';
+                      const spec = String(it.spec || prod?.spec || '').trim();
+                      const qty = Number(it.quantity) || 0;
+                      if (spec && !sizes.includes(spec)) sizes.push(spec);
+                      const k = `${styleCode}|${color}`;
+                      if (!rowMap.has(k)) rowMap.set(k, { styleCode, color, qty: {} });
+                      if (spec) { const rw = rowMap.get(k)!; rw.qty[spec] = (rw.qty[spec] || 0) + qty; }
+                    });
+                    sizes.sort((a, b) => { const na = parseFloat(a); const nb = parseFloat(b); if (!Number.isNaN(na) && !Number.isNaN(nb) && na !== nb) return na - nb; return a.localeCompare(b, 'zh-CN'); });
+                    return { sizes, rows: Array.from(rowMap.values()) };
+                  })();
+                  // 行高估算（mm）：字号pt→mm + 内边距/边框，供超设计框时级联下推
+                  const matrixEstH = (m: any): number => {
+                    const fsM = m.fontSize || 9;
+                    const rowH = fsM * 0.3528 + 1.8;
+                    return (Math.max(1, matrixData.rows.length) + 1) * rowH + 1;
+                  };
+                  const matrixPushAt = (y: number): number => matrixEls.reduce((s: number, m: any) => {
+                    const bottom = (m.y || 0) + (m.height || 25);
+                    if (bottom <= y + 0.5) return s + Math.max(0, matrixEstH(m) - (m.height || 25));
+                    return s;
+                  }, 0);
+                  const renderMatrixHtml = (m: any): string => {
+                    const fsM = m.fontSize || 9;
+                    const pad = fsM <= 7 ? '1px 2px' : '2px 3px';
+                    const sizes = matrixData.sizes;
+                    const sizeW = sizes.length ? (68 / sizes.length) : 0;
+                    const diagTh = `<th style="border:1px solid #333;padding:0;position:relative;width:14%;height:${(fsM * 0.3528 + 1.8).toFixed(1)}mm;"><svg style="position:absolute;left:0;top:0;width:100%;height:100%;" viewBox="0 0 100 100" preserveAspectRatio="none"><line x1="0" y1="0" x2="100" y2="100" stroke="#333" stroke-width="1" vector-effect="non-scaling-stroke"/></svg><span style="position:absolute;left:3px;bottom:1px;">颜色</span><span style="position:absolute;right:3px;top:1px;">规格</span></th>`;
+                    let html = `<table style="border-collapse:collapse;width:100%;font-size:${fsM}pt;table-layout:fixed;word-break:break-all;-webkit-print-color-adjust:exact;print-color-adjust:exact;"><thead><tr><th style="border:1px solid #333;padding:${pad};font-weight:600;text-align:center;width:18%;">款式编码</th>${diagTh}${sizes.map(sz => `<th style="border:1px solid #333;padding:${pad};font-weight:600;text-align:center;width:${sizeW.toFixed(2)}%;">${sz}</th>`).join('')}</tr></thead><tbody>`;
+                    const bodyRows = matrixData.rows.length ? matrixData.rows : [{ styleCode: '—', color: '—', qty: {} }];
+                    bodyRows.forEach((rw: any) => {
+                      html += `<tr><td style="border:1px solid #333;padding:${pad};text-align:center;">${rw.styleCode}</td><td style="border:1px solid #333;padding:${pad};text-align:center;">${rw.color}</td>${sizes.map(sz => `<td style="border:1px solid #333;padding:${pad};text-align:center;">${rw.qty[sz] ? String(rw.qty[sz]) : ''}</td>`).join('')}</tr>`;
+                    });
+                    html += '</tbody></table>';
+                    return html;
+                  };
                   // 三段式渲染：表格上方元素绝对定位；表格按实际行数流式撑高；表格下方元素在“紧贴表格真实底边”的包裹层内绝对定位（top = 设计Y − 表格设计底边），双向紧贴表格
                   let tableInner = '';
                   let belowInner = '';
@@ -19112,9 +19214,11 @@ const handleBatchAttrsConfirm = () => {
                     const td = el.isUnderline ? 'underline' : 'none';
                     const ta = el.textAlign || 'left';
                     const isTable = el.type === 'table';
+                    const isMatrix = el.type === 'matrixTable';
+                    if (isMatrix) h = 'auto'; // 横向表格高度随实际行数撞开，不钳制设计高
                     // 表格下方元素：以表格设计底边为原点换算 top，渲染于紧贴表格真实底边的包裹层内
-                    const belowTable = !!tableEl && !isTable && y >= tableThresholdY;
-                    const topMm = belowTable ? Math.max(0, y - tableBottomYmm) : y;
+                    const belowTable = !!tableEl && !isTable && !isMatrix && y >= tableThresholdY;
+                    const topMm = belowTable ? Math.max(0, y - tableBottomYmm) : y + matrixPushAt(y);
                     const push = (html: string) => { if (isTable) tableInner += html; else if (belowTable) belowInner += html; else inner += html; };
                     // 约束元素不超出纸张边界
                     const maxW = pw - x;
@@ -19214,6 +19318,8 @@ const handleBatchAttrsConfirm = () => {
                       });
                       tableHtml += '</tbody></table>';
                       push(`<div style="${posStyle}">${tableHtml}</div>`);
+                    } else if (el.type === 'matrixTable') {
+                      push(`<div style="${posStyle}">${renderMatrixHtml(el)}</div>`);
                     } else if (el.type === 'hline') {
                       const bw = el.borderWidth || 1;
                       const bc = el.borderColor || '#000';
@@ -19245,8 +19351,10 @@ const handleBatchAttrsConfirm = () => {
                     }
                   });
                   if (tableInner) {
-                    // 占位到表格设计 Y → 表格流式渲染 → 包裹层（下方元素紧贴表格真实底边）
-                    inner += `<div style="height:${Math.max(0, Math.round(((tableEl && tableEl.y) || 0) * 10) / 10)}mm;"></div>` + tableInner + `<div style="position:relative;">${belowInner}</div>`;
+                    // 占位到表格设计 Y（含上方横向表格超高中推）→ 表格流式渲染 → 包裹层（下方元素紧贴表格真实底边）
+                    const spacerMm = Math.max(0, Math.round((((tableEl && tableEl.y) || 0) + matrixPushAt((tableEl && tableEl.y) || 0)) * 10) / 10);
+                    const wrapPad = Number.isFinite(tableBottomYmm) ? `padding-top:${matrixPushAt(tableBottomYmm)}mm;` : '';
+                    inner += `<div style="height:${spacerMm}mm;"></div>` + tableInner + `<div style="position:relative;${wrapPad}">${belowInner}</div>`;
                   }
                 }
                 return `<div style="${pageStyle}">${inner}</div>`;
@@ -24674,7 +24782,7 @@ export function PrintTemplateEditor(props: PrintTemplateEditorProps = {}) {
   const [labelHeight, setLabelHeight] = useState(130);
 
   interface PlacedElement {
-    id: string; type: 'field' | 'text' | 'table' | 'qrcode' | 'barcode' | 'hline' | 'vline' | 'rect' | 'image' | 'ellipse';
+    id: string; type: 'field' | 'text' | 'table' | 'matrixTable' | 'qrcode' | 'barcode' | 'hline' | 'vline' | 'rect' | 'image' | 'ellipse';
     x: number; y: number; width?: number; height?: number; field?: string; content?: string;
     displayAs?: 'text' | 'qrcode' | 'barcode' | 'image';
     zIndex?: number; // 层级：值越小越靠底（置于底层/顶层按钮调整），缺省 0
@@ -25076,6 +25184,12 @@ export function PrintTemplateEditor(props: PrintTemplateEditorProps = {}) {
     setElements(prev => [...prev, newEl]); setSelectedId(newEl.id);
   };
 
+  // ===== 新增：横向表格元素（款式/颜色固定列 + 规格动态列 + 数量矩阵；同模板可多实例做多联单） =====
+  const addMatrixTableElement = () => {
+    const newEl: PlacedElement = { id: nextId(), type: 'matrixTable', x: 10, y: 12 + (elements.length % 5) * 3, width: Math.max(60, paperWidth - 20), height: 25, fontSize: 9 };
+    setElements(prev => [...prev, newEl]); setSelectedId(newEl.id);
+  };
+
   // ===== 统一拖拽+缩放系统 (useRef + 全局原生事件) =====
   const mouseRef = useRef<{ mode: 'drag' | 'resize' | null; id: string; startX: number; startY: number; elX: number; elY: number; elW: number; elH: number; dir: string } | null>(null);
   const elementsRef = useRef(elements);
@@ -25345,6 +25459,7 @@ export function PrintTemplateEditor(props: PrintTemplateEditorProps = {}) {
             <Button size="small" block icon={<span style={{ fontSize: 13, letterSpacing: -1 }}>|||</span>} onClick={() => addCustomElement('barcode')}>条码</Button>
             <Button size="small" block icon={<QrcodeOutlined />} onClick={() => addCustomElement('qrcode')}>二维码</Button>
             <Button size="small" block icon={<AppstoreOutlined />} onClick={addTableElement}>表格</Button>
+            <Tooltip title="款式/颜色固定列 + 规格动态列 + 数量矩阵，打印时自动汇总订单明细；可加多个做多联单"><Button size="small" block icon={<span style={{ fontSize: 13, letterSpacing: -1 }}>▦</span>} onClick={addMatrixTableElement}>横向表格</Button></Tooltip>
             <Button size="small" block onClick={() => addLineElement('hline')}>横线</Button>
             <Button size="small" block onClick={() => addLineElement('vline')}>竖线</Button>
             <Button size="small" block onClick={addRectElement}>矩形</Button>
@@ -25379,8 +25494,8 @@ export function PrintTemplateEditor(props: PrintTemplateEditorProps = {}) {
                 {/* 标题 */}
                 {/* 放置的元素（悬浮式，可自由拖动） */}
                 {elements.map(el => {
-                  const elW = el.width || (el.type === 'table' ? 80 : undefined);
-                  const elH = el.height || (el.type === 'table' ? 32 : undefined);
+                  const elW = el.width || (el.type === 'table' ? 80 : el.type === 'matrixTable' ? 180 : undefined);
+                  const elH = el.height || (el.type === 'table' ? 32 : el.type === 'matrixTable' ? 25 : undefined);
                   const isSelected = selectedId === el.id || selectedIds.includes(el.id);
                   const transforms: string[] = [];
                   if (el.rotation) transforms.push(`rotate(${el.rotation}deg)`);
@@ -25401,7 +25516,7 @@ export function PrintTemplateEditor(props: PrintTemplateEditorProps = {}) {
                       fontWeight: el.isBold ? 700 : 'normal', fontStyle: el.isItalic ? 'italic' : 'normal',
                       textDecoration: [el.isUnderline ? 'underline' : '', el.isStrikethrough ? 'line-through' : ''].filter(Boolean).join(' ') || 'none',
                       textAlign: el.textAlign || 'left',
-                      userSelect: 'none', whiteSpace: el.type === 'table' ? 'normal' : 'nowrap',
+                      userSelect: 'none', whiteSpace: el.type === 'table' || el.type === 'matrixTable' ? 'normal' : 'nowrap',
                       zIndex: isSelected ? 10 : (el.zIndex || 0), overflow: 'visible',
                       transform: transformStr,
                       backgroundColor: el.isBlackReverse ? '#000' : 'transparent',
@@ -25447,6 +25562,37 @@ export function PrintTemplateEditor(props: PrintTemplateEditorProps = {}) {
                             ))}
                           </tbody>
                         </table>
+                      </div>
+                    )}
+                    {el.type === 'matrixTable' && (
+                      <div style={{ fontSize: (el.fontSize || 9) * 1.3333, width: '100%', overflow: 'hidden' }}>
+                        <table style={{ borderCollapse: 'collapse', width: '100%', tableLayout: 'fixed' }}>
+                          <thead>
+                            <tr>
+                              <th style={{ border: '1px solid #333', padding: '2px 3px', background: '#f6ffed', fontWeight: 600, width: '18%' }}>款式编码</th>
+                              <th style={{ border: '1px solid #333', padding: 0, position: 'relative', width: '14%', height: 22 }}>
+                                <svg style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%' }} viewBox="0 0 100 100" preserveAspectRatio="none"><line x1="0" y1="0" x2="100" y2="100" stroke="#333" strokeWidth="1" vectorEffect="non-scaling-stroke" /></svg>
+                                <span style={{ position: 'absolute', left: 3, bottom: 1 }}>颜色</span>
+                                <span style={{ position: 'absolute', right: 3, top: 1 }}>规格</span>
+                              </th>
+                              {['35', '36', '37', '38', '39', '40'].map(s => (
+                                <th key={s} style={{ border: '1px solid #333', padding: '2px 3px', background: '#ffe7ba', fontWeight: 600 }}>{s}</th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {[1, 2].map(row => (
+                              <tr key={row}>
+                                <td style={{ border: '1px solid #333', padding: '2px 3px', background: '#f6ffed', color: '#999' }}>—</td>
+                                <td style={{ border: '1px solid #333', padding: '2px 3px', background: '#f6ffed', color: '#999' }}>—</td>
+                                {['35', '36', '37', '38', '39', '40'].map(s => (
+                                  <td key={s} style={{ border: '1px solid #333', padding: '2px 3px', background: '#fffbe6', color: '#999' }}>—</td>
+                                ))}
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                        <div style={{ fontSize: 8 * 1.3333, color: '#8c9bab', marginTop: 2 }}>打印时自动取订单规格列与数量矩阵；可加多个做多联单</div>
                       </div>
                     )}
                     {/* Resize handles */}
@@ -25604,6 +25750,16 @@ export function PrintTemplateEditor(props: PrintTemplateEditorProps = {}) {
                     <span style={{ fontSize: 11, color: '#b0bec5' }}>值越小越靠底</span>
                   </div>
                 </div>
+                {/* 横向表格专属：数据来源说明 */}
+                {selectedId && (() => {
+                  const sel = elements.find(e => e.id === selectedId);
+                  if (!sel || sel.type !== 'matrixTable') return null;
+                  return (
+                    <div style={{ marginTop: 10, padding: 8, background: '#f6ffed', border: '1px solid #b7eb8f', borderRadius: 4, fontSize: 11, color: '#333', lineHeight: 1.7 }}>
+                      打印时自动汇总订单明细：固定列「款式编码/颜色」，规格列取订单内规格并集，数量格按「款式+颜色+规格」聚合。同一模板可添加多个横向表格（渲染同一份数据，适用多联单撕联留底）。
+                    </div>
+                  );
+                })()}
                 {/* 横线/竖线/矩形/椭圆专属：线条粗细 */}
                 {selectedId && (() => {
                   const sel = elements.find(e => e.id === selectedId);

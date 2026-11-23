@@ -107,6 +107,8 @@ const computeSupPurchaseCents = async (owner: string, targets: Set<string>): Pro
   const src = await readFreshRows(billsKey(owner));
   if (!src.present) return null;
   src.rows.forEach(b => {
+    // 作废行保留但不计入采购总额统计
+    if (b?.voided) return;
     const t = matchTarget(idx, targetFor, { username: b?.supplierUsername, no: b?.supplierNo, name: b?.supplier });
     if (!t) return;
     per.set(t, (per.get(t) || 0) + toCents(b?.totalAmount));
@@ -298,6 +300,8 @@ export const computePurchaseCents = async (owner: string, targets: Set<string>):
   // 调用方不得把快照覆写为 0——采购总额「一会 0 一会正确」跳动的根因防线
   if (!src.present) return null;
   src.rows.forEach(b => {
+    // 作废行保留但不计入客户采购总额统计
+    if (b?.voided) return;
     const t = matchTarget(idx, targetFor, { username: b?.customerUsername, no: b?.customerNo, name: b?.customerName });
     if (!t) return;
     per.set(t, (per.get(t) || 0) + toCents(b?.totalAmount));

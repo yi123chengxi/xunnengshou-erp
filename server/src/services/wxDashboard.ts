@@ -6,12 +6,15 @@
  *   历史数据可能写作 planQty/doneQty/endDate；同键混入的 JG- 加工单脏行按 PO- 前缀过滤
  */
 import { store } from '../database/store';
+import { filterLedgerRows } from './deleteLedger';
 
 async function readRows(key: string): Promise<any[]> {
   try {
     const row = await store.getDataset(key);
     const parsed = row ? JSON.parse(row.dataset_json || '[]') : [];
-    return Array.isArray(parsed) ? parsed : [];
+    const rows = Array.isArray(parsed) ? parsed : [];
+    // 永不缩水键跨端删除收敛：按服务端删除账本过滤已删行
+    return await filterLedgerRows(key, rows);
   } catch {
     return [];
   }

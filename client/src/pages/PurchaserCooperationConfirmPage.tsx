@@ -4,6 +4,7 @@ import { CheckCircleOutlined, CloseCircleOutlined, LinkOutlined } from '@ant-des
 import { useParams, useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
 import { noOfUser, noFromAny, supplierUsernameOf, ensureCredsMigrated } from '../utils/cooperationCred';
+import { hydrateCooperation } from '../utils/cooperationApi';
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -109,6 +110,11 @@ const PurchaserCooperationConfirmPage: React.FC = () => {
 
   useEffect(() => {
     loadToken();
+    // 合作三键已迁服务端权威真表：直接落地本页时先读本地镜像，再拉快照水合后复读，
+    // 避免启动水合未完成时回退分支读到陈旧镜像
+    let alive = true;
+    void hydrateCooperation().then(() => { if (alive) loadToken(); });
+    return () => { alive = false; };
   }, [loadToken]);
 
   // 同意合作 - 直接建立合作关系（邀请链接无需二次审核）

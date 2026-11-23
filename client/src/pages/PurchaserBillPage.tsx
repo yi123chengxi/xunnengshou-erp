@@ -2,13 +2,13 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import {
   Card, Table, Button, Space, Tag, message, Typography, Modal, Input, InputNumber, DatePicker,
   Row, Col, Image, Popover, Empty, Upload, Select, Descriptions, Checkbox, AutoComplete, Alert, Dropdown,
-  Radio, Tooltip,
+  Radio, Tooltip, Popconfirm,
 } from 'antd';
 import {
   PlusOutlined, FileTextOutlined, PictureOutlined, DeleteOutlined, TeamOutlined, ReloadOutlined,
   CameraOutlined, CopyOutlined, EditOutlined, EyeOutlined, SettingOutlined, ShopOutlined,
   SearchOutlined, ShoppingCartOutlined, SwapOutlined, UndoOutlined, ClockCircleOutlined,
-  MenuOutlined, DownloadOutlined, FileExcelOutlined, RollbackOutlined,
+  MenuOutlined, DownloadOutlined, FileExcelOutlined, RollbackOutlined, StopOutlined,
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
@@ -24,7 +24,7 @@ import type { ReturnRegisterPayload } from '../components/ReturnRegisterModal';
 import { buildPurchaserReturnBill, writeReturnStockFlows, getOwnCompanyName } from '../utils/returnRegister';
 import { safeSetItem } from '../utils/storageQuota';
 import { saveDataset } from '../utils/dataStore';
-import { reloadAfterPull, appendRowsToRemoteKey, declareShrink } from '../utils/serverSync';
+import { reloadAfterPull, appendRowsToRemoteKey } from '../utils/serverSync';
 import { compressImageFile } from '../utils/imageCompress';
 import { loadSupplierFinishedProducts } from '../utils/supplierProducts';
 import { loadRoleRecords, loadRoleAll, upsertRecords, loadAllReconRecordsUnion } from '../utils/reconStore';
@@ -1305,8 +1305,42 @@ const PurchaserBillPage: React.FC = () => {
     message.success('已撤回对账请求');
   };
 
+  // 作废/取消作废：不删除账单行，仅打/清 voided 标记，作废后该行不计入采购统计（数量/采购金额划线灰字）；
+  // 同步镜像到供应商侧「客户管理-账单明细」对应行，保证两端统计口径一致。
+  const voidBill = (r: BillRecord, next: boolean) => {
+    const all: any[] = JSON.parse(localStorage.getItem(storageKey) || '[]');
+    const nowIso = new Date().toISOString();
+    localStorage.setItem(storageKey, JSON.stringify(all.map((b: any) => b.key === r.key ? {
+      ...b,
+      ...(next ? { voided: true, voidedAt: nowIso } : { voided: false, voidedAt: '' }),
+      billLog: appendBillLogEntry(b.billLog, next ? '作废账单' : '取消作废'),
+    } : b)));
+    // 镜像供应商账单明细：按出库单号/订单号匹配同步行 voided 标记
+    try {
+      const su = String((r as any).supplierUsername || '');
+      if (su) {
+        const rk = `pageData_customer_bill-detail_${su}`;
+        let rows: any[] = [];
+        try { rows = JSON.parse(localStorage.getItem(rk) || '[]'); } catch { rows = []; }
+        if (Array.isArray(rows)) {
+          let ch = false;
+          const nextRows = rows.map((row: any) => {
+            const hit = (r.outboundNo && String(row.outboundNo || '').trim() === String(r.outboundNo).trim()) || (row.id && row.id === r.key);
+            if (!hit) return row;
+            ch = true;
+            return { ...row, ...(next ? { voided: true, voidedAt: nowIso } : { voided: false, voidedAt: '' }) };
+          });
+          if (ch) localStorage.setItem(rk, JSON.stringify(nextRows));
+        }
+      }
+    } catch { /* ignore */ }
+    refreshSupplierPurchase(getDataOwner(), [r.supplier]);
+    reload();
+    message.success(next ? '已作废：该行保留但不再计入统计' : '已取消作废');
+  };
+
   const columnMap: Record<string, any> = {
-    outboundNo: { title: '出库单号', dataIndex: 'outboundNo', key: 'outboundNo', width: 150, align: 'center' as const, render: (t: string, r: BillRecord) => (<Space size={4}>{(r as any).docType === 'return' && <Tag color="red" style={{ marginRight: 0 }}>退货</Tag>}<Text strong>{t}</Text><Button type="link" size="small" style={{ padding: 0, height: 'auto' }} icon={<EyeOutlined />} onClick={() => openDetail(r)}>详</Button></Space>) },
+    outboundNo: { title: '出库单号', dataIndex: 'outboundNo', key: 'outboundNo', width: 150, align: 'center' as const, render: (t: string, r: BillRecord) => (<Space size={4}>{(r as any).docType === 'return' && <Tag color="red" style={{ marginRight: 0 }}>退货</Tag>}{(r as any).voided && <Tag style={{ marginRight: 0, color: '#999' }}>已作废</Tag>}<Text strong>{t}</Text><Button type="link" size="small" style={{ padding: 0, height: 'auto' }} icon={<EyeOutlined />} onClick={() => openDetail(r)}>详</Button></Space>) },
     auxDocNo: { title: '辅助单据号', dataIndex: 'auxDocNo', key: 'auxDocNo', width: 140, align: 'center' as const, render: (t: string) => t || '-' },
     date: { title: '日期', dataIndex: 'date', key: 'date', width: 110, align: 'center' as const },
     styleCode: { title: '款式编号', key: 'styleCode', width: 140, align: 'center' as const, render: (_: any, r: BillRecord) => {
@@ -1336,8 +1370,8 @@ const PurchaserBillPage: React.FC = () => {
         </div>
       );
     } },
-    qty: { title: '数量', dataIndex: 'totalQty', key: 'qty', width: 80, align: 'center' as const, render: (v: any) => { const n = Number(v) || 0; return <Text style={{ color: n > 0 ? '#52c41a' : n < 0 ? '#ff4d4f' : undefined, fontWeight: 'bold' }}>{n}</Text>; } },
-    amount: { title: '采购金额', dataIndex: 'totalAmount', key: 'amount', width: 100, align: 'center' as const, render: (v: any) => { const n = Number(v) || 0; return <Text style={{ color: n > 0 ? '#52c41a' : n < 0 ? '#ff4d4f' : undefined, fontWeight: 'bold' }}>¥{n.toFixed(2)}</Text>; } },
+    qty: { title: '数量', dataIndex: 'totalQty', key: 'qty', width: 80, align: 'center' as const, render: (v: any, r: any) => { const n = Number(v) || 0; if (r?.voided) return <Text style={{ color: '#999', textDecoration: 'line-through', fontWeight: 'bold' }}>{n}</Text>; return <Text style={{ color: n > 0 ? '#52c41a' : n < 0 ? '#ff4d4f' : undefined, fontWeight: 'bold' }}>{n}</Text>; } },
+    amount: { title: '采购金额', dataIndex: 'totalAmount', key: 'amount', width: 100, align: 'center' as const, render: (v: any, r: any) => { const n = Number(v) || 0; if (r?.voided) return <Text style={{ color: '#999', textDecoration: 'line-through', fontWeight: 'bold' }}>¥{n.toFixed(2)}</Text>; return <Text style={{ color: n > 0 ? '#52c41a' : n < 0 ? '#ff4d4f' : undefined, fontWeight: 'bold' }}>¥{n.toFixed(2)}</Text>; } },
     supplier: { title: '供应商', dataIndex: 'supplier', key: 'supplier', width: 140, align: 'center' as const, render: (t: string) => t || '-' },
     reconcileResult: { title: '对账结果', dataIndex: 'reconcileResult', key: 'reconcileResult', width: 90, align: 'center' as const, render: (t: string, r: BillRecord) => { const val = t || (matchPurchaserRecon(reconRecords, r) ? '已发起对账' : ''); const displayVal = val === '已对账' ? '对账完成' : val; return val ? <Tag color={val === '已发起对账' ? 'blue' : val === '一致' || val === '已对账' || val === '对账完成' || val === '按供方入账' ? 'green' : val === '不相符' ? 'red' : 'orange'}>{displayVal}</Tag> : '-'; } },
     diffNote: { title: '差异说明', dataIndex: 'diffNote', key: 'diffNote', width: 120, align: 'center' as const, ellipsis: true, render: (t: string) => t || '-' },
@@ -1363,26 +1397,32 @@ const PurchaserBillPage: React.FC = () => {
     const initiated = r.reconcileResult === '已发起对账' || matchPurchaserRecon(reconRecords, r);
     // 对账完成/供应商已发起/本方已发起：移除"发起对账"按键
     const hideInitiate = locked || initiated || matchSupplierRecon(reconRecords, r);
-    // 账单来源为"订单发货"的不可删除（系统自动生成）
-    const isAutoBill = r.billSource === '订单发货' || String(r.outboundNo || (r as any).no || '').startsWith('MC-PUSH-') || (r as any).orderSource === '采购商推送' || !!(r as any).orderId;
     return (
       <Space size={4} wrap style={{ justifyContent: 'center' }}>
         <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => openDetail(r)}>查看</Button>
         {!hideInitiate && <Button type="link" size="small" icon={<SwapOutlined />} style={{ color: '#722ed1' }} onClick={() => initiateReconForBills([r])}>发起对账</Button>}
         {initiated && !locked && <Button type="link" size="small" icon={<UndoOutlined />} style={{ color: '#fa8c16' }} onClick={() => withdrawRecon(r)}>撤回对账</Button>}
         {!locked && !initiated && <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openEdit(r)}>编辑</Button>}
-        {!locked && !initiated && !isAutoBill && <Button type="link" size="small" danger icon={<DeleteOutlined />} onClick={() => { declareShrink(storageKey, [r.key]); const all = bills.filter(b => b.key !== r.key); localStorage.setItem(storageKey, JSON.stringify(all));
-                  // 闭环：删除账单同时墓碑化关联的存活对账记录（撤回语义），避免对方平台残留孤儿在途对账
-                  try {
-                    const uname0 = localStorage.getItem('username') || '';
-                    const owner0 = localStorage.getItem('isSubAccount') === 'true' ? (localStorage.getItem('parentAccount') || uname0) : uname0;
-                    const rl0 = loadRoleAll('purchaser', owner0);
-                    const rm0 = rl0.map((x: any) => (!x.delisted && x.source === 'bill' && ((r.outboundNo && String(x.docNo || '').trim() === String(r.outboundNo).trim()) || x.orderNo === r.key || x.matchedBillKey === r.key)) ? { ...x, delisted: true, delistedAt: new Date().toISOString(), withdrawn: true } : x);
-                    upsertRecords(rm0);
-                  } catch { /* ignore */ }
-                  // 桥时序：删除账单同时清理其可能残留的自动会计分录（防止孤儿凭证导致账实不平）
-                  try { removeAutoEntries(getDataOwner(), `purchbill-recon-${r.key}`); } catch { /* ignore */ }
-                  refreshSupplierPurchase(getDataOwner(), [r.supplier]); reload(); message.success('已删除'); }}>删除</Button>}
+        {!locked && !initiated && ((r as any).voided
+          ? <Popconfirm
+              title="确认取消作废"
+              description="取消作废后该行将重新计入统计，确定取消作废吗？"
+              onConfirm={() => voidBill(r, false)}
+              okText="确定"
+              cancelText="取消"
+            >
+              <Button type="link" size="small" icon={<RollbackOutlined />}>取消作废</Button>
+            </Popconfirm>
+          : <Popconfirm
+              title="确认作废"
+              description="作废后该行保留但不再计入统计，确定作废吗？"
+              onConfirm={() => voidBill(r, true)}
+              okText="确定"
+              cancelText="取消"
+              okType="danger"
+            >
+              <Button type="link" size="small" danger icon={<StopOutlined />}>作废</Button>
+            </Popconfirm>)}
       </Space>
     );
   } };

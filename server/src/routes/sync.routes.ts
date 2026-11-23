@@ -70,6 +70,8 @@ const NEVER_SHRINK_PREFIXES = ['purchaser_bills_', 'pageData_customer_bill-detai
 // 把另一端刚新增的账户整份擦掉（表现为「新增账号过会自动删除」）；纳入永不缩水后
 // 陈旧 PUT 一律并集，合法删除由客户端删除操作随 body 申报 removedIds。
 const isNeverShrinkKey = (key: string): boolean => NEVER_SHRINK_PREFIXES.some(p => key.startsWith(p));
+// 跨端删除收敛账本：删除事实持久化到服务端，杜绝未删除端并集回传复活已删行（详见 services/deleteLedger）
+import { applyNeverShrinkLedgerToSaved, ledgerIdsOf, filterLedgerRowsJson } from '../services/deleteLedger';
 // 带「已处理」墓碑语义的跨租户键（采购商已付款待登记收件箱）：采购商追加行、供应商打 handled 墓碑，
 // 供应商端已处理的行不得被采购商端的陈旧副本（离线期间缓存的 handled=false）复活。
 const STICKY_HANDLED_PREFIXES = ['supplier_receipt_inbox_'];
@@ -277,8 +279,21 @@ router.get('/dataset', async (req: Request, res: Response) => {
     const row = await store.getDataset(key);
     if (!row) { res.status(404).json({ error: 'not found' }); return; }
     // 账号数据集读取脱敏：不下发任何密码凭据
-    const json = key === 'registeredUsers' ? sanitizeRegisteredUsersJson(row.dataset_json) : row.dataset_json;
-    res.json({ key: row.dataset_key, json, updatedAt: row.updated_at });
+    let json = key === 'registeredUsers' ? sanitizeRegisteredUsersJson(row.dataset_json) : row.dataset_json;
+    let ledgerRemoved: string[] = [];
+    if (isNeverShrinkKey(key)) {
+      const ledIds = await ledgerIdsOf(key);
+      if (ledIds.size > 0) {
+        ledgerRemoved = Array.from(ledIds);
+        const cleaned = filterLedgerRowsJson(ledIds, json);
+        if (cleaned !== json) {
+          // 读侧自愈：回写存储副本，避免幽灵行长期留存真表被小程序等直读入口看到
+          try { await store.forceUpsertDataset(key, cleaned, row.owner || '', row.updated_at); touchMetaCache(key, row.updated_at); } catch { /* 自愈失败不阻断读 */ }
+        }
+        json = cleaned;
+      }
+    }
+    res.json({ key: row.dataset_key, json, updatedAt: row.updated_at, ...(ledgerRemoved.length ? { removedIds: ledgerRemoved } : {}) });
   } catch (err: any) {
     console.error('[sync] /dataset GET error:', err.message);
     res.status(500).json({ error: err.message });
@@ -320,7 +335,8 @@ router.put('/dataset', async (req: Request, res: Response) => {
         if (isKeyAllowed(targetKey, user, 'write')) {
           const targetRow = await store.getDataset(targetKey).catch(() => undefined);
           // 主账号桶为底、本次写入覆盖同 id 行；removedIds 申报同样作用于主桶
-          const merged = mergeRowsUnionJson(targetRow ? targetRow.dataset_json : null, json, req.body.removedIds);
+          const mergedRaw = mergeRowsUnionJson(targetRow ? targetRow.dataset_json : null, json, req.body.removedIds);
+          const merged = await applyNeverShrinkLedgerToSaved(targetKey, targetRow ? targetRow.dataset_json : null, mergedRaw);
           const rTs = Math.max(Number(req.body.updatedAt) || Date.now(), targetRow ? targetRow.updated_at : 0);
           await store.forceUpsertDataset(targetKey, merged, root, rTs);
           await applyUsageDeltaForWrite(targetKey, targetRow ? targetRow.dataset_json : null, merged);
@@ -407,9 +423,10 @@ router.put('/dataset', async (req: Request, res: Response) => {
         const guarded = mergeWithExplicitRemovals(row.dataset_json, json, req.body.removedIds, coop)
           || mergeArrayDatasets(row.dataset_json, json, isMergeAlwaysKey(key), coop, isStickyHandledKey(key));
         if (guarded) {
+          const guardedFinal = await applyNeverShrinkLedgerToSaved(key, row.dataset_json, guarded);
           const gTs = Math.max(ts, row.updated_at);
-          await store.forceUpsertDataset(key, guarded, owner, gTs);
-          await applyUsageDeltaForWrite(key, row.dataset_json, guarded);
+          await store.forceUpsertDataset(key, guardedFinal, owner, gTs);
+          await applyUsageDeltaForWrite(key, row.dataset_json, guardedFinal);
           touchMetaCache(key, gTs);
           savedJson({ saved: true, merged: true, newTs: gTs });
           return;
@@ -443,7 +460,7 @@ router.put('/dataset', async (req: Request, res: Response) => {
     const merged = isNeverShrinkKey(key)
       ? (mergeWithExplicitRemovals(row.dataset_json, json, req.body.removedIds, coop) || mergeArrayDatasets(row.dataset_json, json, isMergeAlwaysKey(key), coop, isStickyHandledKey(key)))
       : mergeArrayDatasets(row.dataset_json, json, isMergeAlwaysKey(key), coop, isStickyHandledKey(key));
-    const finalJson = merged || json;
+    const finalJson = await applyNeverShrinkLedgerToSaved(key, row.dataset_json, merged || json);
     const finalTs = Math.max(ts, row.updated_at);
     await store.forceUpsertDataset(key, finalJson, owner, finalTs);
     await applyUsageDeltaForWrite(key, row.dataset_json, finalJson);

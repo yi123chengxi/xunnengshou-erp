@@ -2,7 +2,9 @@ import { Router, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import dotenv from 'dotenv';
 import { store } from '../database/store';
+import { filterLedgerRows } from '../services/deleteLedger';
 import { listMolds } from '../database/mold-store';
+import { listBoundPurchasers } from '../database/cooperation-store';
 import { verifyJWT, verifyCredentials, issueToken, JWTPayload } from './auth.routes';
 import { getJwtSecret } from '../utils/jwtSecret';
 import { resolveCompanyRoot } from '../services/storageUsage';
@@ -38,7 +40,9 @@ async function readRows(key: string): Promise<any[]> {
     const row = await store.getDataset(key);
     if (!row) return [];
     const parsed = JSON.parse(row.dataset_json || '[]');
-    return Array.isArray(parsed) ? parsed : [];
+    const rows = Array.isArray(parsed) ? parsed : [];
+    // 永不缩水键跨端删除收敛：按服务端删除账本过滤已删行（主账号删除后小程序不再看到幽灵行）
+    return await filterLedgerRows(key, rows);
   } catch {
     return [];
   }
@@ -2774,7 +2778,14 @@ router.get('/lists/:page', verifyJWT, async (req: Request, res: Response) => {
       // 全量客户：直接客户档案 + 未关联直接客户的绑定采购商（与 Web loadAllCustomersFromStorage 同源，关联判定简化为同名）
       const [custRows, bpRows, adjRows, billRows, receiptRows, orderRows] = await Promise.all([
         readRows(`customers_${owner}`),
-        readRows(`boundPurchasers_${owner}`),
+        // 绑定采购商已迁服务端权威真表（bound_purchasers）；迁移未完成（表空）时回退旧同步键，保证小程序不漏读
+        (async () => {
+          const rows = await listBoundPurchasers(owner);
+          if (rows.length) {
+            return rows.map((r: any) => { try { return JSON.parse(r.record_json); } catch { return null; } }).filter(Boolean);
+          }
+          return readRows(`boundPurchasers_${owner}`);
+        })(),
         readRows(`credit_adjustments_${owner}`),
         readRows(`pageData_customer_bill-detail_${owner}`),
         readRows(`customerReceipts_${owner}`),

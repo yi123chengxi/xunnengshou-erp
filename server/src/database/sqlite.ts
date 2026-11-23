@@ -176,6 +176,36 @@ db.exec(`
     updated_at INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (owner, dataset, rec_key)
   );
+
+  -- 供应商菜单/合作握手权威真表：替代 purchaser_suppliers_ / boundPurchasers_ / cooperation_applications
+  -- 三个跨租户同步键，写路径只改目标行，跨租户代写由 /api/cooperation/* 授权接口在服务端完成
+  CREATE TABLE IF NOT EXISTS supplier_directory (
+    owner TEXT NOT NULL,
+    rec_key TEXT NOT NULL,
+    record_json TEXT NOT NULL,
+    updated_at INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (owner, rec_key)
+  );
+
+  CREATE TABLE IF NOT EXISTS bound_purchasers (
+    owner TEXT NOT NULL,
+    rec_key TEXT NOT NULL,
+    record_json TEXT NOT NULL,
+    updated_at INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (owner, rec_key)
+  );
+
+  CREATE TABLE IF NOT EXISTS cooperation_apps (
+    app_key TEXT NOT NULL,
+    purchaser TEXT NOT NULL DEFAULT '',
+    supplier TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT '',
+    record_json TEXT NOT NULL,
+    updated_at INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (app_key)
+  );
+  CREATE INDEX IF NOT EXISTS idx_coop_purchaser ON cooperation_apps(purchaser);
+  CREATE INDEX IF NOT EXISTS idx_coop_supplier ON cooperation_apps(supplier);
 `);
 
 // 兼容旧库：企业认证表增量列（法人身份证号 / 最近刷脸 CertifyId / 最近变更认证时间）
@@ -398,5 +428,33 @@ INSERT INTO newstyle_records (owner, dataset, rec_key, record_json, updated_at) 
   ON CONFLICT(owner, dataset, rec_key) DO UPDATE SET record_json = excluded.record_json, updated_at = excluded.updated_at
 `);
 export const stmtNewStyleDelete: Statement = db.prepare('DELETE FROM newstyle_records WHERE owner = ? AND dataset = ? AND rec_key = ?');
+
+// ============ 供应商目录权威真表（supplier_directory） ============
+export const stmtSupDirList: Statement = db.prepare('SELECT owner, rec_key, record_json, updated_at FROM supplier_directory WHERE owner = ? ORDER BY updated_at ASC');
+export const stmtSupDirKeys: Statement = db.prepare('SELECT rec_key FROM supplier_directory WHERE owner = ?');
+export const stmtSupDirUpsert: Statement = db.prepare(`
+  INSERT INTO supplier_directory (owner, rec_key, record_json, updated_at) VALUES (?, ?, ?, ?)
+  ON CONFLICT(owner, rec_key) DO UPDATE SET record_json = excluded.record_json, updated_at = excluded.updated_at
+`);
+export const stmtSupDirDelete: Statement = db.prepare('DELETE FROM supplier_directory WHERE owner = ? AND rec_key = ?');
+
+// ============ 已绑定采购商权威真表（bound_purchasers） ============
+export const stmtBoundPurchList: Statement = db.prepare('SELECT owner, rec_key, record_json, updated_at FROM bound_purchasers WHERE owner = ? ORDER BY updated_at ASC');
+export const stmtBoundPurchKeys: Statement = db.prepare('SELECT rec_key FROM bound_purchasers WHERE owner = ?');
+export const stmtBoundPurchUpsert: Statement = db.prepare(`
+  INSERT INTO bound_purchasers (owner, rec_key, record_json, updated_at) VALUES (?, ?, ?, ?)
+  ON CONFLICT(owner, rec_key) DO UPDATE SET record_json = excluded.record_json, updated_at = excluded.updated_at
+`);
+export const stmtBoundPurchDelete: Statement = db.prepare('DELETE FROM bound_purchasers WHERE owner = ? AND rec_key = ?');
+
+// ============ 合作申请权威真表（cooperation_apps） ============
+export const stmtCoopAppListFor: Statement = db.prepare('SELECT app_key, purchaser, supplier, status, record_json, updated_at FROM cooperation_apps WHERE purchaser = ? OR supplier = ? ORDER BY updated_at ASC');
+export const stmtCoopAppGet: Statement = db.prepare('SELECT app_key, purchaser, supplier, status, record_json, updated_at FROM cooperation_apps WHERE app_key = ?');
+export const stmtCoopAppUpsert: Statement = db.prepare(`
+  INSERT INTO cooperation_apps (app_key, purchaser, supplier, status, record_json, updated_at) VALUES (?, ?, ?, ?, ?, ?)
+  ON CONFLICT(app_key) DO UPDATE SET purchaser = excluded.purchaser, supplier = excluded.supplier, status = excluded.status, record_json = excluded.record_json, updated_at = excluded.updated_at
+`);
+export const stmtCoopAppDelete: Statement = db.prepare('DELETE FROM cooperation_apps WHERE app_key = ?');
+export const stmtCoopAppListAll: Statement = db.prepare('SELECT app_key, purchaser, supplier, status, record_json, updated_at FROM cooperation_apps ORDER BY updated_at ASC');
 
 export default db;

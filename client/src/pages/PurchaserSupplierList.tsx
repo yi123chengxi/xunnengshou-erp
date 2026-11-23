@@ -928,6 +928,15 @@ const PurchaserSupplierList: React.FC = () => {
       // 不再依赖本浏览器 localStorage 里根本不存在的对方私有键
       const readDataset = async (k: string): Promise<any[]> => {
         try {
+          // boundPurchasers_ 已迁服务端权威真表，走 /api/cooperation 跨租户读；其余 SHARED 键（credit_adjustments_）仍走旧同步通道
+          if (k.startsWith('boundPurchasers_')) {
+            const owner = k.slice('boundPurchasers_'.length);
+            const rb = await fetch(`${apiBase}/cooperation/bound-purchasers?owner=${encodeURIComponent(owner)}`, { headers: auth });
+            if (!rb.ok) return [];
+            const db = await rb.json();
+            const arrb = db?.data?.list;
+            return Array.isArray(arrb) ? arrb : [];
+          }
           const r = await fetch(`${apiBase}/sync/dataset?key=${encodeURIComponent(k)}`, { headers: auth });
           if (!r.ok) return [];
           const d = await r.json();

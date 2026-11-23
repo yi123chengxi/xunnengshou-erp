@@ -847,7 +847,7 @@ const CustomerInfo: React.FC = () => {
   const [asOfOpen, setAsOfOpen] = useState(false);
   const asOfBills = useMemo<any[]>(() => {
     if (!asOfOpen) return [];
-    try { return JSON.parse(localStorage.getItem(`pageData_customer_bill-detail_${getDataOwner()}`) || '[]'); } catch { return []; }
+    try { const l = JSON.parse(localStorage.getItem(`pageData_customer_bill-detail_${getDataOwner()}`) || '[]'); return (Array.isArray(l) ? l : []).filter((b: any) => !b?.voided); } catch { return []; }
   }, [asOfOpen]);
   const asOfIdName = useMemo(() => {
     const m: Record<string, string> = {};
@@ -1500,6 +1500,7 @@ const CustomerInfo: React.FC = () => {
     let billsAll: any[] = [];
     try { billsAll = JSON.parse(localStorage.getItem(`pageData_customer_bill-detail_${owner}`) || '[]'); } catch { /* ignore */ }
     const bills = billsAll
+      .filter((b: any) => !b.voided)
       .filter((b: any) => (b.customerName || b.customer || '') === record.name)
       .filter((b: any) => {
         const d = String(b.outboundDate || b.date || '');

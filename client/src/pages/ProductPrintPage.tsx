@@ -427,6 +427,14 @@ const ProductPrintPage: React.FC = () => {
             innerParts.push(`<div style="position:absolute;left:${x}mm;top:${y}mm;width:${w || 60}mm;font-size:${tfs}pt;font-family:${el.fontFamily || 'inherit'};-webkit-print-color-adjust:exact;print-color-adjust:exact;"><table style="border-collapse:collapse;width:100%;table-layout:fixed;word-break:break-all;"><thead><tr>${ths}</tr></thead><tbody><tr>${tds}</tr></tbody></table></div>`);
             continue;
           }
+          if (el.type === 'matrixTable') {
+            // 横向表格：商品打印无订单上下文，渲染固定列+斜线表头占位（与订单引擎同版式）
+            const fsM = el.fontSize || 9;
+            const pad = '1px 2px';
+            const diagTh = `<th style="border:1px solid #333;padding:0;position:relative;width:14%;height:${(fsM * 0.3528 + 1.8).toFixed(1)}mm;"><svg style="position:absolute;left:0;top:0;width:100%;height:100%;" viewBox="0 0 100 100" preserveAspectRatio="none"><line x1="0" y1="0" x2="100" y2="100" stroke="#333" stroke-width="1" vector-effect="non-scaling-stroke"/></svg><span style="position:absolute;left:3px;bottom:1px;">颜色</span><span style="position:absolute;right:3px;top:1px;">规格</span></th>`;
+            innerParts.push(`<div style="position:absolute;left:${x}mm;top:${y}mm;width:${w || 120}mm;font-size:${fsM}pt;font-family:${el.fontFamily || 'inherit'};-webkit-print-color-adjust:exact;print-color-adjust:exact;"><table style="border-collapse:collapse;width:100%;table-layout:fixed;"><thead><tr><th style="border:1px solid #333;padding:${pad};text-align:center;width:18%;">款式编码</th>${diagTh}</tr></thead><tbody><tr><td style="border:1px solid #333;padding:${pad};text-align:center;">—</td><td style="border:1px solid #333;padding:${pad};text-align:center;">—</td></tr></tbody></table></div>`);
+            continue;
+          }
           const fnPrefix = el.type === 'field' && el.showFieldName && el.field ? `${esc(el.field)}：` : '';
           innerParts.push(`<div style="${pos}">${fnPrefix}${esc(val).replace(/\n/g, '<br>')}</div>`);
         }
