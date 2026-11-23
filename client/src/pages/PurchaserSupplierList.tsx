@@ -537,6 +537,14 @@ const PurchaserSupplierList: React.FC = () => {
       const rec = findInviteRecord(code);
       if (rec?.usedAt) { message.error('该邀约链接已失效（一次性链接已被使用），请联系供应商重新生成'); setInvitePayload(null); return; }
     }
+    // 已合作检测：命中已有 approved 条目时先弹窗提示（重复同意仅刷新合作时间，不新建关系）
+    const supInfo = resolveUserByCompanyNo(invitePayload.no);
+    let alreadyApproved = false;
+    try {
+      const list: any[] = JSON.parse(localStorage.getItem(storageKey) || '[]');
+      alreadyApproved = !!supInfo && list.some((s: any) => (s.supplierName === supInfo.companyName || String(s.supplierNo || '') === String(invitePayload.no)) && s.cooperationStatus === 'approved');
+    } catch { /* ignore */ }
+    const doAccept = () => {
     const res = acceptCooperationInvite(invitePayload, getDataOwner());
     if (!res.ok) { message.error(res.msg); return; }
     // 一次性邀约码：同意即消耗、链接立即失效；并把客户行标识回写供应商侧绑定采购商卡片（供其客户列表升级对应客户行）
@@ -558,7 +566,20 @@ const PurchaserSupplierList: React.FC = () => {
     }
     setInvitePayload(null);
     reloadData();
-    message.success(res.msg);
+    message.success(alreadyApproved ? `与「${supInfo?.companyName || invitePayload.no}」已是合作关系，本次同意仅刷新合作时间，未新建关系` : res.msg);
+    };
+    if (alreadyApproved) {
+      Modal.confirm({
+        title: '已建立合作关系',
+        content: `检测到您与「${supInfo?.companyName || invitePayload.no}」已建立合作关系，重复同意不会新建关系，仅刷新合作时间。是否继续？`,
+        okText: '继续',
+        cancelText: '取消',
+        centered: true,
+        onOk: doAccept,
+      });
+      return;
+    }
+    doAccept();
   };
 
   // ========== 拒绝供应商邀约 ==========
