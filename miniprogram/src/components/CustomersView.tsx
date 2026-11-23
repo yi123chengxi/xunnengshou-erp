@@ -16,13 +16,15 @@ const CustomersView = ({ tick = 0 }: { tick?: number }) => {
   const [applied, setApplied] = useState('')
   const [list, setList] = useState<ListItem[]>([])
   const [total, setTotal] = useState(0)
+  // 应收欠款总额（服务端按当前筛选列表汇总下发）：计数行靠右展示，欠红/无欠绿与网页版同色
+  const [debtTotal, setDebtTotal] = useState<number | null>(null)
   const [loaded, setLoaded] = useState(false)
   const [detailItem, setDetailItem] = useState<ListItem | null>(null)
 
   useEffect(() => {
     setLoaded(false)
     getListPage('customers', applied)
-      .then(d => { setList(d.list || []); setTotal(d.total || 0) })
+      .then(d => { setList(d.list || []); setTotal(d.total || 0); setDebtTotal(typeof d.debtTotal === 'number' ? d.debtTotal : null) })
       .catch(e => Taro.showToast({ title: e.message, icon: 'none' }))
       .finally(() => setLoaded(true))
   }, [applied, tick])
@@ -47,8 +49,13 @@ const CustomersView = ({ tick = 0 }: { tick?: number }) => {
         </View>
       </View>
       {loaded && total > 0 && (
-        <View style={{ padding: '8px 24px 0' }}>
-          <Text className="muted" style={{ fontSize: 15 }}>共 {total} 条，显示前 {list.length} 条</Text>
+        <View style={{ display: 'flex', alignItems: 'center', padding: '8px 24px 0' }}>
+          <Text className="muted" style={{ fontSize: 15, flex: 1, minWidth: 0, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>共 {total} 条，显示前 {list.length} 条</Text>
+          {debtTotal !== null && (
+            <Text style={{ flexShrink: 0, marginLeft: 8, fontSize: 15, fontWeight: 600, color: debtTotal > 0 ? '#ff4d4f' : '#52c41a' }}>
+              应收欠款总额 ¥{debtTotal.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </Text>
+          )}
         </View>
       )}
       {loaded && list.length === 0 && <View className="empty">暂无数据</View>}

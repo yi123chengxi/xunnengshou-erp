@@ -2653,6 +2653,8 @@ router.get('/lists/:page', verifyJWT, async (req: Request, res: Response) => {
           key: c.id || c.name, title: c.name,
           tag: c.level,
           cardBg: CARD_BGS[idx % CARD_BGS.length],
+          // 临时字段：供计数行汇总应收欠款总额后剥离，不下发前端
+          _debt: debt,
           // 第二行信用/剩余额度、第三行采购总额/应收欠款（用户指定）
           sub: [`信用额度 ${yuan(credit)}　剩余额度 ${yuan(remain)}`, `采购总额 ${yuan(purchase)}　应收欠款 ${yuan(debt)}`],
           subSizes: [13, 13],
@@ -2728,6 +2730,11 @@ router.get('/lists/:page', verifyJWT, async (req: Request, res: Response) => {
     // 生产订单/采购订单单页上限 20 条（用户指定），其余列表页保持 100
     const data: { list: ListItem[]; total: number; sums?: string[] } = finishList(items, q, page === 'production' || page === 'purchase' ? 20 : 100);
     if (sums) data.sums = sums;
+    // 客户列表：计数行靠右展示应收欠款总额（与当前筛选列表联动），汇总后剥离 _debt 临时字段
+    if (page === 'customers') {
+      (data as any).debtTotal = Math.round(data.list.reduce((s: number, it: any) => s + (Number(it._debt) || 0), 0) * 100) / 100;
+      data.list.forEach((it: any) => { delete it._debt; });
+    }
     res.json({ code: 200, data });
   } catch (err: any) {
     console.error('[wx] lists error:', err.message);

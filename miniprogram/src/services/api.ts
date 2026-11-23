@@ -308,7 +308,7 @@ export interface ListItem {
 }
 
 export const getListPage = (page: string, q: string, extra = '') =>
-  request<{ list: ListItem[]; total: number; sums?: string[] }>(`/wx/lists/${page}?q=${encodeURIComponent(q)}${extra ? `&${extra}` : ''}`)
+  request<{ list: ListItem[]; total: number; sums?: string[]; debtTotal?: number }>(`/wx/lists/${page}?q=${encodeURIComponent(q)}${extra ? `&${extra}` : ''}`)
 
 /** 打单拣货列表项（服务端 /wx/picking 下发：卡片三行字段 + 货品明细） */
 export interface PickingItem {
