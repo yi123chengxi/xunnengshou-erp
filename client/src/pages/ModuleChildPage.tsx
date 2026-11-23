@@ -1948,6 +1948,8 @@ const ModuleChildPage: React.FC = () => {
   const [sellerImages, setSellerImages] = useState<string[]>([]);
   // 发货凭证图片（仅发货确认弹窗内上传，确认后写入订单 shipImages 与出库单 images）
   const shipVoucherRef = useRef<string[]>([]);
+  // 发货快递信息（发货确认弹窗内填写，确认后写入订单与出库单，订单详情交易信息展示）
+  const shipExpressRef = useRef<{ name: string; no: string }>({ name: '', no: '' });
   const [sellerImageHighlight, setSellerImageHighlight] = useState<number | null>(null);
   const [sellerImagePreview, setSellerImagePreview] = useState<string | null>(null);
 
@@ -8409,6 +8411,7 @@ const ModuleChildPage: React.FC = () => {
     // 发货确认（正常/强制共用）：force=true 时绕过缺货门禁，实际库存允许扣成负数（出库单与库存日志留痕）
     const confirmShip = (force: boolean, shortageText: string) => {
       shipVoucherRef.current = [];
+      shipExpressRef.current = { name: '', no: '' };
       // 发货凭证上传器：仅发货确认弹窗内可用，压缩后暂存 ref，确认时随发货落库
       const VoucherPicker = () => {
         const [imgs, setImgs] = useState<string[]>([]);
@@ -8424,6 +8427,16 @@ const ModuleChildPage: React.FC = () => {
               commit([...shipVoucherRef.current, dataUrl].slice(0, 9));
             } catch { /* 单张失败跳过 */ }
           }
+        };
+        // 粘贴按键：读取剪切板图片 → 压缩后并入凭证列表（与上传同口径）
+        const onPaste = async () => {
+          const res = await readClipboardImage();
+          if (!res.ok) { message.warning(clipboardImageFailureText(res.reason)); return; }
+          try {
+            const file = new File([res.blob], `paste-${Date.now()}.png`, { type: res.blob.type || 'image/png' });
+            const dataUrl = await compressImageFile(file, { maxEdge: 1280, forceJpeg: true });
+            if (dataUrl) commit([...shipVoucherRef.current, dataUrl].slice(0, 9));
+          } catch { message.error('图片压缩失败，请重试'); }
         };
         return (
           <div style={{ marginTop: 12 }}>
@@ -8442,6 +8455,7 @@ const ModuleChildPage: React.FC = () => {
                 </div>
               )}
               <input ref={inputRef} type="file" accept="image/*" multiple style={{ display: 'none' }} onChange={onFile} />
+              <Button size="small" icon={<SnippetsOutlined />} onClick={onPaste}>粘贴剪切板图片</Button>
             </div>
           </div>
         );
@@ -8456,6 +8470,10 @@ const ModuleChildPage: React.FC = () => {
                 : `确定将选中的 ${records.length} 条拣货单立即发货？订单将变更为“已发货”并从打单拣货移除，同时生成销售出库单并扣减商品实际库存。`}
             </div>
             <VoucherPicker />
+            <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+              <Input placeholder="快递名称（如 顺丰）" allowClear style={{ width: 200 }} onChange={e => { shipExpressRef.current = { ...shipExpressRef.current, name: e.target.value }; }} />
+              <Input placeholder="快递单号" allowClear style={{ flex: 1 }} onChange={e => { shipExpressRef.current = { ...shipExpressRef.current, no: e.target.value }; }} />
+            </div>
           </div>
         ),
         okText: force ? '确认强制发货' : '确定',
@@ -8463,6 +8481,8 @@ const ModuleChildPage: React.FC = () => {
         cancelText: '取消',
         onOk: () => {
         const voucherImages = shipVoucherRef.current || [];
+        const expressName = String(shipExpressRef.current.name || '').trim();
+        const expressNo = String(shipExpressRef.current.no || '').trim();
         const owner = getDataOwner();
         const omKey = `pageData_sales_order-manage_${owner}`;
         const soKey = `sales_outbound_${owner}`;
@@ -8522,15 +8542,16 @@ const ModuleChildPage: React.FC = () => {
             productDetail: rec.productDetail || order.productDetail || '',
             totalQty: items.reduce((s: number, i: any) => s + (Number(i.quantity) || 0), 0),
             items, operator, createTime: now, status: '已发货', remark: '', images: voucherImages,
+            shipExpressName: expressName, shipExpressNo: expressNo,
           });
         });
         try { localStorage.setItem(soKey, JSON.stringify([...newOutbounds, ...soList])); } catch { /* ignore */ }
         // 订单管理：发货即完成交易（状态直达「已完成」）并清除审核状态，派生视图下拣货列表自动移除
-        pushRecordToPage(omKey, omList.map((o: any) => ids.has(o.id) ? { ...o, orderStatus: '已完成', auditStatus: '', shipTime: now, completeTime: now, shipImages: voucherImages } : o));
-        setDataSource(prev => prev.map(r => ids.has(r.id) ? { ...r, orderStatus: '已完成', auditStatus: '', shipTime: now, completeTime: now, shipImages: voucherImages } : r));
+        pushRecordToPage(omKey, omList.map((o: any) => ids.has(o.id) ? { ...o, orderStatus: '已完成', auditStatus: '', shipTime: now, completeTime: now, shipImages: voucherImages, shipExpressName: expressName, shipExpressNo: expressNo } : o));
+        setDataSource(prev => prev.map(r => ids.has(r.id) ? { ...r, orderStatus: '已完成', auditStatus: '', shipTime: now, completeTime: now, shipImages: voucherImages, shipExpressName: expressName, shipExpressNo: expressNo } : r));
         // 写入订单操作日志：发货痕迹（含出库单号）+ 交易完成
         shippedDocs.forEach(d => {
-          appendOrderLog(d.id, '订单发货', `打单拣货发货${force ? '（强制·缺货放行）' : ''}：生成出库单 ${d.docNo}，订单状态变更为已完成`);
+          appendOrderLog(d.id, '订单发货', `打单拣货发货${force ? '（强制·缺货放行）' : ''}：生成出库单 ${d.docNo}，订单状态变更为已完成${expressName || expressNo ? `；快递 ${expressName || '—'} 单号 ${expressNo || '—'}` : ''}`);
           appendOrderLog(d.id, '交易完成', '供应商已发货，订单交易自动完成');
         });
         // 分段付款订单：发货后结转 借预收账款/贷主营业务收入（会计账薄模式，sourceKey 幂等）
@@ -16070,7 +16091,7 @@ const handleBatchAttrsConfirm = () => {
                     children: (
                       <Form autoComplete="off" form={editForm} layout="vertical">
                         <Row gutter={16}>
-                          <Col span={8}>
+                          <Col span={6}>
                             <Form.Item name="id" label={<span style={{ fontSize: 12 }}>订单编号</span>}>
                               <Input size="small" disabled style={{ color: '#000' }} suffix={
                                 <CopyOutlined style={{ color: PRIMARY, cursor: 'pointer' }} onClick={() => {
@@ -16080,30 +16101,40 @@ const handleBatchAttrsConfirm = () => {
                               } />
                             </Form.Item>
                           </Col>
-                          <Col span={8}>
+                          <Col span={6}>
                             <Form.Item name="orderStatus" label={<span style={{ fontSize: 12 }}>订单状态</span>}>
                               <Select size="small" disabled options={['待付款', '部分付款', '已付款', '已发货', '已完成', '已取消'].map(v => ({ label: v, value: v }))} style={{ color: '#000' }} />
                             </Form.Item>
                           </Col>
-                          <Col span={8}>
+                          <Col span={6}>
                             <Form.Item name="orderTag" label={<span style={{ fontSize: 12 }}>订单标签</span>}>
                               <Input size="small" readOnly style={{ cursor: 'pointer', color: '#000' }} placeholder="点击选择订单标签"
                                 onClick={() => { setOrderTagPopupRecord({ key: '__form_edit__', orderTag: editForm.getFieldValue('orderTag') || '' }); setOrderTagPopupVisible(true); }} />
                             </Form.Item>
                           </Col>
-                          <Col span={8}>
+                          <Col span={6}>
                             <Form.Item name="createTime" label={<span style={{ fontSize: 12 }}>订单时间</span>}>
                               <Input size="small" disabled style={{ color: '#000' }} placeholder="订单创建时间" />
                             </Form.Item>
                           </Col>
-                          <Col span={8}>
+                          <Col span={6}>
                             <Form.Item name="payTime" label={<span style={{ fontSize: 12 }}>付款时间</span>}>
                               <Input size="small" disabled style={{ color: '#000' }} placeholder="付款时间" />
                             </Form.Item>
                           </Col>
-                          <Col span={8}>
+                          <Col span={6}>
                             <Form.Item name="orderSource" label={<span style={{ fontSize: 12 }}>订单来源</span>}>
-                              <Select size="small" options={['\u7ebf\u4e0a\u5546\u57ce', '\u7ebf\u4e0b\u95e8\u5e97', '\u7535\u8bdd\u8ba2\u8d2d', '\u5c55\u4f1a', '\u8001\u5ba2\u6237\u4ecb\u7ecd'].map(v => ({ label: v, value: v }))} />
+                              <Select size="small" options={['线上商城', '线下门店', '电话订购', '展会', '老客户介绍'].map(v => ({ label: v, value: v }))} />
+                            </Form.Item>
+                          </Col>
+                          <Col span={6}>
+                            <Form.Item name="shipExpressName" label={<span style={{ fontSize: 12 }}>快递名称</span>}>
+                              <Input size="small" disabled style={{ color: '#000' }} placeholder="发货时填写" />
+                            </Form.Item>
+                          </Col>
+                          <Col span={6}>
+                            <Form.Item name="shipExpressNo" label={<span style={{ fontSize: 12 }}>快递单号</span>}>
+                              <Input size="small" disabled style={{ color: '#000' }} placeholder="发货时填写" />
                             </Form.Item>
                           </Col>
                           {/* 业务员字段移除，默认取创建人；隐藏保留表单值 */}
