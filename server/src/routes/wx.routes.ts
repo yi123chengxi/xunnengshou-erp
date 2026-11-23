@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import dotenv from 'dotenv';
 import { store } from '../database/store';
+import { filterLedgerRows } from '../services/deleteLedger';
 import { listMolds } from '../database/mold-store';
 import { verifyJWT, verifyCredentials, issueToken, JWTPayload } from './auth.routes';
 import { getJwtSecret } from '../utils/jwtSecret';
@@ -38,7 +39,9 @@ async function readRows(key: string): Promise<any[]> {
     const row = await store.getDataset(key);
     if (!row) return [];
     const parsed = JSON.parse(row.dataset_json || '[]');
-    return Array.isArray(parsed) ? parsed : [];
+    const rows = Array.isArray(parsed) ? parsed : [];
+    // 永不缩水键跨端删除收敛：按服务端删除账本过滤已删行（主账号删除后小程序不再看到幽灵行）
+    return await filterLedgerRows(key, rows);
   } catch {
     return [];
   }
@@ -2178,6 +2181,9 @@ router.post('/picking/:id/ship', verifyJWT, async (req: Request, res: Response) 
     // 发货凭证图片：小程序侧已压缩并上传到图片空间，这里只存返回的 URL（限 9 张）
     const shipImages = (Array.isArray(req.body?.images) ? req.body.images : [])
       .filter((u: any) => typeof u === 'string' && u).slice(0, 9);
+    // 快递信息：小程序发货弹窗填写，与 Web 同字段名（shipExpressName/shipExpressNo）写入订单与发货日志
+    const expressName = String(req.body?.expressName || '').trim();
+    const expressNo = String(req.body?.expressNo || '').trim();
     const shipQtys = items.map((it: any, i: number) => {
       const v = Number(reqQ[i]);
       const q = Number.isFinite(v) ? v : itemQty(it);
@@ -2262,11 +2268,11 @@ router.post('/picking/:id/ship', verifyJWT, async (req: Request, res: Response) 
 
     // 原单瘦身（保留发货部分）+ 发货完成 + 日志
     const baseLogs = parseLogs(base.orderLog);
-    baseLogs.push({ time: now, action: '订单发货', operator, detail: `打单拣货发货：生成出库单 ${docNo}，订单状态变更为已完成` });
+    baseLogs.push({ time: now, action: '订单发货', operator, detail: `打单拣货发货：生成出库单 ${docNo}，订单状态变更为已完成${expressName || expressNo ? `；快递: ${expressName || '—'} 单号 ${expressNo || '—'}` : ''}` });
     baseLogs.push({ time: now, action: '交易完成', operator, detail: '供应商已发货，订单交易自动完成' });
     const slim: any = {
       orderStatus: '已完成', auditStatus: '', shipTime: now, completeTime: now, outboundNo: docNo,
-      shipImages, orderLog: JSON.stringify(baseLogs),
+      shipImages, shipExpressName: expressName, shipExpressNo: expressNo, orderLog: JSON.stringify(baseLogs),
     };
 
     // 缺货拆分：拆出子单进入生产（订单号/出库单号 = 原单号-序号）

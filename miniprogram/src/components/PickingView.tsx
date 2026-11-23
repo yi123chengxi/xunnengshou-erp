@@ -44,6 +44,10 @@ const EMPTY_ITEMS = { padding: '18px 0', textAlign: 'center', fontSize: 13, colo
 const SHIP_BTN = { marginTop: 16, height: 44, lineHeight: '44px', textAlign: 'center', fontSize: 16, fontWeight: 600, color: '#ffffff', background: '#1677ff', borderRadius: 8 } as const
 const BACK_BTN = { marginTop: 10, height: 40, lineHeight: '40px', textAlign: 'center', fontSize: 14, color: '#5a6d85', background: '#eef1f5', borderRadius: 8 } as const
 const QTY_INPUT = { width: 74, height: 30, lineHeight: '30px', textAlign: 'right', fontSize: 13, border: '1px solid #c9d4e3', borderRadius: 6, padding: '0 6px', boxSizing: 'border-box', background: '#fff' } as const
+// 快递信息填写行（与 Web 发货弹窗同口径：shipExpressName/shipExpressNo，选填）
+const EXPRESS_ROW = { display: 'flex', alignItems: 'center', marginTop: 10 } as const
+const EXPRESS_LBL = { flexShrink: 0, width: 70, fontSize: 13, color: '#1f2733' } as const
+const EXPRESS_INPUT = { flex: 1, minWidth: 0, height: 36, lineHeight: '36px', fontSize: 14, padding: '0 10px', background: '#fff', border: '1px solid #c9d4e3', borderRadius: 0, boxSizing: 'border-box' } as const
 const HINT = { marginTop: 8, fontSize: 12, color: '#fa8c16', lineHeight: '18px' } as const
 const IMG_ADD_BTN = { flexShrink: 0, fontSize: 13, color: '#1677ff' } as const
 const IMG_GRID = { display: 'flex', flexWrap: 'wrap' } as const
@@ -73,6 +77,9 @@ const PickingView = ({ tick = 0 }: { tick?: number }) => {
   // 发货凭证图片（URL 数组，选图后逐张压缩上传）
   const [shipImages, setShipImages] = useState<string[]>([])
   const [uploading, setUploading] = useState(false)
+  // 快递名称/单号（选填）：确认发货时随 body 下发，服务端与 Web 同字段写入订单
+  const [expressName, setExpressName] = useState('')
+  const [expressNo, setExpressNo] = useState('')
 
   const load = () => {
     setLoaded(false)
@@ -102,8 +109,10 @@ const PickingView = ({ tick = 0 }: { tick?: number }) => {
     setShipMode(false)
     setShipQtys((r.items || []).map(it => Number(it.quantity) || 0))
     setShipImages([])
+    setExpressName('')
+    setExpressNo('')
   }
-  const closeDetail = () => { setDetail(null); setShipMode(false); setSaving(false); setShipImages([]) }
+  const closeDetail = () => { setDetail(null); setShipMode(false); setSaving(false); setShipImages([]); setExpressName(''); setExpressNo('') }
 
   // 进入发货：以订单数量初始化可改数量
   const enterShip = () => {
@@ -149,7 +158,7 @@ const PickingView = ({ tick = 0 }: { tick?: number }) => {
       success: m => {
         if (!m.confirm) return
         setSaving(true)
-        shipPicking(detail.id, shipQtys, shipImages)
+        shipPicking(detail.id, shipQtys, shipImages, { name: expressName.trim(), no: expressNo.trim() })
           .then(r => {
             Taro.showToast({ title: r.needSplit ? `已发货并拆出子单 ${r.splitChildId}` : '发货成功', icon: 'none' })
             closeDetail()
@@ -308,6 +317,15 @@ const PickingView = ({ tick = 0 }: { tick?: number }) => {
                       </View>
                     </View>
                   ))}
+                </View>
+                {/* 快递信息：选填，确认发货后写入订单（与 Web 发货弹窗同字段） */}
+                <View style={{ ...EXPRESS_ROW }}>
+                  <Text style={{ ...EXPRESS_LBL }}>快递名称</Text>
+                  <Input style={{ ...EXPRESS_INPUT }} placeholder="如：顺丰（选填）" value={expressName} onInput={e => setExpressName(e.detail.value)} />
+                </View>
+                <View style={{ ...EXPRESS_ROW }}>
+                  <Text style={{ ...EXPRESS_LBL }}>快递单号</Text>
+                  <Input style={{ ...EXPRESS_INPUT }} placeholder="快递单号（选填）" value={expressNo} onInput={e => setExpressNo(e.detail.value)} />
                 </View>
                 {/* 发货凭证图片：拍照/相册多选，逐张压缩后上传，可预览/单张删除 */}
                 <View style={{ ...SEC_TITLE, marginTop: 14 }}>

@@ -352,10 +352,10 @@ export const getPicking = (q = '') =>
 
 /** 立即发货（可改数量）：quantities 与订单货品明细顺序对齐，逐项 0..原数量；
  *  任一项少于原数量则服务端对缺少部分即时缺货拆分（子单号 = 原单号-1、出库单号 = 原出库单号-1）；
- *  images 为发货凭证图片 URL（小程序侧已压缩上传） */
-export const shipPicking = (id: string, quantities: number[], images: string[] = []) =>
+ *  images 为发货凭证图片 URL（小程序侧已压缩上传）；express 为快递名称/单号（选填，与 Web 同字段落订单） */
+export const shipPicking = (id: string, quantities: number[], images: string[] = [], express: { name?: string; no?: string } = {}) =>
   request<{ shipped: boolean; docNo: string; splitChildId: string; needSplit: boolean }>(
-    `/wx/picking/${encodeURIComponent(id)}/ship`, { method: 'POST', data: { quantities, images } })
+    `/wx/picking/${encodeURIComponent(id)}/ship`, { method: 'POST', data: { quantities, images, expressName: express.name || '', expressNo: express.no || '' } })
 
 export const createBookkeeping = (body: {
   bookDate: string; bookType: '收入' | '支出'; mainCategory: string;
