@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
-  Card, Table, Button, Space, message, Typography, Modal, Input, InputNumber, Select,
+  Card, Table, Button, Space, message, Typography, Modal, Input, InputNumber, Select, Alert,
   Row, Col, Tag, Statistic, Form, Tabs, Checkbox, Tooltip, Empty, AutoComplete, Image as AntdImage, DatePicker, Descriptions,
 } from 'antd';
 import { reloadAfterPull } from '../utils/serverSync';
+import { loadNewStyle, saveNewStyle, NewStyleDataset } from '../utils/newStyleApi';
 import {
   PlusOutlined, EditOutlined, DeleteOutlined, SearchOutlined, ReloadOutlined,
   PictureOutlined, SnippetsOutlined, UploadOutlined, DownloadOutlined, RocketOutlined,
@@ -55,6 +56,7 @@ interface ProgressRec {
   jstImported: boolean; createdAt: string; photoRecvDate: string; photoRecvStatus: string;
   photoPlanDate: string; arrivalStatus: string; arrivalDate: string; returnDate: string;
   platforms: string[]; listPlanDate: string; listDoneDate: string; remark: string; creator: string;
+  productTags?: string;
 }
 interface PhotoRec { key: string; styleCode: string; image: string; remark: string; creator: string; recvStatus: string; planListDate: string; createdAt: string; platforms: string[]; listedAt: string; listingShops?: string[]; listingScreenshots?: string[]; listingDetails?: Record<string, { images: string[]; listedAt: string }>; }
 interface ArrivalRec { key: string; styleCode: string; image: string; date: string; creator: string; arrivalStatus: string; overdueDate: string; }
@@ -953,25 +955,53 @@ const NewStyleProgressPage: React.FC<{ photoOnly?: boolean }> = ({ photoOnly = f
   const { ref: tableAreaRef, y: tableScrollY } = useFixedTableScroll(`${activeTab}|${mainPageSize}|${refreshTick}|${fieldCfg.order.join(',')}|${fieldCfg.hidden.join(',')}`);
   const { wrapColumns: wrapProgressColumns } = useResizableColumns<any>(`newstyle_colw_progress_${owner}`);
 
-  const reload = useCallback(() => {
-    setProgress(safeJson(K_PROGRESS, []));
-    setPhotos(safeJson(K_PHOTO, []));
-    setArrivals(safeJson(K_ARRIVAL, []));
-    setListings(safeJson(K_LISTING, []));
-  }, [K_PROGRESS, K_PHOTO, K_ARRIVAL, K_LISTING]);
-  useEffect(() => { reload(); }, [reload, refreshTick]);
+  // 服务端权威真表：加载优先 /api/newstyle/list（失败回退 IndexedDB 离线缓存）；
+  // localStorage 镜像键仅供开发统计页同步读（已退出全局同步，不作权威）
+  const [nsOffline, setNsOffline] = useState(false);
+  const mirror = (key: string, list: any[]) => { safeSetItem(key, JSON.stringify(list)); };
+  const loadAll = useCallback(async () => {
+    const [p, ph, ar, li] = await Promise.all([
+      loadNewStyle(owner, 'progress'), loadNewStyle(owner, 'photo'), loadNewStyle(owner, 'arrival'), loadNewStyle(owner, 'listing'),
+    ]);
+    // 一次性 salvage：服务端真表空而本机旧键仍有行 → 回灌服务端真表（防换轨后本地副本孤儿化）
+    const salvage = async (ds: NewStyleDataset, loaded: { records: any[]; offline: boolean }, legacy: any[]) => {
+      if (loaded.offline || loaded.records.length || !legacy.length) return loaded;
+      const pushed = await saveNewStyle(owner, ds, legacy);
+      return pushed ? { records: pushed, offline: false } : loaded;
+    };
+    const p2 = await salvage('progress', p, safeJson(K_PROGRESS, [] as any[]));
+    const ph2 = await salvage('photo', ph, safeJson(K_PHOTO, [] as any[]));
+    const ar2 = await salvage('arrival', ar, safeJson(K_ARRIVAL, [] as any[]));
+    const li2 = await salvage('listing', li, safeJson(K_LISTING, [] as any[]));
+    setProgress(p2.records); setPhotos(ph2.records); setArrivals(ar2.records); setListings(li2.records);
+    if (!p2.offline) mirror(K_PROGRESS, p2.records);
+    if (!ph2.offline) mirror(K_PHOTO, ph2.records);
+    if (!ar2.offline) mirror(K_ARRIVAL, ar2.records);
+    if (!li2.offline) mirror(K_LISTING, li2.records);
+    setNsOffline(p2.offline || ph2.offline || ar2.offline || li2.offline);
+  }, [owner, K_PROGRESS, K_PHOTO, K_ARRIVAL, K_LISTING]);
+  useEffect(() => { loadAll(); }, [loadAll, refreshTick]);
 
-  const saveProgress = useCallback((list: ProgressRec[]) => { setProgress(list); safeSetItem(K_PROGRESS, JSON.stringify(list)); }, [K_PROGRESS]);
-  const savePhotos = useCallback((list: PhotoRec[]) => { setPhotos(list); safeSetItem(K_PHOTO, JSON.stringify(list)); }, [K_PHOTO]);
-  const saveArrivals = useCallback((list: ArrivalRec[]) => { setArrivals(list); safeSetItem(K_ARRIVAL, JSON.stringify(list)); }, [K_ARRIVAL]);
-  const saveListings = useCallback((list: ListingRec[]) => { setListings(list); safeSetItem(K_LISTING, JSON.stringify(list)); }, [K_LISTING]);
+  // 权威提交：内存先回显再写服务端；成功用服务端最新列表回写页面与镜像键，
+  // 失败保留内存副本并提示（本地不作权威，刷新后回服务端真表）
+  const commitList = useCallback((ds: NewStyleDataset, list: any[], setter: (l: any) => void, mirrorKey: string) => {
+    setter(list);
+    saveNewStyle(owner, ds, list).then(res => {
+      if (res) { setter(res); mirror(mirrorKey, res); setNsOffline(false); }
+      else message.error('保存失败：无法连接服务器，本次修改仅在当前页面内存中，刷新将丢失，请网络恢复后重试');
+    });
+  }, [owner]);
+  const saveProgress = useCallback((list: ProgressRec[]) => commitList('progress', list, setProgress, K_PROGRESS), [commitList, K_PROGRESS]);
+  const savePhotos = useCallback((list: PhotoRec[]) => commitList('photo', list, setPhotos, K_PHOTO), [commitList, K_PHOTO]);
+  const saveArrivals = useCallback((list: ArrivalRec[]) => commitList('arrival', list, setArrivals, K_ARRIVAL), [commitList, K_ARRIVAL]);
+  const saveListings = useCallback((list: ListingRec[]) => commitList('listing', list, setListings, K_LISTING), [commitList, K_LISTING]);
 
   // ---------- 筛选 ----------
   // 拆分搜索字段：输入态 + 已应用态（回车或点查询后才搜索）
-  const emptyF = { code: '', cost: '', color: '', size: '', factory: '', brand: '', place: '', recv: '', platform: '', range: null as [string, string] | null };
+  const emptyF = { code: '', cost: '', color: '', size: '', factory: '', brand: '', place: '', recv: '', platform: '', tags: [] as string[], range: null as [string, string] | null };
   const [fIn, setFIn] = useState(emptyF);
   const [fAp, setFAp] = useState(emptyF);
-  const applySearch = () => { reloadAfterPull(reload); setFAp({ ...fIn }); };
+  const applySearch = () => { reloadAfterPull(() => { loadAll(); }); setFAp({ ...fIn }); };
   const [onlyOverdue, setOnlyOverdue] = useState(false);
   // 上架逾期点击筛选：限定货号集合（null=不限制）
   const [focusCodes, setFocusCodes] = useState<string[] | null>(null);
@@ -1037,6 +1067,7 @@ const NewStyleProgressPage: React.FC<{ photoOnly?: boolean }> = ({ photoOnly = f
     if (fAp.size && !String(r.sizeRange || '').includes(fAp.size.trim())) return false;
     if (fAp.factory && !String(r.factory || '').toLowerCase().includes(lc(fAp.factory))) return false;
     if (fAp.brand && !String(r.brand || '').toLowerCase().includes(lc(fAp.brand))) return false;
+    if (fAp.tags.length) { const rt = String(r.productTags || '').split(',').filter(Boolean); if (!fAp.tags.some(t => rt.includes(t))) return false; }
     if (fAp.place && !String(r.photoPlace || '').toLowerCase().includes(lc(fAp.place))) return false;
     if (fAp.recv && photoStatusOf(r.styleCode, r.photoRecvStatus) !== fAp.recv) return false;
     if (fAp.platform && !photoPlatformsOf(r.styleCode).some(p => p.toLowerCase().includes(lc(fAp.platform)))) return false;
@@ -1175,8 +1206,21 @@ const NewStyleProgressPage: React.FC<{ photoOnly?: boolean }> = ({ photoOnly = f
   };
   const openEdit = (r: ProgressRec) => {
     setEditing(r);
-    form.setFieldsValue({ ...r, createdAt: r.createdAt ? dayjs(r.createdAt) : null });
+    form.setFieldsValue({ ...r, productTags: String(r.productTags || '').split(',').filter(Boolean), createdAt: r.createdAt ? dayjs(r.createdAt) : null });
     setEditVisible(true);
+  };
+  // 商品标签：与商品页共用租户标签库 custom_product_tags_<owner>，下拉内可新增
+  const [tagOptions, setTagOptions] = useState<string[]>(() => safeJson(`custom_product_tags_${owner}`, [] as string[]));
+  const [newTag, setNewTag] = useState('');
+  const addProductTag = () => {
+    const t = newTag.trim();
+    if (!t) return;
+    if (tagOptions.includes(t)) { message.warning('该标签已存在'); return; }
+    const next = [...tagOptions, t];
+    setTagOptions(next);
+    safeSetItem(`custom_product_tags_${owner}`, JSON.stringify(next));
+    setNewTag('');
+    message.success(`已新增标签「${t}」`);
   };
   const handleSave = async () => {
     const v = await form.validateFields().catch(() => null);
@@ -1192,6 +1236,7 @@ const NewStyleProgressPage: React.FC<{ photoOnly?: boolean }> = ({ photoOnly = f
       arrivalStatus: editing?.arrivalStatus || '未到货', arrivalDate: editing?.arrivalDate || '', returnDate: editing?.returnDate || '',
       platforms: editing?.platforms || [], listPlanDate: editing?.listPlanDate || '', listDoneDate: editing?.listDoneDate || '',
       remark: v.remark || '', creator: editing?.creator || getCurrentUserDisplayName(),
+      productTags: Array.isArray(v.productTags) ? v.productTags.join(',') : String(v.productTags || ''),
     };
     if (!rec.styleCode) { message.warning('请填写货号'); return; }
     saveProgress(editing ? progress.map(x => (x.key === editing.key ? rec : x)) : [rec, ...progress]);
@@ -1357,6 +1402,7 @@ const NewStyleProgressPage: React.FC<{ photoOnly?: boolean }> = ({ photoOnly = f
         returnDate: cnDate(r['图片回传']), platforms: String(r['上架平台'] || '').split(/[,，]/).map((s: string) => s.trim()).filter(Boolean),
         listPlanDate: cnDate(r['预计上架完成时间(图回传)']), listDoneDate: cnDate(r['上架完成时间（按到货）']),
         remark: String(r['备注'] || ''), creator: String(r['创建人'] || '') || '导入',
+        productTags: String(r['商品标签'] || ''),
       })).filter((r: ProgressRec) => r.styleCode);
       // 外拍回传
       const phRows = [...rowsOf('回传图片'), ...rowsOf('外拍图片回传')];
@@ -1408,7 +1454,7 @@ const NewStyleProgressPage: React.FC<{ photoOnly?: boolean }> = ({ photoOnly = f
       资料是否导入聚水潭: r.jstImported ? '✅' : '', 创建时间: r.createdAt, 图片接收: r.photoRecvDate,
       拍照是否逾期: isPhotoOverdue(r) ? '逾期' : '', 图片接收状态: r.photoRecvStatus, 拍摄预计完成: r.photoPlanDate,
       到货情况: r.arrivalStatus, 图片回传: r.returnDate, 上架是否逾期: listOverdueOf(r) ? '逾期' : '',
-      上架平台: (r.platforms || []).join(','), 备注: r.remark, 创建人: r.creator,
+      上架平台: (r.platforms || []).join(','), 商品标签: r.productTags || '', 备注: r.remark, 创建人: r.creator,
       预计上架完成时间: r.listPlanDate, 上架完成时间: r.listDoneDate,
     }));
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(pRows), '主表单');
@@ -1433,6 +1479,10 @@ const NewStyleProgressPage: React.FC<{ photoOnly?: boolean }> = ({ photoOnly = f
     { title: '码段', dataIndex: 'sizeRange', key: 'sizeRange', width: 90, align: 'center', render: v => formatSizes(v) || '—' },
     { title: '工厂名称', dataIndex: 'factory', key: 'factory', width: 100, ellipsis: true, render: v => v || '—' },
     { title: '品牌', dataIndex: 'brand', key: 'brand', width: 90, align: 'center', render: v => v || '—' },
+    {
+      title: '商品标签', dataIndex: 'productTags', key: 'productTags', width: 130, ellipsis: true,
+      render: v => { const ts = String(v || '').split(',').filter(Boolean); return ts.length ? ts.map(t => <Tag key={t} color="blue" style={{ marginRight: 2 }}>{t}</Tag>) : '—'; },
+    },
     {
       title: HT('拍照地', '「去拍照」登记的拍照公司；点击色块可改选；备注可记录快递单号'), dataIndex: 'photoPlace', key: 'photoPlace', width: 110, align: 'center',
       render: (v, r) => {
@@ -1509,6 +1559,7 @@ const NewStyleProgressPage: React.FC<{ photoOnly?: boolean }> = ({ photoOnly = f
 
   return (
     <div style={{ padding: 8 }}>
+      {nsOffline && <Alert style={{ marginBottom: 8 }} type="warning" showIcon message="无法连接服务器：当前展示离线缓存的新款进度数据，网络恢复后刷新将自动回到服务端权威数据" />}
       {!photoOnly && (
       <Card size="small" style={{ marginBottom: 12, borderRadius: 8 }} bodyStyle={{ padding: '12px 16px' }}>
         <Row gutter={[12, 12]}>
@@ -1554,7 +1605,10 @@ const NewStyleProgressPage: React.FC<{ photoOnly?: boolean }> = ({ photoOnly = f
               <Input placeholder="颜色" allowClear style={{ width: 100 }} value={fIn.color} onChange={e => setFIn(p => ({ ...p, color: e.target.value }))} onPressEnter={applySearch} />
               <Input placeholder="码段" allowClear style={{ width: 90 }} value={fIn.size} onChange={e => setFIn(p => ({ ...p, size: e.target.value }))} onPressEnter={applySearch} />
               <Input placeholder="工厂名称" allowClear style={{ width: 110 }} value={fIn.factory} onChange={e => setFIn(p => ({ ...p, factory: e.target.value }))} onPressEnter={applySearch} />
-              <Input placeholder="品牌" allowClear style={{ width: 100 }} value={fIn.brand} onChange={e => setFIn(p => ({ ...p, brand: e.target.value }))} onPressEnter={applySearch} />
+              <Select placeholder="品牌" allowClear showSearch style={{ width: 120 }} value={fIn.brand || undefined} onChange={v => setFIn(p => ({ ...p, brand: v || '' }))}
+                options={brandOpts} filterOption={(input, option: any) => String(option?.value || '').toLowerCase().includes(input.toLowerCase())} />
+              <Select mode="multiple" placeholder="商品标签" allowClear style={{ minWidth: 140 }} value={fIn.tags} onChange={v => setFIn(p => ({ ...p, tags: v || [] }))}
+                options={tagOptions.map(t => ({ value: t, label: t }))} maxTagCount="responsive" />
               <Input placeholder="拍照地" allowClear style={{ width: 100 }} value={fIn.place} onChange={e => setFIn(p => ({ ...p, place: e.target.value }))} onPressEnter={applySearch} />
               <Select placeholder="图片接收状态" allowClear style={{ width: 120 }} value={fIn.recv || undefined} onChange={v => setFIn(p => ({ ...p, recv: v || '' }))} options={[{ value: '已收到' }, { value: '未收到' }]} />
               <Input placeholder="上架平台" allowClear style={{ width: 100 }} value={fIn.platform} onChange={e => setFIn(p => ({ ...p, platform: e.target.value }))} onPressEnter={applySearch} />
@@ -1580,7 +1634,7 @@ const NewStyleProgressPage: React.FC<{ photoOnly?: boolean }> = ({ photoOnly = f
             <div className="ns-rowh">
             <Table rowKey="key" bordered size="small" columns={finalProgressCols} dataSource={filteredProgress}
               rowSelection={{ selectedRowKeys: genSelectedKeys, onChange: keys => setGenSelectedKeys(keys as string[]) }}
-              scroll={{ x: 2200, y: tableScrollY }} pagination={{ pageSize: mainPageSize, showSizeChanger: true, showTotal: t => `共 ${t} 条`, onChange: (_p, ps) => setMainPageSize(ps) }}
+              scroll={{ x: 2330, y: tableScrollY }} pagination={{ pageSize: mainPageSize, showSizeChanger: true, showTotal: t => `共 ${t} 条`, onChange: (_p, ps) => setMainPageSize(ps) }}
               locale={{ emptyText: <Empty description="暂无新款记录，可新增或导入Excel" /> }} />
             </div>
           </>
@@ -1610,6 +1664,18 @@ const NewStyleProgressPage: React.FC<{ photoOnly?: boolean }> = ({ photoOnly = f
             <Col span={6}><Form.Item name="sizeRange" label="码段"><SizeCheckEditor /></Form.Item></Col>
             <Col span={6}><Form.Item name="craft" label="制作工艺"><AutoComplete placeholder="下拉选择或输入新增" options={craftOpts} filterOption={(input, option: any) => String(option?.value || '').toLowerCase().includes(input.toLowerCase())} /></Form.Item></Col>
             <Col span={6}><Form.Item name="photoThenList" label="何时上架"><Select options={[{ value: '拍完上架' }, { value: '到货上架' }, { value: '只拍不上架' }]} /></Form.Item></Col>
+            <Col span={6}><Form.Item name="productTags" label="商品标签">
+                      <Select mode="multiple" allowClear placeholder="下拉选择标签" options={tagOptions.map(t => ({ value: t, label: t }))}
+                        dropdownRender={menu => (<>
+                          {menu}
+                          <div style={{ borderTop: '1px solid #f0f0f0', margin: '4px 0' }} />
+                          <Space style={{ padding: '4px 8px' }}>
+                            <Input size="small" placeholder="新标签名称" value={newTag} onChange={e => setNewTag(e.target.value)}
+                              onKeyDown={e => e.stopPropagation()} onPressEnter={addProductTag} style={{ width: 120 }} />
+                            <Button size="small" type="text" icon={<PlusOutlined />} onClick={addProductTag}>新增标签</Button>
+                          </Space>
+                        </>)} />
+                      </Form.Item></Col>
             <Col span={12}><Form.Item name="remark" label="备注"><Input.TextArea rows={1} placeholder="选填" /></Form.Item></Col>
             <Col span={6}><Form.Item name="image" label="款式图片"><ImgSlot value={form.getFieldValue('image') || ''} onChange={v => form.setFieldsValue({ image: v })} /></Form.Item></Col>
           </Row>

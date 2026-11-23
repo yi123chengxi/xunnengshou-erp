@@ -39,6 +39,7 @@ import systemRoutes from './routes/system.routes';
 import imageRoutes from './routes/image.routes';
 import marketRoutes from './routes/market.routes';
 import moldRoutes from './routes/mold.routes';
+import newstyleRoutes from './routes/newstyle.routes';
 import { migrateLegacyMarketKey } from './services/market-listings';
 import { startEnterprisePatrol } from './services/enterprisePatrol';
 import { initPrintWebSocket } from './ws/print-ws';
@@ -74,6 +75,8 @@ app.use('/api/images', rateLimit({ name: 'images', windowMs: 60_000, max: 300, m
 app.use('/api/market', rateLimit({ name: 'market', windowMs: 60_000, max: 600, message: '市场请求过于频繁，请稍后再试' }));
 // 模具管理权威真表：列表/增删改，低频业务按常规额度
 app.use('/api/molds', rateLimit({ name: 'molds', windowMs: 60_000, max: 300, message: '模具请求过于频繁，请稍后再试' }));
+// 新款进度权威真表：列表/整表提交，低频业务按常规额度
+app.use('/api/newstyle', rateLimit({ name: 'newstyle', windowMs: 60_000, max: 300, message: '新款进度请求过于频繁，请稍后再试' }));
 
 app.use('/api/auth', authRoutes);
 app.use('/api/wx', wxRoutes);
@@ -101,6 +104,7 @@ app.use('/api/system', systemRoutes);
 app.use('/api/images', imageRoutes);
 app.use('/api/market', marketRoutes);
 app.use('/api/molds', moldRoutes);
+app.use('/api/newstyle', newstyleRoutes);
 
 // 健康检查
 app.get('/api/health', (_req, res) => {

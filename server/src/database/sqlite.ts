@@ -165,6 +165,17 @@ db.exec(`
     updated_at INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (owner, mold_key)
   );
+
+  -- 新款进度权威真表：每条记录一行（替代 newstyle_progress_/photo_/arrival_/listing_
+  -- 四个全局 JSON 同步键，写路径只改目标行，杜绝整键替换/陈旧副本互相覆盖丢数据）
+  CREATE TABLE IF NOT EXISTS newstyle_records (
+    owner TEXT NOT NULL,
+    dataset TEXT NOT NULL,
+    rec_key TEXT NOT NULL,
+    record_json TEXT NOT NULL,
+    updated_at INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (owner, dataset, rec_key)
+  );
 `);
 
 // 兼容旧库：企业认证表增量列（法人身份证号 / 最近刷脸 CertifyId / 最近变更认证时间）
@@ -378,5 +389,14 @@ export const stmtMoldUpsert: Statement = db.prepare(`
   ON CONFLICT(owner, mold_key) DO UPDATE SET record_json = excluded.record_json, updated_at = excluded.updated_at
 `);
 export const stmtMoldDelete: Statement = db.prepare('DELETE FROM molds WHERE owner = ? AND mold_key = ?');
+
+// ============ 新款进度权威真表（newstyle_records） ============
+export const stmtNewStyleList: Statement = db.prepare('SELECT owner, dataset, rec_key, record_json, updated_at FROM newstyle_records WHERE owner = ? AND dataset = ? ORDER BY updated_at ASC');
+export const stmtNewStyleKeys: Statement = db.prepare('SELECT rec_key FROM newstyle_records WHERE owner = ? AND dataset = ?');
+export const stmtNewStyleUpsert: Statement = db.prepare(`
+INSERT INTO newstyle_records (owner, dataset, rec_key, record_json, updated_at) VALUES (?, ?, ?, ?, ?)
+  ON CONFLICT(owner, dataset, rec_key) DO UPDATE SET record_json = excluded.record_json, updated_at = excluded.updated_at
+`);
+export const stmtNewStyleDelete: Statement = db.prepare('DELETE FROM newstyle_records WHERE owner = ? AND dataset = ? AND rec_key = ?');
 
 export default db;

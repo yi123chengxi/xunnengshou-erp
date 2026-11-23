@@ -100,7 +100,10 @@ const SYNC_EXACT = ['registeredUsers', 'subscription_orders', 'storage_orders', 
 // 不再参与全局键同步：写入只走 marketApi.writeMarketCache（safeSetItem，不 saveDataset），
 // 读取靠 fetchMarketListings 水合，避免旧全局键整键替换/墓碑并集把权威数据覆盖
 // 图片块体积大，不参与跨浏览器同步（各浏览器独立）
-const EXCLUDE_PREFIXES = ['prodImg_', 'thumb_', 'payShot_', 'mold_img_'];
+const EXCLUDE_PREFIXES = ['prodImg_', 'thumb_', 'payShot_', 'mold_img_',
+  // 新款进度四个数据键已迁服务端权威真表 /api/newstyle/*（行级存储），
+  // 退出全局键同步；本地 localStorage 同名键仅作统计页同步读的镜像缓存
+  'newstyle_progress_', 'newstyle_photo_', 'newstyle_arrival_', 'newstyle_listing_'];
 // 仅上传不拉取的键前缀（这类键有独立的恢复机制，避免 pullAllDatasets 的宽限期竞态覆盖本地新数据）
 const UPLOAD_ONLY_PREFIXES = ['credit_adjustments_'];
 // 只增不删的全局列表键（无删除 UI）：允许愈合回传修复服务端缩水，且不会复活已删除记录
