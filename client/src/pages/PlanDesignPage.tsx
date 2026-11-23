@@ -384,6 +384,12 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
   const [bomSelectField, setBomSelectField] = useState('name');
   const [bomSelectAppliedSearch, setBomSelectAppliedSearch] = useState('');
   const [bomSelectAppliedField, setBomSelectAppliedField] = useState('name');
+  // 半成品/原材料选择多字段搜索：输入态 + 已应用态（回车/点查询才生效，AND 组合）
+  const [bomSelectQName, setBomSelectQName] = useState('');
+  const [bomSelectQStyle, setBomSelectQStyle] = useState('');
+  const [bomSelectQCode, setBomSelectQCode] = useState('');
+  const [bomSelectQSupplier, setBomSelectQSupplier] = useState('');
+  const [bomSelectAppliedQ, setBomSelectAppliedQ] = useState({ name: '', style: '', code: '', supplier: '' });
   // 新增半成品表单
   const [newSemiVisible, setNewSemiVisible] = useState(false);
   const [newSemiName, setNewSemiName] = useState('');
@@ -394,6 +400,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
   const [newSemiLevel, setNewSemiLevel] = useState('1');
     const [newSemiMoldNumber, setNewSemiMoldNumber] = useState('');
     const [newSemiMoldPickerVisible, setNewSemiMoldPickerVisible] = useState(false);
+  const [newSemiSupplier, setNewSemiSupplier] = useState('');
   const [newSemiBomItems, setNewSemiBomItems] = useState<any[]>([]); // 新半成品的物料清单
   const [newSemiBomMode, setNewSemiBomMode] = useState(false); // 新增半成品弹窗中打开BOM选择
   // 半成品编辑模式：正在编辑的记录key（复用新增半成品弹窗，提交时覆盖保存）
@@ -455,7 +462,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
     { key: 'color', label: '颜色', defaultVisible: false },
     { key: 'spec', label: '规格', defaultVisible: false },
     { key: 'image', label: '图片', defaultVisible: true },
-    { key: 'supplierName', label: '供应商名称', defaultVisible: false },
+    { key: 'supplierName', label: '供应商', defaultVisible: true },
     { key: 'level', label: '层级', defaultVisible: true },
     { key: 'unit', label: '单位', defaultVisible: true },
     { key: 'price', label: '成本价', defaultVisible: true },
@@ -1219,6 +1226,8 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
     setBomSelectSearch('');
     setBomSelectAppliedSearch('');
     setBomSelectAppliedField(bomSelectField);
+    setBomSelectQName(''); setBomSelectQStyle(''); setBomSelectQCode(''); setBomSelectQSupplier('');
+    setBomSelectAppliedQ({ name: '', style: '', code: '', supplier: '' });
     const owner = getDataOwner();
     const plKey = productListKey(owner);
     // 先记录本地已有数据的 key，用于保护本地新建记录不被服务端旧数据覆盖
@@ -1363,6 +1372,11 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
     setBomSelectAppliedSearch(bomSelectSearch);
     setBomSelectAppliedField(bomSelectField);
   }, [bomSelectSearch, bomSelectField]);
+
+  // BOM 选择弹窗：半成品/原材料多字段搜索（输入态整体拷入已应用态）
+  const handleBomSelectMultiSearch = useCallback(() => {
+    setBomSelectAppliedQ({ name: bomSelectQName, style: bomSelectQStyle, code: bomSelectQCode, supplier: bomSelectQSupplier });
+  }, [bomSelectQName, bomSelectQStyle, bomSelectQCode, bomSelectQSupplier]);
 
   // 打开半成品子BOM编辑（从批量BOM弹窗中触发）
   const handleOpenSubBom = useCallback((semiProduct: any, type: 'semi' | 'raw' | 'process') => {
@@ -1535,6 +1549,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
     setNewSemiCode(rec.productCode || '');
     setNewSemiLevel(rec.level !== undefined && rec.level !== '' ? String(rec.level) : '1');
     setNewSemiUnit(rec.unit || '件');
+    setNewSemiSupplier(rec.supplierName || rec.supplier || '');
     setNewSemiPrice(Number(rec.costPrice ?? rec.suggestedPrice) || undefined);
     setNewSemiImage('');
     imgDB.get(rec.key).then(v => { if (v) setNewSemiImage(v); else { const url = loadImageUrlMap(getDataOwner())[rec.key]; if (url) setNewSemiImage(absoluteImageUrl(url)); } });
@@ -1635,6 +1650,8 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
           unit: newSemiUnit || '件',
           level: newSemiLevel.trim() || '1',
           costPrice: Number(newSemiPrice) || 0,
+          supplierName: newSemiSupplier.trim(),
+          supplier: newSemiSupplier.trim(),
           updatedAt: new Date().toISOString().slice(0, 10),
         };
         const merged0 = existing0.map((p: any) => p.key === editKey ? { ...p, ...updates } : p);
@@ -1644,7 +1661,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
         if (newSemiBomItems.length > 0) {
           const bom = { semiProducts: [] as any[], rawMaterials: [] as any[], processes: [] as any[] };
           newSemiBomItems.forEach((it: any) => {
-            const item = { key: it.key, name: it.name, code: it.code || '', level: it.level || '', unit: it.unit || '', price: Number(it.price) || 0, qty: it.qty || 1 };
+            const item = { key: it.key, name: it.name, code: it.code || '', level: it.level || '', unit: it.unit || '', supplierName: it.supplierName || it.supplier || '', price: Number(it.price) || 0, qty: it.qty || 1 };
             if (it.type === 'semi') bom.semiProducts.push(item);
             else if (it.type === 'raw') bom.rawMaterials.push(item);
             else bom.processes.push(item);
@@ -1669,7 +1686,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
         setSemiEditKey(null);
         setNewSemiVisible(false);
         setNewSemiName(''); setNewSemiCode(''); setNewSemiPrice(undefined); setNewSemiUnit('件'); setNewSemiMoldNumber('');
-        setNewSemiStyleCode(''); setNewSemiLevel('1'); setNewSemiBomItems([]); setNewSemiImage('');
+        setNewSemiStyleCode(''); setNewSemiLevel('1'); setNewSemiBomItems([]); setNewSemiImage(''); setNewSemiSupplier('');
         message.success(`半成品「${newSemiName.trim()}」修改已保存`);
       } catch { message.error('保存失败'); }
       return;
@@ -1695,7 +1712,8 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
         styleCode: newSemiStyleCode.trim(),
         color: '',
         spec: '',
-        supplier: '',
+        supplier: newSemiSupplier.trim(),
+        supplierName: newSemiSupplier.trim(),
         barcode: '',
         moldNumber: newSemiMoldNumber.trim(),
         suggestedPrice: 0,
@@ -1724,7 +1742,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
       if (newSemiBomItems.length > 0) {
         const bom = { semiProducts: [] as any[], rawMaterials: [] as any[], processes: [] as any[] };
         newSemiBomItems.forEach((it: any) => {
-          const item = { key: it.key, name: it.name, code: it.code || '', level: it.level || '', unit: it.unit || '', price: Number(it.price) || 0, qty: it.qty || 1 };
+          const item = { key: it.key, name: it.name, code: it.code || '', level: it.level || '', unit: it.unit || '', supplierName: it.supplierName || it.supplier || '', price: Number(it.price) || 0, qty: it.qty || 1 };
           if (it.type === 'semi') bom.semiProducts.push(item);
           else if (it.type === 'raw') bom.rawMaterials.push(item);
           else bom.processes.push(item);
@@ -1746,10 +1764,10 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
       }
       setNewSemiVisible(false);
       setNewSemiName(''); setNewSemiCode(''); setNewSemiPrice(undefined); setNewSemiUnit('件'); setNewSemiMoldNumber('');
-      setNewSemiStyleCode(''); setNewSemiLevel('1'); setNewSemiBomItems([]); setNewSemiImage('');
+      setNewSemiStyleCode(''); setNewSemiLevel('1'); setNewSemiBomItems([]); setNewSemiImage(''); setNewSemiSupplier('');
       message.success(`半成品「${newSemiName.trim()}」已创建并选中`);
     } catch { message.error('创建失败'); }
-  }, [newSemiName, newSemiCode, newSemiUnit, newSemiPrice, newSemiStyleCode, newSemiLevel, newSemiBomItems, bomSelectData, batchSubBomTarget, newSemiImage, subBomEditorStack, semiEditKey, newSemiMoldNumber]);
+  }, [newSemiName, newSemiCode, newSemiUnit, newSemiPrice, newSemiStyleCode, newSemiLevel, newSemiBomItems, bomSelectData, batchSubBomTarget, newSemiImage, subBomEditorStack, semiEditKey, newSemiMoldNumber, newSemiSupplier]);
 
   // 随机生成半成品编码（确保不与全部商品及当前选择列表中已有编码重复）
   const generateRandomSemiCode = useCallback(() => {
@@ -2283,7 +2301,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
       } },
       spec: { title: '规格', dataIndex: 'spec', width: 60, render: (v: string, r: any) => v || getProductField(r.key, 'spec') || '—' },
       image: { title: '图片', dataIndex: 'image', width: 60, render: (_v: string, r: any) => <BomImageCell k={r.key} /> },
-      supplierName: { title: '供应商名称', dataIndex: 'supplierName', width: 100, render: (v: string, r: any) => v || getProductField(r.key, 'supplierName') || '—' },
+      supplierName: { title: '供应商', dataIndex: 'supplierName', width: 100, render: (v: string, r: any) => v || r.supplier || getProductField(r.key, 'supplierName') || getProductField(r.key, 'supplier') || '—' },
       level: type !== 'process' ? { title: '层级', dataIndex: 'level', width: 60, align: 'center' as const, render: (v: any) => v ? <Tag color="blue">{v}</Tag> : '—' } : null,
       unit: type !== 'process' ? { title: '单位', dataIndex: 'unit', width: 60, align: 'center' as const, render: (v: any) => v || '—' } : null,
       price: { title: type === 'semi' ? '成本价' : '单价', dataIndex: 'price', width: 90, render: (v: any, r: any) => {
@@ -3278,15 +3296,14 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
           </div>
         )}
         {/* 工具栏：搜索 + 新增按钮 */}
-        <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center', flexWrap: 'wrap' }}>
           {bomSelectType !== 'process' && (
-            <Select size="small" value={bomSelectField} onChange={v => setBomSelectField(v)} style={{ width: 90, flexShrink: 0 }}>
-              <Select.Option value="name">名称</Select.Option>
-              <Select.Option value="code">编码</Select.Option>
-              <Select.Option value="color">颜色</Select.Option>
-              <Select.Option value="spec">规格</Select.Option>
-              <Select.Option value="level">层级</Select.Option>
-            </Select>
+            <>
+              <Input size="small" placeholder="商品简称" value={bomSelectQName} onChange={e => setBomSelectQName(e.target.value)} onPressEnter={handleBomSelectMultiSearch} style={{ width: 130, flexShrink: 0 }} allowClear />
+              <Input size="small" placeholder="款式编码" value={bomSelectQStyle} onChange={e => setBomSelectQStyle(e.target.value)} onPressEnter={handleBomSelectMultiSearch} style={{ width: 110, flexShrink: 0 }} allowClear />
+              <Input size="small" placeholder="商品编码" value={bomSelectQCode} onChange={e => setBomSelectQCode(e.target.value)} onPressEnter={handleBomSelectMultiSearch} style={{ width: 130, flexShrink: 0 }} allowClear />
+              <Input size="small" placeholder="供应商" value={bomSelectQSupplier} onChange={e => setBomSelectQSupplier(e.target.value)} onPressEnter={handleBomSelectMultiSearch} style={{ width: 110, flexShrink: 0 }} allowClear />
+            </>
           )}
           {bomSelectType === 'process' && (
             <Select size="small" value={bomSelectField} onChange={v => setBomSelectField(v)} style={{ width: 90, flexShrink: 0 }}>
@@ -3294,24 +3311,26 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
               <Select.Option value="code">编码</Select.Option>
             </Select>
           )}
-          <Input
-            size="small"
-            prefix={<SearchOutlined />}
-            placeholder="输入关键词搜索..."
-            value={bomSelectSearch}
-            onChange={e => setBomSelectSearch(e.target.value)}
-            onPressEnter={handleBomSelectSearch}
-            style={{ flex: 1 }}
-            allowClear
-          />
-          <Button size="small" type="primary" icon={<SearchOutlined />} onClick={handleBomSelectSearch}>查询</Button>
+          {bomSelectType === 'process' && (
+            <Input
+              size="small"
+              prefix={<SearchOutlined />}
+              placeholder="输入关键词搜索..."
+              value={bomSelectSearch}
+              onChange={e => setBomSelectSearch(e.target.value)}
+              onPressEnter={handleBomSelectSearch}
+              style={{ flex: 1 }}
+              allowClear
+            />
+          )}
+          <Button size="small" type="primary" icon={<SearchOutlined />} onClick={bomSelectType === 'process' ? handleBomSelectSearch : handleBomSelectMultiSearch}>查询</Button>
           {bomSelectType === 'semi' && !newSemiBomMode && (
             <Button size="small" icon={<PlusOutlined />} onClick={() => {
               setNewSemiName(''); setNewSemiCode(''); setNewSemiPrice(undefined); setNewSemiUnit('件');
               // 自动计算BOM层级：子BOM编辑器中取父级+1，否则默认1级
               const _autoLevel = subBomEditorStack.length > 0 ? String((Number(subBomEditorStack[subBomEditorStack.length - 1].target?.level) || subBomEditorStack.length) + 1) : (batchSubBomTarget ? String((Number(batchSubBomTarget.level) || 1) + 1) : '1');
               setNewSemiStyleCode(''); setNewSemiLevel(_autoLevel); setNewSemiBomItems([]);
-              setSemiEditKey(null); setNewSemiImage('');
+              setSemiEditKey(null); setNewSemiImage(''); setNewSemiSupplier('');
               setNewSemiVisible(true);
             }}>新增半成品</Button>
           )}
@@ -3339,6 +3358,18 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
           size="small"
           rowKey="key"
           dataSource={bomSelectData.filter((d: any) => {
+            // 半成品/原材料：四字段已应用态 AND 组合模糊匹配（回车/点查询才生效）
+            if (bomSelectType !== 'process') {
+              const qn = bomSelectAppliedQ.name.trim().toLowerCase();
+              if (qn && !(d.shortName || d.name || '').toLowerCase().includes(qn)) return false;
+              const qs = bomSelectAppliedQ.style.trim().toLowerCase();
+              if (qs && !(d.styleCode || '').toLowerCase().includes(qs)) return false;
+              const qc = bomSelectAppliedQ.code.trim().toLowerCase();
+              if (qc && !(d.productCode || d.code || '').toLowerCase().includes(qc)) return false;
+              const qp = bomSelectAppliedQ.supplier.trim().toLowerCase();
+              if (qp && !(d.supplierName || d.supplier || '').toLowerCase().includes(qp)) return false;
+              return true;
+            }
             if (!bomSelectAppliedSearch.trim()) return true;
             const q = bomSelectAppliedSearch.toLowerCase();
             const field = bomSelectAppliedField;
@@ -3346,12 +3377,6 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
               return (d.shortName || d.name || d.processName || '').toLowerCase().includes(q);
             } else if (field === 'code') {
               return (d.productCode || d.processCode || d.code || '').toLowerCase().includes(q);
-            } else if (field === 'color') {
-              return (d.color || '').toLowerCase().includes(q);
-            } else if (field === 'spec') {
-              return (d.spec || '').toLowerCase().includes(q);
-            } else if (field === 'level') {
-              return String(d.level || '').includes(q);
             }
             return true;
           })}
@@ -3360,11 +3385,14 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
             { title: '工序编号', dataIndex: 'processCode', render: (v: any, r: any) => v || r.id || r.code || '—' },
             { title: '价格', dataIndex: 'price', width: 100, render: (v: any) => `¥${(Number(v) || 0).toFixed(2)}` },
           ] : [
-            { title: '名称', dataIndex: 'shortName', render: (v: any, r: any) => v || r.name || '—' },
-            { title: '编码', dataIndex: 'productCode', width: 120 },
+            { title: '商品简称', dataIndex: 'shortName', render: (v: any, r: any) => v || r.name || '—' },
+            { title: '款式编码', dataIndex: 'styleCode', width: 100, render: (v: string) => v || '—' },
+            { title: '商品编码', dataIndex: 'productCode', width: 120 },
             { title: '颜色', dataIndex: 'color', width: 80, render: (v: string) => v || '—' },
             { title: '规格', dataIndex: 'spec', width: 80, render: (v: string) => v || '—' },
             { title: '层级', dataIndex: 'level', width: 60, align: 'center' as const, render: (v: any) => v ? <Tag color="blue">{v}</Tag> : '—' },
+            { title: '单位', dataIndex: 'unit', width: 60, align: 'center' as const, render: (v: string) => v || '—' },
+            { title: '供应商', dataIndex: 'supplierName', width: 110, render: (v: string, r: any) => v || r.supplier || '—' },
             { title: '成本价', dataIndex: 'costPrice', width: 90, render: (v: any, r: any) => {
               // 半成品优先从子BOM计算成本价
               let price = Number(v) || 0;
@@ -3382,7 +3410,8 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
             selectedRowKeys: bomSelectKeys,
             onChange: (keys) => setBomSelectKeys(keys),
           }}
-          scroll={{ y: 360 }}
+          tableLayout="fixed"
+          scroll={{ y: 360, x: 980 }}
           pagination={{ pageSize: 10, showSizeChanger: true, showTotal: t => `共 ${t} 条` }}
         />
       </Modal>
@@ -3392,7 +3421,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
         title={semiEditKey ? '编辑半成品' : '新增半成品'}
         open={newSemiVisible}
         onOk={handleConfirmNewSemi}
-        onCancel={() => { setSemiEditKey(null); setNewSemiVisible(false); setNewSemiBomItems([]); setNewSemiImage(''); setNewSemiMoldNumber(''); }}
+        onCancel={() => { setSemiEditKey(null); setNewSemiVisible(false); setNewSemiBomItems([]); setNewSemiImage(''); setNewSemiMoldNumber(''); setNewSemiSupplier(''); }}
         okText={semiEditKey ? '保存修改' : '创建'}
         cancelText="取消"
         width={960}
@@ -3448,12 +3477,16 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
               <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => { setNewSemiBomMode(true); handleOpenBomSelect('semi'); }}>添加BOM</Button>
             </Col>
           </Row>
-          {/* 模具编号 */}
+          {/* 模具编号 / 供应商 */}
           <Row gutter={12}>
             <Col span={8}>
               <div style={{ marginBottom: 4, fontSize: 12, color: '#5a6d85' }}>模具编号</div>
               <Input size="small" placeholder="点击选择模具" value={newSemiMoldNumber} readOnly
                 onClick={() => setNewSemiMoldPickerVisible(true)} style={{ cursor: 'pointer' }} />
+            </Col>
+            <Col span={8}>
+              <div style={{ marginBottom: 4, fontSize: 12, color: '#5a6d85' }}>供应商</div>
+              <Input size="small" placeholder="供应商" value={newSemiSupplier} onChange={e => setNewSemiSupplier(e.target.value)} />
             </Col>
           </Row>
           {/* 图片上传（点击/粘贴/拍照） */}
@@ -3472,10 +3505,12 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
               rowKey={(r: any) => `${r.type}-${r.key}`}
               dataSource={newSemiBomItems}
               pagination={false}
-              scroll={{ y: 200 }}
+              tableLayout="fixed"
+              scroll={{ y: 200, x: 940 }}
               columns={[
-                { title: '名称', dataIndex: 'name', render: (v: string) => v || '—' },
-                { title: '编码', dataIndex: 'code', width: 100, render: (v: string) => v || '—' },
+                { title: '商品简称', dataIndex: 'shortName', render: (v: string, r: any) => v || r.name || '—' },
+                { title: '商品编码', dataIndex: 'code', width: 110, render: (v: string, r: any) => v || r.productCode || '—' },
+                { title: '供应商', dataIndex: 'supplierName', width: 100, render: (v: string, r: any) => v || r.supplier || '—' },
                 { title: '类型', dataIndex: 'type', width: 70, align: 'center' as const, render: (t: string) => <Tag color={t === 'semi' ? 'blue' : t === 'raw' ? 'green' : 'orange'}>{t === 'semi' ? '半成品' : t === 'raw' ? '原材料' : '工序'}</Tag> },
                 { title: '层级', dataIndex: 'level', width: 50, align: 'center' as const, render: (v: any) => v || '—' },
                 { title: '单价', dataIndex: 'price', width: 80, render: (v: any) => `¥${(Number(v) || 0).toFixed(2)}` },
