@@ -634,7 +634,7 @@ const BrandAuthPage: React.FC<{ embedded?: boolean }> = ({ embedded }) => {
 
       <div ref={stick.ref} style={{ flex: 1, minHeight: 0 }}>
         <Table rowKey="key" size="small" bordered columns={sized(visibleColumns)} dataSource={filtered}
-          scroll={{ x: 2400, y: stick.scrollY }} pagination={{ pageSize: 20, showSizeChanger: true, showTotal: t => `共 ${t} 条` }} />
+          scroll={{ x: 2400, y: stick.scrollY }} pagination={{ defaultPageSize: 20, showSizeChanger: true, showTotal: t => `共 ${t} 条` }} />
       </div>
 
       <Modal title={editing ? '编辑授权记录' : '新增授权记录'} open={visible} onOk={handleSave} onCancel={() => setVisible(false)} okText="保存" cancelText="取消" width={860} destroyOnClose>

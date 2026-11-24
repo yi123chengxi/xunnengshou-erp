@@ -184,7 +184,7 @@ const AsOfDebtModal: React.FC<AsOfDebtModalProps> = (props) => {
           size="small"
           rowKey="key"
           dataSource={rows}
-          pagination={{ pageSize: 15, showSizeChanger: true, showTotal: t => `共 ${t} 个${nameLabel}` }}
+          pagination={{ defaultPageSize: 15, showSizeChanger: true, showTotal: t => `共 ${t} 个${nameLabel}` }}
           locale={{ emptyText: '该截止日下没有账单或收付款记录' }}
           columns={[
             { title: nameLabel, dataIndex: 'name', width: 180, render: (v: string) => <a onClick={() => setDetailName(v)}>{v}</a> },

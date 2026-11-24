@@ -1451,7 +1451,7 @@ const OwnBrandPage: React.FC<{ embedded?: boolean }> = ({ embedded }) => {
             { title: '有效期', key: 'valid', width: 200, align: 'center', render: (_v: any, r: BrandApplication) => (r.validFrom && r.validTo ? `${r.validFrom} ~ ${r.validTo}` : '—') },
             { title: '归档时间', dataIndex: 'archivedAt', key: 'archivedAt', width: 110, align: 'center', render: (v: string) => v || '—' },
           ] as any)}
-          pagination={{ pageSize: 20, showSizeChanger: true, showTotal: t => `共 ${t} 条` }} />
+          pagination={{ defaultPageSize: 20, showSizeChanger: true, showTotal: t => `共 ${t} 条` }} />
       </div>
     );
   }
@@ -1526,7 +1526,7 @@ const OwnBrandPage: React.FC<{ embedded?: boolean }> = ({ embedded }) => {
 
       <div ref={stick.ref} style={{ flex: 1, minHeight: 0 }}>
         <Table rowKey="key" size="small" bordered columns={sizedOwn(visibleColumns)} dataSource={filtered}
-          scroll={{ x: 2290, y: stick.scrollY }} pagination={{ pageSize: 20, showSizeChanger: true, showTotal: t => `共 ${t} 条` }}
+          scroll={{ x: 2290, y: stick.scrollY }} pagination={{ defaultPageSize: 20, showSizeChanger: true, showTotal: t => `共 ${t} 条` }}
           locale={{ emptyText: '暂无外部授权申请，可将"外部申请链接"发给代理商' }} />
       </div>
 

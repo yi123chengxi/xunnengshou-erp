@@ -167,7 +167,7 @@ export function isKeyAllowed(key: string, user: SyncUser | null, action: SyncAct
   if (!key) return false;
   // 删除墓碑例外：登录客户端只读（用于剪枝本地陈旧注册表行），写仍仅限服务端；须先于 sys_ 全禁判断
   if (key === DELETED_USERS_LEDGER_KEY) return action === 'read' && !!user;
-  // 服务端自用键（如新设备验证的 IP 信任期 sys_trusted_ips_<账号>）：对客户端全禁读写，
+  // 服务端自用键（如新设备验证的 IP 信任期 sys_trusted_ips_<账号>、设备凭证 sys_trusted_devices_<账号>）：对客户端全禁读写，
   // 否则账号本人可经 /api/sync 自封可信 IP，短信二次验证形同虚设
   if (key.startsWith('sys_')) return false;
   if (isPublicKey(key)) return true;

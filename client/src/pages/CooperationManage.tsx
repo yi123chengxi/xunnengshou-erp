@@ -880,7 +880,7 @@ const CooperationManage: React.FC = () => {
           dataSource={filteredData}
           rowKey="key"
           size="middle"
-          pagination={{ pageSize: 10, showSizeChanger: true, showTotal: (t) => `共 ${t} 条` }}
+          pagination={{ defaultPageSize: 10, showSizeChanger: true, showTotal: (t) => `共 ${t} 条` }}
           scroll={{ x: 1200 }}
           locale={{ emptyText: '暂无合作申请' }}
         />

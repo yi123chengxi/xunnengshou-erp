@@ -1445,7 +1445,7 @@ const WithdrawalRecordPage: React.FC = () => {
           rowKey="key"
           bordered
           scroll={{ x: 1000, y: 'calc(100vh - 340px)' }}
-          pagination={{ pageSize: 20, showSizeChanger: true, showTotal: t => `共 ${t} 条` }}
+          pagination={{ defaultPageSize: 20, showSizeChanger: true, showTotal: t => `共 ${t} 条` }}
           size="middle"
           locale={{ emptyText: '暂无提现记录，请点击"新增记录"' }}
         />

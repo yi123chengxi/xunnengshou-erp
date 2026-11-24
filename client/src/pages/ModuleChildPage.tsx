@@ -26213,7 +26213,7 @@ function WarehouseManagePage() {
           </Space>
         </div>
         <Table columns={columns} dataSource={warehouses} rowKey="key" bordered size="small"
-          pagination={{ pageSize: 10, showSizeChanger: true, showTotal: t => `共 ${t} 条` }} />
+          pagination={{ defaultPageSize: 10, showSizeChanger: true, showTotal: t => `共 ${t} 条` }} />
       </Card>
       <Modal title={<span style={{ color: PRIMARY }}>{editRecord ? '编辑仓位' : '创建新的仓位'}</span>}
         open={editVisible} onCancel={() => { setEditVisible(false); setEditRecord(null); }}

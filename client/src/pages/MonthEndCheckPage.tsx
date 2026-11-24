@@ -1249,7 +1249,7 @@ const MonthEndCheckPage: React.FC = () => {
           dataSource={filteredRecords}
           rowKey="key"
           scroll={{ x: 1300, y: 'calc(100vh - 360px)' }}
-          pagination={{ pageSize: 20, showSizeChanger: true, showTotal: t => `共 ${t} 条` }}
+          pagination={{ defaultPageSize: 20, showSizeChanger: true, showTotal: t => `共 ${t} 条` }}
           size="middle"
           locale={{ emptyText: '暂无盘点记录，请点击"新增记录"' }}
         />

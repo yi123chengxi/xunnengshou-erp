@@ -81,7 +81,7 @@ const OrderReservedModal: React.FC<Props> = ({ open, onClose, productCode, produ
         <Table
           bordered
           size="small"
-          pagination={{ pageSize: 20, showSizeChanger: true, showTotal: (t) => `共 ${t} 条记录` }}
+          pagination={{ defaultPageSize: 20, showSizeChanger: true, showTotal: (t) => `共 ${t} 条记录` }}
           dataSource={rows}
           rowKey={(r) => r.orderId}
           columns={columns}

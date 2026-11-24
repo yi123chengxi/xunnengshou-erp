@@ -393,7 +393,7 @@ const OrderProfitPage: React.FC = () => {
             bordered
             size="small"
             pagination={{
-              pageSize: 100,
+              defaultPageSize: 100,
               showSizeChanger: true,
               showTotal: (total) => `共 ${total} 条记录`,
             }}

@@ -406,7 +406,7 @@ const MoldPage: React.FC = () => {
       </Card>
 
       <Table rowKey="key" size="small" bordered columns={wrapColumns(cols)} dataSource={filtered}
-        pagination={{ pageSize: 20, showSizeChanger: true, showTotal: t => `共 ${t} 条` }} />
+        pagination={{ defaultPageSize: 20, showSizeChanger: true, showTotal: t => `共 ${t} 条` }} />
 
       {/* 字段显示控制弹窗 */}
       <FieldConfigModal

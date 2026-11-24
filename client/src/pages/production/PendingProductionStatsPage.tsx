@@ -148,7 +148,7 @@ const PendingProductionStatsPage: React.FC = () => {
         <Button size="small" icon={<ToolOutlined />} onClick={() => navigate('/production/production-schedule')}>去排期看板</Button>
         <span style={{ fontSize: 12, color: '#8c9bb0', alignSelf: 'center' }}>明细 {filteredPool.length} / {snap.pool.length} 单（指标卡为全量口径）</span>
       </div>
-      <Table<PendingRow> size="small" rowKey="key" columns={poolColumns} dataSource={filteredPool} scroll={{ x: 1900 }} pagination={{ pageSize: 20, showSizeChanger: true, showTotal: t => `共 ${t} 单` }} locale={{ emptyText: <Empty description="暂无待生产订单（生产订单全部完工或数量为 0）" /> }} rowClassName={r => (r.overdue ? 'table-row-overdue' : '')} />
+      <Table<PendingRow> size="small" rowKey="key" columns={poolColumns} dataSource={filteredPool} scroll={{ x: 1900 }} pagination={{ defaultPageSize: 20, showSizeChanger: true, showTotal: t => `共 ${t} 单` }} locale={{ emptyText: <Empty description="暂无待生产订单（生产订单全部完工或数量为 0）" /> }} rowClassName={r => (r.overdue ? 'table-row-overdue' : '')} />
     </>
   );
 

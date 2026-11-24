@@ -438,7 +438,7 @@ const InvoiceRecordPage: React.FC = () => {
           dataSource={filtered}
           rowKey="key"
           scroll={{ y: 'calc(100vh - 360px)' }}
-          pagination={{ pageSize: 20, showSizeChanger: true, showTotal: t => `共 ${t} 条记录` }}
+          pagination={{ defaultPageSize: 20, showSizeChanger: true, showTotal: t => `共 ${t} 条记录` }}
           size="middle"
           locale={{ emptyText: '暂无记录，请点击"新增"添加' }}
         />

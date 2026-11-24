@@ -147,9 +147,24 @@ const recordLoginLog = (username: string, success: boolean, detail?: string) => 
 };
 
 // === 新设备验证工具函数 ===
-// 信任判定已从「浏览器设备指纹（localStorage，可伪造且换浏览器即失效）」改为
-// 「服务端出口 IP 信任期」：陌生 IP 首次登录需短信验证码，验证通过后该 IP 30 天内免验证，
-// 到期进入下一个轮回重新验证。信任记录存服务端 sys_trusted_ips_<账号>，客户端不可自封。
+// 信任判定为「双锚点 OR」，任一命中即免短信验证码：
+// 1) 设备凭证（主锚点）：验证通过时服务端签发随机 deviceToken，浏览器按账号存 localStorage，
+//    服务端只留 sha256 摘要（sys_trusted_devices_<账号>），90 天硬轮回 —— 出口 IP 变动不影响；
+// 2) 出口 IP 信任期（兜底）：sys_trusted_ips_<账号>，30 天硬轮回，清缓存/换浏览器时仍能免验证。
+// 两者均存服务端且 sys_ 前缀对客户端禁读写，客户端无法自封可信。都 miss 才弹验证窗，验证后双写。
+const deviceTokenKeyOf = (username: string) => `login_device_token_${username}`;
+
+const getDeviceToken = (username: string): string => {
+  try { return String(localStorage.getItem(deviceTokenKeyOf(username)) || ''); } catch { return ''; }
+};
+
+// 落盘服务端下发的设备凭证；写失败（配额/隐私模式）仅降级为靠 IP 信任，不阻断登录
+const saveDeviceToken = (username: string, token: unknown) => {
+  const tk = String(token || '').trim();
+  if (!username || !tk) return;
+  try { safeSetItem(deviceTokenKeyOf(username), tk); } catch { /* ignore */ }
+};
+
 const checkIpTrust = async (username: string): Promise<boolean> => {
   try {
     const resp = await fetch(`${SMS_API_BASE}/sms/check-ip-trust`, {
@@ -161,6 +176,30 @@ const checkIpTrust = async (username: string): Promise<boolean> => {
     if (data.code !== 0) return false;
     return data.data?.trusted === true;
   } catch { return false; } // 查询失败按不可信处理（fail-closed，走验证流程）
+};
+
+const checkDeviceTrust = async (username: string, token: string): Promise<boolean> => {
+  if (!token) return false;
+  try {
+    const resp = await fetch(`${SMS_API_BASE}/sms/check-device-trust`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, deviceToken: token }),
+    });
+    const data = await resp.json();
+    if (data.code !== 0) return false;
+    return data.data?.trusted === true;
+  } catch { return false; } // 同样 fail-closed
+};
+
+// 两个锚点并发查（延迟等同单次），任一可信即免验证
+const checkLoginTrust = async (username: string): Promise<boolean> => {
+  const token = getDeviceToken(username);
+  const [devTrusted, ipTrusted] = await Promise.all([
+    checkDeviceTrust(username, token),
+    checkIpTrust(username),
+  ]);
+  return devTrusted || ipTrusted;
 };
 
 // 内存登录候选（初始为空：演示账号已取消；注册成功后临时追加便于同会话登录，真值源为 registeredUsers）
@@ -342,7 +381,7 @@ const Auth: React.FC = () => {
       markFirstLoginPromptShown(foundUser.username);
     }
 
-    recordLoginLog(foundUser.username, true, '新设备（陌生 IP）验证通过，登录成功');
+    recordLoginLog(foundUser.username, true, '新设备验证通过（设备凭证/IP 信任未命中），登录成功');
 
     // 登录成功后初始化 Web Push 推送订阅
     initPushNotifications();
@@ -382,9 +421,10 @@ const Auth: React.FC = () => {
         message.error(data.message || '验证码发送失败，请稍后重试');
         return false;
       }
-      // 生产环境未配置短信服务：服务端返回 smsUnconfigured（服务端已同步记录本次 IP 信任），回退为跳过新设备验证直接登录
+      // 生产环境未配置短信服务：服务端返回 smsUnconfigured（已同步记录本次 IP 信任并下发设备凭证），回退为跳过新设备验证直接登录
       if (data.data?.smsUnconfigured) {
         if (pendingLoginUser) {
+          saveDeviceToken(String(pendingLoginUser.username || ''), data.data?.deviceToken);
           setDeviceVerifyVisible(false);
           completeLogin(pendingLoginUser, pendingIsViewOnly);
           message.warning('服务器未配置短信服务，本次已跳过新设备验证；配置阿里云短信后将自动恢复验证');
@@ -429,9 +469,10 @@ const Auth: React.FC = () => {
         return;
       }
       if (!pendingLoginUser) return;
+      saveDeviceToken(String(pendingLoginUser.username || ''), data.data?.deviceToken);
       setDeviceVerifyVisible(false);
       completeLogin(pendingLoginUser, pendingIsViewOnly);
-      message.success('验证通过，该 IP 地址 30 天内免验证登录');
+      message.success('验证通过，本机 90 天内免验证登录（换网络也不会再要求验证码）');
     } catch {
       message.error('网络异常，验证失败，请稍后重试');
     }
@@ -650,11 +691,11 @@ const Auth: React.FC = () => {
 
     message.success(`登录成功！欢迎回来，${foundUser.name}`);
 
-    // === 安全检查：陌生 IP 验证（30 天信任期由服务端裁决） ===
+    // === 安全检查：未信任设备验证（设备凭证 90 天 / 出口 IP 30 天，均由服务端裁决） ===
     // 短信验证码登录已验证手机号身份，跳过；开发环境也跳过
     const isProduction = process.env.NODE_ENV === 'production';
-    if (loginMethod !== 'sms' && isProduction && !(await checkIpTrust(foundUser.username))) {
-      // 陌生 IP，需要验证
+    if (loginMethod !== 'sms' && isProduction && !(await checkLoginTrust(foundUser.username))) {
+      // 本机无有效设备凭证且出口 IP 陌生，需要验证
       setPendingLoginUser(foundUser);
       setPendingIsViewOnly(isViewOnly);
       setDeviceVerifyStep(0);
@@ -663,7 +704,7 @@ const Auth: React.FC = () => {
       setDeviceVerifyInput('');
       setDeviceVerifyCountdown(0);
       setDeviceVerifyVisible(true);
-      recordLoginLog(foundUser.username, true, '陌生 IP 登录，等待短信验证');
+      recordLoginLog(foundUser.username, true, '未信任设备登录，等待短信验证');
       setLoading(false);
       return;
     }
@@ -1045,6 +1086,8 @@ const Auth: React.FC = () => {
         try { localStorage.setItem('token', String(j.data.token)); } catch { /* ignore */ }
       }
       const username = j.data?.username;
+      // 短信登录已完成手机号校验：落盘服务端下发的设备凭证，下次换 IP 也不再弹验证
+      saveDeviceToken(String(username || ''), j.data?.deviceToken);
       // 与账号密码登录同口径：先合并服务器账号再本地查找
       const local: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
       if (!local.some((u: any) => u.username === username)) {

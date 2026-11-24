@@ -399,7 +399,7 @@ const OtherReceivablesPanel: React.FC = () => {
         rowKey="key"
         dataSource={display}
         columns={columns}
-        pagination={{ pageSize: 15, showSizeChanger: true, showTotal: t => `共 ${t} 条` }}
+        pagination={{ defaultPageSize: 15, showSizeChanger: true, showTotal: t => `共 ${t} 条` }}
         locale={{ emptyText: '暂无其他应收款记录，点击「新增应收款」开始登记' }}
         summary={() => {
           if (display.length === 0) return null;

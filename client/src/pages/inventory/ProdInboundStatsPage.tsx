@@ -305,7 +305,7 @@ const ProdInboundStatsPage: React.FC = () => {
         bordered size="small" rowKey="key" columns={columns} dataSource={filteredData}
         scroll={{ x: 1300 }}
         rowSelection={{ selectedRowKeys, onChange: keys => setSelectedRowKeys(keys) }}
-        pagination={{ pageSize: 20, showSizeChanger: true, pageSizeOptions: ['20', '50', '100'], showTotal: t => `共 ${t} 条` }}
+        pagination={{ defaultPageSize: 20, showSizeChanger: true, pageSizeOptions: ['20', '50', '100'], showTotal: t => `共 ${t} 条` }}
         locale={{ emptyText: <Empty description="暂无生产入库数据：生产订单完工后自动写入，或点击「新增入库」手动补录" /> }}
       />
 

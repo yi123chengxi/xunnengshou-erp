@@ -3420,7 +3420,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
           }}
           tableLayout="fixed"
           scroll={{ y: 360, x: 980 }}
-          pagination={{ pageSize: 10, showSizeChanger: true, showTotal: t => `共 ${t} 条` }}
+          pagination={{ defaultPageSize: 10, showSizeChanger: true, showTotal: t => `共 ${t} 条` }}
         />
       </Modal>
 

@@ -177,7 +177,7 @@ const InvoiceApplyPage: React.FC = () => {
           dataSource={filtered}
           rowKey="key"
           scroll={{ x: 1400, y: 'calc(100vh - 360px)' }}
-          pagination={{ pageSize: 20, showSizeChanger: true, showTotal: t => `共 ${t} 条申请` }}
+          pagination={{ defaultPageSize: 20, showSizeChanger: true, showTotal: t => `共 ${t} 条申请` }}
           size="middle"
           locale={{ emptyText: <Empty description="暂无开票申请（合作方向您推送开票申请后显示在此处）" /> }}
         />

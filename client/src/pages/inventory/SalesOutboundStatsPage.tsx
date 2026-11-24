@@ -1149,7 +1149,7 @@ const SalesOutboundStatsPage: React.FC = () => {
             columns={visibleProductColumns}
             rowKey="key"
             scroll={{ x: 1300, y: scrollY }}
-            pagination={{ pageSize: 20, showSizeChanger: true, pageSizeOptions: ['10', '20', '50', '100'], showTotal: t => `共 ${t} 条` }}
+            pagination={{ defaultPageSize: 20, showSizeChanger: true, pageSizeOptions: ['10', '20', '50', '100'], showTotal: t => `共 ${t} 条` }}
             summary={isOrderMode ? renderOrderProductSummary : renderProductSummary}
             locale={{ emptyText: <Empty description="暂无数据，请调整筛选条件" /> }}
           />
@@ -1166,7 +1166,7 @@ const SalesOutboundStatsPage: React.FC = () => {
           columns={curStyleCodeColumns}
           rowKey="key"
           scroll={{ x: 1000, y: scrollY }}
-          pagination={{ pageSize: 20, showSizeChanger: true, pageSizeOptions: ['10', '20', '50', '100'], showTotal: t => `共 ${t} 条` }}
+          pagination={{ defaultPageSize: 20, showSizeChanger: true, pageSizeOptions: ['10', '20', '50', '100'], showTotal: t => `共 ${t} 条` }}
           summary={curStyleCodeSummary}
           locale={{ emptyText: <Empty description="暂无数据，请调整筛选条件" /> }}
         />
@@ -1182,7 +1182,7 @@ const SalesOutboundStatsPage: React.FC = () => {
           columns={visibleCustomerColumns}
           rowKey="key"
           scroll={{ x: 800, y: scrollY }}
-          pagination={{ pageSize: 20, showSizeChanger: true, pageSizeOptions: ['10', '20', '50', '100'], showTotal: t => `共 ${t} 条` }}
+          pagination={{ defaultPageSize: 20, showSizeChanger: true, pageSizeOptions: ['10', '20', '50', '100'], showTotal: t => `共 ${t} 条` }}
           summary={renderCustomerSummary}
           locale={{ emptyText: <Empty description="暂无数据，请调整筛选条件" /> }}
         />
@@ -1198,7 +1198,7 @@ const SalesOutboundStatsPage: React.FC = () => {
           columns={visibleShopColumns}
           rowKey="key"
           scroll={{ x: 800, y: scrollY }}
-          pagination={{ pageSize: 20, showSizeChanger: true, pageSizeOptions: ['10', '20', '50', '100'], showTotal: t => `共 ${t} 条` }}
+          pagination={{ defaultPageSize: 20, showSizeChanger: true, pageSizeOptions: ['10', '20', '50', '100'], showTotal: t => `共 ${t} 条` }}
           summary={renderShopSummary}
           locale={{ emptyText: <Empty description="暂无数据，请调整筛选条件" /> }}
         />
