@@ -1,8 +1,8 @@
-version: 1.1.0
+version: 1.1.1
 files:
   - url: xunnengshou-print-client-setup.exe
-    sha512: 4GDKxCJ610YEzdm6XU/FCNAOQJ2ipsweFvoBwXwWMUAtuPzF6G5i+vNq648y0zpNK8GwTnez6k5odYkPa6vOWQ==
-    size: 87649431
+    sha512: rPG5fvFBepsCyCiiV6uU9iPesIjPCgyYO6hDHLXYLcmV64C5e8t7fM/z9puXcvy8b4D6oDcLySpT5d2wh3+ijg==
+    size: 87645298
 path: xunnengshou-print-client-setup.exe
-sha512: 4GDKxCJ610YEzdm6XU/FCNAOQJ2ipsweFvoBwXwWMUAtuPzF6G5i+vNq648y0zpNK8GwTnez6k5odYkPa6vOWQ==
-releaseDate: '2026-11-05T06:13:08.425Z'
+sha512: rPG5fvFBepsCyCiiV6uU9iPesIjPCgyYO6hDHLXYLcmV64C5e8t7fM/z9puXcvy8b4D6oDcLySpT5d2wh3+ijg==
+releaseDate: '2026-11-24T08:09:40.942Z'

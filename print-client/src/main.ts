@@ -16,6 +16,77 @@ import * as os from 'os';
 import WebSocket from 'ws';
 import { v4 as uuid } from 'uuid';
 
+// ============ 本地文件日志 ============
+// 运行日志全量落盘到「文档/讯能手打印日志」，按天一个文件；仅保留最近 3 天，超期自动删除
+const LOG_RETENTION_DAYS = 3;
+let logDirCache = '';
+let logDateKey = '';
+
+function logDir(): string {
+  if (!logDirCache) logDirCache = path.join(app.getPath('documents'), '讯能手打印日志');
+  return logDirCache;
+}
+
+function dateKey(d: Date): string {
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+// 按文件名日期清理超过保留天数的日志（跨天写新文件时顺带执行）
+function purgeOldLogs() {
+  try {
+    const dir = logDir();
+    if (!fs.existsSync(dir)) return;
+    const now = Date.now();
+    for (const f of fs.readdirSync(dir)) {
+      const m = /^print-(\d{4}-\d{2}-\d{2})\.log$/.exec(f);
+      if (!m) continue;
+      const t = new Date(`${m[1]}T00:00:00`).getTime();
+      if (!Number.isNaN(t) && (now - t) / 86_400_000 > LOG_RETENTION_DAYS) {
+        try { fs.unlinkSync(path.join(dir, f)); } catch { /* ignore */ }
+      }
+    }
+  } catch { /* 清理失败不影响主流程 */ }
+}
+
+function writeLog(level: string, text: string) {
+  try {
+    const now = new Date();
+    const key = dateKey(now);
+    if (key !== logDateKey) {
+      fs.mkdirSync(logDir(), { recursive: true });
+      logDateKey = key;
+      purgeOldLogs();
+    }
+    const p = (n: number) => String(n).padStart(2, '0');
+    const ts = `${p(now.getHours())}:${p(now.getMinutes())}:${p(now.getSeconds())}.${String(now.getMilliseconds()).padStart(3, '0')}`;
+    fs.appendFileSync(path.join(logDir(), `print-${key}.log`), `[${ts}] [${level}] ${text}\n`);
+  } catch { /* 写盘失败静默忽略，绝不影响打印主流程 */ }
+}
+
+// 包装 console 四方法：现有 console.* 调用零改动全量入日志文件
+function fmtArgs(args: any[]): string {
+  return args.map(a => {
+    if (typeof a === 'string') return a;
+    if (a instanceof Error) return a.stack || a.message;
+    try { return JSON.stringify(a); } catch { return String(a); }
+  }).join(' ');
+}
+const origConsole = {
+  log: console.log.bind(console),
+  info: console.info.bind(console),
+  warn: console.warn.bind(console),
+  error: console.error.bind(console),
+};
+console.log = (...args: any[]) => { writeLog('INFO', fmtArgs(args)); origConsole.log(...args); };
+console.info = (...args: any[]) => { writeLog('INFO', fmtArgs(args)); origConsole.info(...args); };
+console.warn = (...args: any[]) => { writeLog('WARN', fmtArgs(args)); origConsole.warn(...args); };
+console.error = (...args: any[]) => { writeLog('ERROR', fmtArgs(args)); origConsole.error(...args); };
+
+// 闪退兜底：未捕获异常 / 未处理拒绝也落盘，避免崩溃无迹可查
+process.on('uncaughtException', (err: Error) => writeLog('FATAL', `uncaughtException: ${err?.stack || err}`));
+process.on('unhandledRejection', (reason: any) => writeLog('FATAL', `unhandledRejection: ${reason?.stack || reason}`));
+
 // ============ 状态 ============
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -55,6 +126,7 @@ let updateDownloaded = false;
 let sharedFilter: string[] = [];
 
 function pushLog(log: JobLog) {
+  writeLog('JOB', `任务 ${log.id} → ${log.status}（打印机: ${log.printerName}）${log.error ? ` 错误: ${log.error}` : ''}`);
   jobLogs.unshift(log);
   if (jobLogs.length > 100) jobLogs.pop();
   if (mainWindow && !mainWindow.isDestroyed()) {
@@ -74,6 +146,7 @@ function removeJobLog(jobId: string) {
 // ============ 自动更新 ============
 
 function sendUpdateEvent(payload: any) {
+  console.log(`[update] ${payload?.type}${payload?.version ? ` v${payload.version}` : ''}${payload?.message ? ` ${payload.message}` : ''}`);
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('update-event', payload);
   }
@@ -132,6 +205,11 @@ function createWindow() {
   });
 
   mainWindow.loadFile(path.join(__dirname, '../src/renderer/index.html'));
+
+  // 渲染进程控制台日志转发落盘（level: 0 verbose / 1 info / 2 warning / 3 error）
+  mainWindow.webContents.on('console-message', (_e: any, level: number, message: string, line: number, sourceId: string) => {
+    writeLog('RENDER', `[L${level}] ${message}（${sourceId}:${line}）`);
+  });
 
   // 关闭窗口 → 最小化到托盘
   mainWindow.on('close', (e) => {
@@ -223,11 +301,15 @@ async function handleLogin(_event: any, user: string, password: string) {
       }
     } catch { /* 忽略探测失败 */ }
   }
-  if (!r.ok || !r.token) return { ok: false, message: r.message || '登录失败' };
+  if (!r.ok || !r.token) {
+    console.log(`[auth] 登录失败: ${user} → ${r.message || '登录失败'}`);
+    return { ok: false, message: r.message || '登录失败' };
+  }
   jwtToken = r.token;
   serverUrl = base;
   username = user;
   isAuthenticated = true;
+  console.log(`[auth] 登录成功: ${user} → ${base}`);
 
   connectWebSocket();
   // 登录成功后检查一次客户端更新
@@ -385,6 +467,7 @@ async function handlePrintJob(msg: {
     log.status = 'printing';
     pushLog({ ...log });
     ws?.send(JSON.stringify({ type: 'job_status', jobId: msg.id, status: 'printing' }));
+    console.log(`[print] 任务 ${msg.id} 开始加载打印内容（${msg.jobType}）: ${msg.jobType === 'url' ? msg.content : 'base64 PDF'}`);
 
     // 创建隐藏的打印窗口
     const printWin = new BrowserWindow({
@@ -409,6 +492,7 @@ async function handlePrintJob(msg: {
       ]);
       setTimeout(() => { try { fs.unlinkSync(tmpFile); } catch { /* ignore */ } }, 60_000);
     }
+    console.log(`[print] 任务 ${msg.id} 内容加载完成`);
 
     checkCancelled();
     if (cancelled) { printWin.close(); throw new Error('任务已取消'); }
@@ -424,6 +508,7 @@ async function handlePrintJob(msg: {
       }),
       new Promise<void>((_, reject) => setTimeout(() => reject(new Error('页面加载超时（60s），请检查网络或服务端是否可达')), loadTimeout)),
     ]);
+    console.log(`[print] 任务 ${msg.id} DOM 就绪`);
     
     checkCancelled();
     if (cancelled) { printWin.close(); throw new Error('任务已取消'); }
@@ -454,6 +539,7 @@ async function handlePrintJob(msg: {
       pushLog({ ...log });
       deviceName = fb.name;
     }
+    console.log(`[print] 任务 ${msg.id} 调用静默打印 deviceName="${deviceName || '系统默认'}" copies=${msg.copies || 1}`);
 
     // 静默打印（带超时 60 秒，打印机不存在时回调可能不触发）
     await Promise.race([
@@ -478,6 +564,7 @@ async function handlePrintJob(msg: {
       }),
       new Promise<void>((_, reject) => setTimeout(() => reject(new Error(`打印超时（60s），打印机"${deviceName || '默认'}"可能不存在或无响应`)), loadTimeout)),
     ]);
+    console.log(`[print] 任务 ${msg.id} 打印回调成功`);
 
     // 关闭打印窗口
     printWin.close();
@@ -499,6 +586,7 @@ async function handlePrintJob(msg: {
       ws?.send(JSON.stringify({ type: 'job_status', jobId: msg.id, status: 'cancelled' }));
       return;
     }
+    console.error(`[print] 任务 ${msg.id} 失败: ${err.message}`);
     log.status = 'failed';
     log.error = err.message;
     pushLog({ ...log });
@@ -635,12 +723,19 @@ function setupChineseMenu() {
       label: '帮助',
       submenu: [
         {
+          label: '打开日志文件夹',
+          click: () => {
+            try { fs.mkdirSync(logDir(), { recursive: true }); } catch { /* ignore */ }
+            shell.openPath(logDir());
+          },
+        },
+        {
           label: '关于讯能手打印客户端',
           click: () => {
             dialog.showMessageBox({
               type: 'info',
               title: '关于讯能手打印客户端',
-              message: '讯能手打印客户端 v1.0.0',
+              message: `讯能手打印客户端 v${app.getVersion()}`,
               detail: '本地打印组件：打印机上报、静默打印、同租户打印机共享。',
             });
           },
@@ -652,6 +747,7 @@ function setupChineseMenu() {
 }
 
 app.whenReady().then(() => {
+  console.log(`[app] 启动 v${app.getVersion()}，日志目录: ${logDir()}`);
   setupChineseMenu();
   createWindow();
   createTray();
