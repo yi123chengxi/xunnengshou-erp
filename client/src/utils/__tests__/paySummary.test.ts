@@ -6,7 +6,7 @@ import {
   repairCustomerSummaryBulk, verifyCustomerPurchase, verifyCustomerSummary,
   incrementCustomerReceived, makeReceiptMatcher, scheduleCustomerRefresh,
   refreshSupplierPurchase, refreshSupplierPaid, loadSupplierSummary, verifySupplierSummary,
-  loadSupplierPayments,
+  loadSupplierPayments, computeSupplierPartyCents,
 } from '../paySummary';
 
 const OWNER = 'supA';
@@ -298,5 +298,66 @@ describe('供应商侧快照同源', () => {
     const list = loadSupplierPayments(OWNER, '乙供应商');
     expect(list).toHaveLength(2);
     expect(String(list[0].supplierName)).toBe('乙供应商');
+  });
+});
+
+describe('按凭证单主体计算（同名供应商终止/删除守卫）', () => {
+  const seedSameName = () => {
+    localStorage.setItem('registeredUsers', JSON.stringify([
+      { username: 'lk888', companyName: '莱库鞋业', companyNo: 'N888' },
+      { username: 'lk1101', companyName: '莱库鞋业', companyNo: 'N1101' },
+    ]));
+    localStorage.setItem('company_renames', '[]');
+  };
+
+  it('同名两家独立主体按凭证各自计算，互不串账', async () => {
+    seedSameName();
+    put(K_SUP_BILLS, [
+      { supplier: '莱库鞋业', supplierUsername: 'lk888', supplierNo: 'N888', totalAmount: 8694 },
+      { supplier: '莱库鞋业', supplierUsername: 'lk1101', supplierNo: 'N1101', totalAmount: 100 },
+    ]);
+    put(K_SUP_PAY, [
+      { supplierName: '莱库鞋业', supplierUsername: 'lk888', supplierNo: 'N888', amount: 8694 },
+    ]);
+    const real = await computeSupplierPartyCents(OWNER, { username: 'lk888', no: 'N888', name: '莱库鞋业' });
+    expect(real).toEqual({ purchase: 869400, paid: 869400 });
+    const test = await computeSupplierPartyCents(OWNER, { username: 'lk1101', no: 'N1101', name: '莱库鞋业' });
+    expect(test).toEqual({ purchase: 10000, paid: 0 });
+  });
+
+  it('仅公司编号凭证也能分开同名两家', async () => {
+    seedSameName();
+    put(K_SUP_BILLS, [
+      { supplier: '莱库鞋业', supplierNo: 'N888', totalAmount: 50 },
+      { supplier: '莱库鞋业', supplierNo: 'N1101', totalAmount: 20 },
+    ]);
+    expect(await computeSupplierPartyCents(OWNER, { no: 'N1101', name: '莱库鞋业' })).toEqual({ purchase: 2000, paid: 0 });
+  });
+
+  it('无凭证且同名歧义时返回 null（不得按 0 放行终止）', async () => {
+    seedSameName();
+    put(K_SUP_BILLS, [{ supplier: '莱库鞋业', totalAmount: 100 }]);
+    expect(await computeSupplierPartyCents(OWNER, { name: '莱库鞋业' })).toBeNull();
+  });
+
+  it('无凭证但名称唯一命中注册主体时退名称计算', async () => {
+    put(K_SUP_BILLS, [{ supplier: '甲公司新名', totalAmount: 100 }]);
+    expect(await computeSupplierPartyCents(OWNER, { name: '甲公司新名' })).toEqual({ purchase: 10000, paid: 0 });
+  });
+
+  it('账单源表本地缺失时返回 null', async () => {
+    seedSameName();
+    expect(await computeSupplierPartyCents(OWNER, { username: 'lk1101', no: 'N1101', name: '莱库鞋业' })).toBeNull();
+  });
+
+  it('作废账单行不计入，无凭证同名行不串入任一主体', async () => {
+    seedSameName();
+    put(K_SUP_BILLS, [
+      { supplier: '莱库鞋业', supplierUsername: 'lk1101', totalAmount: 30, voided: true },
+      { supplier: '莱库鞋业', supplierUsername: 'lk1101', totalAmount: 10 },
+      { supplier: '莱库鞋业', totalAmount: 999 },
+    ]);
+    expect(await computeSupplierPartyCents(OWNER, { username: 'lk1101', name: '莱库鞋业' })).toEqual({ purchase: 1000, paid: 0 });
+    expect(await computeSupplierPartyCents(OWNER, { username: 'lk888', name: '莱库鞋业' })).toEqual({ purchase: 0, paid: 0 });
   });
 });

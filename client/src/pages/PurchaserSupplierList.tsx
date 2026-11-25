@@ -36,7 +36,7 @@ import { CertBadge, fetchCertBatch } from '../components/EnterpriseCertModal';
 import type { CertInfo } from '../components/EnterpriseCertModal';
 import {
   ensureSupplierSummaryBuilt, loadSupplierSummary, verifySupplierSummary, repairSupplierSummary,
-  recordSupplierPayment, loadSupplierPayments, startIdlePatrol, toYuan,
+  recordSupplierPayment, loadSupplierPayments, startIdlePatrol, toYuan, computeSupplierPartyCents,
 } from '../utils/paySummary';
 import type { SupplierSummaryEntry } from '../utils/paySummary';
 import { writeProductList, loadProductListLatest } from '../utils/dataStore';
@@ -1424,10 +1424,17 @@ const PurchaserSupplierList: React.FC = () => {
     });
   };
 
-  const handleTerminate = (record: SupplierEntry) => {
-    // 终止条件：应付欠款（采购金额-已付货款）必须为 0 才可发起
-    const e0 = paySummary[record.supplierName];
-    const due0 = Math.round(toYuan((e0?.purchaseTotal || 0) - (e0?.paidTotal || 0)) * 100) / 100;
+  const handleTerminate = async (record: SupplierEntry) => {
+    // 终止条件：应付欠款（采购金额-已付货款）必须为 0 才可发起；
+    // 同名多家供应商必须按条目凭证（账号/编号）单独计算，名称聚合快照会把两家欠款混在一起互相阻塞
+    const res0 = await computeSupplierPartyCents(getDataOwner(), {
+      username: record.supplierUsername, no: record.supplierNo, name: record.supplierName,
+    });
+    if (!res0) {
+      message.error('无法核算该供应商的应付欠款（本地账单数据缺失，或同名供应商凭证不全），请刷新数据或在编辑中补全供应商编号后再发起终止');
+      return;
+    }
+    const due0 = Math.round(toYuan(res0.purchase - res0.paid) * 100) / 100;
     if (Math.abs(due0) > 0.001) {
       message.error(`供应商「${record.supplierName}」应付欠款 ¥${due0.toFixed(2)} 未结清，应付欠款为 0 时才可发起终止合作`);
       return;
@@ -1438,11 +1445,17 @@ const PurchaserSupplierList: React.FC = () => {
   };
 
   const handleTerminateSubmit = () => {
-    terminateForm.validateFields().then(() => {
+    terminateForm.validateFields().then(async () => {
       if (!terminatingSupplier) return;
-      // 终止条件二次校验：应付欠款必须为 0
-      const eDue = paySummary[terminatingSupplier.supplierName];
-      const due = Math.round(toYuan((eDue?.purchaseTotal || 0) - (eDue?.paidTotal || 0)) * 100) / 100;
+      // 终止条件二次校验：应付欠款必须为 0（同样按条目凭证计算，不读名称聚合快照）
+      const resDue = await computeSupplierPartyCents(getDataOwner(), {
+        username: terminatingSupplier.supplierUsername, no: terminatingSupplier.supplierNo, name: terminatingSupplier.supplierName,
+      });
+      if (!resDue) {
+        message.error('无法核算该供应商的应付欠款（本地账单数据缺失，或同名供应商凭证不全），请刷新数据后再提交');
+        return;
+      }
+      const due = Math.round(toYuan(resDue.purchase - resDue.paid) * 100) / 100;
       if (Math.abs(due) > 0.001) {
         message.error(`供应商「${terminatingSupplier.supplierName}」应付欠款 ¥${due.toFixed(2)} 未结清，应付欠款为 0 时才可发起终止合作`);
         return;
@@ -1517,12 +1530,18 @@ const PurchaserSupplierList: React.FC = () => {
         // 否则供应商端客户基础信息会同步失去该客户
         try {
           const users: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
-          const supUser = users.find((u: any) => (u.companyName || '') === record.supplierName);
+          // 同名多家供应商时按名称 find-first 会静默认错主体：账号优先，其次编号/唯一名称解析
+          const supUser = users.find((u: any) => !!record.supplierUsername && u.username === record.supplierUsername)
+            || findUserByNoOrUniqueName(record.supplierNo, record.supplierName);
           const me = users.find((u: any) => u.username === (localStorage.getItem('username') || ''));
           const myCompany = me?.companyName || '';
           if (supUser && myCompany) {
             const orders: any[] = JSON.parse(localStorage.getItem(`pageData_sales_order-manage_${supUser.username}`) || '[]');
-            if (orders.some((o: any) => (o.customerName || '') === myCompany)) {
+            // 订单归属按身份键判定（账号 > 编号 > 唯一名称），同名客户不再误命中
+            const idx = buildCredIndex();
+            const myKey = idx.identity({ username: me?.username, no: me?.companyNo || me?.companyShortName, name: myCompany });
+            const hasMyOrders = orders.some((o: any) => idx.identity({ username: o?.customerUsername, no: o?.customerNo, name: o?.customerName }) === myKey);
+            if (hasMyOrders) {
               message.error(`供应商「${record.supplierName}」已存在与本公司的订单记录，禁止删除（如需停止合作请使用“终止合作”）`);
               return;
             }

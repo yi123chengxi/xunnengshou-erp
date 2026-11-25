@@ -131,6 +131,36 @@ const computeSupPaidCents = (owner: string, targets: Set<string>): Map<string, {
   return per;
 };
 
+// 按凭证计算单一供应商主体的采购/已付（分）：同名多家独立主体时名称聚合快照分不开彼此，
+// 终止合作/删除等守卫必须按条目凭证（账号 > 公司编号）单独计算，不得读名称聚合值。
+// 无凭证/凭证未注册时仅当名称唯一命中注册主体才退名称；同名歧义返回 null（调用方应阻止操作并提示补凭证）。
+// 返回 null 亦表示账单源表本地缺失，调用方不得按 0 处理。
+export const computeSupplierPartyCents = async (
+  owner: string, party: { username?: string; no?: string; name?: string },
+): Promise<{ purchase: number; paid: number } | null> => {
+  const idx = buildCredIndex();
+  let k = idx.identity({ username: party.username, no: party.no });
+  if (!k.startsWith('u:')) {
+    const kn = idx.identityOfName(trimName(party.name));
+    if (!kn.startsWith('u:')) return null;
+    k = kn;
+  }
+  const targetFor = new Map<string, string>([[k, 'party']]);
+  const src = await readFreshRows(billsKey(owner));
+  if (!src.present) return null;
+  let purchase = 0;
+  src.rows.forEach(b => {
+    if (b?.voided) return;
+    if (matchTarget(idx, targetFor, { username: b?.supplierUsername, no: b?.supplierNo, name: b?.supplier })) purchase += toCents(b?.totalAmount);
+  });
+  let paid = 0;
+  const pays: any[] = readJson(supplierPaymentsKey(owner), []) || [];
+  pays.forEach(p => {
+    if (matchTarget(idx, targetFor, { username: p?.supplierUsername, no: p?.supplierNo, name: p?.supplierName })) paid += payCents(p);
+  });
+  return { purchase, paid };
+};
+
 // 单对象重算：指定供应商的「采购金额」（只遍历账单表一次，仅累加目标供应商）
 export const refreshSupplierPurchase = async (owner: string, names: string[]): Promise<void> => {
   const targets = new Set(names.map(trimName).filter(Boolean));
