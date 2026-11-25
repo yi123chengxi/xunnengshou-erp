@@ -36,11 +36,11 @@ import {
 } from '@ant-design/icons';
 import { useParams, useNavigate } from 'react-router-dom';
 import { modules } from '../layouts/MainLayout';
-import { getAllRoles, permissionModules, getMergedPermissions } from '../config/permissions';
+import { getAllRoles, permissionModules, getMergedPermissions, getRolesStorageKey, loadPresetOverrides, savePresetOverride } from '../config/permissions';
 import * as XLSX from 'xlsx';
 import PermEditor from '../components/PermEditor';
 import { loadUserPermOverrides, saveUserPermOverrides, clearUserPermOverrides, setPreviewUser, loadRolePermSettings, saveRolePermSettings } from '../utils/perm';
-import { withPresetGroups, menuAllowSeed, presetGroupNames } from '../utils/presetGroups';
+import { withPresetGroups, menuAllowSeed, presetGroupNames, accountManageDenySeed, denyAccountManageInPresets } from '../utils/presetGroups';
 import type { PermTri } from '../config/permRegistry';
 import type { ColumnsType } from 'antd/es/table';
 
@@ -444,15 +444,38 @@ const AccountManage: React.FC = () => {
     try {
       const roles = getAllRoles();
       const { groups: merged, added } = withPresetGroups(loadGroups(), roles);
-      if (!added.length) return;
-      saveGroups(merged);
-      const settingsAll = loadRolePermSettings();
-      added.forEach(g => {
-        const role = roles.find(r => r.isPreset && r.name === g.name);
-        const roleTri = (role && role.key && settingsAll[role.key]) || {};
-        saveRolePermSettings(`__group__${g.name}`, { ...menuAllowSeed(g.permissions), ...roleTri });
-      });
-      setGroups(merged);
+      if (added.length) {
+        saveGroups(merged);
+        const settingsAll = loadRolePermSettings();
+        added.forEach(g => {
+          const role = roles.find(r => r.isPreset && r.name === g.name);
+          const roleTri = (role && role.key && settingsAll[role.key]) || {};
+          // 预设不授予账号管理：三平台菜单点叠加 deny 种子（复选框未勾选）
+          saveRolePermSettings(`__group__${g.name}`, { ...menuAllowSeed(g.permissions), ...roleTri, ...accountManageDenySeed() });
+        });
+        setGroups(merged);
+      }
+      // 预设取消账号管理勾选：存量一次性迁移（哨兵幂等；管理员此后显式改勾不会被回改）
+      const base = getRolesStorageKey().slice('roles_'.length);
+      const sentinel = `preset_acct_deny_rev_${base}`;
+      if (localStorage.getItem(sentinel) !== '1') {
+        const before = loadRolePermSettings();
+        const groupsBefore = loadGroups();
+        const overridesBefore = loadPresetOverrides();
+        const patch = denyAccountManageInPresets(roles, before, groupsBefore, overridesBefore);
+        if (patch.changed) {
+          Object.keys(patch.settings).forEach(k => {
+            if (JSON.stringify(patch.settings[k]) !== JSON.stringify(before[k])) {
+              saveRolePermSettings(k, patch.settings[k] as Record<string, 'allow' | 'deny' | 'inherit'>);
+            }
+          });
+          if (JSON.stringify(patch.groups) !== JSON.stringify(groupsBefore)) { saveGroups(patch.groups); setGroups(patch.groups); }
+          patch.overrides.forEach((o, i) => {
+            if (JSON.stringify(o) !== JSON.stringify(overridesBefore[i])) savePresetOverride(o.key, o.permissions);
+          });
+        }
+        localStorage.setItem(sentinel, '1');
+      }
     } catch { /* ignore */ }
   }, []);
 

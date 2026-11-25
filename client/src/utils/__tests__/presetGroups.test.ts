@@ -2,7 +2,7 @@
  * 预设分组契约回归：分组（部门）与角色管理的预设角色一一对应。
  * 新增子账号窗口移除「权限角色」后，分组是子账号唯一的预设权限载体。
  */
-import { withPresetGroups, menuAllowSeed, presetGroupNames } from '../presetGroups';
+import { withPresetGroups, menuAllowSeed, presetGroupNames, accountManageDenySeed, denyAccountManageInPresets, ACCOUNT_MANAGE_MENU_KEYS } from '../presetGroups';
 
 const ROLES = [
   { key: 'role-all', name: '全部权限', isPreset: true, permissions: ['product/finished-product', 'fn:product/finished-product:create'] },
@@ -36,5 +36,52 @@ describe('预设分组', () => {
 
   it('预设分组名只含预设角色', () => {
     expect(presetGroupNames(ROLES)).toEqual(['全部权限', '生产管理']);
+  });
+});
+
+describe('预设取消账号管理勾选', () => {
+  it('deny 种子覆盖三平台菜单点', () => {
+    expect(accountManageDenySeed()).toEqual({
+      'settings/account-manage': 'deny',
+      'purchaser/settings/account-manage': 'deny',
+      'factory/settings/account-manage': 'deny',
+    });
+  });
+
+  it('预设角色/分组三态写 deny，权限清单剔除该页；自定义一律不动', () => {
+    const settings = {
+      'role-all': { 'settings/account-manage': 'allow', 'product/finished-product': 'allow' },
+      '__group__全部权限': { 'settings/account-manage': 'allow' },
+      'custom-x': { 'settings/account-manage': 'allow' },
+      '__group__自定义组': { 'settings/account-manage': 'allow' },
+    };
+    const groups = [
+      { name: '全部权限', permissions: ['settings/account-manage', 'product/finished-product'] },
+      { name: '自定义组', permissions: ['settings/account-manage'] },
+    ];
+    const overrides = [
+      { key: 'role-all', permissions: ['settings/account-manage', 'sales/order-manage'] },
+      { key: 'custom-x', permissions: ['settings/account-manage'] },
+    ];
+    const patch = denyAccountManageInPresets(ROLES, settings, groups, overrides);
+    expect(patch.changed).toBe(true);
+    ACCOUNT_MANAGE_MENU_KEYS.forEach(k => {
+      expect(patch.settings['role-all'][k]).toBe('deny');
+      expect(patch.settings['__group__全部权限'][k]).toBe('deny');
+      expect(patch.settings['__group__生产管理'][k]).toBe('deny');
+    });
+    expect(patch.settings['role-all']['product/finished-product']).toBe('allow');
+    expect(patch.settings['custom-x']['settings/account-manage']).toBe('allow');
+    expect(patch.settings['__group__自定义组']['settings/account-manage']).toBe('allow');
+    expect(patch.groups[0].permissions).toEqual(['product/finished-product']);
+    expect(patch.groups[1].permissions).toEqual(['settings/account-manage']);
+    expect(patch.overrides[0].permissions).toEqual(['sales/order-manage']);
+    expect(patch.overrides[1].permissions).toEqual(['settings/account-manage']);
+  });
+
+  it('幂等：已全部 deny/剔除后再跑 changed=false', () => {
+    const first = denyAccountManageInPresets(ROLES, {}, [{ name: '全部权限', permissions: ['settings/account-manage'] }], []);
+    const second = denyAccountManageInPresets(ROLES, first.settings, first.groups, first.overrides);
+    expect(second.changed).toBe(false);
   });
 });

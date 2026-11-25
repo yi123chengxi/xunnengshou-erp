@@ -92,6 +92,9 @@ const SHARED_PREFIXES = [
   'invoice_record_', 'invoice_apply_requests_', 'purchaser_suppliers_', 'boundPurchasers_',
   'published_credit_', 'credit_adjustments_', 'price_strategy_',
   'roles_', 'role_permsettings_', 'preset_role_overrides_',
+  // 预设取消账号管理勾选的一次性迁移哨兵（值仅 '1'）：跨端同步保证全租户只迁移一次，
+  // 避免未迁移端后开账号管理时把管理员重新勾选的 allow 回改
+  'preset_acct_deny_rev_',
   // 账号个人三态权限覆写（user_perm_overrides_<账号>）：与 registeredUsers.permOverrides 同源，
   // 主账号管理子账号权限、子账号自己登录都需跨端读到；泄露面不大于已是公共键的注册表
   'user_perm_overrides_',

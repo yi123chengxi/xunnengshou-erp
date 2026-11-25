@@ -175,8 +175,8 @@ export const presetRoles: RoleRecord[] = [
   {
     key: 'role-all',
     name: '全部权限',
-    description: '拥有系统所有模块和页面的访问权限',
-    permissions: getAllPermissions(),
+    description: '拥有系统所有模块和页面的访问权限（账号管理除外：该页预设不授予，仅主账号或显式授权可用）',
+    permissions: getAllPermissions().filter(p => p !== 'settings/account-manage'),
     isPreset: true,
   },
   {
