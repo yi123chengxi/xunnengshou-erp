@@ -141,6 +141,7 @@ import { INDUSTRY_TEMPLATES as WF_PRESET_TEMPLATES } from './production/Workflow
 import PlanDesignPage, { imgDB } from './PlanDesignPage';
 import ProductPrintPage from './ProductPrintPage';
 import FieldConfigModal from '../components/FieldConfigModal';
+import ImageSlot from '../components/ImageSlot';
 import StockHistoryModal from '../components/StockHistoryModal';
 import OrderReservedModal from '../components/OrderReservedModal';
 import { buildOrderOccupiedMap, syncOrderReserved, nextOrderIdFrom, collectOrderIdsForAlloc } from '../utils/orderOccupied';
@@ -9275,8 +9276,8 @@ const ModuleChildPage: React.FC = () => {
       message.warning('没有可导出的数据');
       return;
     }
-    // 构建CSV内容
-    const columns = effectivePageConfig?.columns || [];
+    // 构建CSV内容（图片列为内嵌 base64，不入 CSV，避免导出巨型无效文本）
+    const columns = (effectivePageConfig?.columns || []).filter(c => c.type !== 'image');
     const headers = columns.map(c => c.title).join(',');
     const rows = filteredData.map(row =>
       columns.map(c => {
@@ -12888,6 +12889,13 @@ const handleBatchAttrsConfirm = () => {
             </a>
           );
         };
+      }
+      // 银行账户：开户许可证缩略图，点击放大预览
+      if (pageConfig?.title === '银行账户' && col.dataIndex === 'openingPermit') {
+        baseCol.render = (v: string) => v ? (
+          <img src={v} alt="开户许可证" style={{ width: 40, height: 40, objectFit: 'cover', borderRadius: 4, border: '1px solid #eee', cursor: 'zoom-in' }}
+            onClick={(e) => { e.stopPropagation(); setPreviewImgSrc(v); }} />
+        ) : <span style={{ color: '#bbb' }}>—</span>;
       }
       // 加工订单：图片列从 IndexedDB 按商品编码加载半成品图片（覆写 switch 中的 image 默认 render）
       if (pageConfig?.title === '加工订单' && col.key === 'image') {
@@ -17012,6 +17020,9 @@ const handleBatchAttrsConfirm = () => {
                       ]} />
                     ) : col.dataIndex === 'openDate' && pageConfig?.title === '银行账户' ? (
                       <DatePicker size="small" style={{ width: '100%' }} format="YYYY-MM-DD" placeholder="选择开户日期" />
+                    ) : col.dataIndex === 'openingPermit' && pageConfig?.title === '银行账户' ? (
+                      // 开户许可证：上传/剪切板粘贴/自动压缩/点击预览由 ImageSlot 统一承载
+                      <ImageSlot size={72} tip="上传许可证" />
                     ) : col.dataIndex === 'status' && pageConfig?.title === '银行账户' ? (
                       <Select size="small" placeholder="选择状态" options={[
                         { label: '正常', value: '正常' }, { label: '被冻结', value: '被冻结' }, { label: '异常', value: '异常' },

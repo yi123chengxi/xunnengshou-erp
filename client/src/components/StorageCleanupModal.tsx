@@ -40,7 +40,6 @@ const EXCLUDED_PAGES = new Set([
   'production_custom-order-templates', // 自定义订单模板
   'production_custom-order-default',   // 自定义订单默认
   'inventory_prod-in-stats',        // 库存生产统计
-  'finance_bank-account',           // 银行账户
   'basic-data_route-map',           // 工艺路线
   'basic-data_prod-process',        // 生产工序
 ]);
@@ -145,8 +144,11 @@ const PAGE_INFO_MAP: Record<string, PageInfo> = {
   },
   'finance_bank-account': {
     name: '银行账户',
-    description: '财务管理中的银行账户数据',
+    description: '财务管理中的银行账户数据；清理仅剥离开户许可证图片，账户数据保留',
     requiredBy: ['finance_payment-request'],
+    dataKeyPrefixes: ['pageData_finance_bank-account_'],
+    embeddedImageFields: ['openingPermit'],
+    imageDescription: '开户许可证图片（openingPermit 字段）',
   },
   'finance_payment-request': {
     name: '付款申请',

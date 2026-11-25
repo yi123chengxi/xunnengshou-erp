@@ -792,6 +792,7 @@ export const financePages: Record<string, ChildPageConfig> = {
       { title: '账户余额', dataIndex: 'balance', key: 'balance', width: 130, type: 'money', align: 'right', group: '账户信息', defaultVisible: true },
       { title: '账户状态', dataIndex: 'status', key: 'status', width: 90, type: 'tag', group: '状态与人员', defaultVisible: true },
       { title: '开户日期', dataIndex: 'openDate', key: 'openDate', width: 110, type: 'date', group: '状态与人员', defaultVisible: true },
+      { title: '开户许可证', dataIndex: 'openingPermit', key: 'openingPermit', width: 100, type: 'image', align: 'center', group: '账户信息', defaultVisible: true },
       { title: '负责人', dataIndex: 'person', key: 'person', width: 90, type: 'text', group: '状态与人员', defaultVisible: true },
       { title: 'U盾密码', dataIndex: 'uShieldPwd', key: 'uShieldPwd', width: 110, type: 'text', group: '状态与人员', defaultVisible: true },
       { title: '取款密码', dataIndex: 'withdrawPwd', key: 'withdrawPwd', width: 110, type: 'text', group: '状态与人员', defaultVisible: true },
