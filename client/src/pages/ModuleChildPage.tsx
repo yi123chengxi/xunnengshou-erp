@@ -124,6 +124,7 @@ import { removedIdSet, rowIdentities, rowPrimaryId } from '../utils/shrinkRegist
 import { PRESET_PRINT_TEMPLATES, seedPresetPrintTemplates } from '../config/presetPrintTemplates';
 import { refreshCustomerPurchase, computeCustomerReceivedCents, toYuan, loadCustomerSummary } from '../utils/paySummary';
 import { resolveLatestCompanyName, resolveCompanyCred, buildCompanyCredMap, buildCredIndex } from '../utils/nameSync';
+import { uniqueCompanyRootByName } from '../utils/cooperationCred';
 import { normBillDay } from '../utils/billDate';
 import { loadAllCustomersFromStorage } from './CustomerInfo';
 import { loadRoleRecords, loadRoleAll, upsertRecords } from '../utils/reconStore';
@@ -3217,6 +3218,10 @@ const ModuleChildPage: React.FC = () => {
     let users: any[] = [];
     try { users = JSON.parse(localStorage.getItem('registeredUsers') || '[]'); } catch { users = [] }
     const ownCompany = getOwnCompanyName(owner);
+    const meRec = users.find((u: any) => String(u?.username || '') === owner);
+    const myNo = String(meRec?.companyNo || meRec?.companyShortName || '').trim();
+    // 名称档只在全库唯一主体命中时放行：同名两家公司时不得把别家的绑定关系当成我司的
+    const ownNameUnique = !!uniqueCompanyRootByName(ownCompany);
     names.forEach(n => {
       if (out.some(o => o.label === n)) return;
       const cands = users.filter((u: any) => String(u?.companyName || '').trim() === n);
@@ -3224,9 +3229,18 @@ const ModuleChildPage: React.FC = () => {
       const hit = cands.find((c: any) => {
         try {
           const b: any[] = JSON.parse(localStorage.getItem('boundPurchasers_' + c.username) || '[]');
-          return b.some((bp: any) => bp.purchaserUsername === owner || bp.purchaserName === ownCompany);
+          return b.some((bp: any) => {
+            if (String(bp.purchaserUsername || '') === owner) return true;
+            const bpNo = String(bp.purchaserNo || '').trim();
+            if (myNo && bpNo) return bpNo === myNo;
+            return ownNameUnique && String(bp.purchaserName || '') === String(ownCompany || '');
+          });
         } catch { return false; }
-      }) || (cands.length === 1 ? cands[0] : null);
+      }) || (() => {
+        // 名称唯一主体命中（主/子账号归一）才兜底，同名两家独立公司时不猜
+        const root = uniqueCompanyRootByName(n);
+        return root ? users.find((u: any) => String(u?.username || '') === root) : null;
+      })();
       if (hit) push(hit.username, n);
     });
     return out;
@@ -19259,9 +19273,11 @@ const handleBatchAttrsConfirm = () => {
                       }
                     }
                     // 表格上/下方元素绝对定位（与编辑器同坐标契约）；表格本身流式排布，高度随实际行数撑开
+                    // 半透明水印：opacity<1 时三渲染出口一致落地（画布/本引擎/ProductPrintPage）
+                    const op = typeof el.opacity === 'number' && el.opacity < 1 ? `opacity:${Math.max(0, el.opacity)};` : '';
                     const posStyle = isTable
-                      ? `position:relative;margin-left:${x}mm;z-index:${el.zIndex || 0};${w !== 'auto' ? `width:${w}mm;` : `width:${maxW}mm;`}font-size:${fs}pt;font-family:${ff};font-weight:${fw};font-style:${fst};text-decoration:${td};text-align:${ta};${el.color ? `color:${el.color};` : ''}page-break-inside:auto;`
-                      : `position:absolute;left:${x}mm;top:${topMm}mm;z-index:${el.zIndex || 0};${w !== 'auto' ? `width:${w}mm;` : `width:${maxW}mm;`}${h !== 'auto' ? `height:${h}mm;` : ''}font-size:${fs}pt;font-family:${ff};font-weight:${fw};font-style:${fst};text-decoration:${td};text-align:${ta};${el.color ? `color:${el.color};` : ''}overflow:visible;`;
+                      ? `position:relative;margin-left:${x}mm;z-index:${el.zIndex || 0};${w !== 'auto' ? `width:${w}mm;` : `width:${maxW}mm;`}font-size:${fs}pt;font-family:${ff};font-weight:${fw};font-style:${fst};text-decoration:${td};text-align:${ta};${el.color ? `color:${el.color};` : ''}${op}page-break-inside:auto;`
+                      : `position:absolute;left:${x}mm;top:${topMm}mm;z-index:${el.zIndex || 0};${w !== 'auto' ? `width:${w}mm;` : `width:${maxW}mm;`}${h !== 'auto' ? `height:${h}mm;` : ''}font-size:${fs}pt;font-family:${ff};font-weight:${fw};font-style:${fst};text-decoration:${td};text-align:${ta};${el.color ? `color:${el.color};` : ''}${op}overflow:visible;`;
                     if (el.type === 'field') {
                       let val = fieldMap(r, el.field || '');
                       if (el.displayAs === 'barcode') {
@@ -24809,6 +24825,7 @@ export function PrintTemplateEditor(props: PrintTemplateEditorProps = {}) {
     displayAs?: 'text' | 'qrcode' | 'barcode' | 'image';
     zIndex?: number; // 层级：值越小越靠底（置于底层/顶层按钮调整），缺省 0
     color?: string; // 文字颜色（hex），缺省继承黑色
+    opacity?: number; // 不透明度 0-1（缺省 1）；<1 呈半透明水印效果，画布/打印引擎/商品打印页三出口同口径
     showLabel?: boolean; // 二维码/条码下方是否显示文字标签
     showFieldName?: boolean; // 字段元素打印时是否在值前加“字段名：”前缀
     fontSize?: number; fontFamily?: string; isBold?: boolean; isItalic?: boolean; isUnderline?: boolean; isStrikethrough?: boolean;
@@ -25543,6 +25560,7 @@ export function PrintTemplateEditor(props: PrintTemplateEditorProps = {}) {
                       transform: transformStr,
                       backgroundColor: el.isBlackReverse ? '#000' : 'transparent',
                       color: el.isBlackReverse ? '#fff' : (el.color || 'inherit'),
+                      opacity: typeof el.opacity === 'number' ? Math.max(0, Math.min(1, el.opacity)) : 1,
                     }}>
                     {el.type === 'field' && el.displayAs === 'text' && <>{el.showFieldName ? <span>{el.field}：</span> : null}<span style={{ color: '#1677ff' }}>[{el.field}]</span></>}
                     {el.type === 'field' && el.displayAs === 'barcode' && <div style={{ width: (elW || 30) * 3.78, height: (elH || 12) * 3.78 }}>{renderBarcodeVisual(el.field || '')}<div style={{ fontSize: 8 * 1.3333, textAlign: 'center' }}>{el.field}</div></div>}
@@ -25874,6 +25892,17 @@ export function PrintTemplateEditor(props: PrintTemplateEditorProps = {}) {
                         onChange={e => { const c = e.target.value; const next = elements.map(el => el.id === selectedId ? { ...el, color: c } : el); setElements(next); pushHistory(next); }} />
                       <Button size="small" onClick={() => { const next = elements.map(el => el.id === selectedId ? { ...el, color: '#000000' } : el); setElements(next); pushHistory(next); }}>重置</Button>
                     </div>
+                    <div style={{ fontSize: 11, color: '#8c9bab', marginTop: 8, marginBottom: 4, fontWeight: 500 }}>不透明度（水印）</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <input type="range" min={10} max={100} value={Math.round((elements.find(e => e.id === selectedId)?.opacity ?? 1) * 100)}
+                        onChange={e => { const v = Number(e.target.value) / 100; const next = elements.map(el => el.id === selectedId ? { ...el, opacity: v } : el); setElements(next); pushHistory(next); }}
+                        style={{ flex: 1, accentColor: PRIMARY }} />
+                      <InputNumber size="small" min={10} max={100} style={{ width: 56 }}
+                        value={Math.round((elements.find(e => e.id === selectedId)?.opacity ?? 1) * 100)}
+                        onChange={v => { const nv = Math.max(10, Math.min(100, Number(v) || 100)) / 100; const next = elements.map(el => el.id === selectedId ? { ...el, opacity: nv } : el); setElements(next); pushHistory(next); }} />
+                      <span style={{ fontSize: 11, color: '#8c9bab' }}>%</span>
+                    </div>
+                    <div style={{ fontSize: 10, color: '#8c9bab', marginTop: 2 }}>100% 为不透明；调低即半透明水印效果，画布与打印一致</div>
                   </div>
                 </div>
             </div>}

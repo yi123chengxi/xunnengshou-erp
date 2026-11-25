@@ -9,6 +9,7 @@ import {
   noOfUser, noFromCompanyName, usernameFromNo, supplierNoOf, purchaserNoOf,
   amTargetSupplier, isTargetSupplierApp, appMatchesSupplierEntry,
   withCooperationCreds, migrateCooperationCreds, findUserByNoOrUniqueName,
+  uniqueCompanyRootByName, uniqueUserByName, rootOfUsername,
 } from '../cooperationCred';
 
 const APPS_KEY = 'cooperation_applications';
@@ -64,12 +65,22 @@ describe('申请记录归属判定（供应商侧）', () => {
     expect(amTargetSupplier({ ...app, targetSupplierNo: 'A002' })).toBe(true);
   });
 
-  it('无编号的历史记录只按名称全等兜底，绝不做子串匹配', () => {
+  it('无编号的历史记录：名称唯一命中才兜底，同名歧义时双方都不可见，绝不做子串匹配', () => {
     const legacy = { targetSupplierName: '甲贸易有限公司', purchaserCompanyName: '乙皮料公司' };
     seed('s-branch'); // 乙皮料公司二分厂：名称是「乙皮料公司」的子串，但不是本条记录的目标
     expect(amTargetSupplier(legacy)).toBe(false);
+    // 甲贸易有限公司有两个相互独立的账号（A001/A002）→ 歧义，
+    // 谁都不能认领这条无编号历史申请（否则同名新账号会点同意并把自己写进发起方目录）
     seed('p-supplier-1');
-    expect(amTargetSupplier(legacy)).toBe(true);
+    expect(amTargetSupplier(legacy)).toBe(false);
+    seed('p-supplier-2');
+    expect(amTargetSupplier(legacy)).toBe(false);
+    // 名称全库唯一且该主体无编号（老账号）时，名称档仍兜底放行
+    const legacyNoNumber = { targetSupplierName: '丙百货商店' };
+    seed('no-number');
+    expect(amTargetSupplier(legacyNoNumber)).toBe(true);
+    seed('s-main');
+    expect(amTargetSupplier(legacyNoNumber)).toBe(false);
   });
 
   it('显式传参版按 owner/编号/名称逐级判定，供模块级函数复用', () => {
@@ -130,6 +141,13 @@ describe('申请记录 ↔ 供应商条目 同一性判定', () => {
     expect(appMatchesSupplierEntry({ targetSupplierName: '乙皮料公司二分厂' }, entry)).toBe(false);
     expect(appMatchesSupplierEntry({}, entry)).toBe(false);
   });
+
+  it('名称档遇同名两家公司时一律不认，不得把别人的申请归到本方卡片', () => {
+    const entry = { id: 'SP-10', supplierName: '甲贸易有限公司' };
+    expect(appMatchesSupplierEntry({ targetSupplierName: '甲贸易有限公司' }, entry)).toBe(false);
+    // 编号存在时不受名称歧义影响
+    expect(appMatchesSupplierEntry({ targetSupplierNo: 'A002' }, { ...entry, supplierNo: 'A002' })).toBe(true);
+  });
 });
 
 describe('档案回填时的账号定位', () => {
@@ -152,6 +170,24 @@ describe('档案回填时的账号定位', () => {
   it('编号与名称都拿不到时返回 null', () => {
     expect(findUserByNoOrUniqueName('', '')).toBeNull();
     expect(findUserByNoOrUniqueName(undefined, undefined)).toBeNull();
+  });
+});
+
+describe('名称唯一主体解析（写入侧替代 find-first）', () => {
+  it('同名两家独立公司返回空，主/子账号同主体不算歧义', () => {
+    seed('p-supplier-1');
+    expect(uniqueCompanyRootByName('甲贸易有限公司')).toBe('');
+    expect(uniqueUserByName('甲贸易有限公司')).toBeNull();
+    expect(uniqueCompanyRootByName('乙皮料公司')).toBe('s-main');
+    expect(uniqueUserByName('乙皮料公司')?.username).toBe('s-main');
+    expect(uniqueCompanyRootByName('不存在的公司')).toBe('');
+    // 子账号继承主账号公司名：同一主体，不得判为歧义
+    localStorage.setItem('registeredUsers', JSON.stringify([
+      ...USERS,
+      { username: 's-main-sub', companyName: '乙皮料公司', companyNo: 'B101', isSubAccount: true, parentAccount: 's-main' },
+    ]));
+    expect(uniqueCompanyRootByName('乙皮料公司')).toBe('s-main');
+    expect(rootOfUsername('s-main-sub')).toBe('s-main');
   });
 });
 

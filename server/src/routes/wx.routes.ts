@@ -1758,7 +1758,30 @@ router.post('/recon/:key/confirm', verifyJWT, async (req: Request, res: Response
     const regUsers = await readRows('registeredUsers');
     const byCo = (n: any) => {
       const t = String(n || '').trim();
-      return t ? regUsers.find((u: any) => u && (String(u.companyName || '').trim() === t || String(u.companyShortName || '').trim() === t || String(u.companyNo || '').trim() === t)) || null : null;
+      if (!t) return null;
+      // 只做唯一命中：同名两家公司时 find-first 会把对账结果写进别家的采购账单（资金口径串号）
+      const hits = regUsers.filter((u: any) => u && (String(u.companyName || '').trim() === t || String(u.companyShortName || '').trim() === t || String(u.companyNo || '').trim() === t));
+      if (hits.length === 1) return hits[0];
+      if (hits.length === 0) return null;
+      // 主/子账号是同一主体：沿 parentAccount 上溯后只剩一个主体时取该主账号，否则视为歧义不猜
+      const byUn = new Map<string, any>();
+      regUsers.forEach((u: any) => { if (u && u.username) byUn.set(String(u.username), u); });
+      const rootOf = (un: string) => {
+        let cur = un;
+        const seen = new Set<string>();
+        let g = 0;
+        while (g++ < 10 && !seen.has(cur)) {
+          const h = byUn.get(cur);
+          if (!h || !h.isSubAccount || !h.parentAccount) break;
+          const next = String(h.parentAccount);
+          if (!byUn.has(next)) break;
+          seen.add(cur);
+          cur = next;
+        }
+        return cur;
+      };
+      const roots = new Set<string>(hits.map((u: any) => rootOf(String(u.username))));
+      return roots.size === 1 ? (byUn.get(Array.from(roots)[0]) || null) : null;
     };
     const purOwner = String(r.customerUsername || '') || (byCo(r.customerName)?.username || '') || (r.customerNo ? (byCo(r.customerNo)?.username || '') : '');
     if (purOwner) {

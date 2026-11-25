@@ -136,6 +136,20 @@ function removedAgainst(section: Section, currentKeys: Set<string>): string[] {
   return Array.from(prev).filter(k => !currentKeys.has(k));
 }
 
+/**
+ * 跨租户代写时附带本地合作申请镜像（只 upsert、不申报删除）。
+ * 服务端「首次注入门禁」要求存在双方合作申请凭证，而本模块是按键分别防抖推送的：
+ * 同一次握手里「写对方目录」的定时器可能早于「写申请」触发，不带申请就会被门禁判为无凭证而拒写。
+ * 附带后服务端可用同批申请行参与判定，彻底消除写入顺序依赖。
+ */
+function attachHandshakeApps(payload: any): void {
+  try {
+    const raw = localStorage.getItem(APPS_KEY);
+    const rows = raw ? JSON.parse(raw) : [];
+    if (Array.isArray(rows) && rows.length) payload.applications = { rows, removedKeys: [] };
+  } catch { /* ignore */ }
+}
+
 async function doPush(key: string, value: string): Promise<void> {
   let rows: any[] = [];
   try { rows = JSON.parse(value || '[]'); } catch { rows = []; }
@@ -149,12 +163,14 @@ async function doPush(key: string, value: string): Promise<void> {
     const own = target === owner;
     payload.supplierDirectory = { owner: target, rows, removedKeys: own ? removedAgainst('suppliers', cur) : [] };
     if (own) lastKeys.suppliers = cur;
+    if (!own) attachHandshakeApps(payload);
   } else if (key.startsWith(BOUND_PREFIX)) {
     const target = key.slice(BOUND_PREFIX.length);
     const cur = new Set(rows.map(boundKeyOf).filter(Boolean));
     const own = target === owner;
     payload.boundPurchasers = { owner: target, rows, removedKeys: own ? removedAgainst('bound', cur) : [] };
     if (own) lastKeys.bound = cur;
+    if (!own) attachHandshakeApps(payload);
   } else if (key === APPS_KEY) {
     const cur = new Set(rows.map(appKeyOf).filter(Boolean));
     payload.applications = { rows, removedKeys: removedAgainst('apps', cur) };
@@ -171,6 +187,12 @@ async function doPush(key: string, value: string): Promise<void> {
     }, 20000);
     if (!res.ok) return;
     const body = await res.json();
+    // 服务端门禁拦下的跨租户行：不静默吞掉，派发事件供页面提示与控制台诊断
+    const rej = Array.isArray(body?.rejected) ? body.rejected : [];
+    if (rej.length) {
+      try { console.warn('[cooperation] 跨租户写入被服务端门禁拒绝:', rej); } catch { /* ignore */ }
+      try { window.dispatchEvent(new CustomEvent('cooperation-push-rejected', { detail: rej })); } catch { /* ignore */ }
+    }
     // 服务端返回 actor 最新权威快照：回灌本人镜像（跨租户代写的对方键不在快照内，本地保留原样）；
     // 服务端合并了其他设备的行时镜像会变化，派发刷新让本页与既有监听同步收敛
     if (body?.code === 200 && body?.data) {

@@ -31,6 +31,10 @@ function presetDataKey(type: string, id: string): string {
   return id === 'default' ? `print_template_${type}` : `print_template_${type}_${id}`;
 }
 
+// rev1 内置数据的 savedAt 签名：命中即说明该租户从未手动保存过系统预设，可安全升级到新版；
+// 用户任何一次「保存」都会改写 savedAt（saveTemplate 重建数据不携 presetRev/presetSavedAt），此后视为用户数据不再覆写
+const LEGACY_PRESET_SAVED_AT = ['2026-11-05T08:00:00.000Z'];
+
 /** 首次打开时把系统预设写入本地（只补不覆写），保证新部署/新浏览器/新注册租户自带预设模板 */
 export function seedPresetPrintTemplates(type: string): void {
   const presets = PRESET_PRINT_TEMPLATES[type];
@@ -50,9 +54,23 @@ export function seedPresetPrintTemplates(type: string): void {
         list = [...list, { id: preset.id, name: preset.name }];
         changed = true;
         if (!localStorage.getItem(dataKey)) localStorage.setItem(dataKey, JSON.stringify(preset.data));
-      } else if (hasId && !localStorage.getItem(dataKey)) {
-        // 条目在而数据丢失（清缓存/换浏览器）：补回内置数据
-        localStorage.setItem(dataKey, JSON.stringify(preset.data));
+      } else if (hasId) {
+        const raw = localStorage.getItem(dataKey);
+        if (!raw) {
+          // 条目在而数据丢失（清缓存/换浏览器）：补回内置数据
+          localStorage.setItem(dataKey, JSON.stringify(preset.data));
+        } else {
+          // 系统预设安全升级：仅当租户从未手动保存（savedAt 仍为内置签名）时替换为新版预设；
+          // 已保存过的实例一律视为用户数据，只补不覆写
+          try {
+            const cur = JSON.parse(raw);
+            const curRev = Number(cur?.presetRev) || 1;
+            const newRev = Number((preset.data as any)?.presetRev) || 1;
+            const sig = String(cur?.savedAt || '');
+            const untouched = curRev < newRev && (sig === String(cur?.presetSavedAt || '') || LEGACY_PRESET_SAVED_AT.includes(sig));
+            if (untouched) localStorage.setItem(dataKey, JSON.stringify(preset.data));
+          } catch { /* ignore */ }
+        }
       }
     });
     if (changed) localStorage.setItem(listKey, JSON.stringify(list));

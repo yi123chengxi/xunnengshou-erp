@@ -26,10 +26,10 @@ import { safeSetItem } from '../utils/storageQuota';
 import { saveDataset } from '../utils/dataStore';
 import { reloadAfterPull, appendRowsToRemoteKey } from '../utils/serverSync';
 import { compressImageFile } from '../utils/imageCompress';
-import { loadSupplierFinishedProducts } from '../utils/supplierProducts';
+import { loadSupplierFinishedProducts, resolveSupplierOwnerOfEntry } from '../utils/supplierProducts';
 import { loadRoleRecords, loadRoleAll, upsertRecords, loadAllReconRecordsUnion } from '../utils/reconStore';
 import { resolveLatestCompanyName } from '../utils/nameSync';
-import { appMatchesSupplierEntry, purchaserNoOf, myCompanyNo } from '../utils/cooperationCred';
+import { appMatchesSupplierEntry, purchaserNoOf, myCompanyNo, findUserByNoOrUniqueName, noFromUsername } from '../utils/cooperationCred';
 
 const { Text } = Typography;
 const PRIMARY = '#1890ff';
@@ -283,6 +283,8 @@ const PurchaserBillPage: React.FC = () => {
   const [outboundNo, setOutboundNo] = useState('');
   const [prefix, setPrefix] = useState('');
   const [supplier, setSupplier] = useState('');
+  // 供应商身份凭证（账号/编号）：两家独立公司同名时名称不足以定位，选供应商时一并记下
+  const [supCred, setSupCred] = useState<{ username: string; no: string }>({ username: '', no: '' });
   const [billDate, setBillDate] = useState(dayjs());
   const [items, setItems] = useState<BillItem[]>(emptyRows());
   // 新建弹窗：明细行勾选状态 + 批量填充
@@ -332,6 +334,7 @@ const PurchaserBillPage: React.FC = () => {
   const [eOutboundNo, setEOutboundNo] = useState('');
   const [ePrefix, setEPrefix] = useState('');
   const [eSupplier, setESupplier] = useState('');
+  const [eSupCred, setESupCred] = useState<{ username: string; no: string }>({ username: '', no: '' });
   const [eDate, setEDate] = useState(dayjs());
   const [eItems, setEItems] = useState<BillItem[]>(emptyRows());
   // 编辑弹窗：明细行勾选状态 + 批量填充
@@ -495,10 +498,14 @@ const PurchaserBillPage: React.FC = () => {
   };
 
   // 合作供应商列表（已合作）+ 单号前缀（来自供应商列表/注册账号）
-  const resolvePrefix = (name: string): string => {
+  // 按条目凭证定位账号（自带账号 > 编号 > 名称唯一命中）：绝不 find-first，
+  // 否则两家同名公司会共用第一个账号的前缀（表现为两行前缀相同）
+  const resolvePrefix = (name: string, entry?: any): string => {
+    const owner = resolveSupplierOwnerOfEntry(entry || { supplierName: name });
+    if (!owner) return '';
     try {
       const users = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
-      const u = users.find((x: any) => x.companyName === name);
+      const u = (Array.isArray(users) ? users : []).find((x: any) => String(x?.username || '') === owner);
       if (u?.orderPrefix) return String(u.orderPrefix);
     } catch { /* ignore */ }
     return '';
@@ -507,8 +514,9 @@ const PurchaserBillPage: React.FC = () => {
   // 卡片状态只有供应商列表页加载时才会把 pending 升级为 approved，账单页直接读原始键会长期判空，
   // 表现为「选择供应商」弹窗提示“暂无已合作供应商”，因此这里同步套用审批自愈 + 历史账单兜底
   const supplierOptions = useMemo(() => {
-    const out: { name: string; prefix: string; status: string }[] = [];
+    const out: { name: string; prefix: string; status: string; username: string; no: string }[] = [];
     const seen = new Set<string>();
+    const seenNames = new Set<string>();
     let list: any[] = [];
     let apps: any[] = [];
     try { list = JSON.parse(localStorage.getItem(supplierStorageKey) || '[]'); } catch { /* ignore */ }
@@ -519,7 +527,12 @@ const PurchaserBillPage: React.FC = () => {
     (Array.isArray(list) ? list : []).forEach((s: any) => {
       if (!s) return;
       const name = String(s.supplierName || '').trim();
-      if (!name || seen.has(name)) return;
+      if (!name) return;
+      const un = String(s.supplierUsername || '').trim();
+      const no = String(s.supplierNo || '').trim();
+      // 去重键用身份凭证而非公司名：同名两家公司的两条卡片必须各自成项，否则第二家永远选不到
+      const dedupeKey = un || no || `n:${name}`;
+      if (seen.has(dedupeKey)) return;
       let status = String(s.cooperationStatus || 'pending');
       // 审批自愈：卡片仍为 pending，但存在已通过且未作废的合作申请 → 视为已合作（与供应商列表页判定一致）
       if (status === 'pending') {
@@ -531,15 +544,18 @@ const PurchaserBillPage: React.FC = () => {
         if (ok) status = 'approved';
       }
       if (status === 'rejected') return;
-      seen.add(name);
-      out.push({ name, prefix: String(s.orderPrefix || resolvePrefix(name) || ''), status });
+      seen.add(dedupeKey);
+      seenNames.add(name);
+      out.push({ name, prefix: String(s.orderPrefix || resolvePrefix(name, s) || ''), status, username: un, no });
     });
     // 历史账单兜底：换浏览器后供应商卡片可能尚未同步到位，账单里出现过的供应商必须仍可选
     bills.forEach((b: any) => {
       const name = String(b?.supplier || '').trim();
-      if (!name || seen.has(name)) return;
-      seen.add(name);
-      out.push({ name, prefix: resolvePrefix(name), status: 'bill' });
+      if (!name || seenNames.has(name)) return;
+      seenNames.add(name);
+      const un = String(b?.supplierUsername || '').trim();
+      const no = String(b?.supplierNo || '').trim();
+      out.push({ name, prefix: resolvePrefix(name, { supplierUsername: un, supplierNo: no, supplierName: name }), status: 'bill', username: un, no });
     });
     out.sort((a, b) => (SUP_STATUS_ORDER[a.status] ?? 9) - (SUP_STATUS_ORDER[b.status] ?? 9));
     return out;
@@ -553,28 +569,22 @@ const PurchaserBillPage: React.FC = () => {
     return Array.from(set).map(n => ({ value: n, label: n }));
   }, [bills, supplierOptions]);
 
-  // 解析供应商注册账号的 username（用于读取供应商自己的产品数据）
-  const resolveSupplierUsername = (name: string): string => {
-    try {
-      const users = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
-      const u = users.find((x: any) => x.companyName === name);
-      if (u?.username) return String(u.username);
-    } catch { /* ignore */ }
-    return '';
-  };
-
   // 加载供应商的成品产品列表（从供应商自己的账号读取；本地缺失时服务端兜底拉取，保证跨浏览器可见）
   const [supplierProducts, setSupplierProducts] = useState<any[]>([]);
   useEffect(() => {
     let cancelled = false;
     const currentSupplier = addProductTarget === 'create' ? supplier : eSupplier;
     if (!currentSupplier) { setSupplierProducts([]); return; }
-    const productOwner = resolveSupplierUsername(currentSupplier) || getDataOwner();
+    // 凭证优先（选供应商时记下的账号），其次名称唯一命中；
+    // 解析不到时不得回退 getDataOwner()（那会读到本账号自己的商品列表），也不得 find-first 读别家商品
+    const cred = addProductTarget === 'create' ? supCred : eSupCred;
+    const productOwner = cred.username || resolveSupplierOwnerOfEntry({ supplierName: currentSupplier });
+    if (!productOwner) { setSupplierProducts([]); return; }
     loadSupplierFinishedProducts(productOwner)
       .then(list => { if (!cancelled) setSupplierProducts(list); })
       .catch(() => { if (!cancelled) setSupplierProducts([]); });
     return () => { cancelled = true; };
-  }, [addProductVisible, addProductTab, supplier, eSupplier, addProductTarget]);
+  }, [addProductVisible, addProductTab, supplier, eSupplier, addProductTarget, supCred, eSupCred]);
 
   // 供应商货品搜索状态（输入不触发，点击查询/回车才生效）
   const [spInputCode, setSpInputCode] = useState('');
@@ -833,7 +843,7 @@ const PurchaserBillPage: React.FC = () => {
     setPrefix(p);
     // 仅在当前租户的已合作供应商列表中按单号前缀匹配
     const matched = supplierOptions.find(o => String(o.prefix || '') === String(p));
-    if (matched) setSupplier(matched.name);
+    if (matched) { setSupplier(matched.name); setSupCred({ username: matched.username, no: matched.no }); }
   };
 
   // 明细行更新
@@ -851,7 +861,7 @@ const PurchaserBillPage: React.FC = () => {
   const totalAmount = useMemo(() => Math.round(items.reduce((s, it) => s + (Number(it.amount) || 0), 0) * 100) / 100, [items]);
 
   const resetCreate = () => {
-    setOutboundNo(''); setPrefix(''); setSupplier(''); setBillDate(dayjs());
+    setOutboundNo(''); setPrefix(''); setSupplier(''); setSupCred({ username: '', no: '' }); setBillDate(dayjs());
     setItems(emptyRows());
     setBillImage('');
   };
@@ -875,11 +885,16 @@ const PurchaserBillPage: React.FC = () => {
       }
     } catch { /* ignore */ }
     const validItems = mergeDuplicateItems(items.filter(hasData).map(withUnitFromMaster));
+    // 供应商身份凭证：优先选供应商时记下的账号，其次名称唯一命中（同名两家公司时宁缺毋滥）
+    const supOwner = supCred.username || resolveSupplierOwnerOfEntry({ supplierName: supplier });
+    const supNoVal = supCred.no || noFromUsername(supOwner);
     const rec: BillRecord = {
       key: `bill-${Date.now()}`,
       outboundNo: outboundNo.trim(),
       prefix,
       supplier,
+      supplierUsername: supOwner,
+      supplierNo: supNoVal,
       date: billDate ? billDate.format('YYYY-MM-DD') : dayjs().format('YYYY-MM-DD'),
       items: validItems,
       images: billImage ? [billImage] : [],
@@ -1025,6 +1040,7 @@ const PurchaserBillPage: React.FC = () => {
   const openEdit = (r: BillRecord) => {
     setEditKey(r.key);
     setEOutboundNo(r.outboundNo); setEPrefix(r.prefix); setESupplier(r.supplier);
+    setESupCred({ username: String((r as any).supplierUsername || ''), no: String((r as any).supplierNo || '') });
     setEDate(r.date ? dayjs(r.date) : dayjs());
     setEItems(r.items && r.items.length ? r.items.map(x => ({ ...x })) : emptyRows());
     setEditImage(r.purchaserImages?.[0] || '');
@@ -1036,7 +1052,7 @@ const PurchaserBillPage: React.FC = () => {
     setEPrefix(p);
     // 仅在当前租户的已合作供应商列表中按单号前缀匹配
     const matched = supplierOptions.find(o => String(o.prefix || '') === String(p));
-    if (matched) setESupplier(matched.name);
+    if (matched) { setESupplier(matched.name); setESupCred({ username: matched.username, no: matched.no }); }
   };
   const updateEditItem = (idx: number, patch: Partial<BillItem>) => {
     setEItems(prev => prev.map((it, i) => {
@@ -1066,20 +1082,26 @@ const PurchaserBillPage: React.FC = () => {
     let supUsername = (oldRec as any)?.supplierUsername || '';
     let supNo = (oldRec as any)?.supplierNo || '';
     if (supChanged) {
-      supUsername = ''; supNo = '';
+      // 选供应商时记下的凭证优先；名称/简称/编号只在唯一命中时认，
+      // 同名两家公司时不得 find-first 把账单挂到别家账号上
+      supUsername = eSupCred.username || ''; supNo = eSupCred.no || '';
       try {
         const users: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
         const nm = String(eSupplier || '').trim();
-        const u = users.find((x: any) => [x?.companyName, x?.companyShortName, x?.companyNo].some(v => String(v || '').trim() === nm));
-        if (u) { supUsername = u.username || ''; supNo = u.companyNo || ''; }
-        else {
-          // 已合作供应商镜像卡片：按名称反查卡片上的账号凭据
-          const mirrors: any[] = JSON.parse(localStorage.getItem(supplierStorageKey) || '[]');
-          const m = Array.isArray(mirrors) ? mirrors.find((x: any) => String(x?.supplierName || '').trim() === nm && x?.supplierUsername) : null;
-          if (m) {
-            supUsername = String(m.supplierUsername);
-            const mu = users.find((x: any) => x?.username === supUsername);
-            supNo = m.supplierNo || mu?.companyNo || '';
+        if (!supUsername) {
+          const hits = users.filter((x: any) => [x?.companyName, x?.companyShortName, x?.companyNo].some(v => String(v || '').trim() === nm));
+          const u = hits.length === 1 ? hits[0] : null;
+          if (u) { supUsername = u.username || ''; supNo = u.companyNo || ''; }
+          else {
+            // 已合作供应商镜像卡片：按名称反查卡片上的账号凭据（同名多卡片时不猜）
+            const mirrors: any[] = JSON.parse(localStorage.getItem(supplierStorageKey) || '[]');
+            const ms = Array.isArray(mirrors) ? mirrors.filter((x: any) => String(x?.supplierName || '').trim() === nm && x?.supplierUsername) : [];
+            const m = ms.length === 1 ? ms[0] : null;
+            if (m) {
+              supUsername = String(m.supplierUsername);
+              const mu = users.find((x: any) => x?.username === supUsername);
+              supNo = m.supplierNo || mu?.companyNo || '';
+            }
           }
         }
       } catch { /* ignore */ }
@@ -1193,7 +1215,10 @@ const PurchaserBillPage: React.FC = () => {
       // 按凭证（本方账单 key）去重：同号重复的两张账单各自持有唯一 key，允许分别发起；
       // 不再按 docNo 去重，否则第二张同号单会被误判“已发起”而无法发起
       if (reconList.some((r: any) => r.source === 'bill' && r.initiator === 'purchaser' && (r.orderNo === b.key || (!!r.matchedBillKey && r.matchedBillKey === b.key)))) { skipped += 1; return; }
-      const supUser = users.find((x: any) => x.companyName === b.supplier) || users.find((x: any) => x.companyName === resolveLatestCompanyName(b.supplier || '', ''));
+      // 供应商账号：账单凭证优先，其次名称唯一命中（同名两家公司时不得 find-first 把对账发给别家）
+      const supUser = ((b as any).supplierUsername ? users.find((x: any) => x.username === (b as any).supplierUsername) : null)
+        || findUserByNoOrUniqueName((b as any).supplierNo, b.supplier)
+        || findUserByNoOrUniqueName('', resolveLatestCompanyName(b.supplier || '', ''));
       // 重新发起对账时恢复旧的关联状态（orderNo 使用之前关联的供应商账单ID）
       const orderNo = b.linkedSupplierBillId || b.key;
       reconList.unshift({
@@ -1666,10 +1691,16 @@ const PurchaserBillPage: React.FC = () => {
           return (
             <div style={{ maxHeight: 360, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
               {opts.map(o => (
-                <Button key={o.name} block onClick={() => { if (supplierPickTarget === 'create') setSupplier(o.name); else setESupplier(o.name); setSupplierPickVisible(false); }}
+                <Button key={`${o.username || o.no || o.name}|${o.prefix}`} block onClick={() => {
+                  if (supplierPickTarget === 'create') { setSupplier(o.name); setSupCred({ username: o.username, no: o.no }); }
+                  else { setESupplier(o.name); setESupCred({ username: o.username, no: o.no }); }
+                  setSupplierPickVisible(false);
+                }}
                   style={{ justifyContent: 'flex-start', textAlign: 'left' }}>
                   {o.name}
                   {o.prefix ? <Tag color="green" style={{ marginLeft: 8 }}>{o.prefix}</Tag> : null}
+                  {/* 同名两家公司靠公司编号区分，否则用户无法判断选的是哪一家 */}
+                  {o.no ? <Tag style={{ marginLeft: 4 }}>{o.no}</Tag> : null}
                   {SUP_STATUS_TAG[o.status] ? <Tag color={SUP_STATUS_TAG[o.status].color} style={{ marginLeft: 4 }}>{SUP_STATUS_TAG[o.status].text}</Tag> : null}
                 </Button>
               ))}
@@ -1976,7 +2007,10 @@ const PurchaserBillPage: React.FC = () => {
           {addProductTab === 'supplier' && (addProductTarget === 'create' ? supplier : eSupplier) && (
             <Button icon={<EyeOutlined />} onClick={() => {
               const cs = addProductTarget === 'create' ? supplier : eSupplier;
-              const productOwner = resolveSupplierUsername(cs) || getDataOwner();
+              // 凭证优先，其次名称唯一命中；解析不到时不得回退本账号（会把自己的商品当成供应商货品展示）
+              const cred = addProductTarget === 'create' ? supCred : eSupCred;
+              const productOwner = cred.username || resolveSupplierOwnerOfEntry({ supplierName: cs });
+              if (!productOwner) { message.warning('未能定位该供应商的账号（存在同名公司时需按公司编号区分），无法读取其货品'); return; }
               setSpDetailSupplier(cs);
               setSpDetailData([]);
               setSpDetailVisible(true);

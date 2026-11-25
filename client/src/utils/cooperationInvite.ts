@@ -7,7 +7,7 @@
  *   供应商侧已绑定采购商（boundPurchasers_，同浏览器即时回写）。
  */
 import dayjs from 'dayjs';
-import { appMatchesSupplierEntry, noOfUser } from './cooperationCred';
+import { appMatchesSupplierEntry, noOfUser, noFromUsername, uniqueCompanyRootByName } from './cooperationCred';
 
 export const PENDING_INVITE_KEY = 'pending_cooperation_invite';
 export const COOPERATION_APPLICATIONS_KEY = 'cooperation_applications';
@@ -101,7 +101,16 @@ export const acceptCooperationInvite = (p: CooperationInvitePayload, purchaserOw
     district: supplierUser.district || '',
     address: supplierUser.addressDetail || supplierUser.businessAddress || '',
   };
-  const idx = list.findIndex((s: any) => (String(s.supplierNo || '') === String(p.no)) || s.supplierName === supplierCompany);
+  // 条目定位：编号/账号等值优先，名称档只在全库唯一主体命中时才认
+  // （两家独立公司同名时，按名称认领会把别家条目改写成自己的供应商 = 劫持合作关系）
+  const supplierNameUnique = !!uniqueCompanyRootByName(supplierCompany);
+  const idx = list.findIndex((s: any) => {
+    const sNo = String(s.supplierNo || '').trim() || noFromUsername(s.supplierUsername);
+    const wantNo = String(p.no || '').trim();
+    if (sNo && wantNo) return sNo === wantNo;
+    if (String(s.supplierUsername || '').trim() === String(supplierUser.username || '')) return true;
+    return String(s.supplierName || '').trim() === String(supplierCompany || '').trim() && supplierNameUnique;
+  });
   let entry: any;
   if (idx >= 0) {
     entry = {
@@ -143,7 +152,7 @@ export const acceptCooperationInvite = (p: CooperationInvitePayload, purchaserOw
     if (
       (a.type || 'cooperation') === 'cooperation' && a.status === 'pending' && !a.superseded &&
       a.purchaserUsername === purchaserOwner &&
-      (a.targetSupplierName === supplierCompany || appMatchesSupplierEntry(a, entry))
+      appMatchesSupplierEntry(a, entry)
     ) {
       a.superseded = true;
       a.status = 'rejected';
@@ -181,7 +190,14 @@ export const acceptCooperationInvite = (p: CooperationInvitePayload, purchaserOw
   const boundKey = 'boundPurchasers_' + supplierUser.username;
   try {
     const bound: any[] = JSON.parse(localStorage.getItem(boundKey) || '[]');
-    const bi = bound.findIndex((bp: any) => bp.purchaserName === myCompany || bp.purchaserUsername === purchaserOwner);
+    // 同一采购商判定：账号 > 编号 > 名称唯一主体命中（不得按名称全等把同名另一家的绑定行改成已合作）
+    const myNameUnique = !!uniqueCompanyRootByName(myCompany);
+    const bi = bound.findIndex((bp: any) => {
+      if (String(bp.purchaserUsername || '').trim() === String(purchaserOwner || '')) return true;
+      const bpNo = String(bp.purchaserNo || '').trim() || noFromUsername(bp.purchaserUsername);
+      if (myNo && bpNo) return bpNo === myNo;
+      return String(bp.purchaserName || '').trim() === String(myCompany || '').trim() && myNameUnique;
+    });
     if (bi >= 0) {
       bound[bi] = {
         ...bound[bi],
@@ -202,6 +218,7 @@ export const acceptCooperationInvite = (p: CooperationInvitePayload, purchaserOw
         bindDate: today,
         status: 'approved',
         purchaserUsername: purchaserOwner,
+        purchaserNo: myNo,
         salesman: p.bind === 1 ? (p.salesmanName || p.salesman) : '',
       });
     }

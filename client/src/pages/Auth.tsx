@@ -1378,17 +1378,57 @@ const Auth: React.FC = () => {
           return;
         }
         // 服务端权威去重：本地副本可能缺其他租户账号（新机器/拉取失败/数据库故障期）
+        let remoteUsers: any[] = [];
         try {
           const rec = await fetchServerDataset('registeredUsers');
           if (rec) {
             const remote = JSON.parse(rec.json || '[]');
-            if (Array.isArray(remote) && remote.some((u: any) => String(u?.username || '').toLowerCase() === String(username).toLowerCase())) {
-              message.error('该账号已存在（含其他租户），请使用其他账号');
-              setLoading(false);
-              return;
-            }
+            if (Array.isArray(remote)) remoteUsers = remote;
           }
         } catch { /* 服务端不可用时退化为本地校验，提交后仍有服务端准入兑底 */ }
+        if (remoteUsers.some((u: any) => String(u?.username || '').toLowerCase() === String(username).toLowerCase())) {
+          message.error('该账号已存在（含其他租户），请使用其他账号');
+          setLoading(false);
+          return;
+        }
+        // 公司编号唯一性强校验（含跨租户）：编号是合作关系的 key，两家共用一个编号会让商品/账单/额度全部串号，
+        // 因此被别家占用时必须换号（子账号不携 companyNo，不会误伤）
+        const allKnown = [...existingUsers, ...remoteUsers];
+        const noTakenByOther = (no: string): boolean => !!no && allKnown.some((u: any) => u
+          && String(u?.username || '') !== String(username) && String(u?.companyNo || '') === String(no));
+        if (noTakenByOther(newUser.companyNo)) {
+          let newNo = generateUniqueCompanyNo();
+          for (let i = 0; i < 20 && noTakenByOther(newNo); i++) newNo = generateUniqueCompanyNo();
+          form.setFieldValue('companyNo', newNo);
+          Object.assign(newUser, { companyNo: newNo, companyShortName: newNo, companyId: `${newNo}-${Math.random().toString(36).substring(2, 6).toUpperCase()}` });
+        }
+        // 同名二次确认：允许两家不同公司恰好同名（合法场景，不硬禁），但必须让用户核对公司编号，
+        // 避免误把别家公司当成自己已合作的那家（合作关系一律以编号/账号绑定，名称不参与）
+        const myName = String(newUser.companyName || '').trim();
+        const sameNameOthers = allKnown.filter((u: any) => u && String(u?.username || '') !== String(username)
+          && String(u?.companyName || '').trim() === myName);
+        if (myName && sameNameOthers.length) {
+          const nos = Array.from(new Set(sameNameOthers.map((u: any) => String(u?.companyNo || u?.companyShortName || '').trim()).filter(Boolean)));
+          const confirmed = await new Promise<boolean>((resolve) => {
+            Modal.confirm({
+              title: '已存在同名公司，请确认',
+              width: 520,
+              content: (
+                <div>
+                  <div>系统中已有公司名称为「{myName}」的账号{nos.length ? `（公司编号：${nos.join('、')}）` : ''}。</div>
+                  <div style={{ marginTop: 8 }}>合作关系按公司编号绑定，同名不会自动合并，请确认：</div>
+                  <div>· 若与上述为同一家公司，请返回并使用原账号登录；</div>
+                  <div>· 若确为两家不同公司，可继续注册，本次将使用公司编号 {newUser.companyNo}。</div>
+                </div>
+              ),
+              okText: '确为不同公司，继续注册',
+              cancelText: '返回修改',
+              onOk: () => resolve(true),
+              onCancel: () => resolve(false),
+            });
+          });
+          if (!confirmed) { setLoading(false); return; }
+        }
         existingUsers.push({ ...newUser, _createTs: Date.now() });
         safeSetItem('registeredUsers', JSON.stringify(existingUsers));
         // 立即上传账号到服务器并等待确认：失败要明确告知「尚未上云、暂不能登录」

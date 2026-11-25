@@ -1,5 +1,5 @@
 // 主体身份索引单测：保证「凭证优先、名称兜底」与「同名歧义不得误归一」两条不变量
-import { buildCredIndex } from '../nameSync';
+import { buildCredIndex, buildCompanyCredMap, resolveCompanyCred, resolveLatestCompanyName, repairCounterpartyNames } from '../nameSync';
 
 /** 播种注册账号表与改名链：u1 经历 旧名→中间名→新名 两次改名；X 名为未注册主体的改名 */
 const seed = () => {
@@ -145,5 +145,64 @@ describe('buildCredIndex 主/子账号同一主体归一（生产回归：客户
     localStorage.setItem('company_renames', '[]');
     const idx = buildCredIndex();
     expect(idx.identityOfName('丁公司')).toBe('n:丁公司');
+  });
+});
+
+describe('公司凭证映射与展示名：同名两家独立公司不得 find-first', () => {
+  it('歧义公司名不建凭证映射，编号键仍可独立定位', () => {
+    const m = buildCompanyCredMap();
+    expect(m.get('同名公司')).toBeUndefined();
+    expect(resolveCompanyCred('同名公司')).toBeNull();
+    expect(m.get('N2')).toEqual({ username: 'u2', companyNo: 'N2' });
+    expect(m.get('N3')).toEqual({ username: 'u3', companyNo: 'N3' });
+    expect(m.get('甲公司')).toEqual({ username: 'u1', companyNo: 'N1' });
+  });
+
+  it('主/子账号共用公司名不算歧义，仍解析出凭证', () => {
+    localStorage.clear();
+    localStorage.setItem('registeredUsers', JSON.stringify([
+      { username: 'm1', companyName: '丙公司', companyNo: 'N9' },
+      { username: 's1', isSubAccount: true, parentAccount: 'm1', companyName: '丙公司' },
+    ]));
+    localStorage.setItem('company_renames', '[]');
+    expect(buildCompanyCredMap().get('丙公司')).toEqual({ username: 'm1', companyNo: 'N9' });
+  });
+
+  it('resolveLatestCompanyName 账号凭证优先，歧义名不得显示别家全称', () => {
+    expect(resolveLatestCompanyName('随手写的名字', 'u1')).toBe('甲公司新名');
+    // 同名两家公司：无账号凭证时宁可退回原名/改名链，也不能猜成 u2 或 u3
+    expect(resolveLatestCompanyName('同名公司', '')).toBe('同名公司');
+    expect(resolveLatestCompanyName('甲公司旧名', '')).toBe('甲公司新名');
+  });
+});
+
+describe('repairCounterpartyNames 凭证回填：歧义名宁缺不错', () => {
+  const seedBills = (rows: any[]) => {
+    localStorage.setItem('purchaser_bills_shop-owner-1', JSON.stringify(rows));
+  };
+
+  it('唯一公司名回填账号+编号', () => {
+    seedBills([{ key: 'b1', supplier: '甲公司新名', supplierName: '甲公司新名', totalAmount: 100 }]);
+    repairCounterpartyNames();
+    const list = JSON.parse(localStorage.getItem('purchaser_bills_shop-owner-1') || '[]');
+    expect(list[0].supplierUsername).toBe('u1');
+    expect(list[0].supplierNo).toBe('N1');
+  });
+
+  it('同名两家公司时绝不回填凭证（否则把别家账号写进本行，商品/账单/额度全串号）', () => {
+    seedBills([{ key: 'b2', supplier: '同名公司', supplierName: '同名公司', totalAmount: 200 }]);
+    repairCounterpartyNames();
+    const list = JSON.parse(localStorage.getItem('purchaser_bills_shop-owner-1') || '[]');
+    expect(list[0].supplierUsername).toBeUndefined();
+    expect(list[0].supplierNo).toBeUndefined();
+    expect(list[0].supplierName).toBe('同名公司');
+  });
+
+  it('已有凭证的行按账号刷新名称，不受同名歧义影响', () => {
+    seedBills([{ key: 'b3', supplier: '同名公司', supplierName: '同名公司', supplierUsername: 'u3', totalAmount: 300 }]);
+    repairCounterpartyNames();
+    const list = JSON.parse(localStorage.getItem('purchaser_bills_shop-owner-1') || '[]');
+    expect(list[0].supplierUsername).toBe('u3');
+    expect(list[0].supplierNo).toBe('N3');
   });
 });

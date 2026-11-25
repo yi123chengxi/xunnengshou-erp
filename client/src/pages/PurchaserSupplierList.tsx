@@ -198,7 +198,7 @@ const PurchaserSupplierList: React.FC = () => {
   const [payDetailSupplier, setPayDetailSupplier] = useState<string>('');
   // 订单占用明细弹窗
   const [occVisible, setOccVisible] = useState(false);
-  const [occSupplier, setOccSupplier] = useState<string>('');
+  const [occSupplier, setOccSupplier] = useState<SupplierEntry | null>(null);
   const supplierNamesRef = useRef<string[]>([]);
   const [plInputStyleCode, setPlInputStyleCode] = useState('');
   const [plInputBrand, setPlInputBrand] = useState('');
@@ -452,7 +452,7 @@ const PurchaserSupplierList: React.FC = () => {
         if (s.cooperationStatus === 'approved') {
           // 建立合作后自动获取供应商单号前缀
           if (!s.orderPrefix) {
-            const p = resolveSupplierPrefix(s.supplierName);
+            const p = resolveSupplierPrefix(s);
             if (p) { hasChange = true; return { ...s, orderPrefix: p }; }
           }
           // 建立合作后自动同步供应商最新注册信息（联系人/电话/地址等）
@@ -523,7 +523,8 @@ const PurchaserSupplierList: React.FC = () => {
     try {
       const list: any[] = JSON.parse(localStorage.getItem(storageKey) || '[]');
       const sup = resolveUserByCompanyNo(p.no);
-      const done = !!sup && list.some((s: any) => (s.supplierName === sup.companyName || String(s.supplierNo || '') === String(p.no)) && s.cooperationStatus === 'approved');
+      // 已合作判定只认凭证（编号/账号）：同名另一家公司的卡片不得被当成「已与该供应商合作」而拦掉邀约
+      const done = !!sup && list.some((s: any) => (String(s.supplierNo || '') === String(p.no) || (s.supplierUsername && s.supplierUsername === sup.username)) && s.cooperationStatus === 'approved');
       if (done) { message.info('与该供应商已建立合作，无需重复处理邀约'); return; }
     } catch { /* ignore */ }
     setInvitePayload(p);
@@ -542,7 +543,7 @@ const PurchaserSupplierList: React.FC = () => {
     let alreadyApproved = false;
     try {
       const list: any[] = JSON.parse(localStorage.getItem(storageKey) || '[]');
-      alreadyApproved = !!supInfo && list.some((s: any) => (s.supplierName === supInfo.companyName || String(s.supplierNo || '') === String(invitePayload.no)) && s.cooperationStatus === 'approved');
+      alreadyApproved = !!supInfo && list.some((s: any) => (String(s.supplierNo || '') === String(invitePayload.no) || (s.supplierUsername && s.supplierUsername === supInfo.username)) && s.cooperationStatus === 'approved');
     } catch { /* ignore */ }
     const doAccept = () => {
     const res = acceptCooperationInvite(invitePayload, getDataOwner());
@@ -870,7 +871,7 @@ const PurchaserSupplierList: React.FC = () => {
     };
   }, [myParty]);
 
-  // 解析供应商账号 owner：优先条目自带账号 → 其次在同名候选账号中按业务关系消歧 → 回退公司名首个匹配
+  // 解析供应商账号 owner：优先条目自带账号 → 其次在同名候选账号中按业务关系消歧 → 名称唯一主体兜底
   // 消歧信号（公司名可能重名，必须用账号/业务数据定位；名称一律走主体身份键，允许对方档案名与注册名不一致）：
   //   ① credit_adjustments_<账号> 含我司的调整记录（已跨浏览器同步，最可靠）
   //   ② boundPurchasers_<账号> 绑定了我司（同浏览器）
@@ -895,7 +896,13 @@ const PurchaserSupplierList: React.FC = () => {
         if (Array.isArray(custs) && custs.some((cc: any) => same({ name: cc.name }, true))) return c.username;
       } catch { /* ignore */ }
     }
-    return cands[0]?.username || '';
+    // 业务信号全落空时只放行「全库唯一主体」：两家独立公司同名时返回空，
+    // 绝不 find-first 拿另一家公司的额度/客户档案顶上（宁缺毋滥）
+    const idx = buildCredIndex();
+    const uniq = idx.credOfName(supplierName);
+    if (uniq) return String(uniq.username);
+    const sid = idx.identityOfName(supplierName);
+    return sid.startsWith('u:') ? sid.slice(2) : '';
   }, [username, makeMyPartyMatcher]);
 
   // 供应商发布的有效信用额度（published_credit_<供应商账号>，跨浏览器从服务端拉取）
@@ -907,18 +914,22 @@ const PurchaserSupplierList: React.FC = () => {
     const apiBase = API_BASE;
     const owners = dataSource.map((s) => ({ id: s.id, name: s.supplierName, entry: s }));
     if (!owners.length) { setPublishedCredit({}); return; }
+    let users: any[] = [];
+    try { users = JSON.parse(localStorage.getItem('registeredUsers') || '[]'); } catch { users = []; }
+    if (!Array.isArray(users)) users = [];
+    const credIdx = buildCredIndex();
     Promise.all(owners.map(async ({ id, name, entry }) => {
-      let users: any[] = [];
-      try { users = JSON.parse(localStorage.getItem('registeredUsers') || '[]'); } catch { users = []; }
-      // 候选账号：条目自带账号优先 → 供应商编号命中 → 同名公司名账号（公司名可能重名也可能与我侧档案名不一致）
+      // 候选账号：条目自带账号优先 → 供应商编号命中 → 名称唯一主体命中。
+      // 名称档不得「同名全收」逐个试探：两家独立公司同名时会把别家账号给我的额度认成这家给的
       const cands: any[] = [];
       const push = (u: any) => { if (u && !cands.some((c: any) => c.username === u.username)) cands.push(u); };
       if (entry?.supplierUsername) push(users.find((x: any) => x.username === entry.supplierUsername));
       const supNo = String(entry?.supplierNo || '').trim();
       if (supNo) users.forEach((u: any) => { if (String(u.companyNo || u.companyShortName || '').trim() === supNo) push(u); });
-      users.filter((u: any) => (u.companyName || '') === name).forEach((u: any) => push(u));
-      // 改名链：我方档案里存的是供应商旧名时，companyName 全等命不中，按身份键再补一次
-      const sid = buildCredIndex().identityOfName(name);
+      const byName = credIdx.credOfName(name);
+      if (byName) push(users.find((x: any) => x.username === byName.username));
+      // 改名链：我方档案里存的是供应商旧名时，companyName 全等命不中，按身份键再补一次（歧义时为 n: 前缀，不放行）
+      const sid = credIdx.identityOfName(name);
       if (sid.startsWith('u:')) push(users.find((x: any) => x.username === sid.slice(2)));
       // 逐个拉取发布额度，选「含我司记录」的那个账号（跨浏览器权威消歧）
       // 匹配走主体身份键（账号/公司编号优先，名称与改名链兜底）：供应商档案里的我司名称
@@ -1057,11 +1068,14 @@ const PurchaserSupplierList: React.FC = () => {
     return map;
   }, []);
 
-  // 获取指定供应商的占用订单明细
-  const getOccupationOrders = useCallback((supplierName: string) => {
+  // 获取指定供应商的占用订单明细：按条目凭证定位账号；同名歧义时不退回名称匹配（会把两家公司的订单混列）
+  const getOccupationOrders = useCallback((entry: SupplierEntry | null) => {
     try {
+      const supplierName = String(entry?.supplierName || '');
+      if (!supplierName) return [];
       const pushed: any[] = JSON.parse(localStorage.getItem('purchaser_pushed_orders') || '[]');
-      const owner = resolveSupplierOwner(supplierName);
+      const owner = resolveSupplierOwner(supplierName, entry);
+      if (!owner && !buildCredIndex().credOfName(supplierName)) return [];
       return pushed.filter(o => o.status === '已推送' && (owner ? o.supplierUsername === owner : o.supplierCompany === supplierName));
     } catch { return []; }
   }, [resolveSupplierOwner]);
@@ -1144,62 +1158,58 @@ const PurchaserSupplierList: React.FC = () => {
   const editProvince = Form.useWatch('province', editForm);
   const editCity = Form.useWatch('city', editForm);
 
-  // 供应商编号：解析对应供应商注册账号的公司编号
-  const resolveSupplierNo = (name: string): string => {
-    try {
-      const users = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
-      const u = users.find((x: any) => x.companyName === name);
-      if (u?.companyNo) return String(u.companyNo);
-      if (u?.companyShortName) return String(u.companyShortName); // 老账号兼容：无 companyNo 时回退公司英文简称
-    } catch { /* ignore */ }
-    return '';
+  // 供应商身份解析统一口径：条目自带账号 > 公司编号 > 名称唯一命中。
+  // 同名两家公司时名称档解析为空（宁缺毋滥），绝不 find-first 拿另一家公司的编号/前缀/商品/二维码顶上。
+  const supplierUserOf = (entry: any): any | null => {
+    const un = String(entry?.supplierUsername || '').trim();
+    if (un) {
+      try {
+        const users = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+        const hit = (Array.isArray(users) ? users : []).find((u: any) => String(u?.username || '') === un);
+        if (hit) return hit;
+      } catch { /* ignore */ }
+    }
+    return findUserByNoOrUniqueName(entry?.supplierNo, entry?.supplierName);
+  };
+
+  // 供应商编号：条目自带编号优先，其次解析对应供应商注册账号的公司编号（老账号回退公司英文简称）
+  const resolveSupplierNo = (entry: any): string => {
+    const direct = String(entry?.supplierNo || '').trim();
+    if (direct) return direct;
+    const u = supplierUserOf(entry);
+    return String(u?.companyNo || u?.companyShortName || '');
   };
 
   // 单号前缀：解析对应供应商注册账号的订单号前缀（建立合作后获取）
-  const resolveSupplierPrefix = (name: string): string => {
-    try {
-      const users = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
-      const u = users.find((x: any) => x.companyName === name);
-      if (u?.orderPrefix) return String(u.orderPrefix);
-    } catch { /* ignore */ }
-    return '';
-  };
+  const resolveSupplierPrefix = (entry: any): string => String(supplierUserOf(entry)?.orderPrefix || '');
 
-  // 微信加好友二维码：实时从供应商注册账号获取
-  const resolveSupplierWechatQr = (name: string): string => {
-    try {
-      const users = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
-      const u = users.find((x: any) => x.companyName === name);
-      if (u?.wechatQr) return String(u.wechatQr);
-    } catch { /* ignore */ }
-    return '';
-  };
+  // 微信加好友二维码：实时从供应商注册账号获取（按条目凭证定位，同名歧义时不显示别家二维码）
+  const resolveSupplierWechatQr = (entry: any): string => String(supplierUserOf(entry)?.wechatQr || '');
 
   // 解析供应商注册账号的 username（用于读取供应商自己的数据）
-  const resolveSupplierUsername = (name: string): string => {
-    try {
-      const users = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
-      const u = users.find((x: any) => x.companyName === name);
-      if (u?.username) return String(u.username);
-    } catch { /* ignore */ }
-    return '';
+  const resolveSupplierUsername = (entry: any): string => {
+    const un = String(entry?.supplierUsername || '').trim();
+    if (un) return un;
+    const u = supplierUserOf(entry);
+    return u?.username ? String(u.username) : '';
   };
 
   // 供应商货品计数跨浏览器取数：本地优先、缺失时服务端数据集兜底（避免生产环境计数恒 0）
+  // 计数键用条目 id 而非公司名：同名两家公司的两条卡片不得共享同一个计数
   const [spProductCounts, setSpProductCounts] = useState<Record<string, number>>({});
   useEffect(() => {
     let cancelled = false;
     const entries = dataSource.filter(e => e && e.supplierName);
     if (entries.length === 0) return;
     Promise.all(entries.map(async e => {
-      const owner = resolveSupplierUsername(e.supplierName);
+      const owner = resolveSupplierUsername(e);
       if (!owner) return null;
       const list = await loadSupplierFinishedProducts(owner);
-      return { name: e.supplierName, count: list.length };
+      return { id: e.id, count: list.length };
     })).then(res => {
       if (cancelled) return;
       const map: Record<string, number> = {};
-      res.forEach(r => { if (r) map[r.name] = r.count; });
+      res.forEach(r => { if (r) map[r.id] = r.count; });
       setSpProductCounts(prev => ({ ...prev, ...map }));
     }).catch(() => { /* ignore */ });
     return () => { cancelled = true; };
@@ -1258,7 +1268,7 @@ const PurchaserSupplierList: React.FC = () => {
       const sno = String(values.supplierNo || '').trim();
       if (sno) {
         const existing: SupplierEntry[] = JSON.parse(localStorage.getItem(storageKey) || '[]');
-        const dup = existing.find((s) => (String(s.supplierNo || '').trim() || resolveSupplierNo(s.supplierName)) === sno);
+        const dup = existing.find((s) => (String(s.supplierNo || '').trim() || resolveSupplierNo(s)) === sno);
         if (dup) {
           message.error(`供应商编号 ${sno} 已存在（供应商：${dup.supplierName}），不能重复保存`);
           return;
@@ -1323,7 +1333,7 @@ const PurchaserSupplierList: React.FC = () => {
       city: record.city || undefined,
       district: record.district || undefined,
       address: record.address || '',
-      supplierNo: record.supplierNo || resolveSupplierNo(record.supplierName) || '',
+      supplierNo: record.supplierNo || resolveSupplierNo(record) || '',
       remark: record.remark,
       accountName: record.accountName || '',
       bankName: record.bankName || '',
@@ -1340,7 +1350,7 @@ const PurchaserSupplierList: React.FC = () => {
       // 供应商编号查重：排除自身后编号已存在则不允许保存
       const snoEdit = String(values.supplierNo || '').trim();
       if (snoEdit) {
-        const dup = allData.find((s) => s.id !== editingSupplier.id && (String(s.supplierNo || '').trim() || resolveSupplierNo(s.supplierName)) === snoEdit);
+        const dup = allData.find((s) => s.id !== editingSupplier.id && (String(s.supplierNo || '').trim() || resolveSupplierNo(s)) === snoEdit);
         if (dup) {
           message.error(`供应商编号 ${snoEdit} 已存在（供应商：${dup.supplierName}），不能重复保存`);
           return;
@@ -1649,14 +1659,14 @@ const PurchaserSupplierList: React.FC = () => {
       const certInfo = un ? supCertMap[un] : undefined;
       return certInfo !== undefined ? <CertBadge info={certInfo} /> : <Tag style={{ fontSize: 11 }}>未认证</Tag>;
     } },
-    supplierNo: { title: '供应商编号', key: 'supplierNo', width: 110, render: (_: any, record: SupplierEntry) => { const no = record.supplierNo || resolveSupplierNo(record.supplierName); return no ? <Tag color="blue">{no}</Tag> : '-'; } },
-    orderPrefix: { title: '单号前缀', key: 'orderPrefix', width: 90, render: (_: any, record: SupplierEntry) => { const p = record.orderPrefix || resolveSupplierPrefix(record.supplierName); return p ? <Tag color="green">{p}</Tag> : '-'; } },
+    supplierNo: { title: '供应商编号', key: 'supplierNo', width: 110, render: (_: any, record: SupplierEntry) => { const no = resolveSupplierNo(record); return no ? <Tag color="blue">{no}</Tag> : '-'; } },
+    orderPrefix: { title: '单号前缀', key: 'orderPrefix', width: 90, render: (_: any, record: SupplierEntry) => { const p = record.orderPrefix || resolveSupplierPrefix(record); return p ? <Tag color="green">{p}</Tag> : '-'; } },
     shortName: { title: '简称', dataIndex: 'shortName', key: 'shortName', width: 100, render: (text: string) => text || '-' },
     contactPerson: { title: '联系人', dataIndex: 'contactPerson', key: 'contactPerson', width: 100 },
     contactPhone: { title: '联系电话', dataIndex: 'contactPhone', key: 'contactPhone', width: 130 },
     email: { title: '电子邮箱', dataIndex: 'email', key: 'email', width: 160, render: (text: string) => text || '-' },
     legalPerson: { title: '法人代表', dataIndex: 'legalPerson', key: 'legalPerson', width: 100, render: (text: string) => text || '-' },
-    wechatQr: { title: '微信加好友二维码', key: 'wechatQr', width: 90, align: 'center' as const, render: (_: any, record: SupplierEntry) => { const qr = record.wechatQr || resolveSupplierWechatQr(record.supplierName); return qr ? <Image src={qr} alt="微信加好友二维码" width={40} height={40} style={{ objectFit: 'contain', borderRadius: 4, cursor: 'pointer' }} preview={{ mask: '查看' }} /> : <Text type="secondary">-</Text>; } },
+    wechatQr: { title: '微信加好友二维码', key: 'wechatQr', width: 90, align: 'center' as const, render: (_: any, record: SupplierEntry) => { const qr = record.wechatQr || resolveSupplierWechatQr(record); return qr ? <Image src={qr} alt="微信加好友二维码" width={40} height={40} style={{ objectFit: 'contain', borderRadius: 4, cursor: 'pointer' }} preview={{ mask: '查看' }} /> : <Text type="secondary">-</Text>; } },
     province: { title: '省', dataIndex: 'province', key: 'province', width: 80, render: (text: string) => text || '-' },
     city: { title: '市', dataIndex: 'city', key: 'city', width: 80, render: (text: string) => text || '-' },
     district: { title: '区', dataIndex: 'district', key: 'district', width: 80, render: (text: string) => text || '-' },
@@ -1685,19 +1695,24 @@ const PurchaserSupplierList: React.FC = () => {
       render: (_: any, record: SupplierEntry) => { const e = paySummary[record.supplierName]; const credit = supplierCreditMap[record.id] ?? 0; const due = toYuan((e?.purchaseTotal || 0) - (e?.paidTotal || 0)); const occ = orderOccupationMap[record.supplierName] ?? 0; const rem = Math.round((credit - due - occ) * 100) / 100; return <Text strong style={{ color: rem < 0 ? '#f5222d' : '#52c41a' }}>¥{rem.toFixed(2)}</Text>; } },
     // 订单占用 = 已推送未发货订单总额（点击显示明细）
     orderOccupation: { title: <Tooltip title="已推送给供应商但尚未发货的订单占用金额，点击可查看详情。发货后自动释放"><span>订单占用 <InfoCircleOutlined style={{ color: '#bbb', fontSize: 12 }} /></span></Tooltip>, key: 'orderOccupation', width: 120, align: 'right' as const,
-      render: (_: any, record: SupplierEntry) => { const occ = orderOccupationMap[record.supplierName] ?? 0; if (occ <= 0) return <Text style={{ color: '#999' }}>¥0.00</Text>; return <a style={{ color: '#1890ff', fontWeight: 600 }} onClick={() => { setOccSupplier(record.supplierName); setOccVisible(true); }}>¥{occ.toFixed(2)}</a>; } },
+      render: (_: any, record: SupplierEntry) => { const occ = orderOccupationMap[record.supplierName] ?? 0; if (occ <= 0) return <Text style={{ color: '#999' }}>¥0.00</Text>; return <a style={{ color: '#1890ff', fontWeight: 600 }} onClick={() => { setOccSupplier(record); setOccVisible(true); }}>¥{occ.toFixed(2)}</a>; } },
     productList: { title: <Tooltip title="该供应商发布的成品商品数量，点击查看完整商品列表"><span>货品列表 <InfoCircleOutlined style={{ color: '#bbb', fontSize: 12 }} /></span></Tooltip>, key: 'productList', width: 100, align: 'center' as const,
       render: (_: any, record: SupplierEntry) => {
-        // 计数取跨浏览器取数结果（本地优先/服务端兜底），未取到前显示「查看」
-        const count = spProductCounts[record.supplierName] ?? 0;
+        // 计数取跨浏览器取数结果（本地优先/服务端兜底），未取到前显示「查看」；按条目 id 取，同名两行不共享
+        const count = spProductCounts[record.id] ?? 0;
         return (
           <Button type="link" size="small" icon={<ShoppingCartOutlined />}
             onClick={() => {
-              const productOwner = resolveSupplierUsername(record.supplierName) || getDataOwner();
+              // 按条目凭证定位供应商账号；解析不到时不得回退 getDataOwner()（那会读到本账号自己的商品列表）
+              const productOwner = resolveSupplierUsername(record);
               setProductListSupplier(record.supplierName);
               setProductListData([]);
               setPlSelected([]);
               setProductListVisible(true);
+              if (!productOwner) {
+                message.warning('未能定位该供应商的注册账号（可能存在同名公司），请在编辑窗口按公司编号确认后重试');
+                return;
+              }
               // 跨浏览器取数：本地优先，缺失时服务端数据集兜底
               void loadSupplierFinishedProducts(productOwner).then(list => setProductListData(list));
             }}>
@@ -1945,7 +1960,7 @@ const PurchaserSupplierList: React.FC = () => {
         {detailSupplier && (
           <Descriptions column={2} bordered size="small" style={{ marginTop: 16 }}>
             <Descriptions.Item label="供应商名称" span={2}>{detailSupplier.supplierName}</Descriptions.Item>
-            <Descriptions.Item label="供应商编号">{(detailSupplier as any).supplierNo || resolveSupplierNo(detailSupplier.supplierName) || '-'}</Descriptions.Item>
+            <Descriptions.Item label="供应商编号">{resolveSupplierNo(detailSupplier) || '-'}</Descriptions.Item>
             <Descriptions.Item label="简称">{detailSupplier.shortName || '-'}</Descriptions.Item>
             <Descriptions.Item label="法人代表">{detailSupplier.legalPerson || '-'}</Descriptions.Item>
             <Descriptions.Item label="联系人">{detailSupplier.contactPerson || '-'}</Descriptions.Item>
@@ -1954,8 +1969,8 @@ const PurchaserSupplierList: React.FC = () => {
             <Descriptions.Item label="客户地址" span={2}>{[detailSupplier.province, detailSupplier.city, detailSupplier.district].filter(Boolean).join('') || '-'}</Descriptions.Item>
             <Descriptions.Item label="详细地址" span={2}>{detailSupplier.address || '-'}</Descriptions.Item>
             <Descriptions.Item label="微信加好友二维码" span={2}>
-              {detailSupplier.wechatQr || resolveSupplierWechatQr(detailSupplier.supplierName) ? (
-                <img src={detailSupplier.wechatQr || resolveSupplierWechatQr(detailSupplier.supplierName)} alt="微信加好友二维码" style={{ maxWidth: 120, maxHeight: 120, borderRadius: 6, border: '1px solid #eee' }} />
+              {detailSupplier.wechatQr || resolveSupplierWechatQr(detailSupplier) ? (
+                <img src={detailSupplier.wechatQr || resolveSupplierWechatQr(detailSupplier)} alt="微信加好友二维码" style={{ maxWidth: 120, maxHeight: 120, borderRadius: 6, border: '1px solid #eee' }} />
               ) : '-'}
             </Descriptions.Item>
             <Descriptions.Item label="合作状态">
@@ -2565,7 +2580,7 @@ const PurchaserSupplierList: React.FC = () => {
 
       {/* 订单占用明细弹窗：显示该供应商所有已推送未发货订单 */}
       <Modal
-        title={<span style={{ color: PRIMARY }}><DollarOutlined style={{ marginRight: 8 }} />订单占用明细{occSupplier ? ` - ${occSupplier}` : ''}</span>}
+        title={<span style={{ color: PRIMARY }}><DollarOutlined style={{ marginRight: 8 }} />订单占用明细{occSupplier ? ` - ${occSupplier.supplierName}` : ''}</span>}
         open={occVisible}
         onCancel={() => setOccVisible(false)}
         footer={<Button key="close" type="primary" onClick={() => setOccVisible(false)}>关闭</Button>}

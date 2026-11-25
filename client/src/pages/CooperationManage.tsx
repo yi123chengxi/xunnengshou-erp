@@ -19,7 +19,8 @@ import {
 import dayjs from 'dayjs';
 import {
   amTargetSupplier, ensureCredsMigrated, withCooperationCreds, supplierNoOf,
-  myCompanyNo, purchaserUsernameOf, noOfUser,
+  myCompanyNo, purchaserUsernameOf, noOfUser, appMatchesSupplierEntry,
+  purchaserNoOf, noFromUsername, supplierUsernameOf, uniqueCompanyRootByName,
 } from '../utils/cooperationCred';
 
 const { Text, Title } = Typography;
@@ -69,6 +70,9 @@ interface CooperationRecord {
   inviteToken?: string;
   type?: 'cooperation' | 'terminate';
   customerId?: string;
+  /** 发起采购商账号与公司编号：跨租户写入的定位凭证（公司名称可重名，不得据此匹配） */
+  purchaserUsername?: string;
+  purchaserNo?: string;
   /** 本公司是否该申请的目标供应商（按公司编号判定），决定能否批准/拒绝 */
   canHandle: boolean;
 }
@@ -90,6 +94,8 @@ const toRecord = (app: CooperationApplication): CooperationRecord => ({
   applyDate: app.applyDate,
   remark: app.remark,
   customerId: app.customerId,
+  purchaserUsername: app.purchaserUsername || '',
+  purchaserNo: app.purchaserNo || '',
   canHandle: amTargetSupplier(app),
 });
 
@@ -107,6 +113,22 @@ const loadApplications = (): CooperationRecord[] => {
   } catch {
     return [];
   }
+};
+
+/**
+ * 绑定行（boundPurchasers）↔ 申请记录/列表行 的同一采购商判定：
+ * 账号等值 > 公司编号等值 > 名称全等且全库唯一主体命中。
+ * 两家独立公司恰好同名时名称档不认，宁可新建一行，也不能把别家的绑定行改成本次合作的结果。
+ */
+const samePurchaserRow = (bp: any, app: any): boolean => {
+  const pu = String(app?.purchaserUsername || '').trim();
+  if (pu && String(bp?.purchaserUsername || '').trim() === pu) return true;
+  const an = String(app?.purchaserNo || '').trim() || purchaserNoOf(app);
+  const bn = String(bp?.purchaserNo || '').trim() || noFromUsername(bp?.purchaserUsername);
+  if (an && bn) return an === bn;
+  const nm = String(app?.purchaserCompanyName || app?.purchaserName || '').trim();
+  const bnm = String(bp?.purchaserName || '').trim();
+  return !!nm && nm === bnm && !!uniqueCompanyRootByName(nm);
 };
 
 const CooperationManage: React.FC = () => {
@@ -229,7 +251,8 @@ const CooperationManage: React.FC = () => {
           // 查找关联的申请记录，获取采购商账号用户名
           const thisApp = apps.find((app) => app.applicationId === record.applicationId);
           const customerId = thisApp?.customerId || record.customerId || '';
-          const purchaserUsername = thisApp?.purchaserUsername || '';
+          const purchaserUsername = thisApp?.purchaserUsername || purchaserUsernameOf(thisApp) || record.purchaserUsername || '';
+          const purchaserNo = (thisApp ? purchaserNoOf(thisApp) : '') || record.purchaserNo || noFromUsername(purchaserUsername);
           // 从采购商账号（registeredUsers）获取完整企业信息
           let purchaserInfo: any = {};
           if (purchaserUsername) {
@@ -249,10 +272,9 @@ const CooperationManage: React.FC = () => {
               }
             } catch { /* ignore */ }
           }
-          // 匹配兼顾公司名与采购商账号：公司名可能因改名/简称与快照不一致，仅按名称匹配会重复新建一条
-          const existingIdx = boundPurchasers.findIndex(
-            (bp: any) => bp.purchaserName === purchaserCompany || (purchaserUsername && bp.purchaserUsername === purchaserUsername)
-          );
+          // 同一采购商判定走凭证（账号 > 编号 > 名称唯一主体命中）：公司名可能因改名/简称与快照不一致，
+          // 但「名称全等 OR」分支会把同名另一家采购商的绑定行误更新，必须删掉
+          const existingIdx = boundPurchasers.findIndex((bp: any) => samePurchaserRow(bp, thisApp || record));
           if (existingIdx >= 0) {
             // 已存在的采购商（如曾终止合作后重新合作），更新状态为已合作并同步企业信息
             boundPurchasers[existingIdx] = {
@@ -270,6 +292,7 @@ const CooperationManage: React.FC = () => {
               id: `BIND-${Date.now()}`,
               purchaserName: purchaserCompany,
               purchaserUsername: purchaserUsername || '',
+              purchaserNo: purchaserNo || '',
               purchaserContact: record.purchaserContact || '',
               purchaserPhone: record.purchaserPhone || '',
               ...purchaserInfo,
@@ -294,15 +317,11 @@ const CooperationManage: React.FC = () => {
             const purchaserStorageKey = 'purchaser_suppliers_' + approvedApp.purchaserUsername;
             const suppliers: any[] = JSON.parse(localStorage.getItem(purchaserStorageKey) || '[]');
             const approvedSupplierUsername = (approvedApp as any).supplierUsername || '';
-            // 匹配须兼顾名称/供应商账号回退：本浏览器持有的采购商键副本可能陈旧缺条目，
-            // 仅按 purchaserSupplierEntryId 匹配会落空进而走自动新增，产生同供应商双条目
-            const existingIdx = suppliers.findIndex((s: any) => {
-              if (approvedApp.purchaserSupplierEntryId && s.id === approvedApp.purchaserSupplierEntryId) return true;
-              if (s.id === approvedApp.targetSupplierId) return true;
-              if (s.supplierName === record.supplierName) return true;
-              if (approvedSupplierUsername && s.supplierUsername === approvedSupplierUsername) return true;
-              return false;
-            });
+            // 同一性一律走共享凭证谓词（编号 > 条目 id > 名称唯一命中）：
+            // 本浏览器持有的采购商键副本可能陈旧缺条目，仅按 entryId 匹配会落空进而自动新增产生双条目；
+            // 但 s.supplierName === record.supplierName 的名称 OR 必须删掉（同名两家公司会把别家条目改成已合作）
+            const existingIdx = suppliers.findIndex((s: any) =>
+              (approvedSupplierUsername && s.supplierUsername === approvedSupplierUsername) || appMatchesSupplierEntry(approvedApp, s));
             if (existingIdx >= 0) {
               suppliers[existingIdx] = {
                 ...suppliers[existingIdx],
@@ -311,7 +330,8 @@ const CooperationManage: React.FC = () => {
                 statusTs: Date.now(),
                 terminateAt: undefined,
                 terminateBy: undefined,
-                supplierUsername: suppliers[existingIdx].supplierUsername || (localStorage.getItem('username') || ''),
+                supplierUsername: suppliers[existingIdx].supplierUsername || approvedSupplierUsername || supplierUsernameOf(approvedApp) || (localStorage.getItem('username') || ''),
+                supplierNo: suppliers[existingIdx].supplierNo || supplierNoOf(approvedApp) || myCompanyNo() || '',
                 supplierName: record.supplierName || suppliers[existingIdx].supplierName,
               };
             } else {
@@ -320,21 +340,15 @@ const CooperationManage: React.FC = () => {
               let supUser: any = null;
               try {
                 const registeredUsers2: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
-                const cands = registeredUsers2.filter((u: any) =>
-                  (approvedSupplierUsername && u.username === approvedSupplierUsername) ||
-                  (u.companyName || '') === record.supplierName);
-                // 同名账号消歧：优先取 boundPurchasers 中确实绑定了该采购商的账号
-                supUser = cands.find((c: any) => {
-                  try {
-                    const b: any[] = JSON.parse(localStorage.getItem('boundPurchasers_' + c.username) || '[]');
-                    return b.some((bp: any) => bp.purchaserUsername === approvedApp.purchaserUsername || bp.purchaserName === approvedApp.purchaserCompanyName);
-                  } catch { return false; }
-                }) || cands[0] || null;
+                // 只按凭证定位：显式供应商账号 > 申请内编号反查 > 名称唯一主体命中。
+                // 删掉「同名候选 + cands[0]」猜测：两家独立公司同名时会把别家账号写进采购商目录
+                const supUn = approvedSupplierUsername || supplierUsernameOf(approvedApp) || uniqueCompanyRootByName(record.supplierName);
+                supUser = registeredUsers2.find((u: any) => String(u?.username || '') === supUn) || null;
               } catch { /* ignore */ }
               suppliers.unshift({
                 id: approvedApp.purchaserSupplierEntryId || approvedApp.targetSupplierId || `SP-${Date.now()}`,
                 supplierUsername: supUser?.username || approvedSupplierUsername || (localStorage.getItem('username') || ''),
-                supplierNo: supUser?.companyNo || '',
+                supplierNo: noOfUser(supUser) || supplierNoOf(approvedApp) || myCompanyNo() || '',
                 supplierName: record.supplierName,
                 shortName: '',
                 contactPerson: supUser?.contactPerson || '',
@@ -420,7 +434,7 @@ const CooperationManage: React.FC = () => {
           if (cooperativeData) {
             const cooperativePurchasers: any[] = JSON.parse(cooperativeData);
             const updatedPurchasers = cooperativePurchasers.map((bp: any) => {
-              if (bp.purchaserName === record.purchaserName) {
+              if (samePurchaserRow(bp, record)) {
                 return { ...bp, status: 'terminated' };
               }
               return bp;
@@ -443,12 +457,9 @@ const CooperationManage: React.FC = () => {
             if (purchaserData) {
               const suppliers: any[] = JSON.parse(purchaserData);
               const updatedSuppliers = suppliers.map((s) => {
-                // 凭证优先：编号/条目 id 等值；只在两者都不可用时才回退名称匹配
-                const isMatch = terminateApp.purchaserSupplierEntryId
-                  ? s.id === terminateApp.purchaserSupplierEntryId
-                  : (supplierNoOf(terminateApp) && String(s.supplierNo || '') === supplierNoOf(terminateApp))
-                    || s.id === terminateApp.targetSupplierId
-                    || (!supplierNoOf(terminateApp) && s.supplierName === record.supplierName);
+                // 一律走共享凭证谓词（编号 > 条目 id > 名称唯一命中）：
+                // 同名两家公司时不得把别家条目误置为已终止
+                const isMatch = appMatchesSupplierEntry(terminateApp, s);
                 if (isMatch && (s.cooperationStatus === 'terminating' || s.cooperationStatus === 'approved')) {
                   return { ...s, cooperationStatus: 'terminated', terminateApplyDate: undefined };
                 }
@@ -514,10 +525,7 @@ const CooperationManage: React.FC = () => {
             if (purchaserData) {
               const suppliers: any[] = JSON.parse(purchaserData);
               const updatedSuppliers = suppliers.map((s) => {
-                const noMatch = rejectApp ? supplierNoOf(rejectApp) : '';
-                const isMatch = (noMatch && String(s.supplierNo || '') === noMatch)
-                  || s.id === String(rejectApp?.targetSupplierId || '')
-                  || (!noMatch && s.supplierName === record.supplierName);
+                const isMatch = appMatchesSupplierEntry(rejectApp, s);
                 if (isMatch && s.cooperationStatus === 'terminating') {
                   return { ...s, cooperationStatus: 'approved', terminateApplyDate: undefined };
                 }
@@ -540,7 +548,7 @@ const CooperationManage: React.FC = () => {
     if (record.cooperationStatus === 'rejected') return true;
     try {
       const bound: any[] = JSON.parse(localStorage.getItem(`boundPurchasers_${localStorage.getItem('username') || ''}`) || '[]');
-      return bound.some((b: any) => b.purchaserName === record.purchaserName && b.status === 'terminated');
+      return bound.some((b: any) => samePurchaserRow(b, record) && b.status === 'terminated');
     } catch { return false; }
   }, []);
 
@@ -556,14 +564,12 @@ const CooperationManage: React.FC = () => {
     let purchaserUsername = '';
     try {
       const bound: any[] = JSON.parse(localStorage.getItem(`boundPurchasers_${username}`) || '[]');
-      const bp = bound.find((b: any) => b.purchaserName === record.purchaserName);
+      const bp = bound.find((b: any) => samePurchaserRow(b, record));
       purchaserUsername = bp?.purchaserUsername || '';
     } catch { /* ignore */ }
     if (!purchaserUsername) purchaserUsername = purchaserUsernameOf(record);
-    if (!purchaserUsername) {
-      const byName = registeredUsers.filter((u: any) => u.companyName === record.purchaserName);
-      purchaserUsername = byName.length === 1 ? String(byName[0].username) : '';
-    }
+    // 名称兜底只在全库唯一主体命中时放行（主/子账号归一），同名两家公司时返回空串
+    if (!purchaserUsername) purchaserUsername = uniqueCompanyRootByName(record.purchaserName);
     if (!purchaserUsername) { message.error('无法定位该采购商账号，请在客户基础信息通过「邀约合作/采购商编号」发起'); return; }
     const apps: any[] = JSON.parse(localStorage.getItem(COOPERATION_APPLICATIONS_KEY) || '[]');
     // 同一对方判定凭证优先：编号相等即同一家；无编号的历史记录才按名称全等兜底
@@ -579,7 +585,14 @@ const CooperationManage: React.FC = () => {
     let list: any[] = [];
     try { list = JSON.parse(localStorage.getItem(pKey) || '[]'); } catch { /* ignore */ }
     let entryId = '';
-    const existIdx = list.findIndex((s: any) => (myNo && String(s.supplierNo || '') === myNo) || s.supplierName === myCompany);
+    // 条目定位：编号/账号等值优先，名称档只在全库唯一主体命中时才认
+    // （否则会把同名另一家公司的条目改成待确认，并把自己的账号写进去 = 劫持别家合作关系）
+    const existIdx = list.findIndex((s: any) => {
+      const sNo = String(s.supplierNo || '').trim() || noFromUsername(s.supplierUsername);
+      if (myNo && sNo) return sNo === myNo;
+      if (username && String(s.supplierUsername || '').trim() === username) return true;
+      return String(s.supplierName || '').trim() === String(myCompany || '').trim() && !!uniqueCompanyRootByName(myCompany);
+    });
     if (existIdx >= 0) {
       if (list[existIdx].cooperationStatus === 'terminated' || list[existIdx].cooperationStatus === 'rejected') {
         list[existIdx] = { ...list[existIdx], cooperationStatus: 'pending' };

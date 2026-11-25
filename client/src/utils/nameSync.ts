@@ -47,18 +47,68 @@ const SWEEP_PREFIXES = [
 ];
 const SWEEP_EXACT = ['recon_records'];
 
-/** 公司凭证映射：全称/简称/编号 → { username, companyNo（老账号无 companyNo 时回退 companyShortName） } */
+/**
+ * 账号 → 归属主账号解析器：沿 isSubAccount/parentAccount 链上溯（最多 10 层、断链就地停），
+ * 保证归一结果一定是表内真实存在的账号。主账号与其名下子账号是同一主体，不算同名歧义。
+ */
+const makeRootResolver = (users: any[]): ((un: string) => string) => {
+  const byUn = new Map<string, any>();
+  (Array.isArray(users) ? users : []).forEach((u: any) => { if (u && u.username) byUn.set(String(u.username), u); });
+  return (un: string): string => {
+    let cur = String(un || '');
+    const seen = new Set<string>();
+    let g = 0;
+    while (g++ < 10 && !seen.has(cur)) {
+      const u = byUn.get(cur);
+      if (!u || !u.isSubAccount || !u.parentAccount) break;
+      const next = String(u.parentAccount);
+      if (!byUn.has(next)) break;
+      seen.add(cur);
+      cur = next;
+    }
+    return cur;
+  };
+};
+
+/**
+ * 全称/简称/编号 → 唯一主体账号；归一后仍命中多个主体（两家独立公司恰好同名）时返回 null。
+ * 名称解析一律走此口径：宁可解析不出退回名称兼容，也绝不 find-first 猜成别家公司。
+ */
+const uniqueUserByKey = (users: any[], key: string, rootOf: (un: string) => string): any => {
+  const t = String(key || '').trim();
+  if (!t) return null;
+  const hits = (Array.isArray(users) ? users : []).filter((u: any) => u && u.username
+    && (String(u.companyName || '').trim() === t || String(u.companyShortName || '').trim() === t || String(u.companyNo || '').trim() === t));
+  if (!hits.length) return null;
+  const roots = new Set<string>(hits.map((u: any) => rootOf(String(u.username))));
+  if (roots.size !== 1) return null;
+  const root = Array.from(roots)[0];
+  return users.find((u: any) => u && String(u.username) === root) || hits[0];
+};
+
+/** 公司凭证映射：全称/简称/编号 → { username, companyNo（老账号无 companyNo 时回退 companyShortName） }；歧义名不建映射 */
 export const buildCompanyCredMap = (): Map<string, { username: string; companyNo: string }> => {
   const m = new Map<string, { username: string; companyNo: string }>();
   let users: any[] = [];
   try { users = JSON.parse(localStorage.getItem('registeredUsers') || '[]'); } catch { users = []; }
-  (Array.isArray(users) ? users : []).forEach((u: any) => {
+  const list = Array.isArray(users) ? users : [];
+  const rootOf = makeRootResolver(list);
+  const byKey = new Map<string, any[]>();
+  list.forEach((u: any) => {
     if (!u || !u.username) return;
-    const cred = { username: String(u.username), companyNo: String(u.companyNo || u.companyShortName || '') };
     [u.companyName, u.companyShortName, u.companyNo].forEach((k: any) => {
       const s = String(k || '').trim();
-      if (s && !m.has(s)) m.set(s, cred);
+      if (!s) return;
+      if (!byKey.has(s)) byKey.set(s, []);
+      byKey.get(s)!.push(u);
     });
+  });
+  byKey.forEach((hits, s) => {
+    const roots = new Set<string>(hits.map((u: any) => rootOf(String(u.username))));
+    // 同名两家独立公司：该名称不得解析出凭证，否则会把别家账号/编号写进本行的凭证字段（写侧污染，比读侧串号更难回滚）
+    if (roots.size !== 1) return;
+    const u = hits[0];
+    m.set(s, { username: String(u.username), companyNo: String(u.companyNo || u.companyShortName || '') });
   });
   return m;
 };
@@ -121,22 +171,7 @@ export const buildCredIndex = (): CredIndex => {
       byKey.get(s)!.add(String(u.username));
     });
   });
-  // 账号 → 归属主账号：沿 isSubAccount/parentAccount 链上溯；断链（父账号不在表内）就地停止不归一，
-  // 保证归一结果一定是表内真实存在的账号，与名称解析路径给出的身份键完全同值
-  const rootOf = (un: string): string => {
-    let cur = un;
-    const seen = new Set<string>();
-    let g = 0;
-    while (g++ < 10 && !seen.has(cur)) {
-      const u = u2c.get(cur);
-      if (!u || !u.isSubAccount || !u.parentAccount) break;
-      const next = String(u.parentAccount);
-      if (!u2c.has(next)) break;
-      seen.add(cur);
-      cur = next;
-    }
-    return cur;
-  };
+  const rootOf = makeRootResolver(users);
   const userByName = (n: string): any => {
     if (!n) return null;
     const set = byKey.get(n);
@@ -195,7 +230,8 @@ export const resolveLatestCompanyName = (name: string, username?: string): strin
   if (!Array.isArray(users)) users = [];
   let u = un ? users.find(x => x && x.username === un) : null;
   if (!u && n) {
-    u = users.find(x => x && ((x.companyName || '').trim() === n || (x.companyShortName || '').trim() === n || (x.companyNo || '').trim() === n));
+    // 只做唯一主体命中：同名两家公司时 find-first 会把别家公司的全称显示到本行上（展示串号）
+    u = uniqueUserByKey(users, n, makeRootResolver(users));
   }
   if (u && u.companyName) return String(u.companyName);
   let renames: any[] = [];
@@ -222,13 +258,23 @@ export const repairCounterpartyNames = (): string[] => {
     if (!Array.isArray(users) || !users.length) return [];
     const u2c = new Map<string, any>();
     users.forEach(u => { if (u && u.username) u2c.set(String(u.username), u); });
-    // 名称/编号 → 账号 反查表（公司全称为准，兼容简称与编号）
+    // 名称/编号 → 账号 反查表（公司全称为准，兼容简称与编号）；歧义名不建表，凭证回填宁缺不错
+    const rootOf = makeRootResolver(users);
     const name2u = new Map<string, any>();
+    const nameHits = new Map<string, any[]>();
     users.forEach(u => {
-      if (!u) return;
-      if (u.companyName) name2u.set(String(u.companyName), u);
-      if (u.companyShortName) name2u.set(String(u.companyShortName), u);
-      if (u.companyNo) name2u.set(String(u.companyNo), u);
+      if (!u || !u.username) return;
+      [u.companyName, u.companyShortName, u.companyNo].forEach((k: any) => {
+        const s = String(k || '').trim();
+        if (!s) return;
+        if (!nameHits.has(s)) nameHits.set(s, []);
+        nameHits.get(s)!.push(u);
+      });
+    });
+    nameHits.forEach((hits, s) => {
+      const roots = new Set<string>(hits.map((u: any) => rootOf(String(u.username))));
+      if (roots.size !== 1) return;
+      name2u.set(s, hits[0]);
     });
 
     // 改名链：按时间序折叠（A→B→C 折叠为 A→C、B→C）
@@ -263,8 +309,15 @@ export const repairCounterpartyNames = (): string[] => {
       if (!t) return null;
       return name2u.get(t)
         || (chain.has(t) ? name2u.get(chain.get(t) as string) : null)
-        // 反向兼容：快照已是新名、但账号里仍是旧名（另一端未刷新）时，按改名链归一后反查
-        || users.find(u => u && u.companyName && latestName(u.companyName) === latestName(t))
+        // 反向兼容：快照已是新名、但账号里仍是旧名（另一端未刷新）时，按改名链归一后反查（同样只认唯一主体）
+        || (() => {
+          const hits = users.filter(u => u && u.username && u.companyName && latestName(u.companyName) === latestName(t));
+          if (!hits.length) return null;
+          const roots = new Set<string>(hits.map((u: any) => rootOf(String(u.username))));
+          if (roots.size !== 1) return null;
+          const root = Array.from(roots)[0];
+          return users.find(u => u && String(u.username) === root) || hits[0];
+        })()
         || null;
     };
 

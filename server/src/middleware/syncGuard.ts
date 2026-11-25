@@ -344,10 +344,13 @@ export function mergeRegisteredUsersJson(existingJson: string, incomingJson: str
 }
 
 /**
- * 注册表新建行准入校验（服务端权威去重 + 用户名长度下限）：
+ * 注册表新建行准入校验（服务端权威去重 + 用户名长度下限 + 公司编号唯一）：
  * 1) 服务端无同 username 的新行：用户名少于 MIN_USERNAME_LEN 位一律拒绝（注册/子账号/导入同口径）；
  * 2) 服务端已有同 username 且本次携带不同 _createTs 的创建标记：视为重复创建（含跨租户撞名），
- *    拒绝该行参与合并——否则后创建一方会覆盖先创建一方的密码与资料，表现为「新子账号登不上」。
+ *    拒绝该行参与合并——否则后创建一方会覆盖先创建一方的密码与资料，表现为「新子账号登不上」；
+ * 3) 新行的 companyNo 已被别的账号占用（存量或本批已采纳行）：拒绝创建。公司编号是跨公司
+ *    合作关系的 key，两家共用一个编号会让商品/账单/额度全部串号；公司名称允许重复（两家不同公司
+ *    恰好同名是合法场景），编号绝不允许。子账号不携 companyNo，不受此校验影响。
  * 同一创建事件的重传（_createTs 相同）与改密/编辑（无新 _createTs）不受影响。
  */
 export const MIN_USERNAME_LEN = 8;
@@ -359,9 +362,16 @@ export function filterRegisteredUsersCreations(
     const incoming = JSON.parse(incomingJson);
     if (!Array.isArray(incoming)) return { cleanJson: incomingJson, rejected: [] };
     const oldByName = new Map<string, any>();
+    // 公司编号 → 占用账号（存量先入表，本批采纳的新行随后入表，因此批内撞号也能拦下）
+    const noOwner = new Map<string, string>();
     try {
       const old = JSON.parse(existingJson || '[]');
-      if (Array.isArray(old)) old.forEach((u: any) => { if (u && u.username) oldByName.set(String(u.username), u); });
+      if (Array.isArray(old)) old.forEach((u: any) => {
+        if (!u || !u.username) return;
+        oldByName.set(String(u.username), u);
+        const no = String(u.companyNo || '').trim();
+        if (no && !noOwner.has(no)) noOwner.set(no, String(u.username));
+      });
     } catch { /* ignore */ }
     const rejected: { username: string; reason: string }[] = [];
     const clean = incoming.filter((u: any) => {
@@ -372,6 +382,15 @@ export function filterRegisteredUsersCreations(
         if (name.length < MIN_USERNAME_LEN) {
           rejected.push({ username: name, reason: `用户名不足 ${MIN_USERNAME_LEN} 位，服务端已拒绝创建` });
           return false;
+        }
+        const no = String(u.companyNo || '').trim();
+        if (no) {
+          const holder = noOwner.get(no);
+          if (holder && holder !== name) {
+            rejected.push({ username: name, reason: `公司编号 ${no} 已被其他公司占用，服务端已拒绝创建（请重新生成编号）` });
+            return false;
+          }
+          noOwner.set(no, name);
         }
         return true;
       }

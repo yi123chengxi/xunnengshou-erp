@@ -8,17 +8,34 @@
  * 本地缺失时经 fetchServerDataset 从服务端数据集按需拉取（服务端 GET /sync/dataset 不限 owner）。
  */
 import { fetchServerDataset } from './serverSync';
+import { uniqueUserByName, usernameFromNo } from './cooperationCred';
 
 export const supplierProductKey = (owner: string): string => `pageData_basic-data_product-list_${owner}`;
 
-/** 按公司名解析供应商注册账号 username（读取供应商自有数据的钥匙） */
+/**
+ * 按公司名解析供应商注册账号 username（读取供应商自有数据的钥匙）。
+ * 只在全库唯一主体命中时返回：同名两家公司时返回空串，绝不 find-first。
+ * 旧写法 users.find(x => x.companyName === name) 在同名多账号时永远取第一个，
+ * 导致采购商供应商列表里两条同名卡片读到同一份商品（且可能是另一家公司的商品）。
+ */
 export const resolveSupplierUsernameByName = (name: string): string => {
-  try {
-    const users: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
-    const u = users.find((x: any) => x.companyName === name);
-    if (u?.username) return String(u.username);
-  } catch { /* ignore */ }
-  return '';
+  const u = uniqueUserByName(name);
+  return u?.username ? String(u.username) : '';
+};
+
+/**
+ * 按条目凭证解析供应商账号：自带账号 > 公司编号 > 名称唯一命中。
+ * 读商品/成品一律走本函数（传整条供应商条目或账单行），不得只传公司名。
+ */
+export const resolveSupplierOwnerOfEntry = (entry: any): string => {
+  const un = String(entry?.supplierUsername || '').trim();
+  if (un) return un;
+  const no = String(entry?.supplierNo || '').trim();
+  if (no) {
+    const byNo = usernameFromNo(no);
+    if (byNo) return byNo;
+  }
+  return resolveSupplierUsernameByName(entry?.supplierName);
 };
 
 export const filterFinishedProducts = (list: any[]): any[] =>

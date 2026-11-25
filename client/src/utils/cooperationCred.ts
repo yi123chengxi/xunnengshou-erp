@@ -62,6 +62,84 @@ export const noFromCompanyName = (name: string): string => {
   return hit.length === 1 ? noOfUser(hit[0]) : '';
 };
 
+/** 账号 → 归属主账号映射（子账号沿 parentAccount 上溯，与 getDataOwner / nameSync.rootOf 同口径） */
+const buildRootMap = (users: any[]): Map<string, string> => {
+  const byName = new Map<string, any>();
+  users.forEach((u: any) => { if (u?.username) byName.set(String(u.username), u); });
+  const out = new Map<string, string>();
+  byName.forEach((_u: any, un: string) => {
+    let cur = un;
+    const seen = new Set<string>();
+    let g = 0;
+    while (g++ < 10 && !seen.has(cur)) {
+      const h = byName.get(cur);
+      if (!h || !h.isSubAccount || !h.parentAccount) break;
+      const next = String(h.parentAccount);
+      if (!byName.has(next)) break;
+      seen.add(cur);
+      cur = next;
+    }
+    out.set(un, cur);
+  });
+  return out;
+};
+
+/** 账号 → 归属主账号（断链/未注册时就地返回原值，与 nameSync 归一口径一致） */
+export const rootOfUsername = (username: any): string => {
+  const un = String(username || '').trim();
+  if (!un) return '';
+  return buildRootMap(loadUsers()).get(un) || un;
+};
+
+/**
+ * 按公司名称定位唯一主体账号：主账号与其名下子账号视为同一主体（companyName 继承），
+ * 只有相互独立的两家同名公司才算歧义 → 返回空串。
+ * 这是「名称兜底」的唯一合法入口：任何按名称认领申请/条目/账号的判定都必须先过这一关，
+ * 否则同名新账号会认领到别人的合作申请，并把自己写进别人的供应商目录。
+ */
+export const uniqueCompanyRootByName = (name: any): string => {
+  const n = String(name || '').trim();
+  if (!n) return '';
+  const users = loadUsers();
+  const roots = buildRootMap(users);
+  const hit = new Set<string>();
+  users.forEach((u: any) => {
+    if (String(u?.companyName || '').trim() !== n) return;
+    const r = roots.get(String(u?.username || '')) || String(u?.username || '');
+    if (r) hit.add(r);
+  });
+  return hit.size === 1 ? Array.from(hit)[0] : '';
+};
+
+/** 名称唯一命中时返回该注册账号（歧义/未注册返回 null），供写入侧替代 users.find(companyName===) */
+export const uniqueUserByName = (name: any): any | null => {
+  const root = uniqueCompanyRootByName(name);
+  if (!root) return null;
+  return loadUsers().find((u: any) => String(u?.username || '') === root) || null;
+};
+
+/**
+ * 全库「同名多主体」公司名集合（主/子账号归一后仍 >1 个主体才算歧义）。
+ * 批量判定场景（遍历所有租户键 × 所有条目）用它一次构建，避免每行都重新解析 registeredUsers；
+ * 不得跨调用缓存：新账号注册后歧义表会变，缓存会把已歧义的名称继续当成唯一命中。
+ */
+export const ambiguousCompanyNames = (): Set<string> => {
+  const users = loadUsers();
+  const roots = buildRootMap(users);
+  const byName = new Map<string, Set<string>>();
+  users.forEach((u: any) => {
+    const n = String(u?.companyName || '').trim();
+    if (!n) return;
+    const r = roots.get(String(u?.username || '')) || String(u?.username || '');
+    if (!r) return;
+    if (!byName.has(n)) byName.set(n, new Set<string>());
+    byName.get(n)!.add(r);
+  });
+  const out = new Set<string>();
+  byName.forEach((set, n) => { if (set.size > 1) out.add(n); });
+  return out;
+};
+
 /**
  * 定位一个注册账号用于回填对方档案（联系人/电话/地址/法人/银行账户）。
  * 优先级：公司编号等值 > 公司名称全等；两档都只做唯一命中，歧义一律返回 null。
@@ -110,15 +188,17 @@ export const purchaserNoOf = (app: any): string => {
   return resolveNo(app?.purchaserUsername) || noFromCompanyName(app?.purchaserCompanyName);
 };
 
-/** 本账号是否该记录的目标供应商（编号等值优先；编号解析不到时才按名称全等兜底，绝不做子串匹配） */
+/** 本账号是否该记录的目标供应商（编号等值优先；编号解析不到时名称必须全库唯一命中才兜底，绝不做子串匹配） */
 export const amTargetSupplier = (app: any): boolean => {
   const mine = myCompanyNo();
   const theirs = supplierNoOf(app);
   if (mine && theirs) return theirs === mine;
   if (String(app?.targetSupplierName || '').trim() === '待供应商确认') return true;
-  // 无任何可解析编号的历史记录：保持旧行为里"名称全等"这一档，放宽到子串就会重演串号问题
-  const myName = String(loadUsers().find((u: any) => String(u?.username || '') === currentOwnerName())?.companyName || '').trim();
-  return !!myName && !!app?.targetSupplierName && String(app.targetSupplierName).trim() === myName;
+  // 无任何可解析编号的历史记录：名称档必须唯一命中本主体。
+  // 同名两家公司时宁可双方都看不到这条历史申请，也不能让同名的另一账号认领并点同意
+  // （那会把它自己写进发起方的供应商目录，表现为「同名新账号自动出现在我的列表」）。
+  const hitRoot = uniqueCompanyRootByName(app?.targetSupplierName);
+  return !!hitRoot && hitRoot === rootOfUsername(currentOwnerName());
 };
 
 /** 本账号是否该记录的发起采购商：账号等值优先（采购商侧列表本就按账号分区），编号仅作历史无账号记录的兜底 */
@@ -142,7 +222,11 @@ export const isTargetSupplierApp = (app: any, opts: { owner?: string; company?: 
   const theirs = supplierNoOf(app);
   if (mine && theirs) return theirs === mine;
   const company = String(opts.company || '').trim();
-  return !!company && String(app?.targetSupplierName || '').trim() === company;
+  if (!company) return false;
+  // 名称档同样要求唯一主体命中：同名歧义时不得把别人的申请认成发给本公司的
+  const hitRoot = uniqueCompanyRootByName(app?.targetSupplierName);
+  const myRoot = owner ? rootOfUsername(owner) : uniqueCompanyRootByName(company);
+  return !!hitRoot && !!myRoot && hitRoot === myRoot;
 };
 
 /**
@@ -159,7 +243,10 @@ export const appMatchesSupplierEntry = (app: any, entry: any): boolean => {
   const eid = String(entry?.id || '').trim();
   if (eid && (String(app?.purchaserSupplierEntryId || '').trim() === eid || String(app?.targetSupplierId || '').trim() === eid)) return true;
   const en = String(entry?.supplierName || '').trim();
-  return !!en && String(app?.targetSupplierName || '').trim() === en;
+  const an = String(app?.targetSupplierName || '').trim();
+  if (!en || !an || en !== an) return false;
+  // 名称全等还不够：同名两家公司时该名称解析不出唯一主体，一律不认（宁缺毋滥）
+  return !!uniqueCompanyRootByName(en);
 };
 
 /** 目标供应商账号：优先记录内显式值，缺失时按编号本地解析（供跨租户分区键投递使用，避免直接拼语义分裂的 targetSupplierId） */

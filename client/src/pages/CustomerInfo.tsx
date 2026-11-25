@@ -54,7 +54,7 @@ import { createInviteRecord, findUnusedInviteForCustomer, findInviteRecord, buil
 import type { InviteRecord } from '../utils/inviteRegistry';
 import { startCooperationTermination, cancelCooperationTermination, TERMINATE_GRACE_MS } from '../utils/cooperationTerminate';
 import { resolveLatestCompanyName, buildCredIndex } from '../utils/nameSync';
-import { withCooperationCreds, myCompanyNo, purchaserNoOf, ensureCredsMigrated, noOfUser, isTargetSupplierApp, amTargetSupplier, noFromUsername, noFromCompanyName, findUserByNoOrUniqueName } from '../utils/cooperationCred';
+import { withCooperationCreds, myCompanyNo, purchaserNoOf, ensureCredsMigrated, noOfUser, isTargetSupplierApp, amTargetSupplier, noFromUsername, noFromCompanyName, findUserByNoOrUniqueName, ambiguousCompanyNames, uniqueCompanyRootByName } from '../utils/cooperationCred';
 import { reconcileCooperationPairs } from '../utils/cooperationReconcile';
 import { dedupeBoundPurchasers } from '../utils/boundPurchaserDedupe';
 import { copyText } from '../utils/clipboard';
@@ -193,6 +193,7 @@ interface BoundPurchaser {
   status: 'approved' | 'terminated' | 'terminating';
   customerId?: string; // 关联的直接客户ID（从邀约合作发起的）
   purchaserUsername?: string; // 采购商账号用户名（用于查找企业信息）
+  purchaserNo?: string; // 采购商公司编号（同名公司时的唯一身份凭证）
   legalPerson?: string; // 法人代表
   wechatQr?: string; // 微信二维码
   businessAddress?: string; // 经营地址
@@ -271,6 +272,28 @@ const ReceiptVoucherUpload: React.FC<{ value?: string; onChange?: (v: string) =>
   );
 };
 
+/** 批量判定上下文：一次构建歧义名表与账号→编号表，避免嵌套循环里每行重新解析 registeredUsers */
+interface PartyCtx { ambiguous?: Set<string>; noByUn?: Map<string, string> }
+
+/**
+ * 绑定行/申请记录 ↔ 客户档案 的同一采购商判定：账号等值 > 公司编号等值 > 名称全等且全库唯一主体命中。
+ * 两家独立公司恰好同名时名称档不认：否则编辑/终止/删除其中一家会连带改到另一家的绑定行。
+ */
+const samePurchaserParty = (row: any, cust: any, ctx?: PartyCtx): boolean => {
+  const noOfUn = (un: string) => (ctx?.noByUn ? (ctx.noByUn.get(un) || '') : noFromUsername(un));
+  const ru = String(row?.purchaserUsername || '').trim();
+  const cu = String(cust?.purchaserUsername || '').trim();
+  if (ru && cu && ru === cu) return true;
+  const rn = String(row?.purchaserNo || '').trim() || noOfUn(ru);
+  const cn = String(cust?.purchaserNo || '').trim() || noOfUn(cu) || noFromCompanyName(cust?.name);
+  if (rn && cn) return rn === cn;
+  if (ru && cu) return false;
+  const nm = String(cust?.name || cust?.purchaserCompanyName || '').trim();
+  const rnm = String(row?.purchaserName || row?.purchaserCompanyName || '').trim();
+  if (!nm || nm !== rnm) return false;
+  return ctx?.ambiguous ? !ctx.ambiguous.has(nm) : !!uniqueCompanyRootByName(nm);
+};
+
 // 从 localStorage 读取当前登录供应商的真实绑定数据（按数据归属账号隔离）
 export const loadBoundPurchasersFromStorage = (): BoundPurchaser[] => {
   // 同一采购商被不同写点以不同 id 重复落行（供应商审批 BIND-<时间戳> / 派生补入 BIND-<账号后6位>）时先归并自愈：
@@ -295,6 +318,12 @@ export const loadBoundPurchasersFromStorage = (): BoundPurchaser[] => {
   // 派生前回状态快照：供末尾回写比对（派生结果必须落库上传，否则子账号/他端永远读到旧存储态）
   const storedStatusSnap = new Map<string, string>();
   bound.forEach((b: any) => { storedStatusSnap.set(String(b?.purchaserUsername || b?.purchaserName || ''), String(b?.status || '')); });
+  // 名称歧义表与账号→编号表：本函数要遍历所有租户键 × 所有条目，一次构建供后续凭证判定复用
+  const partyCtx: PartyCtx = { ambiguous: ambiguousCompanyNames(), noByUn: new Map<string, string>() };
+  try {
+    const usAll: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+    (Array.isArray(usAll) ? usAll : []).forEach((u: any) => { if (u?.username) partyCtx.noByUn!.set(String(u.username), noOfUser(u)); });
+  } catch { /* ignore */ }
   // 兜底合并：已批准的合作申请（防止个别批准路径未回写 boundPurchasers 导致客户缺失）
   try {
     const owner = getDataOwner();
@@ -307,24 +336,22 @@ export const loadBoundPurchasersFromStorage = (): BoundPurchaser[] => {
     const apps: any[] = JSON.parse(localStorage.getItem(COOPERATION_APPLICATIONS_KEY) || '[]');
     if (Array.isArray(apps)) {
       const tsOfApp = (a: any) => Date.parse(String(a.approveDate || a.applyDate || '').replace(/-/g, '/')) || 0;
-      const samePurchaserOf = (c: any, t: any) => (t.purchaserUsername && c.purchaserUsername === t.purchaserUsername) || (t.purchaserCompanyName && c.purchaserCompanyName === t.purchaserCompanyName);
+      const samePurchaserOf = (c: any, t: any) => samePurchaserParty(c, t, partyCtx);
       const approvedTerminateApps = apps.filter((a: any) => a.type === 'terminate' && a.status === 'approved' && amSupplier(a));
       const coopAppsOfMine = apps.filter((a: any) => (a.type || 'cooperation') === 'cooperation' && !a.superseded && (a.status === 'approved' || a.status === 'pending') && amSupplier(a));
-      // 已批准解除申请对应的采购商名称：解除后若存在更新的合作申请（重新合作），该终止申请不得再回滚状态
-      const terminatedNames = new Set(
-        approvedTerminateApps
-          .filter((t: any) => !coopAppsOfMine.some((c: any) => samePurchaserOf(c, t) && tsOfApp(c) > tsOfApp(t)))
-          .map((a: any) => a.purchaserCompanyName || a.purchaserUsername)
-      );
+      // 已批准解除申请对应的采购商：解除后若存在更新的合作申请（重新合作），该终止申请不得再回滚状态
+      // 按凭证而非名称集合判定：同名两家采购商时，一家解除不得把另一家也置为已终止
+      const effectiveTerminateApps = approvedTerminateApps
+        .filter((t: any) => !coopAppsOfMine.some((c: any) => samePurchaserOf(c, t) && tsOfApp(c) > tsOfApp(t)));
       // 已有绑定记录同步解除状态
       bound = bound.map((bp: any) =>
-        terminatedNames.has(bp.purchaserName) && bp.status !== 'terminated' ? { ...bp, status: 'terminated' } : bp
+        effectiveTerminateApps.some((t: any) => samePurchaserParty(bp, t, partyCtx)) && bp.status !== 'terminated' ? { ...bp, status: 'terminated' } : bp
       );
       // 自愈：条目为已解除但存在更新的已批准合作申请（历史回滚残留）→ 内存恢复已合作；存储由 reconcile 收敛落盘
       bound = bound.map((bp: any) => {
         if (bp.status !== 'terminated') return bp;
-        const tTs = Math.max(0, ...approvedTerminateApps.filter((t: any) => (t.purchaserUsername && t.purchaserUsername === bp.purchaserUsername) || (t.purchaserCompanyName && t.purchaserCompanyName === bp.purchaserName)).map(tsOfApp));
-        const newer = coopAppsOfMine.find((c: any) => c.status === 'approved' && ((c.purchaserUsername && c.purchaserUsername === bp.purchaserUsername) || (c.purchaserCompanyName && c.purchaserCompanyName === bp.purchaserName)) && tsOfApp(c) > tTs);
+        const tTs = Math.max(0, ...approvedTerminateApps.filter((t: any) => samePurchaserParty(bp, t, partyCtx)).map(tsOfApp));
+        const newer = coopAppsOfMine.find((c: any) => c.status === 'approved' && samePurchaserParty(bp, c, partyCtx) && tsOfApp(c) > tTs);
         return newer ? { ...bp, status: 'approved', terminateAt: undefined, terminateBy: undefined } : bp;
       });
       apps.forEach((a: any) => {
@@ -332,7 +359,7 @@ export const loadBoundPurchasersFromStorage = (): BoundPurchaser[] => {
         if (!amSupplier(a)) return;
         const name = a.purchaserCompanyName || a.purchaserUsername;
         if (!name) return;
-        const exists = bound.some((bp: any) => bp.purchaserName === name || (bp.purchaserUsername && bp.purchaserUsername === a.purchaserUsername));
+        const exists = bound.some((bp: any) => samePurchaserParty(bp, a, partyCtx));
         if (exists) return;
         bound = [...bound, {
           key: `bp-app-${a.applicationId || name}`,
@@ -341,8 +368,9 @@ export const loadBoundPurchasersFromStorage = (): BoundPurchaser[] => {
           purchaserContact: a.purchaserContact || '',
           purchaserPhone: a.purchaserPhone || '',
           bindDate: String(a.approveDate || a.applyDate || '').slice(0, 10),
-          status: terminatedNames.has(name) ? 'terminated' : 'approved',
+          status: effectiveTerminateApps.some((t: any) => samePurchaserOf(a, t)) ? 'terminated' : 'approved',
           purchaserUsername: a.purchaserUsername || '',
+          purchaserNo: purchaserNoOf(a) || partyCtx.noByUn!.get(String(a.purchaserUsername || '')) || '',
           salesman: a.salesmanName || '',
           province: (users.find((u: any) => u.username === a.purchaserUsername) as any)?.province || '',
           city: (users.find((u: any) => u.username === a.purchaserUsername) as any)?.city || '',
@@ -361,6 +389,9 @@ export const loadBoundPurchasersFromStorage = (): BoundPurchaser[] => {
     try { users2 = JSON.parse(localStorage.getItem('registeredUsers') || '[]'); } catch { /* ignore */ }
     const me2 = users2.find((u: any) => u.username === owner);
     const myCompany2 = me2?.companyName || owner;
+    const myNo2 = noOfUser(me2);
+    // 名称档只在全库唯一主体命中时放行（两家独立公司同名时不认）
+    const myNameUnique2 = !partyCtx.ambiguous!.has(String(myCompany2 || '').trim());
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
       if (!k || k.indexOf('purchaser_suppliers_') !== 0) continue;
@@ -370,13 +401,22 @@ export const loadBoundPurchasersFromStorage = (): BoundPurchaser[] => {
       try { list = JSON.parse(localStorage.getItem(k) || '[]'); } catch { continue; }
       if (!Array.isArray(list)) continue;
       list.forEach((s: any) => {
-        if ((s.supplierName || '') !== myCompany2) return;
+        // 只认「确实指向本主体」的条目：供应商账号等值 > 公司编号等值 > 名称全等且唯一命中。
+        // 原写法只比公司名，同名另一家公司的条目会把该采购商反向补进我司客户列表（客户泄露）
+        const sUn = String(s.supplierUsername || '').trim();
+        const sRec = sUn ? users2.find((u: any) => u.username === sUn) : null;
+        const sNo = String(s.supplierNo || '').trim() || noOfUser(sRec);
+        const unHit = !!sUn && (sUn === owner || String(sRec?.parentAccount || '') === owner);
+        const noHit = !!myNo2 && !!sNo && sNo === myNo2;
+        const nameHit = !sUn && !sNo && String(s.supplierName || '').trim() === String(myCompany2 || '').trim() && myNameUnique2;
+        if (!unHit && !noHit && !nameHit) return;
         const st = s.cooperationStatus || '';
         if (st !== 'approved' && st !== 'terminated' && st !== 'terminating') return;
         const pRec = users2.find((u: any) => u.username === pUser);
         const name = pRec?.companyName || pUser;
+        const pNo = noOfUser(pRec);
         const mappedStatus = st === 'approved' ? 'approved' : st === 'terminating' ? 'terminating' : 'terminated';
-        const existIdx = bound.findIndex((bp: any) => bp.purchaserName === name || (bp.purchaserUsername && bp.purchaserUsername === pUser));
+        const existIdx = bound.findIndex((bp: any) => samePurchaserParty(bp, { purchaserUsername: pUser, purchaserNo: pNo, name }, partyCtx));
         if (existIdx >= 0) {
           // 采购商侧已解除/解除中时同步状态
           if (mappedStatus !== 'approved' && (bound[existIdx] as any).status === 'approved') {
@@ -396,6 +436,7 @@ export const loadBoundPurchasersFromStorage = (): BoundPurchaser[] => {
           bindDate: String(s.cooperationDate || s.addedDate || '').slice(0, 10),
           status: mappedStatus,
           purchaserUsername: pUser,
+          purchaserNo: pNo,
           province: pRec?.province || '',
           city: pRec?.city || '',
           district: pRec?.district || '',
@@ -1332,7 +1373,7 @@ const CustomerInfo: React.FC = () => {
       const updatedApps = apps.map((a: any) => (
         a.type === 'terminate' && a.status === 'pending' && !a.superseded &&
         amTargetSupplier(a) &&
-        (a.purchaserCompanyName === terminatingCustomer.name || (purchaserUsername && a.purchaserUsername === purchaserUsername))
+        samePurchaserParty(a, terminatingCustomer)
           ? { ...a, superseded: true } : a
       ));
       updatedApps.push(withCooperationCreds({
@@ -1357,7 +1398,7 @@ const CustomerInfo: React.FC = () => {
     try {
       const boundData: any[] = JSON.parse(localStorage.getItem(storageKey) || '[]');
       const updated = boundData.map((bp) =>
-        bp.purchaserName === terminatingCustomer.name
+        samePurchaserParty(bp, terminatingCustomer)
           ? { ...bp, status: 'terminating' as const, terminateAt, terminateBy: 'supplier' }
           : bp
       );
@@ -1455,12 +1496,12 @@ const CustomerInfo: React.FC = () => {
         const boundData = localStorage.getItem(storageKey);
         if (boundData) {
           const boundPurchasers: any[] = JSON.parse(boundData);
-          const filtered = boundPurchasers.filter(
-            (bp) => bp.purchaserName !== record.name
-          );
+          // 同一采购商判定走凭证：同名两家公司时删其中一家不得连带删掉另一家的绑定行
+          const isTargetRow = (bp: any) => samePurchaserParty(bp, record) || (!!record.id && bp.customerId === record.id);
+          const filtered = boundPurchasers.filter((bp) => !isTargetRow(bp));
           // boundPurchasers_ 已纳入服务端「永不缩水键」防擦除：这里是从本端真正移除绑定关系，必须申报被删行主键；
           // 服务端按 key || id 匹配，两列都要申报，否则带 key 的行删不掉、刷新后被并集复活
-          declareShrink(storageKey, boundPurchasers.filter((bp: any) => bp.purchaserName === record.name)
+          declareShrink(storageKey, boundPurchasers.filter(isTargetRow)
             .flatMap((bp: any) => [String(bp.key || ''), String(bp.id || '')]).filter(Boolean));
           localStorage.setItem(storageKey, JSON.stringify(filtered));
           setBoundPurchasers(filtered);
@@ -1568,10 +1609,13 @@ const CustomerInfo: React.FC = () => {
     // 在途申请仅指 pending；历史 approved（含已解除合作后遗留）不算在途，下方统一作废后重新发起
     // 同一对方判定凭证优先：采购商编号（或账号）+ 本方供应商编号；无编号的历史记录才按名称全等兜底
     const myNo = myCompanyNo() || noOfUser(currentUser);
+    // 名称档只在全库唯一主体命中时放行：两家独立公司同名时不得认领/复用别家的申请与条目
+    const myNameUnique = !!uniqueCompanyRootByName(supplierCompany);
     const sameSupplierSide = (a: any): boolean => {
-      if (!myNo) return a.targetSupplierName === supplierCompany;
       const appNo = String(a.targetSupplierNo || '').trim();
-      return appNo ? appNo === myNo : a.targetSupplierName === supplierCompany;
+      if (myNo && appNo) return appNo === myNo;
+      const an = String(a.targetSupplierName || '').trim();
+      return !!an && an === String(supplierCompany || '').trim() && myNameUnique;
     };
     const samePeerApp = (a: any) => (a.type || 'cooperation') === 'cooperation' && !a.superseded
       && (a.purchaserUsername === purchaserUser.username || purchaserNoOf(a) === String(no))
@@ -1586,7 +1630,15 @@ const CustomerInfo: React.FC = () => {
     const pKey = 'purchaser_suppliers_' + purchaserUser.username;
     let list: any[] = [];
     try { list = JSON.parse(localStorage.getItem(pKey) || '[]'); } catch { /* ignore */ }
-    let entry = list.find((s: any) => (myNo && String(s.supplierNo || '') === myNo) || s.supplierName === supplierCompany);
+    // 条目定位：编号/账号等值优先，名称档只在全库唯一主体命中时才认
+    // （原写法会把同名另一家公司的条目认领过来并改写其 supplierUsername = 劫持别家合作关系）
+    const sameSupplierEntry = (s: any): boolean => {
+      const sNo = String(s?.supplierNo || '').trim() || noFromUsername(s?.supplierUsername);
+      if (myNo && sNo) return sNo === myNo;
+      if (String(s?.supplierUsername || '').trim() === myUsername) return true;
+      return String(s?.supplierName || '').trim() === String(supplierCompany || '').trim() && myNameUnique;
+    };
+    let entry = list.find(sameSupplierEntry);
     const now = dayjs().format('YYYY-MM-DD HH:mm:ss');
     if (!entry) {
       entry = {
@@ -1609,7 +1661,7 @@ const CustomerInfo: React.FC = () => {
     } else {
       // 复用已有条目：拒绝/终止后重新申请回退待确认，并刷新供应商主动发起标记
       // （cooperation_applications 不参与跨浏览器同步，标记必须落在条目上）
-      const idx = list.findIndex((s: any) => (myNo && String(s.supplierNo || '') === myNo) || s.supplierName === supplierCompany);
+      const idx = list.findIndex(sameSupplierEntry);
       entry = {
         ...entry,
         cooperationStatus: entry.cooperationStatus === 'rejected' || entry.cooperationStatus === 'terminated' ? 'pending' : entry.cooperationStatus,
@@ -1724,7 +1776,7 @@ const CustomerInfo: React.FC = () => {
             const bound: any[] = JSON.parse(localStorage.getItem(bpKey) || '[]');
             let bpFound = false;
             const updatedBound = bound.map((bp: any) => {
-              if (bp.id === editingCustomer.id || bp.purchaserName === editingCustomer.name) {
+              if (bp.id === editingCustomer.id || samePurchaserParty(bp, editingCustomer)) {
                 bpFound = true;
                 return {
                   ...bp,
@@ -1834,9 +1886,11 @@ const CustomerInfo: React.FC = () => {
       const tname = salesmanTarget.customerName || '';
       // 采购商行的业务员实际存于其关联的直接客户档案；无关联时回退按名称匹配
       const linkedId = boundPurchasers.find(b => b.id === tid)?.customerId || '';
+      // 名称档只在全库唯一主体命中时放行：同名两家客户时不得把业务员写到另一家头上
+      const tnameAmbiguous = ambiguousCompanyNames().has(tname);
       let hit = false;
       const updated = customers.map((c) => {
-        if (c.id === tid || (linkedId && c.id === linkedId) || (tname && c.name === tname)) {
+        if (c.id === tid || (linkedId && c.id === linkedId) || (tname && !tnameAmbiguous && c.name === tname)) {
           hit = true;
           return { ...c, salesman: displayName };
         }
@@ -1853,7 +1907,7 @@ const CustomerInfo: React.FC = () => {
         try {
           const arr: BoundPurchaser[] = JSON.parse(localStorage.getItem(bpKey) || '[]');
           const upd = arr.map(b => {
-            if (b.id === tid || (tname && b.purchaserName === tname)) { bpHit = true; return { ...b, salesman: displayName }; }
+            if (b.id === tid || (tname && !tnameAmbiguous && b.purchaserName === tname)) { bpHit = true; return { ...b, salesman: displayName }; }
             return b;
           });
           if (bpHit) {
@@ -1873,9 +1927,11 @@ const CustomerInfo: React.FC = () => {
     const tid = record.id;
     const tname = record.name || '';
     const linkedId = boundPurchasers.find(b => b.id === tid)?.customerId || '';
+    // 名称档只在全库唯一主体命中时放行（同名两家客户不得互相改等级）
+    const tnameAmbiguous = ambiguousCompanyNames().has(tname);
     let hit = false;
     const updated = customers.map((c) => {
-      if (c.id === tid || (linkedId && c.id === linkedId) || (tname && c.name === tname)) {
+      if (c.id === tid || (linkedId && c.id === linkedId) || (tname && !tnameAmbiguous && c.name === tname)) {
         hit = true;
         return { ...c, level: v };
       }
@@ -1893,7 +1949,7 @@ const CustomerInfo: React.FC = () => {
     try {
       const arr: BoundPurchaser[] = JSON.parse(localStorage.getItem(bpKey) || '[]');
       const upd = arr.map(b => {
-        if (b.id === tid || (tname && b.purchaserName === tname)) { bpHit = true; return { ...b, level: v }; }
+        if (b.id === tid || samePurchaserParty(b, record)) { bpHit = true; return { ...b, level: v }; }
         return b;
       });
       if (bpHit) {
