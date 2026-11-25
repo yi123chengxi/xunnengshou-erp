@@ -34,7 +34,8 @@ import AsOfDebtModal from '../components/AsOfDebtModal';
 import EnterpriseCertModal, { CertBadge, fetchCertStatus, fetchCertBatch } from '../components/EnterpriseCertModal';
 import FieldConfigModal from '../components/FieldConfigModal';
 import type { CertInfo } from '../components/EnterpriseCertModal';
-import { flushDatasetUpload, flushDatasetUploadAsync, ensureDatasetFromServer, mergeDatasetFromServer, reloadAfterPull, declareShrink } from '../utils/serverSync';
+import { flushDatasetUpload, flushDatasetUploadAsync, ensureDatasetFromServer, mergeDatasetFromServer, reloadAfterPull } from '../utils/serverSync';
+import { loadCustomerDelTombs, appendCustomerDelTomb, tombActiveForParty, pruneTombstonedBound } from '../utils/customerDelTomb';
 import { safeSetItem } from '../utils/storageQuota';
 import { isAccountingMode, writeAutoEntries, loadSubjectOptions, subjectFilterOption } from '../utils/accountingBridge';
 import { loadTenantUsers } from '../utils/tenantUsers';
@@ -324,6 +325,8 @@ export const loadBoundPurchasersFromStorage = (): BoundPurchaser[] => {
     const usAll: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
     (Array.isArray(usAll) ? usAll : []).forEach((u: any) => { if (u?.username) partyCtx.noByUn!.set(String(u.username), noOfUser(u)); });
   } catch { /* ignore */ }
+  // 删除墓碑：派生兜底跳过已删主体 + 剪枝复活回流行（详见 utils/customerDelTomb）
+  const delTombs = loadCustomerDelTombs(getDataOwner());
   // 兜底合并：已批准的合作申请（防止个别批准路径未回写 boundPurchasers 导致客户缺失）
   try {
     const owner = getDataOwner();
@@ -359,6 +362,8 @@ export const loadBoundPurchasersFromStorage = (): BoundPurchaser[] => {
         if (!amSupplier(a)) return;
         const name = a.purchaserCompanyName || a.purchaserUsername;
         if (!name) return;
+        // 删除墓碑命中：已批准申请不得把已删客户补回（来源时间戳=申请批准时间）
+        if (tombActiveForParty(delTombs, { purchaserUsername: a.purchaserUsername, purchaserNo: purchaserNoOf(a) || partyCtx.noByUn!.get(String(a.purchaserUsername || '')) || '', purchaserName: name }, tsOfApp(a), partyCtx)) return;
         const exists = bound.some((bp: any) => samePurchaserParty(bp, a, partyCtx));
         if (exists) return;
         bound = [...bound, {
@@ -415,6 +420,9 @@ export const loadBoundPurchasersFromStorage = (): BoundPurchaser[] => {
         const pRec = users2.find((u: any) => u.username === pUser);
         const name = pRec?.companyName || pUser;
         const pNo = noOfUser(pRec);
+        // 删除墓碑命中：采购商侧目录不得把已删客户反向补回（来源时间戳=合作建立时间）
+        const srcMs = Date.parse(String(s.cooperationDate || s.addedDate || '').replace(/-/g, '/')) || 0;
+        if (tombActiveForParty(delTombs, { purchaserUsername: pUser, purchaserNo: pNo, purchaserName: name }, srcMs, partyCtx)) return;
         const mappedStatus = st === 'approved' ? 'approved' : st === 'terminating' ? 'terminating' : 'terminated';
         const existIdx = bound.findIndex((bp: any) => samePurchaserParty(bp, { purchaserUsername: pUser, purchaserNo: pNo, name }, partyCtx));
         if (existIdx >= 0) {
@@ -524,6 +532,9 @@ export const loadBoundPurchasersFromStorage = (): BoundPurchaser[] => {
       return b;
     });
   }
+  // 删除墓碑剪枝：剔除他端派生复活回流的 bound 行，回写后由 doPush 差集申报 removedKeys 跨端收敛
+  const pruneRes = pruneTombstonedBound(bound, delTombs, partyCtx);
+  bound = pruneRes.list;
   // 派生结果回写落库：镜像/合作申请派生出的状态（如已解除合作）与新增记录必须持久化并上传，
   // 否则子账号/其他浏览器拉取的仍是旧存储态 approved（主账号显示已解除、子账号显示已合作的根因）
   try {
@@ -533,7 +544,7 @@ export const loadBoundPurchasersFromStorage = (): BoundPurchaser[] => {
       const st = String(b?.status || '');
       return storedStatusSnap.has(k) ? storedStatusSnap.get(k) !== st : true;
     });
-    if (changed) localStorage.setItem('boundPurchasers_' + getDataOwner(), JSON.stringify(bound));
+    if (changed || pruneRes.removedKeys.length > 0) localStorage.setItem('boundPurchasers_' + getDataOwner(), JSON.stringify(bound));
   } catch { /* ignore */ }
   if (bound.length > 0) return bound;
   return initialBoundPurchasers; // 无真实数据时用 demo
@@ -1492,6 +1503,10 @@ const CustomerInfo: React.FC = () => {
     if (record.type === 'purchaser') {
       // 已绑定的采购商：从 boundPurchasers 中移除
       const storageKey = getStorageKey();
+      // 删除墓碑：不登记则两条派生兜底（已批准合作申请/采购商侧目录反向扫描）
+      // 会按合作痕迹把已删行补回并回写真表导致复活；墓碑随全局同步+服务端恒并集跨端收敛。
+      // 登记不依赖 bound 键是否已在本地落盘（大表可能仅存 IndexedDB），漏登记即等于没删
+      appendCustomerDelTomb(getDataOwner(), { username: record.purchaserUsername, no: resolvePurchaserNo(record), name: record.name });
       try {
         const boundData = localStorage.getItem(storageKey);
         if (boundData) {
@@ -1499,14 +1514,16 @@ const CustomerInfo: React.FC = () => {
           // 同一采购商判定走凭证：同名两家公司时删其中一家不得连带删掉另一家的绑定行
           const isTargetRow = (bp: any) => samePurchaserParty(bp, record) || (!!record.id && bp.customerId === record.id);
           const filtered = boundPurchasers.filter((bp) => !isTargetRow(bp));
-          // boundPurchasers_ 已纳入服务端「永不缩水键」防擦除：这里是从本端真正移除绑定关系，必须申报被删行主键；
-          // 服务端按 key || id 匹配，两列都要申报，否则带 key 的行删不掉、刷新后被并集复活
-          declareShrink(storageKey, boundPurchasers.filter(isTargetRow)
-            .flatMap((bp: any) => [String(bp.key || ''), String(bp.id || '')]).filter(Boolean));
           localStorage.setItem(storageKey, JSON.stringify(filtered));
           setBoundPurchasers(filtered);
         }
       } catch { /* ignore */ }
+      // 关联直接客户档案连带移除：否则 bound 行消失后档案会以直接客户身份重新出现在全部客户列表（第二种复活）
+      const restCustomers = customers.filter((c) => c.id !== record.id);
+      if (restCustomers.length !== customers.length) {
+        setCustomers(restCustomers);
+        localStorage.setItem(getCustomersStorageKey(), JSON.stringify(restCustomers));
+      }
     } else {
       // 直接客户：从 customers 中移除并持久化到 localStorage
       const updated = customers.filter((c) => c.id !== record.id);

@@ -46,8 +46,10 @@ const APPEND_ONLY_KEYS = ['market_trade_orders', 'purchaser_pushed_orders'];
 // 这类键的删除/完成靠 delisted 墓碑表达，整体替换会让未同步墓碑的旧端（如另一端浏览器）
 // 把已完成/已删除的对账记录重新写回，导致「刷新后又出现」「对账结果不回写」。
 const MERGE_ALWAYS_KEYS = ['recon_records'];
-// 墓碑语义键前缀：分平台对账独立库（recon_db_supplier_<账号> / recon_db_purchaser_<账号>）
-const MERGE_ALWAYS_PREFIXES = ['recon_db_'];
+// 墓碑语义键前缀：分平台对账独立库（recon_db_supplier_<账号> / recon_db_purchaser_<账号>）；
+// 客户删除墓碑（customer_del_tomb_<账号>）为 append-only：未同步墓碑的陈旧端整键上传
+// 不得抹掉其他端刚登记的删除记录，否则已删客户会在派生兜底链路重新复活
+const MERGE_ALWAYS_PREFIXES = ['recon_db_', 'customer_del_tomb_'];
 const isMergeAlwaysKey = (key: string): boolean => MERGE_ALWAYS_KEYS.includes(key) || MERGE_ALWAYS_PREFIXES.some(p => key.startsWith(p));
 // 永不缩水键前缀（租户核心账单/订单数据，丢失即信任事故）：PUT 一律改为「incoming 并集 + 仅按显式 removedIds 删除」，
 // 绝不整键替换。未申报 removedIds 的缩水（跨端镜像空基覆盖/派生重建丢行等意外）在服务端被并集保留，物理杜绝误擦除；
