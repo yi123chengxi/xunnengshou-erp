@@ -2104,25 +2104,18 @@ const CustomerInfo: React.FC = () => {
     showCustomerDetail(record);
   };
 
-  // 收款账户下拉选项（财务管理-银行账户列表，可按名称/开户银行/账号/类型检索）
+  // 收款账户下拉选项（财务管理-银行账户列表）：账户名称（有账户简称时默认显示简称）+ 银行账号后4位 + 开户银行 + 账户类型；
+  // 不显示账户余额（收款登记只需识别账户，余额属资金敏感信息不在下拉暴露）
   const getBankAccountOptions = () => {
     let banks: any[] = [];
     try { banks = JSON.parse(localStorage.getItem(`pageData_finance_bank-account_${getDataOwner()}`) || '[]'); } catch { /* ignore */ }
     return banks.map((b: any) => {
-      const name = b.name || b.accountName || b.id || '';
-      const last4 = b.bankAccountNo ? '****' + String(b.bankAccountNo).slice(-4) : '';
-      const searchText = `${name} ${b.bankName || ''} ${b.branchName || ''} ${b.bankAccountNo || ''} ${last4} ${b.accountType || ''}`.toLowerCase();
+      const name = String(b.shortName || '').trim() || b.name || b.accountName || b.id || '';
+      const last4 = b.bankAccountNo ? String(b.bankAccountNo).slice(-4) : '';
       return {
-        value: name,
-        searchText,
-        label: (
-          <span style={{ display: 'inline-flex', gap: 8, alignItems: 'center', whiteSpace: 'nowrap' }}>
-            <span style={{ fontWeight: 600 }}>{name || '—'}</span>
-            <span style={{ color: '#888' }}>开户银行：{b.bankName || '—'}{b.branchName ? `（${b.branchName}）` : ''}</span>
-            <span style={{ color: '#888' }}>尾号：{last4 || '—'}</span>
-            <Tag color="blue" style={{ marginRight: 0 }}>{b.accountType || '—'}</Tag>
-          </span>
-        ),
+        value: b.key,
+        bank: b,
+        label: `${name}${last4 ? `（${last4}）` : ''} - ${b.bankName || '—'} - ${b.accountType || '—'}`,
       };
     });
   };
@@ -3113,15 +3106,7 @@ const CustomerInfo: React.FC = () => {
             <Select style={{ width: '100%' }} value={receiptBankKey || undefined} placeholder="选择收款入账银行账户" allowClear
               showSearch filterOption={(input, option) => String(option?.label ?? '').toLowerCase().includes(input.toLowerCase())}
               onChange={v => setReceiptBankKey(v || '')}
-              options={(() => {
-                try {
-                  const banks: any[] = JSON.parse(localStorage.getItem(`pageData_finance_bank-account_${getDataOwner()}`) || '[]');
-                  return banks.filter((b: any) => b.status !== 'disabled').map((b: any) => ({
-                    label: `${b.name} - ${b.bankName || ''} ${b.balance !== undefined ? `(余额 ¥${Number(b.balance).toFixed(2)})` : ''}`,
-                    value: b.key,
-                  }));
-                } catch { return []; }
-              })()} />
+              options={getBankAccountOptions().filter(o => o.bank?.status !== 'disabled')} />
           </div>
         </div>
         <div style={{ marginTop: 16, padding: '8px 12px', background: '#f6f8fa', border: '1px solid #e3e8ee', borderRadius: 6, fontSize: 12, color: '#5a6d85', lineHeight: 1.8 }}>
