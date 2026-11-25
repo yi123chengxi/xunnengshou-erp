@@ -13700,7 +13700,7 @@ const handleBatchAttrsConfirm = () => {
   // 默认显示列数
   const defaultVisibleCount = effectivePageConfig?.columns.filter(c => c.defaultVisible !== false).length || 0;
 
-  // ============ 银行账户导入（Excel/CSV；账户名称或银行账号已存在/文件内重复则提示并跳过） ============
+  // ============ 银行账户导入（Excel/CSV；展示表头自动匹配情况；账户名称允许重复；银行账号重复仅提醒数量不拦截） ============
   const handleBankImportFile = useCallback((file: File) => {
     const reader = new FileReader();
     reader.onload = (e) => {
@@ -13712,14 +13712,23 @@ const handleBatchAttrsConfirm = () => {
         if (jsonData.length === 0) { message.warning('文件中没有数据'); return; }
         // 表头标题→字段映射（复用银行账户列配置，另加常用别名）
         const titleToKey: Record<string, string> = {};
-        effectivePageConfig?.columns.forEach(c => { titleToKey[c.title] = c.dataIndex; });
+        const keyToTitle: Record<string, string> = {};
+        effectivePageConfig?.columns.forEach(c => { titleToKey[c.title] = c.dataIndex; keyToTitle[c.dataIndex] = c.title; });
         titleToKey['账户名'] = 'name';
         titleToKey['账号'] = 'bankAccountNo';
+        // 表头自动匹配情况：收集文件全部表头，区分已匹配/未匹配
+        const headerSet = new Set<string>();
+        jsonData.forEach(row => Object.keys(row).forEach(h => headerSet.add(String(h).trim())));
+        const matchedHeaders: string[] = [];
+        const unmatchedHeaders: string[] = [];
+        headerSet.forEach(h => { (titleToKey[h] ? matchedHeaders : unmatchedHeaders).push(h); });
         const normAcct = (v: any) => String(v ?? '').replace(/\s/g, '');
-        const seenNames = new Set<string>();
+        const existingAccts = new Set(dataSource.map((r: any) => normAcct(r.bankAccountNo)).filter(Boolean));
         const seenAccts = new Set<string>();
         const accepted: Record<string, any>[] = [];
-        const skipped: string[] = [];
+        const invalidRows: string[] = [];
+        const dupExisting: string[] = [];
+        const dupInFile: string[] = [];
         jsonData.forEach((row, idx) => {
           const lineNo = idx + 2;
           const mapped: Record<string, any> = {};
@@ -13729,16 +13738,13 @@ const handleBatchAttrsConfirm = () => {
           });
           const name = String(mapped.name || '').trim();
           const acct = normAcct(mapped.bankAccountNo);
-          if (!name && !acct) { skipped.push(`第${lineNo}行：账户名称与银行账号均为空`); return; }
-          // 与已有账户重复：账户名称或银行账号命中即跳过
-          const dupName = !!name && dataSource.some((r: any) => String(r.name || '').trim() === name);
-          const dupAcct = !!acct && dataSource.some((r: any) => normAcct(r.bankAccountNo) === acct);
-          if (dupName || dupAcct) { skipped.push(`第${lineNo}行（${name || acct}）：${dupName ? '账户名称已存在' : '银行账号已存在'}，已跳过`); return; }
-          // 文件内部重复
-          if (name && seenNames.has(name)) { skipped.push(`第${lineNo}行（${name}）：文件内账户名称重复，已跳过`); return; }
-          if (acct && seenAccts.has(acct)) { skipped.push(`第${lineNo}行（${acct}）：文件内银行账号重复，已跳过`); return; }
-          if (name) seenNames.add(name);
-          if (acct) seenAccts.add(acct);
+          if (!name && !acct) { invalidRows.push(`第${lineNo}行`); return; }
+          // 银行账号重复仅计数提醒不拦截（一个公司可开多个账户，账户名称重复属正常，不再按名称去重）
+          if (acct) {
+            if (existingAccts.has(acct)) dupExisting.push(`第${lineNo}行（${acct}）`);
+            else if (seenAccts.has(acct)) dupInFile.push(`第${lineNo}行（${acct}）`);
+            seenAccts.add(acct);
+          }
           // Excel 日期序列号/日期对象 → YYYY-MM-DD 字符串
           if (typeof mapped.openDate === 'number') mapped.openDate = dayjs('1899-12-30').add(mapped.openDate, 'day').format('YYYY-MM-DD');
           else if (mapped.openDate instanceof Date) mapped.openDate = dayjs(mapped.openDate).format('YYYY-MM-DD');
@@ -13753,18 +13759,42 @@ const handleBatchAttrsConfirm = () => {
             ...mapped,
           });
         });
-        if (accepted.length) {
-          setDataSource(prev => [...accepted, ...prev]);
-          message.success(`导入成功 ${accepted.length} 条银行账户`);
-        }
-        if (skipped.length) {
-          Modal.warning({
-            title: `已跳过 ${skipped.length} 条重复或无效数据`,
-            content: <div style={{ maxHeight: 320, overflow: 'auto' }}>{skipped.map((s, i) => <div key={i} style={{ fontSize: 12, lineHeight: 1.8 }}>{s}</div>)}</div>,
-            okText: '知道了',
-          });
-        }
-        if (!accepted.length && !skipped.length) message.warning('文件中没有有效的银行账户数据');
+        if (accepted.length) setDataSource(prev => [...accepted, ...prev]);
+        const dupTotal = dupExisting.length + dupInFile.length;
+        Modal.info({
+          title: '银行账户导入结果',
+          width: 620,
+          okText: '知道了',
+          content: (
+            <div style={{ fontSize: 12, lineHeight: 1.9, maxHeight: 420, overflow: 'auto' }}>
+              <div style={{ fontSize: 13 }}>
+                {accepted.length
+                  ? <span style={{ color: '#52c41a', fontWeight: 600 }}>成功导入 {accepted.length} 条银行账户</span>
+                  : <span style={{ color: '#ff4d4f', fontWeight: 600 }}>未导入任何数据</span>}
+                {invalidRows.length > 0 && <span style={{ color: '#faad14' }}>；跳过 {invalidRows.length} 条无效行（账户名称与银行账号均为空：{invalidRows.join('、')}）</span>}
+              </div>
+              <Divider style={{ margin: '8px 0' }} />
+              <div style={{ fontWeight: 600 }}>表头自动匹配（{matchedHeaders.length}/{headerSet.size} 列）</div>
+              <div style={{ marginTop: 4 }}>
+                {matchedHeaders.map(h => (
+                  <Tag key={h} color="green" style={{ marginBottom: 4 }}>{h} → {keyToTitle[titleToKey[h]] || h}</Tag>
+                ))}
+                {matchedHeaders.length === 0 && <span style={{ color: '#ff4d4f' }}>没有匹配到任何字段，请核对表头是否为银行账户列名</span>}
+              </div>
+              {unmatchedHeaders.length > 0 && (
+                <div style={{ color: '#8c8c8c', marginTop: 4 }}>未匹配列（已忽略）：{unmatchedHeaders.join('、')}</div>
+              )}
+              {dupTotal > 0 && (
+                <>
+                  <Divider style={{ margin: '8px 0' }} />
+                  <div style={{ fontWeight: 600, color: '#faad14' }}>银行账号重复提醒：共 {dupTotal} 条（仅提醒，已照常导入）</div>
+                  {dupExisting.length > 0 && <div style={{ marginTop: 4 }}>与已有账户重复 {dupExisting.length} 条：{dupExisting.join('；')}</div>}
+                  {dupInFile.length > 0 && <div style={{ marginTop: 4 }}>文件内重复 {dupInFile.length} 条：{dupInFile.join('；')}</div>}
+                </>
+              )}
+            </div>
+          ),
+        });
       } catch { message.error('文件解析失败，请上传 Excel 或 CSV 文件'); }
     };
     reader.readAsArrayBuffer(file);
