@@ -9,7 +9,7 @@ import {
   PlusOutlined, EditOutlined, DeleteOutlined, FileExcelOutlined, ReloadOutlined, SearchOutlined,
   UploadOutlined, CheckCircleOutlined, DollarOutlined, TeamOutlined, SettingOutlined, FileTextOutlined,
   BarChartOutlined, AppstoreOutlined, SyncOutlined, QuestionCircleOutlined, ScanOutlined, TagsOutlined,
-  CalendarOutlined, FundOutlined, PieChartOutlined, RiseOutlined,
+  CalendarOutlined, FundOutlined, PieChartOutlined, RiseOutlined, StopOutlined, RollbackOutlined,
 } from '@ant-design/icons';
 import * as XLSX from 'xlsx';
 import EChartsLite from '../components/EChartsLite';
@@ -53,6 +53,15 @@ const STICKY_BOTTOM_STYLE = `
   flex: 1 !important;
   min-height: 200px !important;
 }
+/* 已作废记录整行置灰划线：记录保留但不计入统计，故仅作视觉弱化 */
+.wh-stats-tabs .ws-voided-row > td,
+.ws-voided-row > td {
+  background: #fafafa !important;
+  color: #bfbfbf !important;
+  text-decoration: line-through;
+}
+.ws-voided-row > td .ant-tag { opacity: 0.55; }
+.ws-voided-row > td .ant-btn { text-decoration: none; }
 `;
 const styleEl = document.createElement('style');
 styleEl.textContent = STICKY_BOTTOM_STYLE;
@@ -136,10 +145,12 @@ interface StockRecord {
   image: string; creator: string; priceRate: number; qcWage: number;
   packer: string; packWage: number; lastEditor: string; lastEditTime: string;
   commission: number; person: string; foreignTeam: string;
+  voided?: boolean; voidedAt?: string;
 }
 interface PickRecord {
   key: string; orderNo: string; quantity: number; wage: number;
   image: string; createdAt: string; creator: string; month: string; material: string; priceRate: number; picker: string;
+  voided?: boolean; voidedAt?: string;
 }
 interface UrgentRecord {
   key: string; isDuplicate: boolean; orderNo: string; inspectorId: string;
@@ -148,6 +159,7 @@ interface UrgentRecord {
   packWage: number; packer: string; commission: number; foreignTeam: string;
   productCode: string; remark: string; image: string; creator: string;
   date: string; lastEditor: string;
+  voided?: boolean; voidedAt?: string;
 }
 interface StockWageRate { key: string; material: string; rate: number; packRate: number; teamRate: number; }
 interface UrgentWageRate { key: string; material: string; rate: number; packRate: number; teamRate: number; }
@@ -435,14 +447,14 @@ const StockTab: React.FC = () => {
   }, [olRecords]);
   const stockQtyMap = useMemo(() => {
     const map: Record<string, number> = {};
-    records.forEach(r => { if (r.orderNo) map[r.orderNo] = (map[r.orderNo] || 0) + (r.quantity || 0); });
+    records.forEach(r => { if (r.orderNo && !r.voided) map[r.orderNo] = (map[r.orderNo] || 0) + (r.quantity || 0); });
     return map;
   }, [records]);
-  const compareRecords = useMemo(() => compareOrderNo ? records.filter(r => r.orderNo === compareOrderNo) : [], [records, compareOrderNo]);
+  const compareRecords = useMemo(() => compareOrderNo ? records.filter(r => r.orderNo === compareOrderNo && !r.voided) : [], [records, compareOrderNo]);
   const urgentOrderSet = useMemo(() => {
-    const urgentRecs: { orderNo?: string }[] = safeJson<{ orderNo?: string }[]>(sk.urgent, []);
+    const urgentRecs: { orderNo?: string; voided?: boolean }[] = safeJson<{ orderNo?: string; voided?: boolean }[]>(sk.urgent, []);
     const set = new Set<string>();
-    urgentRecs.forEach(r => { if (r.orderNo) set.add(r.orderNo); });
+    urgentRecs.forEach(r => { if (r.orderNo && !r.voided) set.add(r.orderNo); });
     return set;
   }, [urgentTick]);
 
@@ -496,13 +508,17 @@ const StockTab: React.FC = () => {
     return true;
   }), [records, appliedSearch, appliedFMonth, appliedFInspector, appliedFMaterial, appliedDateRange, appliedFCompare, appliedFUrgent, stockQtyMap, labelQtyMap, urgentOrderSet, canViewAll, myDisplayName, quickRange]);
 
+  // 作废行仍在列表中展示（划置灰），但不计入统计卡与比对合计
+  const counted = useMemo(() => filtered.filter(r => !r.voided), [filtered]);
+
   const stats = useMemo(() => ({
-    total: filtered.length,
-    totalQty: filtered.reduce((s, r) => s + (r.quantity || 0), 0),
-    totalQcWage: filtered.reduce((s, r) => s + (r.qcWage || 0), 0),
-    totalPackWage: filtered.reduce((s, r) => s + (r.packWage || 0), 0),
-    totalCommission: filtered.reduce((s, r) => s + (r.commission || 0), 0),
-  }), [filtered]);
+    total: counted.length,
+    totalQty: counted.reduce((s, r) => s + (r.quantity || 0), 0),
+    totalQcWage: counted.reduce((s, r) => s + (r.qcWage || 0), 0),
+    totalPackWage: counted.reduce((s, r) => s + (r.packWage || 0), 0),
+    totalCommission: counted.reduce((s, r) => s + (r.commission || 0), 0),
+    voidedCount: filtered.length - counted.length,
+  }), [counted, filtered]);
 
   const openAdd = () => {
     const rec = emptyStock();
@@ -548,7 +564,8 @@ const StockTab: React.FC = () => {
       message.success(editing ? '已更新' : '已新增');
     }).catch(() => {});
   };
-  const handleDelete = (r: StockRecord) => save(records.filter(x => x.key !== r.key));
+  // 删行会被服务端并集同步回灌“复活”，改为打作废标记不删行
+  const handleVoid = (r: StockRecord, next: boolean) => save(records.map(x => x.key === r.key ? { ...x, voided: next, voidedAt: next ? new Date().toISOString() : '' } : x));
 
   const handleImport = (file: File) => {
     const reader = new FileReader();
@@ -583,6 +600,7 @@ const StockTab: React.FC = () => {
       '创建人': r.creator, '工价': r.priceRate, '质检计件工资': r.qcWage,
       '打包员': r.packer, '打包工资': r.packWage, '外贸组长工资': r.commission,
       '人员': r.person, '外贸组长': r.foreignTeam,
+      '状态': r.voided ? '已作废' : '',
     }));
     const ws = XLSX.utils.json_to_sheet(rows);
     const wb = XLSX.utils.book_new();
@@ -631,15 +649,25 @@ const StockTab: React.FC = () => {
       },
     },
     {
-      title: '操作', key: 'action', width: 100, align: 'center', fixed: 'right',
+      title: <Tooltip title="已作废的行不计入下方统计卡，也不计入按单号比对的数量">状态 <QuestionCircleOutlined style={{ color: '#bfbfbf', cursor: 'help' }} /></Tooltip>, key: 'status', width: 80, align: 'center',
+      render: (_v, r) => r.voided ? <Tag style={{ color: '#bfbfbf', borderColor: '#d9d9d9', textDecoration: 'none' }}>已作废</Tag> : '—',
+    },
+    {
+      title: '操作', key: 'action', width: 150, align: 'center', fixed: 'right',
       render: (_v, r) => {
         const canModify = canEditAll || r.creator === myDisplayName;
         return (
         <Space size={0}>
           <Button type="link" size="small" icon={<EditOutlined />} disabled={!canModify} onClick={() => openEdit(r)} />
-          <Popconfirm title="确定删除？" onConfirm={() => handleDelete(r)} okText="删除" cancelText="取消">
-            <Button type="link" size="small" danger icon={<DeleteOutlined />} disabled={!canModify} />
-          </Popconfirm>
+          {r.voided ? (
+            <Popconfirm title="确定取消作废？" description="取消作废后该行将重新计入统计" okText="取消作废" cancelText="再想想" onConfirm={() => handleVoid(r, false)}>
+              <Button type="link" size="small" icon={<RollbackOutlined />} disabled={!canModify}>取消作废</Button>
+            </Popconfirm>
+          ) : (
+            <Popconfirm title="确定作废该行？" description="作废后该行不再计入统计，但记录仍保留可查" okText="作废" cancelText="取消" onConfirm={() => handleVoid(r, true)}>
+              <Button type="link" size="small" danger icon={<StopOutlined />} disabled={!canModify}>作废</Button>
+            </Popconfirm>
+          )}
         </Space>
         );
       },
@@ -653,7 +681,7 @@ const StockTab: React.FC = () => {
     { key: 'material', label: '材质' }, { key: 'image', label: '图片' }, { key: 'priceRate', label: '工价' },
     { key: 'qcWage', label: '质检工资' }, { key: 'packer', label: '打包员' }, { key: 'packWage', label: '打包工资' },
     { key: 'commission', label: '外贸组长工资' }, { key: 'person', label: '人员' }, { key: 'foreignTeam', label: '外贸组长' },
-    { key: 'remark', label: '备注' }, { key: 'creator', label: '创建人' }, { key: 'compare', label: '比对结果' }, { key: 'isUrgent', label: '急采单' },
+    { key: 'remark', label: '备注' }, { key: 'creator', label: '创建人' }, { key: 'compare', label: '比对结果' }, { key: 'isUrgent', label: '急采单' }, { key: 'status', label: '状态' },
   ], []);
   const visibleColumns = useMemo(() => {
     const order = fieldOrder.length > 0 ? fieldOrder : stockFieldItems.map(f => f.key);
@@ -705,6 +733,11 @@ const StockTab: React.FC = () => {
         <Col flex="1"><StatCard title="打包工资合计" value={stats.totalPackWage} color="#722ed1" icon={<DollarOutlined />} precision={2} /></Col>
         <Col flex="1"><StatCard title="外贸组长工资合计" value={stats.totalCommission} color="#fa8c16" icon={<DollarOutlined />} precision={2} /></Col>
       </Row>
+      {stats.voidedCount > 0 && (
+        <div style={{ marginBottom: 6, fontSize: 12, color: '#8c8c8c', flexShrink: 0 }}>
+          当前筛选下有 <b>{stats.voidedCount}</b> 条已作废记录（划置灰行），未计入以上统计
+        </div>
+      )}
       <QuickRangeBar />
       <Space wrap style={{ marginBottom: 12, flexShrink: 0 }}>
         <Tooltip title="输入关键字搜索，支持内部单号、货号、质检员、打包员等字段模糊匹配，回车或点击查询生效">
@@ -777,6 +810,7 @@ const StockTab: React.FC = () => {
       </div>
       <div ref={stockTableRef} style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
       <Table rowKey="key" size="small" bordered columns={wrapStockCols(visibleColumns)} dataSource={filtered}
+        rowClassName={(r: any) => (r as StockRecord).voided ? 'ws-voided-row' : ''}
         rowSelection={{
           selectedRowKeys: selectAllFiltered ? filtered.map(r => r.key) : selectedRowKeys,
           onChange: keys => { setSelectedRowKeys(keys); setSelectAllFiltered(false); },
@@ -823,12 +857,12 @@ const StockTab: React.FC = () => {
             { title: '图片', dataIndex: 'image', key: 'image', width: 50, align: 'center', render: v => v ? <AntdImage src={v} width={32} height={32} style={{ objectFit: 'cover', borderRadius: 4 }} /> : '—' },
             { title: '创建人', dataIndex: 'creator', key: 'creator', width: 70, align: 'center', render: v => v || '—' },
             {
-              title: '操作', key: 'action', width: 80, align: 'center',
+              title: '操作', key: 'action', width: 90, align: 'center',
               render: (_v, r) => (
                 <Space size={0}>
                   <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openEdit(r)} />
-                  <Popconfirm title="确定删除？" onConfirm={() => handleDelete(r)} okText="删除" cancelText="取消">
-                    <Button type="link" size="small" danger icon={<DeleteOutlined />} />
+                  <Popconfirm title="确定作废该行？" description="作废后该行不再计入统计，但记录仍保留可查" okText="作废" cancelText="取消" onConfirm={() => handleVoid(r, true)}>
+                    <Button type="link" size="small" danger icon={<StopOutlined />} />
                   </Popconfirm>
                 </Space>
               ),
@@ -902,13 +936,16 @@ const PickTab: React.FC = () => {
     if (search.trim() && ![r.orderNo, r.creator, r.picker].join(' ').toLowerCase().includes(search.trim().toLowerCase())) return false;
     return true;
   }), [records, search, fMonth, canViewAll, myDisplayName, quickRange]);
-  const stats = useMemo(() => ({ total: filtered.length, qty: filtered.reduce((s, r) => s + r.quantity, 0), wage: filtered.reduce((s, r) => s + r.wage, 0) }), [filtered]);
+  const counted = useMemo(() => filtered.filter(r => !r.voided), [filtered]);
+  const stats = useMemo(() => ({ total: counted.length, qty: counted.reduce((s, r) => s + r.quantity, 0), wage: counted.reduce((s, r) => s + r.wage, 0), voidedCount: filtered.length - counted.length }), [counted, filtered]);
+  // 删行会被服务端并集同步回灌“复活”，改为打作废标记不删行
+  const handleVoid = (r: PickRecord, next: boolean) => save(records.map(x => x.key === r.key ? { ...x, voided: next, voidedAt: next ? new Date().toISOString() : '' } : x));
   const months = useMemo(() => Array.from(new Set(records.map(r => r.month).filter(Boolean))).sort().reverse(), [records]);
   const openAdd = () => { setEditing(null); form.setFieldsValue({ ...emptyPick() }); setVisible(true); };
   const openEdit = (r: PickRecord) => { setEditing(r); form.setFieldsValue(r); setVisible(true); };
   const handleSave = () => { form.validateFields().then(v => { const qty = Number(v.quantity) || 0; const latestWages: PickWageRate[] = safeJson<PickWageRate[]>(sk.pickWage, []); const unifiedRate = latestWages[0]?.rate || 0; const rec: PickRecord = { ...(editing || emptyPick()), ...v, key: editing?.key || genKey('PK'), material: '', priceRate: unifiedRate, wage: qty * unifiedRate }; const list = editing ? records.map(x => x.key === editing.key ? rec : x) : [rec, ...records]; save(list); setVisible(false); message.success(editing ? '已更新' : '已新增'); }).catch(() => {}); };
   const handleImport = (file: File) => { const reader = new FileReader(); reader.onload = e => { try { const wb = XLSX.read(e.target?.result, { type: 'array' }); const rows: any[] = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '' }); const added: PickRecord[] = rows.map(r => ({ ...emptyPick(), orderNo: String(r['内部单号'] || ''), quantity: Number(r['数量']) || 0, wage: Number(r['计件工资']) || 0, creator: String(r['创建人'] || getDisplayName()), picker: String(r['配货员'] || r['创建人'] || getDisplayName()), month: String(r['月份'] || '') })); save([...added, ...records]); message.success(`已导入 ${added.length} 条`); } catch { message.error('导入失败'); } }; reader.readAsArrayBuffer(file); return false; };
-  const handleExport = () => { const rows = filtered.map(r => ({ '内部单号': r.orderNo, '数量': r.quantity, '计件工资': r.wage, '创建时间': r.createdAt, '创建人': r.creator, '配货员': r.picker, '月份': r.month })); const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), '配货统计'); XLSX.writeFile(wb, `配货统计_${todayIso()}.xlsx`); message.success('已导出'); };
+  const handleExport = () => { const rows = filtered.map(r => ({ '内部单号': r.orderNo, '数量': r.quantity, '计件工资': r.wage, '创建时间': r.createdAt, '创建人': r.creator, '配货员': r.picker, '月份': r.month, '状态': r.voided ? '已作废' : '' })); const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), '配货统计'); XLSX.writeFile(wb, `配货统计_${todayIso()}.xlsx`); message.success('已导出'); };
   const cols: ColumnsType<PickRecord> = [
     { title: '月份', dataIndex: 'month', key: 'month', width: 90, align: 'center', render: v => v ? <Tag>{v}</Tag> : '—' },
     { title: '内部单号', dataIndex: 'orderNo', key: 'orderNo', width: 160, ellipsis: true, render: v => v ? <span style={{ fontWeight: 500, color: '#1e4a7e' }}>{v}</span> : '—' },
@@ -918,7 +955,8 @@ const PickTab: React.FC = () => {
     { title: '创建时间', dataIndex: 'createdAt', key: 'createdAt', width: 120, align: 'center' },
     { title: '创建人', dataIndex: 'creator', key: 'creator', width: 90, align: 'center' },
     { title: '配货员', dataIndex: 'picker', key: 'picker', width: 90, align: 'center', render: v => v || '—' },
-    { title: '操作', key: 'action', width: 100, align: 'center', fixed: 'right', render: (_v, r) => { const canModify = canEditAll || r.creator === myDisplayName; return (<Space size={0}><Button type="link" size="small" icon={<EditOutlined />} disabled={!canModify} onClick={() => openEdit(r)} /><Popconfirm title="确定删除？" onConfirm={() => save(records.filter(x => x.key !== r.key))}><Button type="link" size="small" danger icon={<DeleteOutlined />} disabled={!canModify} /></Popconfirm></Space>); } },
+    { title: '状态', key: 'status', width: 80, align: 'center', render: (_v, r) => r.voided ? <Tag style={{ color: '#bfbfbf', borderColor: '#d9d9d9', textDecoration: 'none' }}>已作废</Tag> : '—' },
+    { title: '操作', key: 'action', width: 150, align: 'center', fixed: 'right', render: (_v, r) => { const canModify = canEditAll || r.creator === myDisplayName; return (<Space size={0}><Button type="link" size="small" icon={<EditOutlined />} disabled={!canModify} onClick={() => openEdit(r)} />{r.voided ? (<Popconfirm title="确定取消作废？" description="取消作废后该行将重新计入统计" okText="取消作废" cancelText="再想想" onConfirm={() => handleVoid(r, false)}><Button type="link" size="small" icon={<RollbackOutlined />} disabled={!canModify}>取消作废</Button></Popconfirm>) : (<Popconfirm title="确定作废该行？" description="作废后该行不再计入统计，但记录仍保留可查" okText="作废" cancelText="取消" onConfirm={() => handleVoid(r, true)}><Button type="link" size="small" danger icon={<StopOutlined />} disabled={!canModify}>作废</Button></Popconfirm>)}</Space>); } },
   ];
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, overflow: 'hidden' }}>
@@ -927,6 +965,11 @@ const PickTab: React.FC = () => {
         <Col flex="1"><StatCard title="总数量" value={stats.qty} suffix="双" color="#1e4a7e" icon={<BarChartOutlined />} /></Col>
         <Col flex="1"><StatCard title="工资合计" value={stats.wage} color="#52c41a" icon={<DollarOutlined />} precision={2} /></Col>
       </Row>
+      {stats.voidedCount > 0 && (
+        <div style={{ marginBottom: 6, fontSize: 12, color: '#8c8c8c', flexShrink: 0 }}>
+          当前筛选下有 <b>{stats.voidedCount}</b> 条已作废记录（划置灰行），未计入以上统计
+        </div>
+      )}
       <QuickRangeBar />
       <Space wrap style={{ marginBottom: 12, flexShrink: 0 }}>
         <Input placeholder="搜索单号/创建人" prefix={<SearchOutlined />} style={{ width: 200 }} value={search} onChange={e => setSearch(e.target.value)} allowClear />
@@ -936,7 +979,7 @@ const PickTab: React.FC = () => {
         <Button icon={<FileExcelOutlined />} onClick={handleExport}>导出</Button>
       </Space>
       <div ref={pickTableRef} style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-        <Table rowKey="key" size="small" bordered columns={wrapPickCols(cols)} dataSource={filtered} scroll={{ x: 800, y: pickScrollY }} pagination={{ defaultPageSize: 20, showSizeChanger: true, pageSizeOptions: ['20', '50', '100', '200'], showTotal: t => `共 ${t} 条` }} style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }} />
+        <Table rowKey="key" size="small" bordered columns={wrapPickCols(cols)} dataSource={filtered} rowClassName={(r: any) => (r as PickRecord).voided ? 'ws-voided-row' : ''} scroll={{ x: 800, y: pickScrollY }} pagination={{ defaultPageSize: 20, showSizeChanger: true, pageSizeOptions: ['20', '50', '100', '200'], showTotal: t => `共 ${t} 条` }} style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }} />
       </div>
       <Modal title={editing ? '编辑配货记录' : '新增配货记录'} open={visible} onOk={handleSave} onCancel={() => setVisible(false)} okText="保存" width={480} destroyOnClose>
         <Form autoComplete="off" form={form} layout="vertical">
@@ -1126,7 +1169,8 @@ const UrgentTab: React.FC = () => {
     if (appliedSearch) { const kw = appliedSearch.toLowerCase(); const hay = [r.orderNo, r.productCode, r.inspector, r.material, r.remark, r.packer, r.foreignTeam].join(' ').toLowerCase(); if (!hay.includes(kw)) return false; }
     return true;
   }), [records, appliedSearch, appliedFMonth, appliedFInspector, appliedFMaterial, appliedDateRange, canViewAll, myDisplayName, quickRange]);
-  const stats = useMemo(() => ({ total: filtered.length, qty: filtered.reduce((s, r) => s + r.quantity, 0), wage: filtered.reduce((s, r) => s + r.wage, 0), packWage: filtered.reduce((s, r) => s + r.packWage, 0), commission: filtered.reduce((s, r) => s + r.commission, 0) }), [filtered]);
+  const counted = useMemo(() => filtered.filter(r => !r.voided), [filtered]);
+  const stats = useMemo(() => ({ total: counted.length, qty: counted.reduce((s, r) => s + r.quantity, 0), wage: counted.reduce((s, r) => s + r.wage, 0), packWage: counted.reduce((s, r) => s + r.packWage, 0), commission: counted.reduce((s, r) => s + r.commission, 0), voidedCount: filtered.length - counted.length }), [counted, filtered]);
   const months = useMemo(() => Array.from(new Set(records.map(r => r.month).filter(Boolean))).sort().reverse(), [records]);
   const handleScanCreate = () => {
     const orderNo = scanInput.trim();
@@ -1192,7 +1236,7 @@ const UrgentTab: React.FC = () => {
       save(list); setVisible(false); message.success(editing ? '已更新' : '已新增');
     }).catch(() => {});
   };
-  const handleDelete = (r: UrgentRecord) => save(records.filter(x => x.key !== r.key));
+  const handleVoid = (r: UrgentRecord, next: boolean) => save(records.map(x => x.key === r.key ? { ...x, voided: next, voidedAt: next ? new Date().toISOString() : '' } : x));
   const handleImport = (file: File) => {
     const reader = new FileReader();
     reader.onload = e => {
@@ -1222,6 +1266,7 @@ const UrgentTab: React.FC = () => {
       '创建人': r.creator, '工价': r.priceRate, '质检工资': r.wage,
       '打包员': r.packer, '打包工资': r.packWage, '外贸组长工资': r.commission,
       '外贸组长': r.foreignTeam,
+      '状态': r.voided ? '已作废' : '',
     }));
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), '急采统计');
@@ -1245,8 +1290,9 @@ const UrgentTab: React.FC = () => {
     { title: '外贸组长', dataIndex: 'foreignTeam', key: 'foreignTeam', width: 100, align: 'center', render: v => v || '—' },
     { title: '备注', dataIndex: 'remark', key: 'remark', width: 120, ellipsis: true },
     { title: '创建人', dataIndex: 'creator', key: 'creator', width: 80, align: 'center', render: v => v || '—' },
-    { title: '操作', key: 'action', width: 100, align: 'center', fixed: 'right',
-      render: (_v, r) => { const canModify = canEditAll || r.creator === myDisplayName; return (<Space size={0}><Button type="link" size="small" icon={<EditOutlined />} disabled={!canModify} onClick={() => openEdit(r)} /><Popconfirm title="确定删除？" onConfirm={() => handleDelete(r)} okText="删除" cancelText="取消"><Button type="link" size="small" danger icon={<DeleteOutlined />} disabled={!canModify} /></Popconfirm></Space>); } },
+    { title: '状态', key: 'status', width: 80, align: 'center', render: (_v, r) => r.voided ? <Tag style={{ color: '#bfbfbf', borderColor: '#d9d9d9', textDecoration: 'none' }}>已作废</Tag> : '—' },
+    { title: '操作', key: 'action', width: 150, align: 'center', fixed: 'right',
+      render: (_v, r) => { const canModify = canEditAll || r.creator === myDisplayName; return (<Space size={0}><Button type="link" size="small" icon={<EditOutlined />} disabled={!canModify} onClick={() => openEdit(r)} />{r.voided ? (<Popconfirm title="确定取消作废？" description="取消作废后该行将重新计入统计" okText="取消作废" cancelText="再想想" onConfirm={() => handleVoid(r, false)}><Button type="link" size="small" icon={<RollbackOutlined />} disabled={!canModify}>取消作废</Button></Popconfirm>) : (<Popconfirm title="确定作废该行？" description="作废后该行不再计入统计，但记录仍保留可查" okText="作废" cancelText="取消" onConfirm={() => handleVoid(r, true)}><Button type="link" size="small" danger icon={<StopOutlined />} disabled={!canModify}>作废</Button></Popconfirm>)}</Space>); } },
   ];
   return (
     <ConfigProvider theme={{
@@ -1284,6 +1330,11 @@ const UrgentTab: React.FC = () => {
         <Col flex="1"><StatCard title="打包工资合计" value={stats.packWage} color="#722ed1" icon={<DollarOutlined />} precision={2} /></Col>
         <Col flex="1"><StatCard title="外贸组长工资合计" value={stats.commission} color="#fa8c16" icon={<DollarOutlined />} precision={2} /></Col>
       </Row>
+      {stats.voidedCount > 0 && (
+        <div style={{ marginBottom: 6, fontSize: 12, color: '#8c8c8c', flexShrink: 0 }}>
+          当前筛选下有 <b>{stats.voidedCount}</b> 条已作废记录（划置灰行），未计入以上统计
+        </div>
+      )}
       <QuickRangeBar />
       {/* 扫码快速新增 */}
       <Card style={{ marginBottom: 12, border: '1px dashed #d9d9d9', flexShrink: 0 }} styles={{ body: { padding: '8px 16px' } }}>
@@ -1361,6 +1412,7 @@ const UrgentTab: React.FC = () => {
       </div>
       <div ref={urgentTableRef} style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
       <Table rowKey="key" size="small" bordered columns={wrapUrgentCols(cols)} dataSource={filtered}
+        rowClassName={(r: any) => (r as UrgentRecord).voided ? 'ws-voided-row' : ''}
         rowSelection={{
           selectedRowKeys: selectAllFiltered ? filtered.map(r => r.key) : selectedRowKeys,
           onChange: keys => { setSelectedRowKeys(keys); setSelectAllFiltered(false); },
@@ -1637,21 +1689,21 @@ const SalaryTab: React.FC = () => {
       const noteMap: Record<string, number> = {};
       let stockQty = 0, urgentQty = 0, pickQty = 0;
       for (const r of stockRecords) {
-        if (r.month !== m) continue;
+        if (r.month !== m || r.voided) continue;
         stockQty += r.quantity || 0;
         if (r.qcInspector) { if (!qcMap[r.qcInspector]) qcMap[r.qcInspector] = { stockWage: 0, urgentWage: 0, qty: 0 }; qcMap[r.qcInspector].stockWage += r.qcWage || 0; qcMap[r.qcInspector].qty += r.quantity || 0; }
         if (r.packer) { if (!packMap[r.packer]) packMap[r.packer] = { stockPack: 0, urgentPack: 0 }; packMap[r.packer].stockPack += r.packWage || 0; }
         if (r.foreignTeam) { teamMap[r.foreignTeam] = (teamMap[r.foreignTeam] || 0) + (r.commission || 0); }
       }
       for (const r of urgentRecords) {
-        if (r.month !== m) continue;
+        if (r.month !== m || r.voided) continue;
         urgentQty += r.quantity || 0;
         if (r.inspector) { if (!qcMap[r.inspector]) qcMap[r.inspector] = { stockWage: 0, urgentWage: 0, qty: 0 }; qcMap[r.inspector].urgentWage += r.wage || 0; qcMap[r.inspector].qty += r.quantity || 0; }
         if (r.packer) { if (!packMap[r.packer]) packMap[r.packer] = { stockPack: 0, urgentPack: 0 }; packMap[r.packer].urgentPack += r.packWage || 0; }
         if (r.foreignTeam) { teamMap[r.foreignTeam] = (teamMap[r.foreignTeam] || 0) + (r.commission || 0); }
       }
       for (const r of pickRecords) {
-        if (r.month !== m) continue;
+        if (r.month !== m || r.voided) continue;
         pickQty += r.quantity || 0;
         const k = r.picker || r.creator;
         if (k) { if (!pickMap[k]) pickMap[k] = { wage: 0, qty: 0 }; pickMap[k].wage += r.wage || 0; pickMap[k].qty += r.quantity || 0; }
@@ -2091,9 +2143,9 @@ const DataAnalysisTab: React.FC = () => {
     return Array.from(s).sort().reverse();
   }, [stockRecords, urgentRecords]);
 
-  // 按月份过滤
-  const stocks = useMemo(() => monthFilter ? stockRecords.filter(r => r.month === monthFilter) : stockRecords, [stockRecords, monthFilter]);
-  const urgents = useMemo(() => monthFilter ? urgentRecords.filter(r => r.month === monthFilter) : urgentRecords, [urgentRecords, monthFilter]);
+  // 按月份过滤（已作废行不参与任何分析统计）
+  const stocks = useMemo(() => (monthFilter ? stockRecords.filter(r => r.month === monthFilter) : stockRecords).filter(r => !r.voided), [stockRecords, monthFilter]);
+  const urgents = useMemo(() => (monthFilter ? urgentRecords.filter(r => r.month === monthFilter) : urgentRecords).filter(r => !r.voided), [urgentRecords, monthFilter]);
 
   // ====== 概览统计 ======
   const overview = useMemo(() => {
@@ -2112,13 +2164,13 @@ const DataAnalysisTab: React.FC = () => {
   const monthlyTrend = useMemo(() => {
     const map = new Map<string, { month: string; stockQty: number; urgentQty: number; stockCount: number; urgentCount: number; qcWage: number; packWage: number; commission: number; totalWage: number }>();
     stockRecords.forEach(r => {
-      if (!r.month) return;
+      if (!r.month || r.voided) return;
       const d = map.get(r.month) || { month: r.month, stockQty: 0, urgentQty: 0, stockCount: 0, urgentCount: 0, qcWage: 0, packWage: 0, commission: 0, totalWage: 0 };
       d.stockQty += r.quantity; d.stockCount += 1; d.qcWage += r.qcWage; d.packWage += r.packWage; d.commission += r.commission;
       map.set(r.month, d);
     });
     urgentRecords.forEach(r => {
-      if (!r.month) return;
+      if (!r.month || r.voided) return;
       const d = map.get(r.month) || { month: r.month, stockQty: 0, urgentQty: 0, stockCount: 0, urgentCount: 0, qcWage: 0, packWage: 0, commission: 0, totalWage: 0 };
       d.urgentQty += r.quantity; d.urgentCount += 1;
       map.set(r.month, d);

@@ -2669,36 +2669,43 @@ router.get('/lists/:page', verifyJWT, async (req: Request, res: Response) => {
         sub: [r.brand, r.person && `负责人:${r.person}`, r.status].filter(Boolean) as string[],
       }));
     } else if (page === 'warehouseStats' || page === 'warehouseStock') {
-      const rows = (await readRows(`ws_stock_${owner}`)).filter((r: any) => inRange(day10(r.date)) && (wsViewAll || String(r.creator || '') === wsMyName));
+      const all = (await readRows(`ws_stock_${owner}`)).filter((r: any) => inRange(day10(r.date)) && (wsViewAll || String(r.creator || '') === wsMyName));
+      // 已作废记录保留展示但不再计入合计（与 Web 端作废口径一致）
+      const rows = all.filter((r: any) => !r.voided);
       sums = ['', String(rows.reduce((s: number, r: any) => s + (Number(r.quantity) || 0), 0)), '',
         money(rows.reduce((s: number, r: any) => s + (Number(r.qcWage) || 0), 0))];
-      items = rows.map((r: any) => ({
+      items = all.map((r: any) => ({
         key: r.key || r.orderNo || r.productCode, title: pick(r.productCode, r.orderNo, r.key) || '备货记录',
-        tag: r.month,
+        tag: r.voided ? '已作废' : r.month,
+        tone: r.voided ? 'gray' : undefined,
         row: [pick(r.orderNo, r.key), String(r.quantity ?? ''), pick(r.material, '—'),
           (Number(r.qcWage) || 0) ? `¥${Number(r.qcWage).toFixed(2)}` : '—'],
         sub: [day10(r.date), r.orderNo, r.quantity !== undefined && r.quantity !== null && `数量 ${r.quantity}`,
           r.material, r.person, r.packer].filter(Boolean) as string[],
       }));
     } else if (page === 'warehousePick') {
-      const rows = (await readRows(`ws_pick_${owner}`)).filter((r: any) => inRange(day10(r.createdAt)) && (wsViewAll || String(r.creator || '') === wsMyName));
+      const all = (await readRows(`ws_pick_${owner}`)).filter((r: any) => inRange(day10(r.createdAt)) && (wsViewAll || String(r.creator || '') === wsMyName));
+      const rows = all.filter((r: any) => !r.voided);
       sums = ['', String(rows.reduce((s: number, r: any) => s + (Number(r.quantity) || 0), 0)),
         money(rows.reduce((s: number, r: any) => s + (Number(r.wage) || 0), 0))];
-      items = rows.map((r: any) => ({
+      items = all.map((r: any) => ({
         key: r.key || r.orderNo, title: pick(r.orderNo, r.key) || '配货记录',
-        tag: r.month, amount: Number(r.wage) || 0,
+        tag: r.voided ? '已作废' : r.month,
+        tone: r.voided ? 'gray' : undefined, amount: Number(r.wage) || 0,
         row: [pick(r.orderNo, r.key), String(r.quantity ?? ''), (Number(r.wage) || 0) ? `¥${Number(r.wage).toFixed(2)}` : '—'],
         sub: [r.quantity !== undefined && r.quantity !== null && `数量 ${r.quantity}`,
           r.priceRate && `工价 ¥${r.priceRate}`, r.picker && `配货员:${r.picker}`,
           r.creator, day10(r.createdAt)].filter(Boolean) as string[],
       }));
     } else if (page === 'warehouseUrgent') {
-      const rows = (await readRows(`ws_urgent_${owner}`)).filter((r: any) => inRange(day10(pick(r.date, r.qcDate))) && (wsViewAll || String(r.creator || '') === wsMyName));
+      const all = (await readRows(`ws_urgent_${owner}`)).filter((r: any) => inRange(day10(pick(r.date, r.qcDate))) && (wsViewAll || String(r.creator || '') === wsMyName));
+      const rows = all.filter((r: any) => !r.voided);
       sums = ['', String(rows.reduce((s: number, r: any) => s + (Number(r.quantity) || 0), 0)), '',
         money(rows.reduce((s: number, r: any) => s + (Number(r.wage) || 0), 0))];
-      items = rows.map((r: any) => ({
+      items = all.map((r: any) => ({
         key: r.key || r.orderNo || r.productCode, title: pick(r.productCode, r.orderNo, r.key) || '急采记录',
-        tag: r.month, amount: Number(r.wage) || 0,
+        tag: r.voided ? '已作废' : r.month,
+        tone: r.voided ? 'gray' : undefined, amount: Number(r.wage) || 0,
         row: [pick(r.orderNo, r.key), String(r.quantity ?? ''), pick(r.material, '—'),
           (Number(r.wage) || 0) ? `¥${Number(r.wage).toFixed(2)}` : '—'],
         sub: [day10(pick(r.date, r.qcDate)), r.orderNo,
@@ -2728,19 +2735,19 @@ router.get('/lists/:page', verifyJWT, async (req: Request, res: Response) => {
       const team: Record<string, number> = {};
       const noteM: Record<string, number> = {};
       stockR.forEach((r: any) => {
-        if (r.month !== m) return;
+        if (r.month !== m || r.voided) return;
         if (r.qcInspector) { const e = qc[r.qcInspector] || (qc[r.qcInspector] = { s: 0, u: 0 }); e.s += Number(r.qcWage) || 0; }
         if (r.packer) { const e = pack[r.packer] || (pack[r.packer] = { s: 0, u: 0 }); e.s += Number(r.packWage) || 0; }
         if (r.foreignTeam) team[r.foreignTeam] = (team[r.foreignTeam] || 0) + (Number(r.commission) || 0);
       });
       urgentR.forEach((r: any) => {
-        if (r.month !== m) return;
+        if (r.month !== m || r.voided) return;
         if (r.inspector) { const e = qc[r.inspector] || (qc[r.inspector] = { s: 0, u: 0 }); e.u += Number(r.wage) || 0; }
         if (r.packer) { const e = pack[r.packer] || (pack[r.packer] = { s: 0, u: 0 }); e.u += Number(r.packWage) || 0; }
         if (r.foreignTeam) team[r.foreignTeam] = (team[r.foreignTeam] || 0) + (Number(r.commission) || 0);
       });
       pickR.forEach((r: any) => {
-        if (r.month !== m) return;
+        if (r.month !== m || r.voided) return;
         const k = r.picker || r.creator;
         if (k) pickM[k] = (pickM[k] || 0) + (Number(r.wage) || 0);
       });
