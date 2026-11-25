@@ -134,4 +134,73 @@ describe('dataOwner', () => {
       flush: () => undefined,
     })).toBe(false);
   });
+
+  // ===== 跨公司脏隶属守卫（两家公司订单串号的结构根因）=====
+
+  it('accountRootOf 拒绝跨公司脏链：双方各自带不同 companyNo 时自成租户', () => {
+    const users = [
+      { username: 'laiku', isSubAccount: false, companyNo: 'XW27L2R1' },
+      // 陈旧本地注册表把另一家公司的主账号登记成本公司子账号
+      { username: 'nuolai', isSubAccount: true, parentAccount: 'laiku', companyNo: '68S09CIK' },
+    ];
+    expect(accountRootOf(users, 'nuolai')).toBe('nuolai');
+    expect(accountRootOf(users, 'laiku')).toBe('laiku');
+  });
+
+  it('accountRootOf 兼容不带编号的历史子账号（仍归主账号桶）', () => {
+    const users = [
+      { username: 'laiku', isSubAccount: false, companyNo: 'XW27L2R1' },
+      { username: 'chen', isSubAccount: true, parentAccount: 'laiku' },
+    ];
+    expect(accountRootOf(users, 'chen')).toBe('laiku');
+  });
+
+  it('tenantMembersOf 不把带不同 companyNo 的别家账号算作本企业成员', () => {
+    localStorage.clear();
+    localStorage.setItem('username', 'laiku');
+    localStorage.setItem('registeredUsers', JSON.stringify([
+      { username: 'laiku', isSubAccount: false, companyNo: 'XW27L2R1' },
+      { username: 'chen', isSubAccount: true, parentAccount: 'laiku' },
+      { username: 'nuolai', isSubAccount: true, parentAccount: 'laiku', companyNo: '68S09CIK' },
+    ]));
+    expect(tenantMembersOf('laiku').sort()).toEqual(['chen', 'laiku']);
+  });
+
+  it('脏隶属不再把别家公司桶当错桶并走并排空', () => {
+    localStorage.clear();
+    localStorage.setItem('username', 'laiku');
+    localStorage.setItem('token', fakeToken({ username: 'laiku', owner: 'laiku' }));
+    localStorage.setItem('registeredUsers', JSON.stringify([
+      { username: 'laiku', isSubAccount: false, companyNo: 'XW27L2R1' },
+      { username: 'nuolai', isSubAccount: true, parentAccount: 'laiku', companyNo: '68S09CIK' },
+    ]));
+    localStorage.setItem('pageData_sales_order-manage_laiku', JSON.stringify([{ id: 'MC000001' }]));
+    localStorage.setItem('pageData_sales_order-manage_nuolai', JSON.stringify([{ id: 'MC000009' }]));
+    const flushed: string[] = [];
+    const shrunk: string[] = [];
+    const ok = mergeStrandedTenantDataset('pageData_sales_order-manage_laiku', 'pageData_sales_order-manage_', {
+      safeSetItem: (k, v) => localStorage.setItem(k, v),
+      declareShrink: (k, ids) => shrunk.push(`${k}:${ids.join(',')}`),
+      flush: (k) => flushed.push(k),
+    });
+    expect(ok).toBe(false);
+    expect(shrunk).toEqual([]);
+    expect(JSON.parse(localStorage.getItem('pageData_sales_order-manage_nuolai') || '[]')).toEqual([{ id: 'MC000009' }]);
+    expect(JSON.parse(localStorage.getItem('pageData_sales_order-manage_laiku') || '[]')).toEqual([{ id: 'MC000001' }]);
+  });
+
+  it('getSessionOwner 自愈回写全局会话字段（旧页面读法不再命中别家桶）', () => {
+    localStorage.clear();
+    localStorage.setItem('username', 'chen');
+    // 上一家公司登录残留的全局字段：不自愈回写时，页面级 getDataOwner 会把 chen 当主账号
+    localStorage.setItem('isSubAccount', 'false');
+    localStorage.setItem('parentAccount', '');
+    localStorage.setItem('registeredUsers', JSON.stringify([
+      { username: 'laiku', isSubAccount: false, companyNo: 'XW27L2R1' },
+      { username: 'chen', isSubAccount: true, parentAccount: 'laiku' },
+    ]));
+    expect(getSessionOwner()).toBe('laiku');
+    expect(localStorage.getItem('isSubAccount')).toBe('true');
+    expect(localStorage.getItem('parentAccount')).toBe('laiku');
+  });
 });

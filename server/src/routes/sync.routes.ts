@@ -14,7 +14,7 @@ import {
   attachSyncUser, currentSyncUser, requireSyncAuth, isKeyAllowed, filterMetaForUser,
   sanitizeRegisteredUsersJson, hashRegisteredUsersJson, hashPassword, mergeRegisteredUsersJson,
   filterRegisteredUsersCreations, tenantFamilySuffix, isEmptyOwnerFamilyKey, mergeRowsUnionJson, SyncUser,
-  filterResurrectedUsersJson, applyDeletedUsersLedger, DELETED_USERS_LEDGER_KEY,
+  filterResurrectedUsersJson, applyDeletedUsersLedger, DELETED_USERS_LEDGER_KEY, foreignRemovableIds,
 } from '../middleware/syncGuard';
 import { notifyDatasetUpdated } from '../ws/chat-ws';
 
@@ -73,6 +73,13 @@ const NEVER_SHRINK_PREFIXES = ['purchaser_bills_', 'pageData_customer_bill-detai
 // 把另一端刚新增的账户整份擦掉（表现为「新增账号过会自动删除」）；纳入永不缩水后
 // 陈旧 PUT 一律并集，合法删除由客户端删除操作随 body 申报 removedIds。
 const isNeverShrinkKey = (key: string): boolean => NEVER_SHRINK_PREFIXES.some(p => key.startsWith(p));
+// 跨租户删除申报守卫的键家族（仅订单桶）：pageData_* 不按严格私有封收（采购商推单与撤回
+// 必须写进供应商账号下的键），所以「带 removedIds 的整桶排空」也对外开放；而客户端的
+// 租户成员判定依赖本机一份可能陈旧的 registeredUsers，脏隶属会把别家公司订单并进本桶
+// 并排空对方桶（已发生的真实事故）。订单行的来源可证（pushRef=<订单键>@<采购商账号>），
+// 故对他桶只承认本人推单产生的删除；bill-detail 等无法从行内证明归属的家族暂不纳入，
+// 由客户端侧的服务端权威成员判定 + 跨公司脏链守卫拦截。
+const CROSS_TENANT_DRAIN_GUARDED = ['pageData_sales_order-manage_'];
 // 跨端删除收敛账本：删除事实持久化到服务端，杜绝未删除端并集回传复活已删行（详见 services/deleteLedger）
 import { applyNeverShrinkLedgerToSaved, ledgerIdsOf, filterLedgerRowsJson } from '../services/deleteLedger';
 // 带「已处理」墓碑语义的跨租户键（采购商已付款待登记收件箱）：采购商追加行、供应商打 handled 墓碑，
@@ -333,6 +340,21 @@ router.put('/dataset', async (req: Request, res: Response) => {
     }
     if (familySuffix && user) {
       const root = await resolveCompanyRoot(familySuffix).catch(() => familySuffix);
+      // 跨租户删除申报裁剪（仅订单桶）：该类键不按严格私有封收（采购商推单要写进供应商桶），
+      // 所以必须堵住“脏成员判定把别家公司订单整桶删除”这条路径，同家族写入不受影响
+      const claimedRemovals = Array.isArray(req.body.removedIds) ? req.body.removedIds : [];
+      if (claimedRemovals.length > 0 && CROSS_TENANT_DRAIN_GUARDED.some((p) => key.startsWith(p))) {
+        const myRoot = String(user.owner || user.username || '');
+        const sameFamily = root === myRoot || familySuffix === user.username || familySuffix === myRoot;
+        if (!sameFamily) {
+          const curRow = await store.getDataset(key).catch(() => undefined);
+          const allowed = foreignRemovableIds(curRow ? curRow.dataset_json : null, claimedRemovals, [String(user.username || ''), myRoot]);
+          if (allowed.length !== claimedRemovals.length) {
+            console.warn(`[sync] 跨租户删除申报已裁剪 ${key}：${claimedRemovals.length} → ${allowed.length}（user=${user.username}）`);
+            req.body.removedIds = allowed;
+          }
+        }
+      }
       if (root && root !== familySuffix) {
         const targetKey = key.slice(0, key.length - familySuffix.length) + root;
         if (isKeyAllowed(targetKey, user, 'write')) {

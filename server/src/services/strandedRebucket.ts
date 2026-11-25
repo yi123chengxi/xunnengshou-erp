@@ -11,6 +11,7 @@
  */
 import { store } from '../database/store';
 import { tenantFamilySuffix, mergeRowsUnionJson } from '../middleware/syncGuard';
+import { companyRootOf } from './storageUsage';
 
 // ============ 订单桶修复（与客户端 utils/orderRepair.ts 同口径） ============
 const rowKeyOf = (r: any): string => (r && (r.key || r.id)) ? String(r.key || r.id) : '';
@@ -89,19 +90,9 @@ export async function migrateStrandedOwnerDatasets(): Promise<number> {
     if (healedIdentity > 0) {
       await store.forceUpsertDataset('registeredUsers', JSON.stringify(users), '', Math.max(Date.now(), rec.updated_at || 0));
     }
-    const rootOf = (name: string): string => {
-      let cur = name;
-      const seen = new Set<string>([cur]);
-      for (let i = 0; i < 8; i++) {
-        const u = byName.get(cur);
-        if (!u || !u.isSubAccount || !u.parentAccount) break;
-        const next = String(u.parentAccount);
-        if (seen.has(next)) break;
-        seen.add(next);
-        cur = next;
-      }
-      return cur;
-    };
+    // 跨公司脏链守卫在 companyRootOf 内：两家各自带不同 companyNo 时不会被当作同一家族，
+    // 本迁移只会收敛「同公司主/子账号」间的错桶，绝不会把别家公司订单并进本桶并排空对方桶
+    const rootOf = (name: string): string => companyRootOf(byName, name);
     const meta = await store.getAllMeta();
     let moved = 0;
     for (const m of meta) {

@@ -38,7 +38,24 @@ const readRegisteredUsers = (): any[] => {
   } catch { return []; }
 };
 
-/** 沿 parentAccount 链追溯到真正的主账号（链上有环/账号缺失时停在当前节点） */
+/** 公司身份键：主账号行带 companyNo（子账号行通常为空）。
+ *  同一家公司重复注册会得到不同 companyNo（真实数据：瑞安市莱库鞋业有限公司有
+ *  yichengxi / yichengxi888 / yichengxi1101 三个互不隶属的主账号），
+ *  因此「同为公司名」不代表同租户，只有身份键相等才代表同租户 */
+const companyIdentityOf = (u: any): string => String((u && (u.companyNo || u.companyId)) || '').trim();
+
+/** 两条账号行是否可能属于同一租户：身份键未知（历史子账号行不带编号）时保守放行，
+ *  双方都带编号且不同 ⇒ 必然不同租户 */
+export const sameTenantCompany = (a: any, b: any): boolean => {
+  const ia = companyIdentityOf(a);
+  const ib = companyIdentityOf(b);
+  return !ia || !ib || ia === ib;
+};
+
+/** 沿 parentAccount 链追溯到真正的主账号（链上有环/账号缺失时停在当前节点）。
+ *  脏链守卫：子账号行与链上任一父账号行各自带不同 companyNo 时，该隶属关系是脏数据
+ *  （陈旧本地注册表被并进来的历史绑定），以本行为界自成租户——否则脏链会让
+ *  tenantMembersOf/错桶归并把别家公司的数据并进本租户桶并排空来源桶 */
 export const accountRootOf = (users: any[], username: string): string => {
   if (!username) return '';
   const byName = new Map<string, any>();
@@ -49,6 +66,7 @@ export const accountRootOf = (users: any[], username: string): string => {
   const visited = new Set<string>([username]);
   while (cur && !visited.has(cur)) {
     visited.add(cur);
+    if (!sameTenantCompany(start, byName.get(cur))) return username;
     const parent = byName.get(cur);
     if (!parent || !parent.isSubAccount) return cur;
     cur = String(parent.parentAccount || '');
@@ -121,20 +139,76 @@ export const getSessionOwner = (): string => {
     const root = accountRootOf(readRegisteredUsers(), me);
     owner = root || me;
   }
+  // 自愈回写：全站仍有数十个页面各自用「全局 isSubAccount / parentAccount」推导桶名，
+  // 这两个字段不按账号隔离，切换账号后残留的上家值会让页面直接读写别家公司的桶。
+  // 统一口径每解析出一归属就同步一次，使旧读法天然跟随正确值（仅写会话字段，
+  // ownerRoot_* 仍只落服务端确认值，避免本地推断被钉成启动窗口的权威来源）
+  const wantSub = owner && owner !== me ? 'true' : 'false';
+  const wantParent = owner && owner !== me ? owner : '';
+  if (owner && (safeGet('isSubAccount') !== wantSub || safeGet('parentAccount') !== wantParent)) {
+    safeSet('isSubAccount', wantSub);
+    safeSet('parentAccount', wantParent);
+  }
   ownerCache = { sig, owner };
   return owner;
 };
 
-/** 本企业成员清单：owner 自身 + 名下全部子账号（错桶修复遍历来源键用） */
-export const tenantMembersOf = (owner: string): string[] => {
+/** 依据给定注册表解析 owner 名下成员（含 owner 自身），带跨公司身份键守卫 */
+const membersFromRegistry = (users: any[], owner: string): string[] => {
   if (!owner) return [];
-  const users = readRegisteredUsers();
+  const byName = new Map<string, any>();
+  users.forEach((u: any) => { if (u && u.username) byName.set(String(u.username), u); });
+  const ownerRow = byName.get(owner);
   const out = new Set<string>([owner]);
   users.forEach((u: any) => {
     if (!u || !u.username) return;
-    if (accountRootOf(users, String(u.username)) === owner) out.add(String(u.username));
+    const name = String(u.username);
+    if (name === owner) return;
+    if (accountRootOf(users, name) !== owner) return;
+    if (!sameTenantCompany(ownerRow, u)) return;
+    out.add(name);
   });
   return Array.from(out);
+};
+
+/** 本企业成员清单：owner 自身 + 名下全部子账号（错桶修复遍历来源键用） */
+export const tenantMembersOf = (owner: string): string[] => membersFromRegistry(readRegisteredUsers(), owner);
+
+// ============ 服务端权威注册表 ============
+// 破坏性归并（把别的桶并进主桶并排空来源桶）绝不能依据本机那份可能陈旧/被污染的
+// registeredUsers 判定成员：历史事故中一份脏隶属就让 A 公司的订单被并进 B 公司桶、
+// 同时清空 A 公司桶。registeredUsers 是公开只读键，取服务端那份作唯一权威依据；
+// 取不到时调用方必须放弃归并（归只是体验优化，不是正确性前提）。
+let authRegistryCache: { at: number; users: any[] } | null = null;
+
+export const fetchAuthoritativeRegistry = async (maxAgeMs = 5 * 60_000): Promise<any[] | null> => {
+  if (authRegistryCache && Date.now() - authRegistryCache.at < maxAgeMs) return authRegistryCache.users;
+  try {
+    const token = safeGet(TOKEN_KEY);
+    const res = await fetch(`${API_BASE}/sync/dataset?key=registeredUsers`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) return authRegistryCache ? authRegistryCache.users : null;
+    const j = await res.json().catch(() => null);
+    let arr: any = Array.isArray(j) ? j : j?.json;
+    if (typeof arr === 'string') { try { arr = JSON.parse(arr); } catch { arr = null; } }
+    if (!Array.isArray(arr)) return authRegistryCache ? authRegistryCache.users : null;
+    authRegistryCache = { at: Date.now(), users: arr };
+    return arr;
+  } catch {
+    return authRegistryCache ? authRegistryCache.users : null;
+  }
+};
+
+/** 以服务端权威注册表解析企业主成员；返回 null 表示无法确认（调用方应跳过破坏性归并） */
+export const authoritativeTenantMembers = async (owner: string): Promise<string[] | null> => {
+  if (!owner) return null;
+  const users = await fetchAuthoritativeRegistry();
+  if (!users) return null;
+  const byName = new Map<string, any>();
+  users.forEach((u: any) => { if (u && u.username) byName.set(String(u.username), u); });
+  if (!byName.has(owner)) return null; // 本账号都不在服务端注册表里：无法可信地进归并
+  return membersFromRegistry(users, owner);
 };
 
 /** 向服务端确认归属账号（历史令牌没有 owner 声明时兜底，1.5 秒超时：
@@ -210,12 +284,7 @@ export const mergeStrandedTenantDataset = (
 ): boolean => {
   const owner = getSessionOwner();
   if (!owner) return false;
-  const users = readRegisteredUsers();
-  const members = new Set<string>([owner]);
-  users.forEach((u: any) => {
-    if (!u || !u.username) return;
-    if (accountRootOf(users, String(u.username)) === owner) members.add(String(u.username));
-  });
+  const members = new Set<string>(tenantMembersOf(owner));
   const strandedKeys: string[] = [];
   try {
     for (let i = 0; i < localStorage.length; i++) {

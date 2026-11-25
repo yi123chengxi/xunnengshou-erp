@@ -545,6 +545,37 @@ export function isEmptyOwnerFamilyKey(key: string): boolean {
 }
 
 /**
+ * 跨租户删除申报白名单。
+ *
+ * pageData_sales_order-manage_ 不在严格私有前缀表里（采购商推单/额度链路按设计要写进
+ * 供应商账号名下的键），所以任何登录账号都能对该家族发起「带 removedIds 的写入」。
+ * 一份判定错误的成员清单（本机脏 registeredUsers 副本）就足以把别家公司的订单整桶
+ * 搬走并排空来源桶——租户隔离不能只建在客户端的键名推导上。
+ * 服务端对“他桶”删除申报只承认本人推送产生的行（行内 pushRef 形如 <订单键>@<采购商账号>）。
+ * 同租户写入不走本函数，删除申报语义不变。
+ */
+export function foreignRemovableIds(existingJson: string | null | undefined, removedIds: any, writerNames: string[]): string[] {
+  const names = new Set(writerNames.map((n) => String(n || '')).filter(Boolean));
+  const claim = (Array.isArray(removedIds) ? removedIds : []).map((x: any) => String(x)).filter(Boolean);
+  if (claim.length === 0 || names.size === 0) return [];
+  let rows: any[] = [];
+  try { const p = existingJson ? JSON.parse(existingJson) : []; if (Array.isArray(p)) rows = p; } catch { rows = []; }
+  const refById = new Map<string, string>();
+  rows.forEach((r: any) => {
+    if (!r) return;
+    const ref = String(r.pushRef || '');
+    if (r.key) refById.set(String(r.key), ref);
+    if (r.id) refById.set(String(r.id), ref);
+  });
+  return claim.filter((id) => {
+    const ref = refById.get(id);
+    if (ref === undefined) return false; // 存量里没有该行：他桶的删除申报一律不认
+    const at = ref.lastIndexOf('@');
+    return at > 0 && names.has(ref.slice(at + 1));
+  });
+}
+
+/**
  * 行级并集合并（按 key||id 去重，incoming 覆盖同 id 行），并剔除 removedIds 申报删除的行。
  * 供「子账号错桶写入重定向到主账号桶」与「启动期错桶迁移」共用：
  * 调用方通过交换 existing/incoming 参数决定同 id 行谁优先。

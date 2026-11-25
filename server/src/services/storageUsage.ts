@@ -15,15 +15,32 @@ import { store } from '../database/store';
 // 用户索引（用户名集合 + 每个账号归属的主账号），60s 缓存；registeredUsers 变化时失效
 let userIndexCache: { ts: number; names: Set<string>; roots: Map<string, string> } | null = null;
 
-/** 沿 parentAccount 链追溯到真正的主账号（最多 8 层，防环），口径与 auth.routes.resolveOwner 一致 */
-function rootOf(byName: Map<string, any>, name: string): string {
+/** 公司身份键：主账号行带 companyNo（子账号行通常为空）。
+ *  同一家公司重复注册会拿到不同 companyNo（独立租户），所以“公司名相同”不等于同租户 */
+export const companyIdentityOf = (u: any): string => String((u && (u.companyNo || u.companyId)) || '').trim();
+
+/** 两条账号行是否可能同租户：身份键未知时保守放行（历史子账号行不带编号），
+ *  双方都带编号且不同 ⇒ 必然不同租户 */
+export const sameTenantCompany = (a: any, b: any): boolean => {
+  const ia = companyIdentityOf(a);
+  const ib = companyIdentityOf(b);
+  return !ia || !ib || ia === ib;
+};
+
+/** 沿 parentAccount 链追溯到真正的主账号（最多 8 层，防环），口径与 auth.routes.resolveOwner 一致。
+ *  脏链守卫：子账号行与链上任一父账号行各自带不同 companyNo 时，该隶属关系不可信（历史
+ *  污染绑定），以本行为界自成租户。本函数的结果决 JWT owner 声明、PUT 错桶重定向与
+ *  启动期错桶迁移，一旦脏链把 A 公司当成 B 公司子账号，两者订单会被物理归并并排空来源桶 */
+export function companyRootOf(byName: Map<string, any>, name: string): string {
   let cur = name;
+  const start = byName.get(name);
   const seen = new Set<string>([cur]);
   for (let i = 0; i < 8; i++) {
     const u = byName.get(cur);
     if (!u || !u.isSubAccount || !u.parentAccount) break;
     const next = String(u.parentAccount);
     if (seen.has(next)) break;
+    if (!sameTenantCompany(start, byName.get(next))) return cur;
     seen.add(next);
     cur = next;
   }
@@ -45,7 +62,7 @@ async function loadUserIndex(): Promise<{ names: Set<string>; roots: Map<string,
     for (const r of await store.getAllUsers()) if (r.username) names.add(r.username);
   } catch { /* ignore */ }
   const roots = new Map<string, string>();
-  for (const n of names) roots.set(n, rootOf(byName, n));
+  for (const n of names) roots.set(n, companyRootOf(byName, n));
   userIndexCache = { ts: Date.now(), names, roots };
   return userIndexCache;
 }

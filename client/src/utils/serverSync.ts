@@ -14,7 +14,7 @@ import { reconcileCooperationPairs } from './cooperationReconcile';
 import { migrateLegacyReconRecords } from './reconStore';
 import { repairCounterpartyNames } from './nameSync';
 import { healReconTerminalLinks } from './reconHeal';
-import { getSessionOwner, tenantMembersOf, mergeStrandedTenantDataset } from './dataOwner';
+import { getSessionOwner, authoritativeTenantMembers, mergeStrandedTenantDataset } from './dataOwner';
 import { repairOrderBucket } from './orderRepair';
 import { queuePut, queueDelete, queueAll } from './uploadQueue';
 import { takeRemovedIds, peekRemovedIds, declareShrink, tombstoneIds, removedIdSet, rowIdentities, rowPrimaryId, pruneTombstonesByRows, recordTombstones } from './shrinkRegistry';
@@ -961,6 +961,11 @@ let strandedRepairRunning = false;
  * - 服务端错桶：其他设备浏览器写下的键（主账号端从不拉取），显式 fetch 后把主桶缺失的行补入，
  *   再申报删除+上传空数组排空来源键（不排空会被永不缩水并集复活）。
  * 幂等：来源键排空后后续会话 fetch 到空数组自动跳过。
+ *
+ * 成员判定只用服务端权威注册表（authoritativeTenantMembers）：本机的 registeredUsers
+ * 可能是陈旧/被污染副本，据它判成员会把别家公司的桶当自家错桶并走——既污染本租户桶，
+ * 又排空对方桶（已发生过的真实事故：两家公司的订单被归并到同一家名下）。
+ * 拿不到服务端注册表时直接跳过本轮归并（归并只是收敛体验，不是正确性前提）。
  */
 export async function repairStrandedOwnerBuckets(meta?: Record<string, number> | null): Promise<number> {
   if (strandedRepairRunning) return 0;
@@ -968,7 +973,9 @@ export async function repairStrandedOwnerBuckets(meta?: Record<string, number> |
   try {
     const owner = getSessionOwner();
     if (!owner) return 0;
-    const members = tenantMembersOf(owner).filter(m => m !== owner);
+    const authMembers = await authoritativeTenantMembers(owner);
+    if (!authMembers) return 0;
+    const members = authMembers.filter(m => m !== owner);
     if (members.length === 0) return 0;
     // 凭 meta 清单跳过「不存在或本账号无权读」的成员桶：旧实现逐键盲探，
     // 每轮拉取刷出一串 404/403 控制台噪声（服务端鉴权拒绝本就是他桶私有的正确行为）
