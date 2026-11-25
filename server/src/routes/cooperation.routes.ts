@@ -48,7 +48,7 @@ function rowsToRecords(rows: { record_json: string }[]): any[] {
 interface CompanyIndex { rootOf: Map<string, string>; noOf: Map<string, string>; }
 let companyIdxCache: { ts: number; idx: CompanyIndex } | null = null;
 
-async function companyIndex(): Promise<CompanyIndex> {
+export async function companyIndex(): Promise<CompanyIndex> {
   const now = Date.now();
   if (companyIdxCache && now - companyIdxCache.ts < 30000) return companyIdxCache.idx;
   const rootOf = new Map<string, string>();
@@ -82,7 +82,9 @@ async function companyIndex(): Promise<CompanyIndex> {
   return idx;
 }
 
-const rootOfAccount = (idx: CompanyIndex, un: string): string => {
+export type { CompanyIndex };
+
+export const rootOfAccount = (idx: CompanyIndex, un: string): string => {
   const s = String(un || '').trim();
   return s ? (idx.rootOf.get(s) || s) : '';
 };
@@ -95,7 +97,7 @@ const HANDSHAKE_STATUS = new Set(['pending', 'approved']);
  * 名称一律不参与——公司名称既不唯一也不稳定，同名两家公司的申请不得互相认领。
  * incomingApps 为本次请求同时携带的申请行（客户端按键分别推送，通常为空，保留以兼容合并推送）。
  */
-async function hasHandshake(purchaser: string, supplier: string, incomingApps: any[], idx: CompanyIndex): Promise<boolean> {
+export async function hasHandshake(purchaser: string, supplier: string, incomingApps: any[], idx: CompanyIndex): Promise<boolean> {
   const pRoot = rootOfAccount(idx, purchaser);
   const sRoot = rootOfAccount(idx, supplier);
   if (!pRoot || !sRoot || pRoot === sRoot) return false;

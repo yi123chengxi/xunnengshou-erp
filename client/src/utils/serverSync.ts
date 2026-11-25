@@ -21,11 +21,12 @@ import { takeRemovedIds, peekRemovedIds, declareShrink, tombstoneIds, removedIdS
 export { declareShrink } from './shrinkRegistry';
 
 // 需要同步的业务数据 key 前缀/精确名
-// 注意：customer_pay_summary_/supplier_pay_summary_ 为本地派生快照（由订单/账单/台账重算），禁止跨端同步——
+// 注意：supplier_pay_summary_ 为本地派生快照（由订单/账单/台账重算），禁止跨端同步——
 // 否则任一端在源数据未拉全时算出 0 快照上传，会经 pull 宽限期覆盖其他端的正确快照，表现为采购总额跳动/归 0
+// （customer_pay_summary_ 已迁服务端权威真表 /api/customer/*，行级 updatedAt 防陈旧，见 EXCLUDE_PREFIXES）
 const SYNC_PREFIXES = [
   // ==== 原有业务数据 ====（molds_ 已迁服务端权威真表 /api/molds/*，退出全局键同步，本地仅 IndexedDB 只读缓存）
-  'pageData_', 'custom_', 'warehouses_', 'purchaser_suppliers_', 'boundPurchasers_', 'accounts_', 'shop_info_', 'shop_profit_', 'month_end_check_', 'withdrawal_record_', 'dev_', 'hr_', 'newstyle_', 'brandauth_', 'credit_adjustments_', 'published_credit_', 'payment_requests_', 'payment_request_managers_', 'notification_settings_', 'print_template_', 'price_strategy_', 'user_notice_', 'invoice_record_', 'invoice_apply_requests_', 'purchaser_bills_', 'recon_db_', 'roles_', 'preset_role_overrides_', 'role_permsettings_', 'preset_acct_deny_rev_', 'user_perm_overrides_', 'customers_', 'supplier_payments_', 'customerReceipts_', 'inventory_check_', 'inventory_outbound_', 'purchase_receiving_', 'stock_change_log_', 'sales_outbound_',
+  'pageData_', 'custom_', 'warehouses_', 'purchaser_suppliers_', 'boundPurchasers_', 'accounts_', 'shop_info_', 'shop_profit_', 'month_end_check_', 'withdrawal_record_', 'dev_', 'hr_', 'newstyle_', 'brandauth_', 'published_credit_', 'payment_requests_', 'payment_request_managers_', 'notification_settings_', 'print_template_', 'price_strategy_', 'user_notice_', 'invoice_record_', 'invoice_apply_requests_', 'purchaser_bills_', 'recon_db_', 'roles_', 'preset_role_overrides_', 'role_permsettings_', 'preset_acct_deny_rev_', 'user_perm_overrides_', 'supplier_payments_', 'customerReceipts_', 'inventory_check_', 'inventory_outbound_', 'purchase_receiving_', 'stock_change_log_', 'sales_outbound_',
   // ==== 财务/账务（此前仅存本机，换电脑即丢）====
   'reimbursement_',            // 报销单 + 报销付款 + 报销负责人（三者同前缀）
   'receiving_accounts_',       // 报销/日常记账-本人垫付收款账户库（键后缀为登录账号，子账号各自独立）
@@ -97,9 +98,6 @@ const SYNC_PREFIXES = [
   // 客户删除墓碑（customer_del_tomb_<账号>）：供应商删除绑定采购商后阻断派生兜底复活，
   // 须跨端同步（服务端恒并集，见 sync.routes MERGE_ALWAYS_PREFIXES），归属严格私有
   'customer_del_tomb_',
-  // 客户归档登记册（customer_archive_<账号>）：删除改归档后的显式意图登记，
-  // 压制派生兜底/reconcile 补全/水合回灌三处复活出口，跨端同步口径同墓碑
-  'customer_archive_',
 ];
 const SYNC_EXACT = ['registeredUsers', 'subscription_orders', 'storage_orders', 'market_ratings', 'market_trade_orders', 'market_visitor_cart_shares', 'market_mold_listings', 'purchaser_pushed_orders', 'cooperation_applications', 'cooperation_invites', 'recon_records', 'recon_feedback', 'company_renames'];
 // market_publish_orders 已退役为「商机市场独立库（/api/market/*）的本地只读缓存」，
@@ -112,9 +110,13 @@ const EXCLUDE_PREFIXES = ['prodImg_', 'thumb_', 'payShot_', 'mold_img_',
   'newstyle_progress_', 'newstyle_photo_', 'newstyle_arrival_', 'newstyle_listing_',
   // 供应商菜单/合作握手三键已迁服务端权威真表 /api/cooperation/*（行级存储 + 授权跨租户代写），
   // 退出全局键同步；本地同名键退化为只读镜像，由 cooperationApi 水合/推送
-  'purchaser_suppliers_', 'boundPurchasers_', 'cooperation_applications'];
+  'purchaser_suppliers_', 'boundPurchasers_', 'cooperation_applications',
+  // 客户数据四键已迁服务端权威真表 /api/customer/*（行级存储 + 授权跨租户代写），
+  // 退出全局键同步；本地同名键退化为只读镜像，由 customerApi 水合/推送
+  'customers_', 'customer_archive_', 'credit_adjustments_', 'customer_pay_summary_'];
 // 仅上传不拉取的键前缀（这类键有独立的恢复机制，避免 pullAllDatasets 的宽限期竞态覆盖本地新数据）
-const UPLOAD_ONLY_PREFIXES = ['credit_adjustments_'];
+// （credit_adjustments_ 已迁 /api/customer/* 权威真表，退出本名单）
+const UPLOAD_ONLY_PREFIXES: string[] = [];
 // 只增不删的全局列表键（无删除 UI）：允许愈合回传修复服务端缩水，且不会复活已删除记录
 const APPEND_ONLY_GLOBAL_KEYS = ['market_trade_orders', 'purchaser_pushed_orders'];
 // 带下架语义的全局列表键：并集合并会在查看端复活已删除记录并回传服务器，

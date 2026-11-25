@@ -42,7 +42,7 @@ const archiveOf = (over: Partial<CustomerArchiveEntry> = {}): CustomerArchiveEnt
 describe('customerArchive 客户归档登记册', () => {
   beforeEach(() => { localStorage.clear(); seedUsers(); });
 
-  it('登记后本地可读回，键纳入跨端同步白名单；迁移哨兵键不参与同步', () => {
+  it('登记后本地可读回；归档键已迁 /api/customer 权威真表退出全局同步；迁移哨兵键不参与同步', () => {
     appendCustomerArchive(OWNER, { username: 'purA', no: 'AAAA1111', name: '甲公司', archivedBy: '张三' });
     const list = loadCustomerArchives(OWNER);
     expect(list.length).toBe(1);
@@ -50,7 +50,8 @@ describe('customerArchive 客户归档登记册', () => {
     expect(list[0].archivedAt).toBeGreaterThan(0);
     expect(list[0].archivedBy).toBe('张三');
     expect(Number(localStorage.getItem(`${customerArchiveKey(OWNER)}_ts`))).toBeGreaterThan(0);
-    expect(isSyncKey(customerArchiveKey(OWNER))).toBe(true);
+    // 归档册已换轨服务端真表（customerApi 钩子推送/水合），不再走全局键同步
+    expect(isSyncKey(customerArchiveKey(OWNER))).toBe(false);
     expect(isSyncKey(`${customerArchiveKey(OWNER)}_ts`)).toBe(false);
     // 哨兵键故意避开同步前缀：跨端覆盖会误跳过迁移
     expect(isSyncKey(`cust_arch_migrated_${OWNER}`)).toBe(false);

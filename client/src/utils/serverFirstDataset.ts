@@ -107,9 +107,10 @@ export async function commitServerFirst(key: string, json: string): Promise<{ ca
   return { cached, uploaded };
 }
 
-// 专用通道键：永不缩水键走行级并集语义（整键采纳会破坏删除申报）、仅上传键/追加型全局键/
+// 专用通道键：永不缩水键走行级并集语义（整键采纳会破坏删除申报）、追加型全局键/
 // 商品清单（自有 reconcile 通道）不参与通用整键对账
-const UPLOAD_ONLY_PREFIXES = ['credit_adjustments_'];
+// （credit_adjustments_ 已迁 /api/customer/* 权威真表，isSyncKey=false 自动跳过本通道）
+const UPLOAD_ONLY_PREFIXES: string[] = [];
 const APPEND_ONLY_GLOBAL_KEYS = ['market_trade_orders', 'purchaser_pushed_orders'];
 
 /** 判定某键是否跳过通用服务端为主对账 */

@@ -23,6 +23,7 @@ import {
   purchaserNoOf, noFromUsername, supplierUsernameOf, uniqueCompanyRootByName,
 } from '../utils/cooperationCred';
 import { unarchiveParty } from '../utils/customerArchive';
+import { pushRemoteUnarchive } from '../utils/customerApi';
 
 const { Text, Title } = Typography;
 
@@ -256,6 +257,8 @@ const CooperationManage: React.FC = () => {
           const purchaserNo = (thisApp ? purchaserNoOf(thisApp) : '') || record.purchaserNo || noFromUsername(purchaserUsername);
           // 显式解除归档：批准合作 = 重新合作，曾归档的采购商主体须恢复（批准写点唯一解除出口之一）
           unarchiveParty(supplierUsername, { username: purchaserUsername, no: purchaserNo, name: purchaserCompany });
+          // 服务端权威真表：显式解除归档（本人段由写钩子收敛，此调用兜底跨账号场景并即时回灌快照）
+          void pushRemoteUnarchive(supplierUsername, { username: purchaserUsername, no: purchaserNo, name: purchaserCompany });
           // 从采购商账号（registeredUsers）获取完整企业信息
           let purchaserInfo: any = {};
           if (purchaserUsername) {

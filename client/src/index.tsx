@@ -20,6 +20,7 @@ import { cleanupDemoAccountsAndSession } from './utils/demoAccountCleanup';
 import { startBankSyncWatcher } from './utils/supplierBankSync';
 import { startInviteConsumeWatcher } from './utils/inviteRegistry';
 import { scheduleCooperationUpload, installCooperationSync } from './utils/cooperationApi';
+import { scheduleCustomerUpload, installCustomerSync } from './utils/customerApi';
 
 // 全局 localStorage 配额防护：任何 setItem 配额溢出时自动清理重试，杜绝未捕获 QuotaExceededError 崩溃
 installStorageQuotaGuard();
@@ -29,6 +30,8 @@ installStorageWriteFailureNotice();
 registerSetItemHook((key, value) => scheduleDatasetUpload(key, value));
 // 供应商菜单/合作握手三键已退出全局同步，改走服务端权威真表专用通道（/api/cooperation/*）
 registerSetItemHook((key, value) => scheduleCooperationUpload(key, value));
+// 客户数据四键（档案/归档册/额度调整/欠款汇总）已退出全局同步，改走 /api/customer/* 专用通道
+registerSetItemHook((key, value) => scheduleCustomerUpload(key, value));
 // 待上传队列自动补传：断网/关页面期间未及上传的保存，联网、切回前台或每 30 秒自动重试
 installUploadQueueRetry();
 // 商品清单内存缓存预热：本地缓存被预算淘汰后，仪表盘等同步读取的页面仍能取到数据
@@ -53,6 +56,8 @@ startBankSyncWatcher();
 startInviteConsumeWatcher();
 // 供应商菜单/合作握手权威真表：启动即拉快照回灌镜像，并定时/可见性恢复/聚焦时收敛
 installCooperationSync();
+// 客户数据权威真表：首载补种 + 拉快照回灌镜像，并定时/可见性恢复时收敛
+installCustomerSync();
 
 // 陈旧 bundle 提醒：本 tab 加载的 main chunk 与服务端最新 manifest 不一致时提示强刷
 //（救济已被浏览器缓存旧 index.html 的设备；nginx 已对 index.html 设 no-cache 杜绝新增缓存）

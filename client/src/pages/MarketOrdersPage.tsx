@@ -6,6 +6,7 @@ import { isInstallmentOrder, depositAmountOf, sumPayRecords, mergePayRecords, pa
 import type { PayRecord } from '../utils/receiptWrite';
 import { saveDataset } from '../utils/dataStore';
 import { reloadAfterPull } from '../utils/serverSync';
+import { fetchCustomerShared, peekCustomerShared } from '../utils/customerApi';
 import { loadSupplierProducts, loadSupplierFinishedProducts } from '../utils/supplierProducts';
 import { QtyTemplateManagerModal, QtyFillConfirmModal, loadQtyTemplates, saveQtyTemplates, QtyTemplate } from '../components/QtyTemplateModals';
 import FieldConfigModal, { FieldConfigItem } from '../components/FieldConfigModal';
@@ -394,6 +395,8 @@ const MarketOrdersPage: React.FC = () => {
       if (!prod) return `商品 ${item.productCode || item.shortName} 在供应商 ${order.supplierCompany} 商品列表中不存在，无法推送`;
       if (!prod.suggestedPrice || Number(prod.suggestedPrice) <= 0) return `商品 ${item.productCode || item.shortName} 未设置基础售价，无法推送`;
     }
+    // 额度调整/客户档案已迁 /api/customer 权威真表：推送校验前先取最新跨租户共享快照
+    await fetchCustomerShared(order.supplierUsername);
     const credit = calcSupplierCredit(order.supplierUsername);
     const occupation = calcOccupation(order.supplierUsername);
     const e = getPaySummary(order.supplierUsername);
@@ -410,7 +413,9 @@ const MarketOrdersPage: React.FC = () => {
       const users: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
       const me = users.find(u => u.username === username);
       const myName = String(me?.companyName || username || '');
-      const custs: any[] = JSON.parse(localStorage.getItem('customers_' + supplierUsername) || '[]');
+      // 跨租户读共享缓存（预热见下方 effect；离线回退本地镜像）
+      const shared = peekCustomerShared(supplierUsername);
+      const custs: any[] = shared.customers;
       const bps: any[] = JSON.parse(localStorage.getItem('boundPurchasers_' + supplierUsername) || '[]');
       let base = 0;
       let adjId = '';
@@ -425,7 +430,7 @@ const MarketOrdersPage: React.FC = () => {
         const c = custs.find((c: any) => myName && c.name === myName);
         if (c) { base = Number(c.credit) || 0; adjId = c.id; adjName = c.name; }
       }
-      const adjs: any[] = JSON.parse(localStorage.getItem('credit_adjustments_' + supplierUsername) || '[]');
+      const adjs: any[] = shared.creditAdjustments;
       const net = adjs.filter((r: any) => (adjId && r.customerId === adjId) || (adjName && r.customerName === adjName))
         .reduce((sum: number, r: any) => sum + (r.type === 'increase' ? r.amount : -r.amount), 0);
       return Math.round((base + net) * 100) / 100;
@@ -1098,6 +1103,14 @@ const MarketOrdersPage: React.FC = () => {
     const occ = calcOccupation(addSupplier);
     return Math.round((due + occ) * 100) / 100;
   }, [addSupplier, creditRefreshKey]);
+
+  // 跨租户额度已迁 /api/customer 权威真表：选中供应商变化时预热共享快照并触发额度重算
+  useEffect(() => {
+    if (!addSupplier) return;
+    let alive = true;
+    void fetchCustomerShared(addSupplier).then(() => { if (alive) setCreditRefreshKey(k => k + 1); });
+    return () => { alive = false; };
+  }, [addSupplier]);
 
   // 图片粘贴处理
   const handleImagePaste = useCallback((e: React.ClipboardEvent) => {

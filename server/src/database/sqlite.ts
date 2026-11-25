@@ -206,6 +206,40 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_coop_purchaser ON cooperation_apps(purchaser);
   CREATE INDEX IF NOT EXISTS idx_coop_supplier ON cooperation_apps(supplier);
+
+  -- 客户数据权威真表：替代 customers_ / customer_archive_ / credit_adjustments_ / customer_pay_summary_
+  -- 四个本地优先同步键，写路径只改目标行，跨租户代写由 /api/customer/* 授权接口在服务端完成
+  CREATE TABLE IF NOT EXISTS customer_profiles (
+    owner TEXT NOT NULL,
+    rec_key TEXT NOT NULL,
+    record_json TEXT NOT NULL,
+    updated_at INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (owner, rec_key)
+  );
+
+  CREATE TABLE IF NOT EXISTS customer_archives (
+    owner TEXT NOT NULL,
+    rec_key TEXT NOT NULL,
+    record_json TEXT NOT NULL,
+    updated_at INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (owner, rec_key)
+  );
+
+  CREATE TABLE IF NOT EXISTS customer_credit_adj (
+    owner TEXT NOT NULL,
+    rec_key TEXT NOT NULL,
+    record_json TEXT NOT NULL,
+    updated_at INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (owner, rec_key)
+  );
+
+  CREATE TABLE IF NOT EXISTS customer_pay_summary (
+    owner TEXT NOT NULL,
+    rec_key TEXT NOT NULL,
+    record_json TEXT NOT NULL,
+    updated_at INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (owner, rec_key)
+  );
 `);
 
 // 兼容旧库：企业认证表增量列（法人身份证号 / 最近刷脸 CertifyId / 最近变更认证时间）
@@ -456,5 +490,41 @@ export const stmtCoopAppUpsert: Statement = db.prepare(`
 `);
 export const stmtCoopAppDelete: Statement = db.prepare('DELETE FROM cooperation_apps WHERE app_key = ?');
 export const stmtCoopAppListAll: Statement = db.prepare('SELECT app_key, purchaser, supplier, status, record_json, updated_at FROM cooperation_apps ORDER BY updated_at ASC');
+
+// ============ 客户档案权威真表（customer_profiles） ============
+export const stmtCustProfList: Statement = db.prepare('SELECT owner, rec_key, record_json, updated_at FROM customer_profiles WHERE owner = ? ORDER BY updated_at ASC');
+export const stmtCustProfKeys: Statement = db.prepare('SELECT rec_key FROM customer_profiles WHERE owner = ?');
+export const stmtCustProfUpsert: Statement = db.prepare(`
+  INSERT INTO customer_profiles (owner, rec_key, record_json, updated_at) VALUES (?, ?, ?, ?)
+  ON CONFLICT(owner, rec_key) DO UPDATE SET record_json = excluded.record_json, updated_at = excluded.updated_at
+`);
+export const stmtCustProfDelete: Statement = db.prepare('DELETE FROM customer_profiles WHERE owner = ? AND rec_key = ?');
+
+// ============ 客户归档册权威真表（customer_archives） ============
+export const stmtCustArchList: Statement = db.prepare('SELECT owner, rec_key, record_json, updated_at FROM customer_archives WHERE owner = ? ORDER BY updated_at ASC');
+export const stmtCustArchKeys: Statement = db.prepare('SELECT rec_key FROM customer_archives WHERE owner = ?');
+export const stmtCustArchUpsert: Statement = db.prepare(`
+  INSERT INTO customer_archives (owner, rec_key, record_json, updated_at) VALUES (?, ?, ?, ?)
+  ON CONFLICT(owner, rec_key) DO UPDATE SET record_json = excluded.record_json, updated_at = excluded.updated_at
+`);
+export const stmtCustArchDelete: Statement = db.prepare('DELETE FROM customer_archives WHERE owner = ? AND rec_key = ?');
+
+// ============ 额度调整权威真表（customer_credit_adj） ============
+export const stmtCustCreditList: Statement = db.prepare('SELECT owner, rec_key, record_json, updated_at FROM customer_credit_adj WHERE owner = ? ORDER BY updated_at ASC');
+export const stmtCustCreditKeys: Statement = db.prepare('SELECT rec_key FROM customer_credit_adj WHERE owner = ?');
+export const stmtCustCreditUpsert: Statement = db.prepare(`
+  INSERT INTO customer_credit_adj (owner, rec_key, record_json, updated_at) VALUES (?, ?, ?, ?)
+  ON CONFLICT(owner, rec_key) DO UPDATE SET record_json = excluded.record_json, updated_at = excluded.updated_at
+`);
+export const stmtCustCreditDelete: Statement = db.prepare('DELETE FROM customer_credit_adj WHERE owner = ? AND rec_key = ?');
+
+// ============ 客户欠款汇总权威真表（customer_pay_summary，按主体名拆行） ============
+export const stmtCustSummaryList: Statement = db.prepare('SELECT owner, rec_key, record_json, updated_at FROM customer_pay_summary WHERE owner = ? ORDER BY updated_at ASC');
+export const stmtCustSummaryKeys: Statement = db.prepare('SELECT rec_key FROM customer_pay_summary WHERE owner = ?');
+export const stmtCustSummaryUpsert: Statement = db.prepare(`
+  INSERT INTO customer_pay_summary (owner, rec_key, record_json, updated_at) VALUES (?, ?, ?, ?)
+  ON CONFLICT(owner, rec_key) DO UPDATE SET record_json = excluded.record_json, updated_at = excluded.updated_at
+`);
+export const stmtCustSummaryDelete: Statement = db.prepare('DELETE FROM customer_pay_summary WHERE owner = ? AND rec_key = ?');
 
 export default db;

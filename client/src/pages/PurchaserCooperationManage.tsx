@@ -21,6 +21,7 @@ import { copyText } from '../utils/clipboard';
 import { dedupePurchaserSuppliers } from '../utils/cooperationDedupe';
 import { appMatchesSupplierEntry, myCompanyNo, supplierUsernameOf, ensureCredsMigrated, noFromUsername } from '../utils/cooperationCred';
 import { unarchiveParty } from '../utils/customerArchive';
+import { pushRemoteUnarchive } from '../utils/customerApi';
 
 const { Text, Title } = Typography;
 
@@ -392,6 +393,8 @@ const PurchaserCooperationManage: React.FC = () => {
         if (supUser) {
           // 显式解除归档：批准合作 = 重新合作，供应商侧曾归档的采购商主体须恢复
           unarchiveParty(supUser, { username, no: noFromUsername(username), name: purchaserCompanyName });
+          // 服务端权威真表：显式解除供应商侧归档（本机可能无对方 customer_archive_ 镜像，本地写会落空）
+          void pushRemoteUnarchive(supUser, { username, no: noFromUsername(username), name: purchaserCompanyName });
           const boundKey = 'boundPurchasers_' + supUser;
           try {
             const bound: any[] = JSON.parse(localStorage.getItem(boundKey) || '[]');

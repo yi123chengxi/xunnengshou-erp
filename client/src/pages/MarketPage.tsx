@@ -14,6 +14,7 @@ import dayjs from 'dayjs';
 import { safeSetItem } from '../utils/storageQuota';
 import { saveDataset } from '../utils/dataStore';
 import { reloadAfterPull } from '../utils/serverSync';
+import { fetchCustomerShared, peekCustomerShared } from '../utils/customerApi';
 import { getProvinceOptions, getCityOptions, getDistrictOptions } from '../utils/regions';
 import { syncOrderReserved } from '../utils/orderOccupied';
 import MoldMarketTab from './MoldMarketTab';
@@ -2012,12 +2013,23 @@ const addToCart = useCallback((rec: any, qty?: number) => {
   }, [orderForm]);
 
   // === 供应商剩余额度计算（与 MarketOrdersPage / PurchaserSupplierList 同口径） ===
+  // 客户档案/额度调整已迁 /api/customer 权威真表：勾选供应商变化时预热共享快照，
+  // 渲染路径经 peekCustomerShared 同步读缓存（离线回退本地镜像）
+  const [sharedTick, setSharedTick] = useState(0);
+  useEffect(() => {
+    const sups = Array.from(new Set(checkedItems.map(c => market.find(r => r.key === c.cardKey)?.publisherUsername).filter(Boolean))) as string[];
+    if (!sups.length) return;
+    let alive = true;
+    void Promise.all(sups.map(s => fetchCustomerShared(s))).then(() => { if (alive) setSharedTick(t => t + 1); });
+    return () => { alive = false; };
+  }, [checkedItems, market]);
   const calcSupplierCredit = useCallback((supplierUsername: string): number => {
     try {
       const users: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
       const me = users.find(u => u.username === username);
       const myName = String(me?.companyName || username || '');
-      const custs: any[] = JSON.parse(localStorage.getItem('customers_' + supplierUsername) || '[]');
+      const shared = peekCustomerShared(supplierUsername);
+      const custs: any[] = shared.customers;
       const bps: any[] = JSON.parse(localStorage.getItem('boundPurchasers_' + supplierUsername) || '[]');
       let base = 0;
       let adjId = '';
@@ -2032,12 +2044,12 @@ const addToCart = useCallback((rec: any, qty?: number) => {
         const c = custs.find((c: any) => myName && c.name === myName);
         if (c) { base = Number(c.credit) || 0; adjId = c.id; adjName = c.name; }
       }
-      const adjs: any[] = JSON.parse(localStorage.getItem('credit_adjustments_' + supplierUsername) || '[]');
+      const adjs: any[] = shared.creditAdjustments;
       const net = adjs.filter((r: any) => (adjId && r.customerId === adjId) || (adjName && r.customerName === adjName))
         .reduce((sum: number, r: any) => sum + (r.type === 'increase' ? r.amount : -r.amount), 0);
       return Math.round((base + net) * 100) / 100;
     } catch { return 0; }
-  }, [username]);
+  }, [username, sharedTick]);
 
   const calcSupplierOccupation = useCallback((supplierUsername: string): number => {
     try {
@@ -2069,7 +2081,7 @@ const addToCart = useCallback((rec: any, qty?: number) => {
   }, [calcSupplierCredit, calcSupplierOccupation, getSupplierPaySummary]);
 
   // 确认付款：按供应商生成交易订单 + 推送供应商订单管理
-  const handleConfirmPay = useCallback(() => {
+  const handleConfirmPay = useCallback(async () => {
     const vals = orderForm.getFieldsValue();
     // 时间格式与订单管理一致（zh-CN 本地化字符串）
     const now = new Date().toLocaleString('zh-CN');
@@ -2082,6 +2094,8 @@ const addToCart = useCallback((rec: any, qty?: number) => {
       arr.push({ ...c, _rec: rec });
       bySup.set(rec.publisherUsername, arr);
     });
+    // 余额支付校验需最新跨租户额度：先预取权威共享快照（离线回退本地镜像）
+    await Promise.all(Array.from(bySup.keys()).map(s => fetchCustomerShared(s)));
     let users: any[] = [];
     try { users = JSON.parse(localStorage.getItem('registeredUsers') || '[]'); } catch { /* ignore */ }
     // 客户名称取客户公司名称：注册账号 companyName 优先，缺失回退本地 companyName

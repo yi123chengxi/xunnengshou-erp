@@ -24,6 +24,15 @@ describe('财务域同步白名单', () => {
     expect(isSyncKey('supplier_pay_summary_owner1')).toBe(false);
   });
 
+  it('客户数据四键已迁 /api/customer 权威真表，退出全局键同步（customerApi 专用通道接管）', () => {
+    expect(isSyncKey('customers_owner1')).toBe(false);
+    expect(isSyncKey('customer_archive_owner1')).toBe(false);
+    expect(isSyncKey('credit_adjustments_owner1')).toBe(false);
+    expect(isSyncKey('customer_pay_summary_owner1')).toBe(false);
+    // 删除墓碑仍是全局同步键（归档迁移源，过渡期保留）
+    expect(isSyncKey('customer_del_tomb_owner1')).toBe(true);
+  });
+
   it('仓库统计各存储键必须纳入跨端同步白名单（历史缺陷：只存本机致他端看不到新增）', () => {
     const WAREHOUSE_KEYS = [
       'ws_stock_owner1', 'ws_urgent_owner1', 'ws_pick_owner1',

@@ -34,10 +34,11 @@ import AsOfDebtModal from '../components/AsOfDebtModal';
 import EnterpriseCertModal, { CertBadge, fetchCertStatus, fetchCertBatch } from '../components/EnterpriseCertModal';
 import FieldConfigModal from '../components/FieldConfigModal';
 import type { CertInfo } from '../components/EnterpriseCertModal';
-import { flushDatasetUpload, flushDatasetUploadAsync, ensureDatasetFromServer, mergeDatasetFromServer, reloadAfterPull } from '../utils/serverSync';
+import { flushDatasetUploadAsync, reloadAfterPull } from '../utils/serverSync';
 import { loadCustomerArchives, appendCustomerArchive, archiveMatchesParty, archiveActiveForParty, pruneArchivedBound, unarchiveParty, migrateTombsToArchive } from '../utils/customerArchive';
 import type { CustomerArchiveEntry } from '../utils/customerArchive';
 import { flushCooperationUpload } from '../utils/cooperationApi';
+import { flushCustomerUpload, hydrateCustomer } from '../utils/customerApi';
 import { safeSetItem } from '../utils/storageQuota';
 import { isAccountingMode, writeAutoEntries, loadSubjectOptions, subjectFilterOption } from '../utils/accountingBridge';
 import { loadTenantUsers } from '../utils/tenantUsers';
@@ -124,13 +125,8 @@ const saveCreditAdjustments = async (records: CreditAdjustRecord[]) => {
   // 同步写入 _ts 时间戳，防止 pullAllDatasets 用服务端旧数据覆盖
   safeSetItem(`${key}_ts`, String(Date.now()));
   saveDataset(key, json);
-  // 立即上传服务端并等待确认落库（确保服务端有数据后再返回）
-  const uploaded = await flushDatasetUploadAsync(key, json);
-  if (!uploaded) {
-    // 服务端上传失败时降级为 fire-and-forget
-    flushDatasetUpload(key, json);
-    console.warn('[credit_adjust] 服务端上传失败，降级为异步上传');
-  }
+  // 立即推送权威真表并等待完成（额度调整已迁 /api/customer/*；离线时 customerApi 重试队列补传）
+  await flushCustomerUpload(key);
   // 回读校验：确认 localStorage 中的数据与写入一致
   try {
     const readback = localStorage.getItem(key);
@@ -997,31 +993,15 @@ const CustomerInfo: React.FC = () => {
   const [occupiedDetailVisible, setOccupiedDetailVisible] = useState(false);
   const [occupiedDetailCustomer, setOccupiedDetailCustomer] = useState<CustomerRecord | null>(null);
 
-  // 页面挂载时始终从服务端拉取额度调整记录并与本地合并（确保服务端数据不丢失）
+  // 页面挂载时从服务端权威真表水合（额度调整已迁 /api/customer/*，本地为只读镜像）
   useEffect(() => {
-    const key = getCreditAdjustKey();
-    mergeDatasetFromServer(key).then((mergedJson) => {
-      if (mergedJson) {
-        try {
-          const merged = JSON.parse(mergedJson);
-          if (Array.isArray(merged)) {
-            setCreditAdjustments(merged);
-          }
-        } catch { /* ignore */ }
-      } else {
-        // 服务端不可用，使用本地数据
-      }
+    hydrateCustomer().then((ok) => {
+      if (ok) setCreditAdjustments(loadCreditAdjustments());
     });
-    // 定时自检：每 30 秒从服务端合并额度数据（确保不丢失）
+    // 定时自检：每 30 秒水合权威快照并重载额度调整（customerApi 另有 45s 全局收敛）
     const selfCheckInterval = setInterval(() => {
-      const key = getCreditAdjustKey();
-      mergeDatasetFromServer(key).then((mergedJson) => {
-        if (mergedJson) {
-          try {
-            const merged = JSON.parse(mergedJson);
-            if (Array.isArray(merged)) setCreditAdjustments(merged);
-          } catch { /* ignore */ }
-        }
+      hydrateCustomer().then((ok) => {
+        if (ok) setCreditAdjustments(loadCreditAdjustments());
       });
     }, 30000);
     return () => clearInterval(selfCheckInterval);
@@ -1091,15 +1071,9 @@ const CustomerInfo: React.FC = () => {
       if (document.visibilityState === 'visible') {
         syncBoundPurchasers();
         setDataRefreshKey(k => k + 1);
-        // 页面重新可见时从服务端合并额度调整记录
-        const key = getCreditAdjustKey();
-        mergeDatasetFromServer(key).then((mergedJson) => {
-          if (mergedJson) {
-            try {
-              const merged = JSON.parse(mergedJson);
-              if (Array.isArray(merged)) setCreditAdjustments(merged);
-            } catch { /* ignore */ }
-          }
+        // 页面重新可见时水合权威快照并重载额度调整
+        hydrateCustomer().then((ok) => {
+          if (ok) setCreditAdjustments(loadCreditAdjustments());
         });
       }
     };
@@ -1131,16 +1105,9 @@ const CustomerInfo: React.FC = () => {
       // 同文档写入不发原生 storage 事件：pull 落地的订单/账单必须显式重算，
       // 否则新设备采购总额停在 0，只能等空闲巡检逐个（20s/个）修正
       scheduleCustomerRefresh(getDataOwner(), getAllCustNames(), () => setCustSummary(loadCustomerSummary(getDataOwner())));
-      // 从服务端合并额度调整记录
-      const key = getCreditAdjustKey();
-      mergeDatasetFromServer(key).then((mergedJson) => {
-        if (mergedJson) {
-          try {
-            const merged = JSON.parse(mergedJson);
-            if (Array.isArray(merged)) setCreditAdjustments(merged);
-          } catch { /* ignore */ }
-        }
-      });
+      // 同步落地可能已更新额度调整/欠款汇总镜像：直接从镜像重载
+      setCreditAdjustments(loadCreditAdjustments());
+      setCustSummary(loadCustomerSummary(getDataOwner()));
     };
     window.addEventListener('sync-data-updated', handleSyncOrUpdate);
     return () => {
@@ -2914,6 +2881,7 @@ const CustomerInfo: React.FC = () => {
                                 setCreditAdjustments(loadCreditAdjustments());
                                 setDataRefreshKey(k => k + 1);
                               };
+                              void hydrateCustomer();
                               reloadAfterPull(reload);
                               setSearchText(searchInput.trim()); setCodeSearchText(codeSearchInput.trim()); setAddressSearchText(addressSearchInput.trim());
                             }}>查询</Button>

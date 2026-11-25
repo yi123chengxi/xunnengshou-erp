@@ -6,6 +6,7 @@ import dayjs from 'dayjs';
 import { noOfUser, noFromAny, noFromUsername, supplierUsernameOf, ensureCredsMigrated } from '../utils/cooperationCred';
 import { hydrateCooperation } from '../utils/cooperationApi';
 import { unarchiveParty } from '../utils/customerArchive';
+import { pushRemoteUnarchive, confirmRemoteCustomerLink } from '../utils/customerApi';
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -257,6 +258,8 @@ const PurchaserCooperationConfirmPage: React.FC = () => {
       const purchaserCompany = currentUser.companyName || purchaserUsername;
       // 显式解除归档：同意邀约 = 重新合作，供应商侧曾归档的采购商主体须恢复
       unarchiveParty(supOwner || tokenData.supplierId, { username: purchaserUsername, no: noFromUsername(purchaserUsername), name: purchaserCompany });
+      // 服务端权威真表：显式解除供应商侧归档（本机可能无对方 customer_archive_ 镜像，本地写会落空）
+      void pushRemoteUnarchive(supOwner || tokenData.supplierId, { username: purchaserUsername, no: noFromUsername(purchaserUsername), name: purchaserCompany });
       const purchaserInfo = {
         purchaserContact: currentUser.contactPerson || '',
         purchaserPhone: currentUser.phone || '',
@@ -295,6 +298,13 @@ const PurchaserCooperationConfirmPage: React.FC = () => {
 
     // 6. 如果链接关联了客户ID（供应商从客户信息页发起的邀约），更新对应客户类型
     if (tokenData.customerId) {
+      // 服务端权威真表：显式回写供应商侧客户合作类型（本机可能无对方 customers_ 镜像，下方本地写会落空）
+      const custOwner = supplierUsernameOf({
+        supplierUsername: tokenData.supplierId,
+        targetSupplierId: tokenData.supplierId,
+        targetSupplierName: tokenData.supplierName,
+      }) || tokenData.supplierId;
+      void confirmRemoteCustomerLink(custOwner, tokenData.customerId, { type: '合作客户', cooperationDate: dayjs().format('YYYY-MM-DD') });
       try {
         const customerStorageKey = 'customers_' + tokenData.supplierId;
         const customers: any[] = JSON.parse(localStorage.getItem(customerStorageKey) || '[]');

@@ -41,6 +41,7 @@ import {
 import type { SupplierSummaryEntry } from '../utils/paySummary';
 import { writeProductList, loadProductListLatest } from '../utils/dataStore';
 import { reloadAfterPull, declareShrink } from '../utils/serverSync';
+import { fetchCustomerShared } from '../utils/customerApi';
 import {
   takePendingInvite, acceptCooperationInvite, rejectCooperationInvite, resolveUserByCompanyNo,
 } from '../utils/cooperationInvite';
@@ -955,12 +956,11 @@ const PurchaserSupplierList: React.FC = () => {
         } catch { /* ignore */ }
       }
       // 发布键读不到（供应商端上传失败/旧版本未发布）时的服务器权威兜底：
-      // boundPurchasers_<供应商> 与 credit_adjustments_<供应商> 同为 SHARED 键，登录即可跨租户读，
-      // 按供应商端同公式 base + 调整净额 现算，保证“服务器有数据界面就有数据”，
-      // 不再依赖本浏览器 localStorage 里根本不存在的对方私有键
+      // boundPurchasers_<供应商> 走 /api/cooperation 跨租户读，credit_adjustments_<供应商> 已迁
+      // /api/customer 权威真表走 /shared 跨租户读，按供应商端同公式 base + 调整净额 现算，
+      // 保证“服务器有数据界面就有数据”，不再依赖本浏览器 localStorage 里根本不存在的对方私有键
       const readDataset = async (k: string): Promise<any[]> => {
         try {
-          // boundPurchasers_ 已迁服务端权威真表，走 /api/cooperation 跨租户读；其余 SHARED 键（credit_adjustments_）仍走旧同步通道
           if (k.startsWith('boundPurchasers_')) {
             const owner = k.slice('boundPurchasers_'.length);
             const rb = await fetch(`${apiBase}/cooperation/bound-purchasers?owner=${encodeURIComponent(owner)}`, { headers: auth });
@@ -968,6 +968,12 @@ const PurchaserSupplierList: React.FC = () => {
             const db = await rb.json();
             const arrb = db?.data?.list;
             return Array.isArray(arrb) ? arrb : [];
+          }
+          // 额度调整已退出全局同步（dataset_store 旧副本可能陈旧），改读权威真表共享快照
+          if (k.startsWith('credit_adjustments_')) {
+            const owner = k.slice('credit_adjustments_'.length);
+            const shared = await fetchCustomerShared(owner);
+            return shared.creditAdjustments;
           }
           const r = await fetch(`${apiBase}/sync/dataset?key=${encodeURIComponent(k)}`, { headers: auth });
           if (!r.ok) return [];

@@ -41,6 +41,7 @@ import marketRoutes from './routes/market.routes';
 import moldRoutes from './routes/mold.routes';
 import newstyleRoutes from './routes/newstyle.routes';
 import cooperationRoutes from './routes/cooperation.routes';
+import customerDataRoutes from './routes/customerData.routes';
 import { migrateLegacyMarketKey } from './services/market-listings';
 import { startEnterprisePatrol } from './services/enterprisePatrol';
 import { initPrintWebSocket } from './ws/print-ws';
@@ -80,6 +81,8 @@ app.use('/api/molds', rateLimit({ name: 'molds', windowMs: 60_000, max: 300, mes
 app.use('/api/newstyle', rateLimit({ name: 'newstyle', windowMs: 60_000, max: 300, message: '新款进度请求过于频繁，请稍后再试' }));
 // 供应商菜单/合作握手权威真表：快照读 + 授权写入，低频业务按常规额度
 app.use('/api/cooperation', rateLimit({ name: 'cooperation', windowMs: 60_000, max: 600, message: '合作请求过于频繁，请稍后再试' }));
+// 客户数据权威真表：快照读 + 授权写入，低频业务按常规额度
+app.use('/api/customer', rateLimit({ name: 'customer', windowMs: 60_000, max: 600, message: '客户数据请求过于频繁，请稍后再试' }));
 
 app.use('/api/auth', authRoutes);
 app.use('/api/wx', wxRoutes);
@@ -109,6 +112,7 @@ app.use('/api/market', marketRoutes);
 app.use('/api/molds', moldRoutes);
 app.use('/api/newstyle', newstyleRoutes);
 app.use('/api/cooperation', cooperationRoutes);
+app.use('/api/customer', customerDataRoutes);
 
 // 健康检查
 app.get('/api/health', (_req, res) => {
