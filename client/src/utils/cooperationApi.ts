@@ -16,6 +16,7 @@
 import { API_BASE } from './apiBase';
 import { saveDataset } from './dataStore';
 import { getOriginalSetItem } from './storageQuota';
+import { filterArchivedBound } from './customerArchive';
 
 const SUP_PREFIX = 'purchaser_suppliers_';
 const BOUND_PREFIX = 'boundPurchasers_';
@@ -90,7 +91,9 @@ function snapshotToMirrors(data: any): boolean {
   let changed = false;
   if (owner) {
     if (writeMirror(SUP_PREFIX + owner, suppliers)) changed = true;
-    if (writeMirror(BOUND_PREFIX + owner, bound)) changed = true;
+    // 归档压制：服务端真表仍挂已归档行时不得落回镜像（45s 水合回灌复活出口）；
+    // lastKeys 仍记未过滤快照键集，下次推送差集自动申报 removedKeys 收敛真表
+    if (writeMirror(BOUND_PREFIX + owner, filterArchivedBound(bound, owner))) changed = true;
   }
   if (writeMirror(APPS_KEY, apps)) changed = true;
   lastKeys.suppliers = new Set(suppliers.map(supKeyOf).filter(Boolean));

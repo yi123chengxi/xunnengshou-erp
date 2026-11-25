@@ -13,6 +13,7 @@
  */
 import { getDataOwner } from './brandAuth';
 import { declareShrink } from './shrinkRegistry';
+import { loadCustomerArchives, archiveMatchesParty, filterArchivedBound, CustomerArchiveEntry } from './customerArchive';
 
 const STATUS_RANK: Record<string, number> = { approved: 1, terminating: 2, terminated: 3 };
 const BOUND_PREFIX = 'boundPurchasers_';
@@ -156,6 +157,13 @@ export function reconcileCooperationPairs(): void {
     });
 
     // 2) 每方向镜像补全：boundPurchasers_<s> / purchaser_suppliers_<p> 任一侧缺失时按对侧镜像 + registeredUsers 补正确形状
+    //    归档压制：供应商侧主体已归档的公司对不得补回 bound 行（否则剪一次补一次形成复活写点）
+    const archiveCache = new Map<string, CustomerArchiveEntry[]>();
+    const archivesOf = (owner: string): CustomerArchiveEntry[] => {
+      let list = archiveCache.get(owner);
+      if (!list) { list = loadCustomerArchives(owner); archiveCache.set(owner, list); }
+      return list;
+    };
     const dirs = new Map<string, { s: string; p: string }>();
     guardedRecs.forEach(r => { if (r.s !== r.p && STATUS_RANK[r.status]) dirs.set(pairKey(r.s, r.p), { s: r.s, p: r.p }); });
     dirs.forEach(({ s, p }) => {
@@ -169,7 +177,8 @@ export function reconcileCooperationPairs(): void {
       const cBound = canon.get(pk) || (isTrusted(bKey) ? undefined : canonLoose.get(pk));
       let bHolder = boundKeys.find(x => x.key === bKey);
       const bExist = bHolder ? bHolder.list.some((e: any) => e && e.purchaserUsername === p) : false;
-      if (cBound && !bExist) {
+      const bArchived = archivesOf(s).some(a => archiveMatchesParty(a, { purchaserUsername: p, purchaserNo: pRec?.companyNo || '', purchaserName: pRec?.companyName || '' }));
+      if (cBound && !bExist && !bArchived) {
         const from = src.find(r => r.shape === 'bound') || src[0];
         const base: any = (from && holderOf(from.key) ? holderOf(from.key)!.list[from.idx] : null) || {};
         const card: any = {
@@ -243,9 +252,12 @@ export function reconcileCooperationPairs(): void {
     });
 
     // 4) 回写变更键（经 setItem 钩子自动触发跨浏览器同步上传）
+    //    bound 键回写前再滤一次归档行：状态回写不得把已归档行重新推回服务端真表
     changed.forEach(key => {
       const holder = holderOf(key);
-      if (holder) localStorage.setItem(key, JSON.stringify(holder.list));
+      if (!holder) return;
+      const list = key.indexOf(BOUND_PREFIX) === 0 ? filterArchivedBound(holder.list, holder.owner) : holder.list;
+      localStorage.setItem(key, JSON.stringify(list));
     });
     // 通知已挂载页面（客户列表/供应商列表）重读存储，立即呈现一致状态
     if (changed.size > 0) {

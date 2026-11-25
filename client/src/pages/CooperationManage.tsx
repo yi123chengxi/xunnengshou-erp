@@ -22,6 +22,7 @@ import {
   myCompanyNo, purchaserUsernameOf, noOfUser, appMatchesSupplierEntry,
   purchaserNoOf, noFromUsername, supplierUsernameOf, uniqueCompanyRootByName,
 } from '../utils/cooperationCred';
+import { unarchiveParty } from '../utils/customerArchive';
 
 const { Text, Title } = Typography;
 
@@ -253,6 +254,8 @@ const CooperationManage: React.FC = () => {
           const customerId = thisApp?.customerId || record.customerId || '';
           const purchaserUsername = thisApp?.purchaserUsername || purchaserUsernameOf(thisApp) || record.purchaserUsername || '';
           const purchaserNo = (thisApp ? purchaserNoOf(thisApp) : '') || record.purchaserNo || noFromUsername(purchaserUsername);
+          // 显式解除归档：批准合作 = 重新合作，曾归档的采购商主体须恢复（批准写点唯一解除出口之一）
+          unarchiveParty(supplierUsername, { username: purchaserUsername, no: purchaserNo, name: purchaserCompany });
           // 从采购商账号（registeredUsers）获取完整企业信息
           let purchaserInfo: any = {};
           if (purchaserUsername) {

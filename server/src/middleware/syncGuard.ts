@@ -111,6 +111,8 @@ const STRICT_PRIVATE_PREFIXES = [
   'customers_', 'accounts_', 'withdrawal_record_', 'month_end_check_',
   // 客户删除墓碑（键后缀为供应商账号）：记录被删采购商凭证，仅本租户读写
   'customer_del_tomb_',
+  // 客户归档登记册（键后缀为供应商账号）：删除改归档的显式意图登记，仅本租户读写
+  'customer_archive_',
   // 提现任务状态（键末段为主账号）：发起后需同步到同租户负责人电脑弹出提醒
   'withdrawal_task_status_',
   'shop_info_', 'shop_profit_', 'shopmgr_', 'inventory_check_', 'stock_change_log_', 'sales_outbound_',

@@ -97,6 +97,9 @@ const SYNC_PREFIXES = [
   // 客户删除墓碑（customer_del_tomb_<账号>）：供应商删除绑定采购商后阻断派生兜底复活，
   // 须跨端同步（服务端恒并集，见 sync.routes MERGE_ALWAYS_PREFIXES），归属严格私有
   'customer_del_tomb_',
+  // 客户归档登记册（customer_archive_<账号>）：删除改归档后的显式意图登记，
+  // 压制派生兜底/reconcile 补全/水合回灌三处复活出口，跨端同步口径同墓碑
+  'customer_archive_',
 ];
 const SYNC_EXACT = ['registeredUsers', 'subscription_orders', 'storage_orders', 'market_ratings', 'market_trade_orders', 'market_visitor_cart_shares', 'market_mold_listings', 'purchaser_pushed_orders', 'cooperation_applications', 'cooperation_invites', 'recon_records', 'recon_feedback', 'company_renames'];
 // market_publish_orders 已退役为「商机市场独立库（/api/market/*）的本地只读缓存」，

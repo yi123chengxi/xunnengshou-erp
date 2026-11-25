@@ -10,7 +10,6 @@ import {
   ExportOutlined,
   EyeOutlined,
   EditOutlined,
-  DeleteOutlined,
   LinkOutlined,
   UserOutlined,
   CopyOutlined,
@@ -25,6 +24,7 @@ import {
   FileTextOutlined,
   CalendarOutlined,
   SettingOutlined,
+  InboxOutlined,
 } from '@ant-design/icons';
 import { Popconfirm } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
@@ -35,7 +35,9 @@ import EnterpriseCertModal, { CertBadge, fetchCertStatus, fetchCertBatch } from 
 import FieldConfigModal from '../components/FieldConfigModal';
 import type { CertInfo } from '../components/EnterpriseCertModal';
 import { flushDatasetUpload, flushDatasetUploadAsync, ensureDatasetFromServer, mergeDatasetFromServer, reloadAfterPull } from '../utils/serverSync';
-import { loadCustomerDelTombs, appendCustomerDelTomb, tombActiveForParty, pruneTombstonedBound } from '../utils/customerDelTomb';
+import { loadCustomerArchives, appendCustomerArchive, archiveMatchesParty, archiveActiveForParty, pruneArchivedBound, unarchiveParty, migrateTombsToArchive } from '../utils/customerArchive';
+import type { CustomerArchiveEntry } from '../utils/customerArchive';
+import { flushCooperationUpload } from '../utils/cooperationApi';
 import { safeSetItem } from '../utils/storageQuota';
 import { isAccountingMode, writeAutoEntries, loadSubjectOptions, subjectFilterOption } from '../utils/accountingBridge';
 import { loadTenantUsers } from '../utils/tenantUsers';
@@ -295,6 +297,20 @@ const samePurchaserParty = (row: any, cust: any, ctx?: PartyCtx): boolean => {
   return ctx?.ambiguous ? !ctx.ambiguous.has(nm) : !!uniqueCompanyRootByName(nm);
 };
 
+/** 归档判定上下文（与 partyCtx 同口径：歧义名表 + 账号→编号表，一次构建复用） */
+const buildArchiveCtx = (): PartyCtx => {
+  const ctx: PartyCtx = { ambiguous: ambiguousCompanyNames(), noByUn: new Map<string, string>() };
+  try {
+    const usAll: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+    (Array.isArray(usAll) ? usAll : []).forEach((u: any) => { if (u?.username) ctx.noByUn!.set(String(u.username), noOfUser(u)); });
+  } catch { /* ignore */ }
+  return ctx;
+};
+
+/** 客户档案行是否命中归档册（直客行字段口径：name→purchaserName） */
+const isArchivedCustomerRow = (c: any, archives: CustomerArchiveEntry[], ctx?: PartyCtx): boolean =>
+  archives.some(a => archiveMatchesParty(a, { purchaserUsername: c?.purchaserUsername, purchaserNo: c?.purchaserNo, purchaserName: c?.name }, ctx));
+
 // 从 localStorage 读取当前登录供应商的真实绑定数据（按数据归属账号隔离）
 export const loadBoundPurchasersFromStorage = (): BoundPurchaser[] => {
   // 同一采购商被不同写点以不同 id 重复落行（供应商审批 BIND-<时间戳> / 派生补入 BIND-<账号后6位>）时先归并自愈：
@@ -325,8 +341,9 @@ export const loadBoundPurchasersFromStorage = (): BoundPurchaser[] => {
     const usAll: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
     (Array.isArray(usAll) ? usAll : []).forEach((u: any) => { if (u?.username) partyCtx.noByUn!.set(String(u.username), noOfUser(u)); });
   } catch { /* ignore */ }
-  // 删除墓碑：派生兜底跳过已删主体 + 剪枝复活回流行（详见 utils/customerDelTomb）
-  const delTombs = loadCustomerDelTombs(getDataOwner());
+  // 归档登记册：派生兜底跳过已归档主体 + 剪枝复活回流行（详见 utils/customerArchive）；存量删除墓碑首载迁移
+  migrateTombsToArchive(getDataOwner());
+  const archives = loadCustomerArchives(getDataOwner());
   // 兜底合并：已批准的合作申请（防止个别批准路径未回写 boundPurchasers 导致客户缺失）
   try {
     const owner = getDataOwner();
@@ -362,8 +379,8 @@ export const loadBoundPurchasersFromStorage = (): BoundPurchaser[] => {
         if (!amSupplier(a)) return;
         const name = a.purchaserCompanyName || a.purchaserUsername;
         if (!name) return;
-        // 删除墓碑命中：已批准申请不得把已删客户补回（来源时间戳=申请批准时间）
-        if (tombActiveForParty(delTombs, { purchaserUsername: a.purchaserUsername, purchaserNo: purchaserNoOf(a) || partyCtx.noByUn!.get(String(a.purchaserUsername || '')) || '', purchaserName: name }, tsOfApp(a), partyCtx)) return;
+        // 归档命中：已批准申请不得把已归档客户补回（无时间戳让位，解除仅恢复/批准写点两条显式出口）
+        if (archiveActiveForParty(archives, { purchaserUsername: a.purchaserUsername, purchaserNo: purchaserNoOf(a) || partyCtx.noByUn!.get(String(a.purchaserUsername || '')) || '', purchaserName: name }, partyCtx)) return;
         const exists = bound.some((bp: any) => samePurchaserParty(bp, a, partyCtx));
         if (exists) return;
         bound = [...bound, {
@@ -420,9 +437,8 @@ export const loadBoundPurchasersFromStorage = (): BoundPurchaser[] => {
         const pRec = users2.find((u: any) => u.username === pUser);
         const name = pRec?.companyName || pUser;
         const pNo = noOfUser(pRec);
-        // 删除墓碑命中：采购商侧目录不得把已删客户反向补回（来源时间戳=合作建立时间）
-        const srcMs = Date.parse(String(s.cooperationDate || s.addedDate || '').replace(/-/g, '/')) || 0;
-        if (tombActiveForParty(delTombs, { purchaserUsername: pUser, purchaserNo: pNo, purchaserName: name }, srcMs, partyCtx)) return;
+        // 归档命中：采购商侧目录不得把已归档客户反向补回（无时间戳让位）
+        if (archiveActiveForParty(archives, { purchaserUsername: pUser, purchaserNo: pNo, purchaserName: name }, partyCtx)) return;
         const mappedStatus = st === 'approved' ? 'approved' : st === 'terminating' ? 'terminating' : 'terminated';
         const existIdx = bound.findIndex((bp: any) => samePurchaserParty(bp, { purchaserUsername: pUser, purchaserNo: pNo, name }, partyCtx));
         if (existIdx >= 0) {
@@ -532,8 +548,8 @@ export const loadBoundPurchasersFromStorage = (): BoundPurchaser[] => {
       return b;
     });
   }
-  // 删除墓碑剪枝：剔除他端派生复活回流的 bound 行，回写后由 doPush 差集申报 removedKeys 跨端收敛
-  const pruneRes = pruneTombstonedBound(bound, delTombs, partyCtx);
+  // 归档剪枝：剔除他端派生/水合复活回流的 bound 行，回写后由 doPush 差集申报 removedKeys 跨端收敛
+  const pruneRes = pruneArchivedBound(bound, archives, partyCtx);
   bound = pruneRes.list;
   // 派生结果回写落库：镜像/合作申请派生出的状态（如已解除合作）与新增记录必须持久化并上传，
   // 否则子账号/其他浏览器拉取的仍是旧存储态 approved（主账号显示已解除、子账号显示已合作的根因）
@@ -580,7 +596,11 @@ const findPurchaserAccount = (bp: any): any => {
 
 // 合并直接客户和已绑定采购商（与客户列表页展示逻辑保持一致）
 export const loadAllCustomersFromStorage = (): CustomerRecord[] => {
-  const customers = loadCustomersFromStorage();
+  // 归档全出口过滤：已归档主体两源均排除（编号查重等消费方同口径）
+  migrateTombsToArchive(getDataOwner());
+  const archives = loadCustomerArchives(getDataOwner());
+  const actx = buildArchiveCtx();
+  const customers = loadCustomersFromStorage().filter(c => !isArchivedCustomerRow(c, archives, actx));
   const boundPurchasers = loadBoundPurchasersFromStorage();
   const associatedCustomerIds = new Set(
     boundPurchasers.map(bp => resolveLinkedDirectCustomer(bp, customers)?.id).filter(Boolean) as string[]
@@ -771,6 +791,15 @@ export const showCustomerDetail = (record: CustomerRecord) => {
 const CustomerInfo: React.FC = () => {
   const [customers, setCustomers] = useState<CustomerRecord[]>(loadCustomersFromStorage);
   const [boundPurchasers, setBoundPurchasers] = useState<BoundPurchaser[]>(loadBoundPurchasersFromStorage);
+  // 归档登记册 state（「已归档客户」页签数据源；首载迁移存量删除墓碑）
+  const [archives, setArchives] = useState<CustomerArchiveEntry[]>(() => {
+    migrateTombsToArchive(getDataOwner());
+    return loadCustomerArchives(getDataOwner());
+  });
+  const reloadArchives = useCallback(() => {
+    migrateTombsToArchive(getDataOwner());
+    setArchives(loadCustomerArchives(getDataOwner()));
+  }, []);
   const [searchText, setSearchText] = useState('');
   const [searchInput, setSearchInput] = useState('');  // 输入框即时值（回车/查询后才应用到 searchText）
   const [codeSearchText, setCodeSearchText] = useState('');  // 客户编号搜索
@@ -1052,6 +1081,11 @@ const CustomerInfo: React.FC = () => {
       if (e.key?.startsWith('credit_adjustments_')) {
         setCreditAdjustments(loadCreditAdjustments());
       }
+      // 归档登记册跨页签变更：重载归档页签与客户列表（他端归档/恢复即时收敛）
+      if (e.key?.startsWith('customer_archive_')) {
+        reloadArchives();
+        syncBoundPurchasers();
+      }
     };
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
@@ -1078,7 +1112,7 @@ const CustomerInfo: React.FC = () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('bound-purchasers-changed', handleBoundChange);
     };
-  }, [syncBoundPurchasers, reloadCustomerReceipts, getAllCustNames]);
+  }, [syncBoundPurchasers, reloadCustomerReceipts, getAllCustNames, reloadArchives]);
 
   // 监听自定义事件：当在绑定管理页面确认解绑后，自动刷新客户列表
   useEffect(() => {
@@ -1089,6 +1123,9 @@ const CustomerInfo: React.FC = () => {
     // 监听服务器同步和订单数据变更，触发采购总额重新计算
     const handleSyncOrUpdate = () => {
       setDataRefreshKey(k => k + 1);
+      // 同步落地可能带来他端归档/恢复：重载归档册与绑定镜像
+      reloadArchives();
+      syncBoundPurchasers();
       // 服务端 pull 落地后收款台账可能已更新：同步重载台账 state（否则明细弹窗空白）
       reloadCustomerReceipts();
       // 同文档写入不发原生 storage 事件：pull 落地的订单/账单必须显式重算，
@@ -1110,7 +1147,7 @@ const CustomerInfo: React.FC = () => {
       window.removeEventListener('supplier-unbind-success', handleUnbindSuccess);
       window.removeEventListener('sync-data-updated', handleSyncOrUpdate);
     };
-  }, [syncBoundPurchasers, reloadCustomerReceipts, getAllCustNames]);
+  }, [syncBoundPurchasers, reloadCustomerReceipts, getAllCustNames, reloadArchives]);
 
   // 收款确认同文档广播（收/付申请确认/订单分期入账）：重载台账 state 与已收货款快照
   useEffect(() => {
@@ -1173,6 +1210,8 @@ const CustomerInfo: React.FC = () => {
   // 合并客户和已绑定采购商的数据（用于显示）
   // 如果采购商关联了 customerId（从直接客户邀约合作），则更新该直接客户为合作采购商类型
   const allCustomers = useMemo(() => {
+    // 归档全出口过滤：已归档主体两源均排除（搜索/导出/应收欠款总额自动联动）
+    const actx = buildArchiveCtx();
     // 采购总额/已收货款直接读增量快照（O(1)/行）；快照由写点增量维护 + 巡检自愈
     const sumOf = (name: string) => custSummary[String(name || '').trim()];
     const purchaseOf = (name: string) => toYuan(sumOf(name)?.purchaseTotal || 0);
@@ -1191,11 +1230,13 @@ const CustomerInfo: React.FC = () => {
 
     // 直接客户列表：过滤掉已升级为合作采购商的条目；采购总额/已收货款按账单明细自动统计；信用额度从独立数据库计算
     const directCustomers = customers
-      .filter(c => !associatedCustomerIds.has(c.id))
+      .filter(c => !associatedCustomerIds.has(c.id) && !isArchivedCustomerRow(c, archives, actx))
       .map(c => ({ ...c, baseCredit: Number(c.credit) || 0, credit: getEffectiveCredit(c.id, c.name, Number(c.credit) || 0, creditAdjustments), totalPurchase: purchaseOf(c.name), receivedPayment: receivedOf(c.name), orderOccupied: occupiedOf(c.name) }));
 
     // 合作采购商列表：优先使用采购商真实信息，若关联了直接客户则补充地区/等级等字段
-    const purchaserCustomers: CustomerRecord[] = boundPurchasers.map((bp, i) => {
+    const purchaserCustomers: CustomerRecord[] = boundPurchasers
+      .filter(bp => !archives.some(a => archiveMatchesParty(a, bp, actx)))
+      .map((bp, i) => {
       const linkedDirect = resolveLinkedDirectCustomer(bp, customers);
       const pAcc = findPurchaserAccount(bp);
       const isTerminated = bp.status === 'terminated';
@@ -1239,7 +1280,7 @@ const CustomerInfo: React.FC = () => {
       };
     });
     return [...directCustomers, ...purchaserCustomers];
-  }, [customers, boundPurchasers, custSummary, creditAdjustments, dataRefreshKey, orderOccupiedVersion]);
+  }, [customers, boundPurchasers, archives, custSummary, creditAdjustments, dataRefreshKey, orderOccupiedVersion]);
 
   // 客户认证状态批量查询（按 purchaserUsername 查）
   const [custCertMap, setCustCertMap] = useState<Record<string, CertInfo>>({});
@@ -1469,69 +1510,206 @@ const CustomerInfo: React.FC = () => {
   const permTick = usePermTick();
   const fnOk = (a: string) => canFn('supplier', 'customer/customer-info', a);
 
-  // 删除客户
-  const handleDeleteCustomer = (record: CustomerRecord) => {
-    if (!fnOk('delete')) { message.warning('无删除权限'); return; }
-    // 合作关系存续期间（已合作/终止中）禁止删除，只能走终止合作流程
-    if (record.type === 'purchaser' && record.bindStatus && record.bindStatus !== '已解除合作') {
-      message.error(`客户「${record.name}」合作关系存续期间不能删除，如需停止合作请使用“终止合作”`);
-      return;
-    }
-    // 应收欠款不为 0 禁止删除（操作列已隐藏删除键，此处为深度防护）
-    const debtNow = Math.round(((Number(record.totalPurchase) || 0) - (Number(record.receivedPayment) || 0)) * 100) / 100;
-    if (Math.abs(debtNow) > 0.001) {
-      message.error(`客户「${record.name}」应收欠款 ¥${debtNow.toFixed(2)} 未结清，不能删除`);
-      return;
-    }
-    // 防误删保护：客户已有订单或账单明细历史记录时禁止删除，避免历史数据失去客户归属
+  // 归档客户（替代删除语义）：移入「已归档客户」页签，不毁数据不断关系，可随时恢复；
+  // 无合作存续/应收欠款/订单历史拦截（归档不毁数据，历史账单归属不变）
+  const handleArchiveCustomer = (record: CustomerRecord) => {
+    if (!fnOk('delete')) { message.warning('无归档权限'); return; }
     const owner = getDataOwner();
-    let hasHistory = false;
-    try {
-      const orders: any[] = JSON.parse(localStorage.getItem(`pageData_sales_order-manage_${owner}`) || '[]');
-      hasHistory = orders.some((o: any) => (o.customerName || '') === record.name);
-    } catch { /* ignore */ }
-    if (!hasHistory) {
-      try {
-        const bills: any[] = JSON.parse(localStorage.getItem(`pageData_customer_bill-detail_${owner}`) || '[]');
-        hasHistory = bills.some((b: any) => (b.customerName || b.customer || '') === record.name);
-      } catch { /* ignore */ }
-    }
-    if (hasHistory) {
-      message.error(`客户「${record.name}」已存在订单或账单记录，禁止删除（如需停止合作请使用“解除合作”）`);
-      return;
-    }
+    const archivedBy = getCurrentUserDisplayName();
     if (record.type === 'purchaser') {
-      // 已绑定的采购商：从 boundPurchasers 中移除
+      // 已绑定的采购商：从 boundPurchasers 镜像移除并推送收敛真表
       const storageKey = getStorageKey();
-      // 删除墓碑：不登记则两条派生兜底（已批准合作申请/采购商侧目录反向扫描）
-      // 会按合作痕迹把已删行补回并回写真表导致复活；墓碑随全局同步+服务端恒并集跨端收敛。
-      // 登记不依赖 bound 键是否已在本地落盘（大表可能仅存 IndexedDB），漏登记即等于没删
-      appendCustomerDelTomb(getDataOwner(), { username: record.purchaserUsername, no: resolvePurchaserNo(record), name: record.name });
+      let boundRow: any = null;
       try {
         const boundData = localStorage.getItem(storageKey);
-        if (boundData) {
-          const boundPurchasers: any[] = JSON.parse(boundData);
-          // 同一采购商判定走凭证：同名两家公司时删其中一家不得连带删掉另一家的绑定行
+        const list: any[] = boundData ? JSON.parse(boundData) : [];
+        if (Array.isArray(list)) {
+          // 同一采购商判定走凭证：同名两家公司时归档其中一家不得连带归档另一家的绑定行
           const isTargetRow = (bp: any) => samePurchaserParty(bp, record) || (!!record.id && bp.customerId === record.id);
-          const filtered = boundPurchasers.filter((bp) => !isTargetRow(bp));
+          boundRow = list.find(isTargetRow) || null;
+          const filtered = list.filter((bp) => !isTargetRow(bp));
           localStorage.setItem(storageKey, JSON.stringify(filtered));
           setBoundPurchasers(filtered);
+          // 立即推送：钩子防抖 800ms 内刷新/关页会丢删除申报，服务端真表同收敛
+          void flushCooperationUpload(storageKey);
         }
       } catch { /* ignore */ }
-      // 关联直接客户档案连带移除：否则 bound 行消失后档案会以直接客户身份重新出现在全部客户列表（第二种复活）
-      const restCustomers = customers.filter((c) => c.id !== record.id);
-      if (restCustomers.length !== customers.length) {
+      // 关联直客档案按凭证匹配连带移除（修复旧删除分支按 record.id 等值匹配可能漏删档案的缺陷）；
+      // 档案存 snapshot 供恢复回写
+      const linked = resolveLinkedDirectCustomer({ customerId: record.id, purchaserName: record.name, purchaserUsername: record.purchaserUsername, purchaserNo: resolvePurchaserNo(record) }, customers);
+      // 归档登记不依赖 bound 键是否已在本地落盘（大表可能仅存 IndexedDB），漏登记即等于没归档
+      appendCustomerArchive(owner, {
+        username: record.purchaserUsername, no: resolvePurchaserNo(record), name: record.name, archivedBy,
+        snapshot: { boundRow: boundRow || undefined, directProfile: linked || undefined },
+      });
+      if (linked) {
+        const restCustomers = customers.filter((c) => c.id !== linked.id);
         setCustomers(restCustomers);
         localStorage.setItem(getCustomersStorageKey(), JSON.stringify(restCustomers));
       }
     } else {
-      // 直接客户：从 customers 中移除并持久化到 localStorage
+      // 直接客户：登记归档（档案存 snapshot）并从 customers 移除
+      appendCustomerArchive(owner, {
+        username: record.purchaserUsername || '', no: resolvePurchaserNo(record), name: record.name, archivedBy,
+        snapshot: { directProfile: record },
+      });
       const updated = customers.filter((c) => c.id !== record.id);
       setCustomers(updated);
       localStorage.setItem(getCustomersStorageKey(), JSON.stringify(updated));
     }
-    message.success(`客户「${record.name}」已删除，历史账单不受影响`);
+    reloadArchives();
+    setDataRefreshKey(k => k + 1);
+    message.success(`客户「${record.name}」已归档，可在「已归档客户」页签随时恢复`);
   };
+
+  // 恢复归档客户：解除归档 + snapshot 回写（bound 行写镜像并立即推送；直客档案写回 customers_）；
+  // 若服务端首注门禁拒写，兜底派生会在归档解除后自愈重建
+  const handleRestoreArchived = (entry: CustomerArchiveEntry) => {
+    if (!fnOk('delete')) { message.warning('无操作权限'); return; }
+    const owner = getDataOwner();
+    const removed = unarchiveParty(owner, { id: entry.id, username: entry.username, no: entry.no, name: entry.name });
+    if (!removed) { message.warning('该归档记录已不存在'); reloadArchives(); return; }
+    const boundRow = entry.snapshot?.boundRow;
+    if (boundRow) {
+      const storageKey = getStorageKey();
+      try {
+        const list: any[] = JSON.parse(localStorage.getItem(storageKey) || '[]');
+        if (Array.isArray(list) && !list.some((bp: any) => samePurchaserParty(bp, boundRow))) {
+          list.unshift(boundRow);
+          localStorage.setItem(storageKey, JSON.stringify(list));
+          void flushCooperationUpload(storageKey);
+        }
+      } catch { /* ignore */ }
+    }
+    const directProfile = entry.snapshot?.directProfile;
+    if (directProfile?.id) {
+      try {
+        const list = loadCustomersFromStorage();
+        if (!list.some((c) => c.id === directProfile.id)) {
+          const next = [directProfile as CustomerRecord, ...list];
+          setCustomers(next);
+          localStorage.setItem(getCustomersStorageKey(), JSON.stringify(next));
+        }
+      } catch { /* ignore */ }
+    }
+    syncBoundPurchasers();
+    reloadArchives();
+    setDataRefreshKey(k => k + 1);
+    message.success(`客户「${entry.name}」已恢复到客户列表`);
+  };
+
+  // 已归档客户查看：复用现有查看抽屉（只读），档案优先取归档 snapshot
+  const handleViewArchived = (row: { entry: CustomerArchiveEntry; name: string; no: string; originType: 'direct' | 'purchaser' }) => {
+    const e = row.entry;
+    const bp = e.snapshot?.boundRow;
+    const dp = e.snapshot?.directProfile;
+    const rec: CustomerRecord = {
+      key: e.id,
+      id: dp?.id || bp?.id || e.id,
+      name: row.name,
+      level: dp?.level || bp?.level || 'B',
+      contact: bp?.purchaserContact || dp?.contact || '',
+      phone: bp?.purchaserPhone || dp?.phone || '',
+      region: dp?.region || '-',
+      credit: Number(dp?.credit) || 0,
+      status: 'completed',
+      date: bp?.bindDate || dp?.date || '',
+      type: row.originType,
+      bindStatus: row.originType === 'purchaser' ? (bp?.status === 'terminated' ? '已解除合作' : bp?.status === 'terminating' ? '终止中' : '已合作') : undefined,
+      purchaserUsername: e.username || dp?.purchaserUsername || '',
+      purchaserNo: row.no,
+      salesman: bp?.salesman || dp?.salesman || '',
+      legalPerson: bp?.legalPerson || dp?.legalPerson || '',
+      businessAddress: bp?.businessAddress || dp?.businessAddress || '',
+      email: bp?.email || dp?.email || '',
+      province: bp?.province || dp?.province || '',
+      city: bp?.city || dp?.city || '',
+      district: bp?.district || dp?.district || '',
+      detailAddress: bp?.detailAddress || dp?.detailAddress || '',
+      remark: dp?.remark || '',
+    };
+    showCustomerDetail(rec);
+  };
+
+  // 已归档客户页签数据：归档册 join 实时状态/欠款（状态取采购商侧供应商镜像，不受供应商侧归档剪枝影响）
+  const archivedRows = useMemo(() => {
+    const owner = getDataOwner();
+    let myNo = '';
+    let myCompany = '';
+    try {
+      const us: any[] = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+      const me = us.find((u: any) => u.username === owner);
+      myNo = noOfUser(me);
+      myCompany = me?.companyName || '';
+    } catch { /* ignore */ }
+    const sumOf = (name: string) => custSummary[String(name || '').trim()];
+    return archives.map((entry) => {
+      const bp = entry.snapshot?.boundRow;
+      const dp = entry.snapshot?.directProfile;
+      const name = resolveLatestCompanyName(entry.name || bp?.purchaserName || dp?.name || '', entry.username);
+      // 当前合作状态：优先读采购商侧供应商镜像（后台继续仲裁的实时结果），兜底归档时快照
+      let status = String(bp?.status || '');
+      if (entry.username) {
+        try {
+          const ps: any[] = JSON.parse(localStorage.getItem('purchaser_suppliers_' + entry.username) || '[]');
+          const hit = ps.find((s: any) => {
+            const sUn = String(s.supplierUsername || '').trim();
+            if (sUn) return sUn === owner;
+            const sNo = String(s.supplierNo || '').trim();
+            if (myNo && sNo) return sNo === myNo;
+            return !!myCompany && String(s.supplierName || '').trim() === myCompany;
+          });
+          if (hit?.cooperationStatus) status = String(hit.cooperationStatus);
+        } catch { /* ignore */ }
+      }
+      const originType: 'direct' | 'purchaser' = (entry.username || bp) ? 'purchaser' : 'direct';
+      const statusText = originType === 'direct' ? '—' : status === 'approved' ? '已合作' : status === 'terminating' ? '终止中' : status === 'terminated' ? '已解除合作' : '—';
+      // 应收欠款与主列表同口径：采购总额-已收货款（含关联档案历史别名）
+      const baseName = String(bp?.purchaserName || entry.name || '').trim();
+      const extraName = dp?.name && dp.name !== baseName ? String(dp.name).trim() : '';
+      const purchase = toYuan(sumOf(baseName)?.purchaseTotal || 0) + (extraName ? toYuan(sumOf(extraName)?.purchaseTotal || 0) : 0);
+      const received = toYuan(sumOf(baseName)?.receivedTotal || 0) + (extraName ? toYuan(sumOf(extraName)?.receivedTotal || 0) : 0);
+      const debt = Math.round((purchase - received) * 100) / 100;
+      return { entry, name, no: entry.no || dp?.purchaserNo || bp?.purchaserNo || '', originType, statusText, debt };
+    });
+  }, [archives, custSummary, dataRefreshKey]);
+
+  // 已归档客户页签列
+  const archivedColumns: ColumnsType<typeof archivedRows[number]> = [
+    { title: '名称', dataIndex: 'name', key: 'name', width: 220, render: (v: string) => <Text strong>{v}</Text> },
+    { title: '编号', dataIndex: 'no', key: 'no', width: 120, render: (v: string) => v || '—' },
+    {
+      title: '原类型', dataIndex: 'originType', key: 'originType', width: 120,
+      render: (v: string) => v === 'purchaser' ? <Tag color="blue">合作采购商</Tag> : <Tag>直接客户</Tag>,
+    },
+    {
+      title: '当前合作状态', dataIndex: 'statusText', key: 'statusText', width: 130,
+      render: (v: string) => v === '已合作' ? <Badge status="success" text={v} /> : v === '终止中' ? <Badge status="processing" text={v} /> : v === '已解除合作' ? <Badge status="warning" text={v} /> : <Text type="secondary">{v}</Text>,
+    },
+    {
+      title: '应收欠款(元)', dataIndex: 'debt', key: 'debt', width: 130,
+      render: (v: number) => <Text style={{ color: v > 0 ? '#ff4d4f' : '#52c41a' }}>¥{v.toFixed(2)}</Text>,
+    },
+    { title: '归档时间', key: 'archivedAt', width: 150, render: (_, r) => dayjs(r.entry.archivedAt).format('YYYY-MM-DD HH:mm') },
+    { title: '归档人', key: 'archivedBy', width: 130, render: (_, r) => r.entry.archivedBy || (r.entry.origin === 'delete-migrate' ? '历史删除迁移' : '—') },
+    {
+      title: '操作', key: 'action', width: 150, fixed: 'right',
+      render: (_, r) => (
+        <Space size={0}>
+          <Popconfirm
+            title="恢复该客户？"
+            description="恢复后回到客户列表，合作状态继续随后台实时仲裁。"
+            onConfirm={() => handleRestoreArchived(r.entry)}
+            okText="确定"
+            cancelText="取消"
+          >
+            <Button type="link" size="small" icon={<ReloadOutlined />}>恢复</Button>
+          </Popconfirm>
+          <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => handleViewArchived(r)}>查看</Button>
+        </Space>
+      ),
+    },
+  ];
 
   // 本公司名称（对账单标题：本公司名称+对账单）
   const ourCompanyName = useMemo(() => {
@@ -2534,9 +2712,6 @@ const CustomerInfo: React.FC = () => {
       width: 220,
       fixed: 'right',
       render: (_, record) => {
-        // 应收欠款不为 0 时隐藏删除键，不能删除对应客户
-        const debt = Math.round(((Number(record.totalPurchase) || 0) - (Number(record.receivedPayment) || 0)) * 100) / 100;
-        const hasDebt = Math.abs(debt) > 0.001;
         return (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '0 2px' }}>
           <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => handleView(record)}>
@@ -2615,20 +2790,18 @@ const CustomerInfo: React.FC = () => {
               重新合作
             </Button>
           )}
-          {/* 应收欠款不为 0 或合作存续/终止中的采购商不允许删除 */}
-          {hasDebt ? null : record.type === 'purchaser' && (record.bindStatus === '已合作' || record.bindStatus === '终止中' || record.bindStatus === '解除合作申请中') ? null : (
-            <Popconfirm
-              title="确定删除该客户？"
-              description="删除后该客户将从列表中移除，历史账单不受影响。"
-              onConfirm={() => handleDeleteCustomer(record)}
-              okText="确定"
-              cancelText="取消"
-            >
-              <Button type="link" size="small" danger icon={<DeleteOutlined />}>
-                删除
-              </Button>
-            </Popconfirm>
-          )}
+          {/* 归档：不毁数据不断关系，无合作存续/应收欠款/订单历史拦截（替代删除语义，不再复活） */}
+          <Popconfirm
+            title="确定归档该客户？"
+            description="归档后移入「已归档客户」，不在客户列表显示；合作关系与历史账单不受影响，可随时恢复。"
+            onConfirm={() => handleArchiveCustomer(record)}
+            okText="确定"
+            cancelText="取消"
+          >
+            <Button type="link" size="small" icon={<InboxOutlined />}>
+              归档
+            </Button>
+          </Popconfirm>
         </div>
         );
       },
@@ -2655,6 +2828,7 @@ const CustomerInfo: React.FC = () => {
               { key: 'all', label: `全部客户 (${allCustomers.length})` },
               { key: 'direct', label: `直接客户 (${customers.length})` },
               { key: 'purchaser', label: `已绑定采购商 (${boundPurchasers.length})` },
+              { key: 'archived', label: (<span>已归档客户 <Badge count={archives.length} size="small" offset={[2, -2]} /></span>) },
             ]}
           />
           <div style={{ fontSize: 13, height: 34, display: 'flex', alignItems: 'center' }}>
@@ -2735,6 +2909,7 @@ const CustomerInfo: React.FC = () => {
                               const reload = () => {
                                 setCustomers(loadCustomersFromStorage());
                                 syncBoundPurchasers();
+                                reloadArchives();
                                 setCustSummary(loadCustomerSummary(getDataOwner()));
                                 setCreditAdjustments(loadCreditAdjustments());
                                 setDataRefreshKey(k => k + 1);
@@ -2768,6 +2943,24 @@ const CustomerInfo: React.FC = () => {
 
       {/* 数据表格 */}
       <Card ref={tableCardRef} bodyStyle={{ padding: '0 24px 24px', display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }} style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+        {activeTab === 'archived' ? (
+          <Table
+            bordered
+            columns={archivedColumns}
+            dataSource={archivedRows}
+            rowKey={(r) => r.entry.id}
+            scroll={{ x: 1100, y: tableBodyHeight }}
+            size="middle"
+            pagination={{
+              showSizeChanger: true,
+              showQuickJumper: true,
+              showTotal: (total, range) => `第 ${range[0]}-${range[1]} 条，共 ${total} 条`,
+              pageSizeOptions: ['10', '20', '50'],
+              defaultPageSize: 20,
+            }}
+            locale={{ emptyText: '暂无已归档客户' }}
+          />
+        ) : (
         <Table
           bordered
           columns={visibleColumns}
@@ -2783,6 +2976,7 @@ const CustomerInfo: React.FC = () => {
           }}
           locale={{ emptyText: '暂无客户数据' }}
         />
+        )}
       </Card>
 
       {/* 邀约合作弹窗（生成邀约链接：仅携带公司编号，可勾选绑定负责人；客户行级为一次性链接） */}

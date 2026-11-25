@@ -3,8 +3,9 @@ import { Card, Button, message, Space, Typography, Descriptions, Tag, Spin } fro
 import { CheckCircleOutlined, CloseCircleOutlined, LinkOutlined } from '@ant-design/icons';
 import { useParams, useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
-import { noOfUser, noFromAny, supplierUsernameOf, ensureCredsMigrated } from '../utils/cooperationCred';
+import { noOfUser, noFromAny, noFromUsername, supplierUsernameOf, ensureCredsMigrated } from '../utils/cooperationCred';
 import { hydrateCooperation } from '../utils/cooperationApi';
+import { unarchiveParty } from '../utils/customerArchive';
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -254,6 +255,8 @@ const PurchaserCooperationConfirmPage: React.FC = () => {
       const boundStorageKey = 'boundPurchasers_' + (supOwner || tokenData.supplierId);
       const boundPurchasers: any[] = JSON.parse(localStorage.getItem(boundStorageKey) || '[]');
       const purchaserCompany = currentUser.companyName || purchaserUsername;
+      // 显式解除归档：同意邀约 = 重新合作，供应商侧曾归档的采购商主体须恢复
+      unarchiveParty(supOwner || tokenData.supplierId, { username: purchaserUsername, no: noFromUsername(purchaserUsername), name: purchaserCompany });
       const purchaserInfo = {
         purchaserContact: currentUser.contactPerson || '',
         purchaserPhone: currentUser.phone || '',

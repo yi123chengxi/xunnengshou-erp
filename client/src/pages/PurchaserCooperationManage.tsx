@@ -19,7 +19,8 @@ import {
 import dayjs from 'dayjs';
 import { copyText } from '../utils/clipboard';
 import { dedupePurchaserSuppliers } from '../utils/cooperationDedupe';
-import { appMatchesSupplierEntry, myCompanyNo, supplierUsernameOf, ensureCredsMigrated } from '../utils/cooperationCred';
+import { appMatchesSupplierEntry, myCompanyNo, supplierUsernameOf, ensureCredsMigrated, noFromUsername } from '../utils/cooperationCred';
+import { unarchiveParty } from '../utils/customerArchive';
 
 const { Text, Title } = Typography;
 
@@ -389,6 +390,8 @@ const PurchaserCooperationManage: React.FC = () => {
           if (byName.length === 1) supUser = String(byName[0].username || '');
         }
         if (supUser) {
+          // 显式解除归档：批准合作 = 重新合作，供应商侧曾归档的采购商主体须恢复
+          unarchiveParty(supUser, { username, no: noFromUsername(username), name: purchaserCompanyName });
           const boundKey = 'boundPurchasers_' + supUser;
           try {
             const bound: any[] = JSON.parse(localStorage.getItem(boundKey) || '[]');

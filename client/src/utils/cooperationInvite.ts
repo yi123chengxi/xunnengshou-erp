@@ -8,6 +8,7 @@
  */
 import dayjs from 'dayjs';
 import { appMatchesSupplierEntry, noOfUser, noFromUsername, uniqueCompanyRootByName } from './cooperationCred';
+import { unarchiveParty } from './customerArchive';
 
 export const PENDING_INVITE_KEY = 'pending_cooperation_invite';
 export const COOPERATION_APPLICATIONS_KEY = 'cooperation_applications';
@@ -187,6 +188,8 @@ export const acceptCooperationInvite = (p: CooperationInvitePayload, purchaserOw
   localStorage.setItem(COOPERATION_APPLICATIONS_KEY, JSON.stringify(apps));
 
   // 3. 回写供应商侧已绑定采购商（同浏览器即时生效；跨浏览器由供应商侧兜底重建）
+  // 显式解除归档：同意邀约 = 重新合作，供应商侧曾归档的采购商主体须恢复（批准写点唯一解除出口之一）
+  unarchiveParty(supplierUser.username, { username: purchaserOwner, no: myNo, name: myCompany });
   const boundKey = 'boundPurchasers_' + supplierUser.username;
   try {
     const bound: any[] = JSON.parse(localStorage.getItem(boundKey) || '[]');
