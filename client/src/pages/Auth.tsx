@@ -5,7 +5,7 @@ import isSameOrBefore from 'dayjs/plugin/isSameOrBefore';
 dayjs.extend(isBetween);
 dayjs.extend(isSameOrBefore);
 import { Card, Typography, Form, Input, Button, Tabs, message, Divider, Checkbox, Select, Steps, Result, Alert, Descriptions, Modal, Radio, Space, Row, Col } from 'antd';
-import { UserOutlined, LockOutlined, ShopOutlined, BankOutlined, PhoneOutlined, MailOutlined, UserAddOutlined, InfoCircleOutlined, SyncOutlined, SafetyCertificateOutlined, MobileOutlined, TagOutlined, EnvironmentOutlined } from '@ant-design/icons';
+import { UserOutlined, LockOutlined, ShopOutlined, BankOutlined, PhoneOutlined, MailOutlined, UserAddOutlined, InfoCircleOutlined, SyncOutlined, SafetyCertificateOutlined, MobileOutlined, TagOutlined, EnvironmentOutlined, WechatOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import Logo from '../components/Logo';
 import { safeSetItem } from '../utils/storageQuota';
@@ -402,6 +402,169 @@ const Auth: React.FC = () => {
       message.info('您既是供应商又是采购商，可以在后台切换视图');
     }
   }, [navigate]);
+
+  // ============ 微信扫码登录（微信开放平台网站应用，与小程序同 UnionID 绑定表） ============
+  const [wxStage, setWxStage] = useState<'qr' | 'select' | 'bind'>('qr');
+  const [wxQr, setWxQr] = useState<{ state: string; url: string } | null>(null);
+  const [wxQrErr, setWxQrErr] = useState('');
+  const [wxSelect, setWxSelect] = useState<{ ticket: string; list: { username: string; name: string; company: string }[] } | null>(null);
+  const [wxBindToken, setWxBindToken] = useState('');
+  const [wxBindBusy, setWxBindBusy] = useState(false);
+  const [wxSelectBusy, setWxSelectBusy] = useState('');
+  const wxPollRef = useRef<any>(null);
+  const [wxBindForm] = Form.useForm();
+
+  /** 微信身份确认后的统一出口：直登 / 选公司 / 绑账号；token 同键落 localStorage 并复用 completeLogin 会话链 */
+  const applyWxOutcome = useCallback((data: any) => {
+    if (data?.token && data?.user) {
+      safeSetItem('token', String(data.token));
+      safeSetItem('wxToken', String(data.token));
+      const u = data.user;
+      const isSub = !!u.owner && u.username !== u.owner;
+      completeLogin({
+        username: u.username, role: u.role, name: u.name || u.username,
+        isSubAccount: isSub, parentAccount: isSub ? u.owner : '',
+        roles: [], customPermissions: [], needsPasswordChange: false,
+      }, false);
+      return;
+    }
+    if (data?.needSelect) { setWxSelect({ ticket: data.ticket, list: data.list || [] }); setWxStage('select'); return; }
+    if (data?.bindToken) { setWxBindToken(String(data.bindToken)); setWxStage('bind'); return; }
+    message.error('微信登录结果异常，请重试');
+  }, [completeLogin]);
+
+  const wxPollOnce = useCallback(async (state: string): Promise<boolean> => {
+    try {
+      const res = await fetch(`${SMS_API_BASE}/wx/web/qr/poll?state=${encodeURIComponent(state)}`);
+      const d = await res.json().catch(() => null);
+      const st = d?.data?.status;
+      if (st === 'done') { applyWxOutcome(d.data); return true; }
+      if (st === 'expired') { setWxQrErr('二维码已过期，请点击刷新重试'); return true; }
+    } catch { /* 网络抖动继续轮询 */ }
+    return false;
+  }, [applyWxOutcome]);
+
+  const wxStartQr = useCallback(() => {
+    setWxStage('qr'); setWxQr(null); setWxQrErr(''); setWxSelect(null); setWxBindToken('');
+    fetch(`${SMS_API_BASE}/wx/web/qr`)
+      .then(r => (r.status === 501 || r.status === 404 ? Promise.reject(new Error('not_configured')) : r.json()))
+      .then(d => { setWxQr({ state: d.data.state, url: d.data.url }); })
+      .catch(e => { setWxQrErr(e?.message === 'not_configured' ? '网页微信扫码登录暂未开通（需微信开放平台网站应用审核通过后配置）' : '二维码获取失败，请稍后重试'); });
+  }, []);
+
+  // 扫码页签展示期间轮询；iframe 内 callback postMessage 到达时立即补一次轮询
+  useEffect(() => {
+    if (activeTab !== 'wx' || wxStage !== 'qr' || !wxQr) return;
+    const state = wxQr.state;
+    wxPollRef.current = setInterval(() => {
+      void wxPollOnce(state).then(done => { if (done && wxPollRef.current) clearInterval(wxPollRef.current); });
+    }, 2000);
+    const onMsg = (ev: MessageEvent) => {
+      if (ev.data && ev.data.type === 'wx-qr-done' && ev.data.state === state) {
+        void wxPollOnce(state).then(done => { if (done && wxPollRef.current) clearInterval(wxPollRef.current); });
+      }
+    };
+    window.addEventListener('message', onMsg);
+    return () => { if (wxPollRef.current) clearInterval(wxPollRef.current); window.removeEventListener('message', onMsg); };
+  }, [activeTab, wxStage, wxQr, wxPollOnce]);
+
+  useEffect(() => {
+    if (activeTab === 'wx' && wxStage === 'qr' && !wxQr && !wxQrErr) wxStartQr();
+  }, [activeTab, wxStage, wxQr, wxQrErr, wxStartQr]);
+
+  const wxChooseCompany = async (username: string) => {
+    if (!wxSelect || wxSelectBusy) return;
+    setWxSelectBusy(username);
+    try {
+      const res = await fetch(`${SMS_API_BASE}/wx/web/qr/select`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ticket: wxSelect.ticket, username }),
+      });
+      const d = await res.json().catch(() => null);
+      if (res.ok && d?.data) applyWxOutcome(d.data);
+      else message.error(d?.message || '选择失败，请重新扫码');
+    } catch { message.error('网络异常，请重试'); }
+    finally { setWxSelectBusy(''); }
+  };
+
+  const wxBindSubmit = async () => {
+    if (wxBindBusy) return;
+    const username = String(wxBindForm.getFieldValue('username') || '').trim();
+    const password = String(wxBindForm.getFieldValue('password') || '');
+    if (!username || !password) { message.warning('请输入 ERP 账号与密码'); return; }
+    setWxBindBusy(true);
+    try {
+      const res = await fetch(`${SMS_API_BASE}/wx/bind`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bindToken: wxBindToken, username, password }),
+      });
+      const d = await res.json().catch(() => null);
+      if (res.ok && d?.data) applyWxOutcome(d.data);
+      else message.error(d?.message || '绑定失败');
+    } catch { message.error('网络异常，请重试'); }
+    finally { setWxBindBusy(false); }
+  };
+
+  const renderWxLogin = () => {
+    if (wxStage === 'select' && wxSelect) {
+      return (
+        <div>
+          <Alert type="info" showIcon message="该微信绑定了多个公司账号，请选择要登录的公司" style={{ marginBottom: 16 }} />
+          {wxSelect.list.map(it => (
+            <Card key={it.username} size="small" style={{ marginBottom: 12, cursor: 'pointer', borderColor: wxSelectBusy === it.username ? PRIMARY : undefined }} onClick={() => wxChooseCompany(it.username)}>
+              <div style={{ display: 'flex', alignItems: 'center' }}>
+                <ShopOutlined style={{ marginRight: 8, color: PRIMARY }} />
+                <div style={{ flex: 1, textAlign: 'left' }}>
+                  <div style={{ fontWeight: 600 }}>{it.company || it.username}</div>
+                  <div style={{ fontSize: 12, color: '#8c8c8c' }}>账号 {it.username}{it.name ? ` · ${it.name}` : ''}</div>
+                </div>
+                <Button type="primary" ghost size="small" loading={wxSelectBusy === it.username}>选择</Button>
+              </div>
+            </Card>
+          ))}
+          <Button block onClick={() => wxStartQr()}>返回重新扫码</Button>
+        </div>
+      );
+    }
+    if (wxStage === 'bind') {
+      return (
+        <Form form={wxBindForm} layout="vertical">
+          <Alert type="info" showIcon message="首次使用：请绑定本微信到您的 ERP 账号" style={{ marginBottom: 16 }} />
+          <Form.Item name="username" label="ERP 账号" rules={[{ required: true, message: '请输入账号' }]}>
+            <Input prefix={<UserOutlined />} placeholder="请输入用户名" />
+          </Form.Item>
+          <Form.Item name="password" label="密码" rules={[{ required: true, message: '请输入密码' }]}>
+            <Input.Password prefix={<LockOutlined />} placeholder="请输入密码" />
+          </Form.Item>
+          <Button type="primary" block loading={wxBindBusy} onClick={wxBindSubmit}>绑定并登录</Button>
+          <Button block style={{ marginTop: 8 }} onClick={() => wxStartQr()}>返回扫码</Button>
+        </Form>
+      );
+    }
+    return (
+      <div style={{ textAlign: 'center' }}>
+        {wxQrErr ? (
+          <div style={{ padding: '40px 0' }}>
+            <Alert type="warning" showIcon message={wxQrErr} style={{ marginBottom: 16, textAlign: 'left' }} />
+            <Button onClick={wxStartQr}>重试</Button>
+          </div>
+        ) : wxQr ? (
+          <>
+            <iframe title="微信扫码登录" src={wxQr.url} style={{ width: 300, height: 400, border: 'none' }} />
+            <div style={{ marginTop: 8 }}>
+              <Text type="secondary" style={{ fontSize: 12 }}>请使用微信扫一扫并确认授权</Text>
+              <Button type="link" size="small" icon={<SyncOutlined />} onClick={wxStartQr}>刷新二维码</Button>
+            </div>
+          </>
+        ) : (
+          <div style={{ padding: '60px 0' }}>
+            <SyncOutlined spin style={{ fontSize: 24, color: PRIMARY }} />
+            <div style={{ marginTop: 12 }}><Text type="secondary">二维码加载中…</Text></div>
+          </div>
+        )}
+      </div>
+    );
+  };
 
   // 发送设备验证码（服务端真实短信）
   const sendDeviceCodeRequest = useCallback(async (): Promise<boolean> => {
@@ -1971,10 +2134,10 @@ const Auth: React.FC = () => {
           </div>
 
           <Title level={2} style={{ marginBottom: 4, color: '#1a2b45' }}>
-            {activeTab === 'login' ? '欢迎回来' : '创建账号'}
+            {activeTab === 'login' ? '欢迎回来' : activeTab === 'wx' ? '微信扫码登录' : '创建账号'}
           </Title>
           <Text type="secondary" style={{ display: 'block', marginBottom: 32, fontSize: 14 }}>
-            {activeTab === 'login' ? '登录您的账号以继续使用系统' : '注册新账号以开始使用系统'}
+            {activeTab === 'login' ? '登录您的账号以继续使用系统' : activeTab === 'wx' ? '请使用微信扫一扫登录；绑定多个公司时扫码后选择' : '注册新账号以开始使用系统'}
           </Text>
 
           {/* 登录/注册切换Tabs */}
@@ -2011,27 +2174,36 @@ const Auth: React.FC = () => {
                   </span>
                 ),
               },
+              {
+                key: 'wx',
+                label: (
+                  <span>
+                    <WechatOutlined style={{ marginRight: 8 }} />
+                    微信扫码
+                  </span>
+                ),
+              },
             ]}
           />
 
-          {/* 渲染登录或注册表单 */}
-          {activeTab === 'login' ? renderLoginForm() : renderRegisterForm()}
+          {/* 渲染登录/注册/微信扫码表单 */}
+          {activeTab === 'login' ? renderLoginForm() : activeTab === 'wx' ? renderWxLogin() : renderRegisterForm()}
 
           {/* 底部说明 */}
           <Divider style={{ margin: '16px 0' }} />
           <div style={{ textAlign: 'center' }}>
             <Text type="secondary" style={{ fontSize: 12 }}>
-              {activeTab === 'login' ? '还没有账号？' : '已有账号？'}
-              <a 
+              {activeTab === 'register' ? '已有账号？' : '还没有账号？'}
+              <a
                 onClick={() => {
-                  setActiveTab(activeTab === 'login' ? 'register' : 'login');
+                  setActiveTab(activeTab === 'register' ? 'login' : 'register');
                   setRegisterStep(0);
                   setRegisterSuccess(false);
                   form.resetFields();
                 }}
                 style={{ marginLeft: 8, color: PRIMARY }}
               >
-                {activeTab === 'login' ? '立即注册' : '立即登录'}
+                {activeTab === 'register' ? '立即登录' : '立即注册'}
               </a>
             </Text>
           </div>

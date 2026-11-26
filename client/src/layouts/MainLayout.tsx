@@ -32,6 +32,7 @@ import {
   ScheduleOutlined,
   RocketOutlined,
   ShoppingOutlined,
+  WechatOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation } from 'react-router-dom';
 import type { MenuProps } from 'antd';
@@ -41,10 +42,12 @@ import { menuVisible, menuKeyFromPath, usePermTick, getPreviewUser, setPreviewUs
 import { validatePassword } from '../utils/passwordPolicy';
 import { Result as AntResult } from 'antd';
 import ServiceOrdersModal from '../components/ServiceOrdersModal';
+import WxBindModal, { fetchWxBound } from '../components/WxBindModal';
 import EnterpriseCertModal, { CertBadge, fetchCertStatus, getChangeLockMessage } from '../components/EnterpriseCertModal';
 import type { CertInfo } from '../components/EnterpriseCertModal';
 import StorageCleanupModal from '../components/StorageCleanupModal';
 import TrialCountdown from '../components/TrialCountdown';
+import WxBindManage from '../components/WxBindManage';
 import SubscriptionModal from '../components/SubscriptionModal';
 import dayjs from 'dayjs';
 import { getUserQuota, getUsagePercent, formatStorageSize, getUsageBreakdown, sessionDataOwner } from '../utils/storageQuota';
@@ -608,6 +611,12 @@ const MainLayout: React.FC = () => {
   // 服务订单弹窗
   const [serviceOrdersVisible, setServiceOrdersVisible] = useState(false);
 
+  // 微信绑定弹窗与入口文案（wxBound 决定显示「绑定微信」还是「解绑微信」）
+  const [wxBindVisible, setWxBindVisible] = useState(false);
+  const [wxBound, setWxBound] = useState(false);
+  // 进后台先预取一次绑定状态，避免首次展开菜单时文案滞后一拍
+  useEffect(() => { void fetchWxBound().then(setWxBound); }, []);
+
   // 企业认证弹窗
   const [enterpriseCertVisible, setEnterpriseCertVisible] = useState(false);
   const [cleanupModalVisible, setCleanupModalVisible] = useState(false);
@@ -873,6 +882,7 @@ const MainLayout: React.FC = () => {
               </Descriptions.Item>
             </Descriptions>
           )},
+          { key: 'wxbind', label: '微信绑定', children: <WxBindManage /> },
         ]} />
 
         {userInfo.status === '待审核' && (
@@ -962,6 +972,9 @@ const MainLayout: React.FC = () => {
       case 'profile':
         setProfileVisible(true);
         break;
+      case 'wxBind':
+        setWxBindVisible(true);
+        break;
       case 'settings':
         setSettingsVisible(true);
         break;
@@ -999,6 +1012,7 @@ const MainLayout: React.FC = () => {
 
   const userMenuItems: MenuProps['items'] = [
     { key: 'profile', icon: <UserOutlined />, label: '企业信息' },
+    { key: 'wxBind', icon: <WechatOutlined />, label: wxBound ? '解绑微信' : '绑定微信' },
     { key: 'serviceOrders', icon: <ShoppingCartOutlined />, label: '服务订单' },
     { key: 'enterpriseCert', icon: <SafetyCertificateOutlined />, label: '企业认证' },
     { key: 'settings', icon: <SettingOutlined />, label: '系统设置' },
@@ -2184,6 +2198,7 @@ const MainLayout: React.FC = () => {
 
       {/* 服务订单弹窗 */}
       <ServiceOrdersModal open={serviceOrdersVisible} onClose={() => setServiceOrdersVisible(false)} />
+      <WxBindModal open={wxBindVisible} onClose={() => setWxBindVisible(false)} onChanged={setWxBound} />
 
       {/* 企业认证弹窗（三要素核验） */}
       <EnterpriseCertModal open={enterpriseCertVisible} onClose={() => setEnterpriseCertVisible(false)} onCertChanged={loadOwnCert} />

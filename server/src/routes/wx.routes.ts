@@ -30,6 +30,10 @@ dotenv.config();
 const JWT_SECRET = getJwtSecret();
 const WX_APPID = process.env.WX_APPID || '';
 const WX_SECRET = process.env.WX_SECRET || '';
+// 网页扫码登录（微信开放平台网站应用）：与小程序同属一个开放平台账号时 UnionID 互通
+const WX_WEB_APPID = process.env.WX_WEB_APPID || '';
+const WX_WEB_SECRET = process.env.WX_WEB_SECRET || '';
+const WX_WEB_CALLBACK = process.env.WX_WEB_CALLBACK || 'https://www.xns114.com/api/wx/web/qr/callback';
 const BIND_KEY = 'wx_openid_bindings';
 
 const router = Router();
@@ -109,7 +113,131 @@ async function readBindings(): Promise<Record<string, string>> {
   }
 }
 
-interface Code2SessionResult { openid?: string; errcode?: number; errmsg?: string }
+/** 绑定表 v2：{ v:2, map: { ident: username[] }, alias: { openid: unionid } }；兼容旧形 { openid: username }。
+ *  ident 优先取 unionid（小程序与网页扫码同一微信身份互通）；一个微信可绑多个公司账号 */
+interface BindStore { map: Record<string, string[]>; alias: Record<string, string> }
+async function readBindStore(): Promise<BindStore> {
+  try {
+    const raw = await store.getSetting(BIND_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    if (parsed && parsed.v === 2 && parsed.map && typeof parsed.map === 'object') {
+      return { map: parsed.map, alias: parsed.alias && typeof parsed.alias === 'object' ? parsed.alias : {} };
+    }
+    const map: Record<string, string[]> = {};
+    for (const [k, v] of Object.entries(parsed || {})) {
+      if (typeof v === 'string' && v) map[k] = [v];
+      else if (Array.isArray(v)) map[k] = v.map(String).filter(Boolean);
+    }
+    return { map, alias: {} };
+  } catch {
+    return { map: {}, alias: {} };
+  }
+}
+async function writeBindStore(bs: BindStore): Promise<void> {
+  await store.setSetting(BIND_KEY, JSON.stringify({ v: 2, map: bs.map, alias: bs.alias }));
+}
+/** 标识归一：unionid 后知时把旧 openid 键下的绑定自动并入 unionid 键（换端扫码不失绑定） */
+function resolveIdent(bs: BindStore, openid: string, unionid?: string): { ident: string; changed: boolean } {
+  if (!unionid) return { ident: bs.alias[openid] || openid, changed: false };
+  const prev = bs.alias[openid];
+  if (prev === unionid) return { ident: unionid, changed: false };
+  const merge = (src: string) => {
+    const arr = bs.map[src];
+    if (!arr || !arr.length) return;
+    bs.map[unionid] = Array.from(new Set([...(bs.map[unionid] || []), ...arr]));
+    delete bs.map[src];
+  };
+  merge(openid);
+  if (prev && prev !== unionid) merge(prev);
+  bs.alias[openid] = unionid;
+  return { ident: unionid, changed: true };
+}
+const usersOfIdent = (bs: BindStore, ident: string): string[] => (Array.isArray(bs.map[ident]) ? bs.map[ident] : []);
+
+/** 账号列表展示（选择公司页）：账号名 + 公司名（子账号沿 parentAccount 链继承公司名） */
+async function accountBriefs(usernames: string[]): Promise<{ username: string; name: string; company: string }[]> {
+  const users = await readRows('registeredUsers');
+  const find = (un: string) => users.find((u: any) => u && u.username === un);
+  const companyOf = (un: string): string => {
+    const visited = new Set<string>(); let cur = un;
+    while (cur && !visited.has(cur)) {
+      visited.add(cur);
+      const h = find(cur);
+      if (!h) break;
+      if (h.companyName) return String(h.companyName);
+      if (!h.isSubAccount || !h.parentAccount) break;
+      cur = String(h.parentAccount);
+    }
+    return '';
+  };
+  return usernames.map(un => {
+    const h = find(un);
+    return { username: un, name: String(h?.displayName || h?.contactPerson || h?.name || un), company: companyOf(un) };
+  });
+}
+
+/** 微信登录令牌：与网页 signToken 同构 {username, role, owner} + wxIdent（绑定管理查看/解绑用） */
+function issueWxToken(username: string, role: string, owner: string, wxIdent: string): string {
+  return jwt.sign({ username, role, owner, wxIdent }, JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN || '7d' } as jwt.SignOptions);
+}
+
+/** 选择公司票据（内存 5 分钟）：多绑定扫码登录后选定账号再凭票发令牌 */
+const selectTickets = new Map<string, { usernames: string[]; ident: string; exp: number }>();
+function issueSelectTicket(ident: string, usernames: string[]): string {
+  const ticket = `tk${Date.now()}${Math.random().toString(36).slice(2, 8)}`;
+  selectTickets.set(ticket, { usernames, ident, exp: Date.now() + 5 * 60000 });
+  if (selectTickets.size > 300) for (const [k, v] of selectTickets) if (v.exp < Date.now()) selectTickets.delete(k);
+  return ticket;
+}
+async function consumeSelectTicket(ticket: string, username: string) {
+  const key = String(ticket || '');
+  const t = selectTickets.get(key);
+  selectTickets.delete(key);
+  if (!t || t.exp < Date.now() || !t.usernames.includes(String(username || ''))) return null;
+  const un = String(username);
+  const [role, owner, name] = await Promise.all([roleOf(un), ownerOf(un), displayNameOf(un)]);
+  return { token: issueWxToken(un, role, owner, t.ident), user: { username: un, role, owner, name } };
+}
+
+/** 网页扫码 state 表（内存 5 分钟）：callback 写结果、网页轮询取走后即删；
+ *  purpose=bind 时 callback 只暂存微信身份不写库，写库须由已鉴权的 /bind/self 凭 state 消费 */
+const qrStates = new Map<string, { status: 'waiting' | 'done'; result?: any; exp: number; purpose?: 'login' | 'bind' }>();
+function newQrState(purpose: 'login' | 'bind'): string {
+  const state = `st${Date.now()}${Math.random().toString(36).slice(2, 8)}`;
+  qrStates.set(state, { status: 'waiting', exp: Date.now() + 5 * 60000, purpose });
+  if (qrStates.size > 300) for (const [k, v] of qrStates) if (v.exp < Date.now()) qrStates.delete(k);
+  return state;
+}
+function webQrUrl(state: string): string {
+  return `https://open.weixin.qq.com/connect/qrconnect?appid=${encodeURIComponent(WX_WEB_APPID)}&redirect_uri=${encodeURIComponent(WX_WEB_CALLBACK)}&response_type=code&scope=snsapi_login&state=${state}#wechat_redirect`;
+}
+function webConfigured(): boolean { return !!WX_WEB_APPID && !!WX_WEB_SECRET; }
+async function webCode2Token(code: string): Promise<{ openid?: string; unionid?: string; errcode?: number; errmsg?: string }> {
+  const url = `https://api.weixin.qq.com/sns/oauth2/access_token?appid=${encodeURIComponent(WX_WEB_APPID)}&secret=${encodeURIComponent(WX_WEB_SECRET)}&code=${encodeURIComponent(code)}&grant_type=authorization_code`;
+  const res = await fetch(url);
+  return (await res.json()) as any;
+}
+
+/** 拿到微信身份后的统一分流（小程序 code2session 与网页扫码 callback 同口径）：
+ *  0 绑定→bindToken 走账号密码绑定；1 绑定→直接发令牌；多绑定→ticket+账号列表待选公司 */
+async function loginOutcome(openid: string, unionid?: string) {
+  const bs = await readBindStore();
+  const { ident, changed } = resolveIdent(bs, openid, unionid);
+  if (changed) await writeBindStore(bs);
+  const users = usersOfIdent(bs, ident);
+  if (users.length === 1) {
+    const un = users[0];
+    const [role, owner, name] = await Promise.all([roleOf(un), ownerOf(un), displayNameOf(un)]);
+    return { bound: true, token: issueWxToken(un, role, owner, ident), user: { username: un, role, owner, name } };
+  }
+  if (users.length > 1) {
+    return { bound: false, needSelect: true, ticket: issueSelectTicket(ident, users), list: await accountBriefs(users) };
+  }
+  const bindToken = jwt.sign({ ident, openid: ident, typ: 'wx-bind' }, JWT_SECRET, { expiresIn: '10m' } as jwt.SignOptions);
+  return { bound: false, bindToken };
+}
+
+interface Code2SessionResult { openid?: string; unionid?: string; errcode?: number; errmsg?: string }
 async function code2session(code: string): Promise<Code2SessionResult> {
   const url = `https://api.weixin.qq.com/sns/jscode2session?appid=${encodeURIComponent(WX_APPID)}&secret=${encodeURIComponent(WX_SECRET)}&js_code=${encodeURIComponent(code)}&grant_type=authorization_code`;
   const res = await fetch(url);
@@ -251,7 +379,7 @@ async function scopeShopsFor<T extends { person?: string }>(owner: string, usern
 
 // ============ 登录 / 绑定 ============
 
-/** POST /api/wx/login {code} —— 微信 code 换 openid，已绑定直接发令牌 */
+/** POST /api/wx/login {code} —— 微信 code 换 openid：单绑定发令牌、多绑定返回 ticket+账号列表、未绑定返回 bindToken */
 router.post('/login', async (req: Request, res: Response) => {
   try {
     if (!wxConfigured()) {
@@ -265,33 +393,39 @@ router.post('/login', async (req: Request, res: Response) => {
       res.status(401).json({ code: 401, message: `微信登录失败(${sess.errcode || ''} ${sess.errmsg || ''})` });
       return;
     }
-    const bindings = await readBindings();
-    const username = bindings[sess.openid];
-    if (username) {
-      const [role, owner, name] = await Promise.all([roleOf(username), ownerOf(username), displayNameOf(username)]);
-      const token = await issueToken(username, role);
-      res.json({ code: 200, data: { bound: true, token, user: { username, role, owner, name } } });
-      return;
-    }
-    const bindToken = jwt.sign({ openid: sess.openid, typ: 'wx-bind' }, JWT_SECRET, { expiresIn: '10m' } as jwt.SignOptions);
-    res.json({ code: 200, data: { bound: false, bindToken } });
+    res.json({ code: 200, data: await loginOutcome(sess.openid, sess.unionid) });
   } catch (err: any) {
     console.error('[wx] login error:', err.message);
     res.status(500).json({ code: 500, message: '服务器内部错误' });
   }
 });
 
-/** POST /api/wx/bind {bindToken, username, password} —— 首次使用：ERP 账号密码绑定 openid */
+/** 选择公司共用处理：凭 ticket+username 发令牌（小程序 /login/select 与网页 /web/qr/select 同口径） */
+const selectHandler = async (req: Request, res: Response) => {
+  try {
+    const out = await consumeSelectTicket(req.body.ticket, req.body.username);
+    if (!out) { res.status(400).json({ code: 400, message: '选择凭证无效或已过期，请重新扫码登录' }); return; }
+    res.json({ code: 200, data: { bound: true, ...out } });
+  } catch (err: any) {
+    console.error('[wx] select error:', err.message);
+    res.status(500).json({ code: 500, message: '服务器内部错误' });
+  }
+};
+
+/** POST /api/wx/login/select {ticket, username} —— 小程序多绑定扫码后选定公司发令牌 */
+router.post('/login/select', selectHandler);
+
+/** POST /api/wx/bind {bindToken, username, password} —— 首次使用/追加绑定：ERP 账号密码校验后把账号追加进该微信的绑定数组 */
 router.post('/bind', async (req: Request, res: Response) => {
   try {
     const { bindToken, username, password } = req.body;
-    let openid = '';
+    let ident = '';
     try {
-      const payload = jwt.verify(String(bindToken || ''), JWT_SECRET) as { openid?: string; typ?: string };
-      if (payload.typ !== 'wx-bind' || !payload.openid) throw new Error('bad bind token');
-      openid = payload.openid;
+      const payload = jwt.verify(String(bindToken || ''), JWT_SECRET) as { openid?: string; ident?: string; typ?: string };
+      if (payload.typ !== 'wx-bind' || !(payload.ident || payload.openid)) throw new Error('bad bind token');
+      ident = String(payload.ident || payload.openid);
     } catch {
-      res.status(401).json({ code: 401, message: '绑定凭证无效或已过期，请重新进入小程序' });
+      res.status(401).json({ code: 401, message: '绑定凭证无效或已过期，请重新进入' });
       return;
     }
     const result = await verifyCredentials(String(username || ''), String(password || ''));
@@ -299,14 +433,197 @@ router.post('/bind', async (req: Request, res: Response) => {
       res.status(result.status).json({ code: result.status, message: result.message });
       return;
     }
-    const bindings = await readBindings();
-    bindings[openid] = result.user.username;
-    await store.setSetting(BIND_KEY, JSON.stringify(bindings));
+    const bs = await readBindStore();
+    const arr = usersOfIdent(bs, ident);
+    if (!arr.includes(result.user.username)) arr.push(result.user.username);
+    bs.map[ident] = arr;
+    await writeBindStore(bs);
     const [role, owner] = await Promise.all([roleOf(result.user.username), ownerOf(result.user.username)]);
-    const token = await issueToken(result.user.username, role);
+    const token = issueWxToken(result.user.username, role, owner, ident);
     res.json({ code: 200, data: { bound: true, token, user: { ...result.user, role, owner } } });
   } catch (err: any) {
     console.error('[wx] bind error:', err.message);
+    res.status(500).json({ code: 500, message: '服务器内部错误' });
+  }
+});
+
+/** GET /api/wx/web/qr —— 生成网页扫码 state 与开放平台授权 URL（scope=snsapi_login）；未配置凭据返回 501 供前端灰态 */
+router.get('/web/qr', async (req: Request, res: Response) => {
+  if (!webConfigured()) {
+    res.status(501).json({ code: 501, message: '网页微信扫码登录未开通（WX_WEB_APPID/WX_WEB_SECRET）' });
+    return;
+  }
+  const state = newQrState('login');
+  res.json({ code: 200, data: { state, url: webQrUrl(state) } });
+});
+
+/** GET /api/wx/web/qr/callback —— 开放平台回跳：code 换 web openid+unionid，结果写入 state 表；
+ *  回跳发生在登录页 iframe 内，故返回极简 HTML 以 postMessage 通知父窗口刷新轮询 */
+router.get('/web/qr/callback', async (req: Request, res: Response) => {
+  const state = String(req.query.state || '');
+  const code = String(req.query.code || '');
+  const html = (msg: string) => {
+    res.type('html').send(`<html><head><meta charset="utf-8"/></head><body style="font-family:sans-serif;text-align:center;padding-top:40px;color:#555">${msg}<script>try{window.parent&&window.parent.postMessage({type:'wx-qr-done',state:${JSON.stringify(state)}},'*')}catch(e){}</script></body></html>`);
+  };
+  const entry = qrStates.get(state);
+  if (!entry || entry.exp < Date.now()) { html('二维码已过期，请刷新页面重新扫码'); return; }
+  if (!code) { html('授权失败，请重试'); return; }
+  try {
+    const tk = await webCode2Token(code);
+    if (!tk.openid) { html(`微信授权失败(${tk.errcode || ''} ${tk.errmsg || ''})`); return; }
+    if (entry.purpose === 'bind') {
+      // 绑定用途：ident 与登录同口径经 resolveIdent 归并后仅暂存 state，不回写绑定表，
+      // 避免匿名回跳链路直接改数据；ident 也不下发前端
+      const bs = await readBindStore();
+      const { ident, changed } = resolveIdent(bs, tk.openid, tk.unionid);
+      if (changed) await writeBindStore(bs);
+      entry.status = 'done';
+      entry.result = { purpose: 'bind', ident };
+      entry.exp = Date.now() + 60000;
+      html('已检测到微信，请返回页面确认绑定');
+      return;
+    }
+    const outcome = await loginOutcome(tk.openid, tk.unionid);
+    entry.status = 'done';
+    entry.result = outcome;
+    entry.exp = Date.now() + 60000;
+    html('扫码成功，请在页面继续');
+  } catch (err: any) {
+    console.error('[wx] web qr callback error:', err.message);
+    html('登录失败，请重试');
+  }
+});
+
+/** GET /api/wx/web/qr/poll?state= —— 网页轮询扫码结果：waiting / done(+loginOutcome 结果) / expired */
+router.get('/web/qr/poll', async (req: Request, res: Response) => {
+  const state = String(req.query.state || '');
+  const entry = qrStates.get(state);
+  if (!entry || entry.exp < Date.now()) {
+    qrStates.delete(state);
+    res.json({ code: 200, data: { status: 'expired' } });
+    return;
+  }
+  if (entry.status === 'waiting') { res.json({ code: 200, data: { status: 'waiting' } }); return; }
+  const result = entry.result;
+  // bind 用途的 state 须保留到 /bind/self 消费，轮询只报「已扫码」不下发 ident
+  if (entry.purpose === 'bind') { res.json({ code: 200, data: { status: 'done', purpose: 'bind' } }); return; }
+  qrStates.delete(state);
+  res.json({ code: 200, data: { status: 'done', ...result } });
+});
+
+/** POST /api/wx/web/qr/select {ticket, username} —— 网页扫码多绑定选定公司发令牌 */
+router.post('/web/qr/select', selectHandler);
+
+/** GET /api/wx/web/qr/bind —— 已登录会话发起「绑定微信」二维码：state 标 bind 用途，callback 不写库 */
+router.get('/web/qr/bind', verifyJWT, async (req: Request, res: Response) => {
+  if (!webConfigured()) {
+    res.status(501).json({ code: 501, message: '网页微信扫码未开通（WX_WEB_APPID/WX_WEB_SECRET）' });
+    return;
+  }
+  const state = newQrState('bind');
+  res.json({ code: 200, data: { state, url: webQrUrl(state) } });
+});
+
+/** ident 隐去中段：仅保留前 6 后 4，供界面辨认「是哪个微信」而不外泄完整标识 */
+function maskIdent(ident: string): string {
+  const s = String(ident || '');
+  if (s.length <= 12) return `${s.slice(0, 4)}…`;
+  return `${s.slice(0, 6)}…${s.slice(-4)}`;
+}
+
+/** 当前账号在绑定表中的归属桶（一个账号可能被多个微信绑过） */
+async function bucketsOfUser(username: string): Promise<[string, string[]][]> {
+  const bs = await readBindStore();
+  return Object.entries(bs.map).filter(([, arr]) => Array.isArray(arr) && arr.includes(username));
+}
+
+/** GET /api/wx/bind/self —— 当前 ERP 账号是否已绑微信（账号密码会话即可查，不要求 wxIdent） */
+router.get('/bind/self', verifyJWT, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user as JWTPayload;
+    const hit = await bucketsOfUser(user.username);
+    res.json({ code: 200, data: { bound: hit.length > 0, wechats: hit.map(([ident]) => maskIdent(ident)) } });
+  } catch (err: any) {
+    console.error('[wx] bind/self query error:', err.message);
+    res.status(500).json({ code: 500, message: '服务器内部错误' });
+  }
+});
+
+/** POST /api/wx/bind/self {state} —— 凭 bind state 把当前账号追加进该微信的绑定数组。
+ *  ident 只在服务端 state 内流转、不出前端，避免伪造 ident 把他人微信绑到自己账号 */
+router.post('/bind/self', verifyJWT, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user as JWTPayload;
+    const state = String(req.body.state || '');
+    const entry = qrStates.get(state);
+    if (!entry || entry.purpose !== 'bind' || entry.status !== 'done' || entry.exp < Date.now()) {
+      res.status(400).json({ code: 400, message: '扫码凭证无效或已过期，请重新扫码' });
+      return;
+    }
+    const ident = String(entry.result?.ident || '');
+    if (!ident) { res.status(400).json({ code: 400, message: '未获取到微信身份，请重新扫码' }); return; }
+    qrStates.delete(state);
+    const bs = await readBindStore();
+    const arr = Array.isArray(bs.map[ident]) ? bs.map[ident] : [];
+    if (!arr.includes(user.username)) arr.push(user.username);
+    bs.map[ident] = arr;
+    await writeBindStore(bs);
+    res.json({ code: 200, data: { bound: true, wechat: maskIdent(ident), accounts: arr.length } });
+  } catch (err: any) {
+    console.error('[wx] bind/self error:', err.message);
+    res.status(500).json({ code: 500, message: '服务器内部错误' });
+  }
+});
+
+/** POST /api/wx/unbind/self —— 把当前账号从所有微信绑定中摘出（仅删本账号，不动同微信下的其它公司账号） */
+router.post('/unbind/self', verifyJWT, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user as JWTPayload;
+    const bs = await readBindStore();
+    let removed = 0;
+    for (const [ident, arr] of Object.entries(bs.map)) {
+      if (!Array.isArray(arr) || !arr.includes(user.username)) continue;
+      const next = arr.filter(u => u !== user.username);
+      if (next.length) bs.map[ident] = next; else delete bs.map[ident];
+      removed += 1;
+    }
+    if (removed) await writeBindStore(bs);
+    res.json({ code: 200, data: { bound: false, removed } });
+  } catch (err: any) {
+    console.error('[wx] unbind/self error:', err.message);
+    res.status(500).json({ code: 500, message: '服务器内部错误' });
+  }
+});
+
+/** GET /api/wx/bindings —— 当前微信已绑公司账号列表（令牌须带 wxIdent，即微信登录会话） */
+router.get('/bindings', verifyJWT, async (req: Request, res: Response) => {
+  try {
+    const ident = String((req as any).user.wxIdent || '');
+    if (!ident) { res.status(400).json({ code: 400, message: '当前会话非微信登录，无法查看绑定列表' }); return; }
+    const bs = await readBindStore();
+    const users = usersOfIdent(bs, ident);
+    res.json({ code: 200, data: { list: await accountBriefs(users), current: (req as any).user.username } });
+  } catch (err: any) {
+    console.error('[wx] bindings error:', err.message);
+    res.status(500).json({ code: 500, message: '服务器内部错误' });
+  }
+});
+
+/** POST /api/wx/unbind {username} —— 当前微信解绑指定公司账号（解绑后该微信登录不再列出该公司） */
+router.post('/unbind', verifyJWT, async (req: Request, res: Response) => {
+  try {
+    const ident = String((req as any).user.wxIdent || '');
+    if (!ident) { res.status(400).json({ code: 400, message: '当前会话非微信登录，无法解绑' }); return; }
+    const target = String(req.body.username || '');
+    const bs = await readBindStore();
+    const arr = usersOfIdent(bs, ident);
+    if (!target || !arr.includes(target)) { res.status(400).json({ code: 400, message: '该微信未绑定指定账号' }); return; }
+    const next = arr.filter(u => u !== target);
+    if (next.length) bs.map[ident] = next; else delete bs.map[ident];
+    await writeBindStore(bs);
+    res.json({ code: 200, data: { unbound: target, list: await accountBriefs(next) } });
+  } catch (err: any) {
+    console.error('[wx] unbind error:', err.message);
     res.status(500).json({ code: 500, message: '服务器内部错误' });
   }
 });

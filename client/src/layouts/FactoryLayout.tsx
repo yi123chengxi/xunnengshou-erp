@@ -3,12 +3,13 @@ import { Layout, Menu, Avatar, Dropdown, Space, Typography, Button, Tag } from '
 import {
   HomeOutlined, ShopOutlined, ToolOutlined, DollarOutlined,
   SettingOutlined, UserOutlined, LogoutOutlined, ProfileOutlined,
-  MenuFoldOutlined, MenuUnfoldOutlined, BankOutlined, ShoppingCartOutlined,
+  MenuFoldOutlined, MenuUnfoldOutlined, BankOutlined, ShoppingCartOutlined, WechatOutlined,
 } from '@ant-design/icons';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import type { MenuProps } from 'antd';
 import Logo from '../components/Logo';
 import ServiceOrdersModal from '../components/ServiceOrdersModal';
+import WxBindModal, { fetchWxBound } from '../components/WxBindModal';
 import { useDevPermSet, isPermAllowed } from '../utils/devPerms';
 import { menuVisible, menuKeyFromPath, usePermTick } from '../utils/perm';
 import { Result as AntResult } from 'antd';
@@ -105,6 +106,11 @@ const FactoryLayout: React.FC = () => {
 
   const [serviceOrdersVisible, setServiceOrdersVisible] = useState(false);
 
+  // 微信绑定弹窗与入口文案（wxBound 决定显示「绑定微信」还是「解绑微信」）
+  const [wxBindVisible, setWxBindVisible] = useState(false);
+  const [wxBound, setWxBound] = useState(false);
+  useEffect(() => { void fetchWxBound().then(setWxBound); }, []);
+
   const userMenuItems: MenuProps['items'] = [
     {
       key: 'user-info',
@@ -118,11 +124,16 @@ const FactoryLayout: React.FC = () => {
       disabled: true,
     },
     { type: 'divider' },
+    { key: 'wxBind', icon: <WechatOutlined />, label: wxBound ? '解绑微信' : '绑定微信' },
     { key: 'serviceOrders', icon: <ShoppingCartOutlined />, label: '服务订单' },
     { key: 'logout', icon: <LogoutOutlined />, label: '退出登录', danger: true },
   ];
 
   const handleUserMenuClick: MenuProps['onClick'] = useCallback(({ key }: { key: string }) => {
+    if (key === 'wxBind') {
+      setWxBindVisible(true);
+      return;
+    }
     if (key === 'serviceOrders') {
       setServiceOrdersVisible(true);
       return;
@@ -211,6 +222,7 @@ const FactoryLayout: React.FC = () => {
         </Content>
       </Layout>
       <ServiceOrdersModal open={serviceOrdersVisible} onClose={() => setServiceOrdersVisible(false)} />
+      <WxBindModal open={wxBindVisible} onClose={() => setWxBindVisible(false)} onChanged={setWxBound} />
     </Layout>
   );
 };
