@@ -4,6 +4,7 @@ import Taro from '@tarojs/taro'
 const TOKEN_KEY = 'wx_token'
 const USER_KEY = 'wx_user'
 const BIND_TOKEN_KEY = 'wx_bind_token'
+const GUEST_KEY = 'wx_guest_mode'
 
 export interface SessionUser {
   username: string
@@ -17,7 +18,11 @@ export const getToken = (): string => {
   try { return Taro.getStorageSync(TOKEN_KEY) || '' } catch { return '' }
 }
 export const setToken = (token: string): void => {
-  try { Taro.setStorageSync(TOKEN_KEY, token) } catch { /* ignore */ }
+  try {
+    Taro.setStorageSync(TOKEN_KEY, token)
+    // 令牌一旦写入就不可能还是游客：在唯一写点回收游客态，而不是在四条登录路径里各自补调用
+    Taro.removeStorageSync(GUEST_KEY)
+  } catch { /* ignore */ }
 }
 export const getUser = (): SessionUser | null => {
   try { return Taro.getStorageSync(USER_KEY) || null } catch { return null }
@@ -49,4 +54,17 @@ export const setPreviewMode = (): void => {
 }
 export const clearPreviewMode = (): void => {
   try { Taro.removeStorageSync(PREVIEW_KEY) } catch { /* ignore */ }
+}
+
+// 游客浏览模式：用户在登录环节选择「暂不登录」后置位。
+// 微信登录规范要求小程序不得强制登录，故无令牌时须留在页面渲染空态，而非跳回登录页锁住用户。
+// 与 PREVIEW_KEY 分开维护：preview 语义是「接口未部署」，游客语义是「未登录」，二者提示文案不同。
+export const isGuestMode = (): boolean => {
+  try { return Taro.getStorageSync(GUEST_KEY) === '1' } catch { return false }
+}
+export const setGuestMode = (): void => {
+  try { Taro.setStorageSync(GUEST_KEY, '1') } catch { /* ignore */ }
+}
+export const clearGuestMode = (): void => {
+  try { Taro.removeStorageSync(GUEST_KEY) } catch { /* ignore */ }
 }

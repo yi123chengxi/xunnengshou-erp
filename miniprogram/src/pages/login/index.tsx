@@ -3,7 +3,7 @@ import './index.scss'
 import { View, Text, Input, Button } from '@tarojs/components'
 import Taro from '@tarojs/taro'
 import { wxLogin, bindAccount, passwordLogin } from '../../services/auth'
-import { getBindToken } from '../../services/session'
+import { getBindToken, setGuestMode } from '../../services/session'
 
 // H5 预览端无 wx.login：直接账号密码登录；weapp 端走微信一键登录/绑定
 const isH5 = process.env.TARO_ENV === 'h5'
@@ -15,7 +15,25 @@ const Login = () => {
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
 
-  const enter = () => Taro.switchTab({ url: '/pages/workbench/index' })
+  // 本项目无原生 tabBar（底部按键由 AppTabBar 每页内渲染），Tab 页跳转必须用 reLaunch，用 switchTab 会 fail
+  const enter = () => Taro.reLaunch({ url: '/pages/workbench/index' }).catch(() => {
+    // 跳转失败不再静默吞掉，否则表现为「登录成功但页面没反应」
+    Taro.showToast({ title: '已进入首页，请点底部按键', icon: 'none' })
+  })
+
+  // 登录环节的取消出口：微信登录规范不允许把用户锁在「只能登录」的页面，
+  // 点取消必须真能离开——优先原路返回保留进入登录页前的位置，栈底无上一页时才回首页浏览模式
+  const skipLogin = () => {
+    setGuestMode()
+    const pages = Taro.getCurrentPages()
+    if (pages.length > 1) {
+      Taro.navigateBack().catch(() => Taro.reLaunch({ url: '/pages/workbench/index' }))
+    } else {
+      Taro.reLaunch({ url: '/pages/workbench/index' }).catch(() => {
+        Taro.showToast({ title: '已进入浏览模式，请点底部按键', icon: 'none' })
+      })
+    }
+  }
 
   const onWxLogin = async () => {
     if (busy) return
@@ -23,6 +41,7 @@ const Login = () => {
     try {
       const r = await wxLogin()
       if (r.bound) enter()
+      else if (r.needSelect) Taro.navigateTo({ url: '/pages/company-select/index' })
       else {
         setNeedBind(true)
         Taro.showToast({ title: '首次使用请绑定ERP账号', icon: 'none' })
@@ -71,6 +90,13 @@ const Login = () => {
           )}
         </View>
       )}
+      {/* 取消入口放在分支外，保证「一键登录态」与「账号绑定态」两种界面都有可用出口 */}
+      <View
+        style={{ marginTop: 28, textAlign: 'center', fontSize: 28, color: '#595959', padding: '16px 24px' }}
+        onClick={skipLogin}
+      >
+        暂不登录，先随便看看
+      </View>
     </View>
   )
 }

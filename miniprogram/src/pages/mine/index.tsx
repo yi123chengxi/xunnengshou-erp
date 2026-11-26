@@ -92,6 +92,19 @@ const Mine = () => {
         </View>
       </View>
 
+      {/* 微信绑定管理：查看/解绑本微信已绑定的公司账号（与网页个人中心同源） */}
+      <View style={CARD}>
+        <View
+          style={{ display: 'flex', alignItems: 'center', padding: '13px 0' }}
+          onClick={() => Taro.navigateTo({ url: '/pages/wx-bindings/index' })}
+        >
+          <Text style={{ fontSize: 22, lineHeight: '26px' }}>🔗</Text>
+          <Text style={{ fontSize: 16, marginLeft: 10 }}>微信绑定管理</Text>
+          <View style={{ flex: 1 }} />
+          <Text style={{ marginLeft: 8, fontSize: 15, color: '#9aa3ad' }}>›</Text>
+        </View>
+      </View>
+
       {/* 账号/企业信息：与网页版企业信息弹窗同字段（空值行不显示），进入页面拉取实时信息 */}
       <View style={CARD}>
         {rows.map(([k, v]) => (

@@ -3,7 +3,7 @@ import './index.scss'
 import { View, Text, Image } from '@tarojs/components'
 import Taro, { useDidShow } from '@tarojs/taro'
 import { getSummary, getDashboard, SummaryData, DashboardData, BoardMetrics } from '../../services/api'
-import { getUser, getToken } from '../../services/session'
+import { getUser, getToken, setGuestMode, isGuestMode } from '../../services/session'
 import { isPreviewMode } from '../../services/auth'
 import { getFavs } from '../../services/favorites'
 import { CHILD_ICONS, childTitle, openMenuChild, loadMenuPerms, childAllowed } from '../../config/menu'
@@ -60,12 +60,18 @@ const Workbench = () => {
     loadMenuPerms().then(setPerms)
   }, [])
   const user = getUser()
+  // 游客态：微信登录规范要求小程序不得强制登录，未登录时留在首页以浏览模式渲染，
+  // 由用户主动点「登录」才进登录页（且用 navigateTo 保留左上角返回）
+  const [guest, setGuest] = useState(() => !getToken())
 
   useDidShow(() => {
     if (!getToken()) {
-      Taro.redirectTo({ url: '/pages/login/index' })
+      // 置游客位让请求层回空态，而不是打后端拿 401 再被踢去登录页
+      if (!isGuestMode()) setGuestMode()
+      setGuest(true)
       return
     }
+    setGuest(false)
     // 菜单权限首载失败（失败不入缓存）时回首页自愈重拉，避免常用宫格入口一直缺失
     if (!perms) loadMenuPerms().then(setPerms)
     // 待办数沿用 /wx/summary；经营看板走 /wx/dashboard（服务端按网页版同口径计算并做权限裁剪）
@@ -112,6 +118,20 @@ const Workbench = () => {
       {isPreviewMode() && (
         <View style={{ background: '#fff7e6', color: '#fa8c16', fontSize: 22, textAlign: 'center', padding: '8px 0' }}>
           布局预览模式：数据接口待部署后自动接入真实数据
+        </View>
+      )}
+      {guest && (
+        <View style={{ background: '#e6f4ff', padding: '16px 24px', display: 'flex', alignItems: 'center' }}>
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text style={{ fontSize: 26, color: '#0958d9', display: 'block' }}>当前为浏览模式</Text>
+            <Text style={{ fontSize: 22, color: '#4096ff' }}>无需登录即可浏览页面结构，登录后展示公司真实数据</Text>
+          </View>
+          <View
+            style={{ marginLeft: 16, background: '#1677ff', color: '#fff', fontSize: 24, padding: '8px 20px', borderRadius: 4, flexShrink: 0 }}
+            onClick={() => Taro.navigateTo({ url: '/pages/login/index' })}
+          >
+            登录
+          </View>
         </View>
       )}
       <View style={{ background: 'linear-gradient(135deg,#1677ff,#4096ff)', padding: '24px 32px 52px', color: '#fff' }}>

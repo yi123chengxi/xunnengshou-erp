@@ -11,6 +11,8 @@ export default defineAppConfig({
     'pages/more/index',
     'pages/module/index',
     'pages/approval-detail/index',
+    'pages/company-select/index',
+    'pages/wx-bindings/index',
     'pages/chat/index',
     'pages/messages/index',
   ],
