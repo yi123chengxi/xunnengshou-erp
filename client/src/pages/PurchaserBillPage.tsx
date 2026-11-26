@@ -146,14 +146,13 @@ interface BillRecord {
   returnReason?: string;
 }
 
-// 供应商候选排序：已合作优先，其余按合作流程推进程度，账单兜底项排最后
-const SUP_STATUS_ORDER: Record<string, number> = { approved: 0, terminating: 1, pending: 2, terminated: 3, bill: 9 };
+// 供应商候选排序：已合作优先，其余按合作流程推进程度
+const SUP_STATUS_ORDER: Record<string, number> = { approved: 0, terminating: 1, pending: 2, terminated: 3 };
 // 非「已合作」状态在候选列表中显式标注，避免误选未建立合作的供应商
 const SUP_STATUS_TAG: Record<string, { text: string; color: string }> = {
   pending: { text: '待合作', color: 'orange' },
   terminating: { text: '解除中', color: 'gold' },
   terminated: { text: '已解除', color: 'default' },
-  bill: { text: '历史账单', color: 'blue' },
 };
 
 /** 数量/金额区间判断：区间串格式「最小~最大」，留空一侧表示不限；退货负数按带符号比较 */
@@ -510,9 +509,10 @@ const PurchaserBillPage: React.FC = () => {
     } catch { /* ignore */ }
     return '';
   };
-  // 供应商候选：与「供应商 - 供应商列表」页保持同一口径（显示全部合作方，不再只取 approved）
-  // 卡片状态只有供应商列表页加载时才会把 pending 升级为 approved，账单页直接读原始键会长期判空，
-  // 表现为「选择供应商」弹窗提示“暂无已合作供应商”，因此这里同步套用审批自愈 + 历史账单兜底
+  // 供应商候选：与「供应商 - 供应商列表」页严格同一口径（只取列表键中带合作状态的条目）
+  // 商品导入自动创建的裸条目（仅 id/名称/简称，无 cooperationStatus）在列表页不显示，
+  // 此处也不得混入选择弹窗；卡片状态只有供应商列表页加载时才会把 pending 升级为 approved，
+  // 账单页直接读原始键会长期判空，因此这里同步套用审批自愈
   const supplierOptions = useMemo(() => {
     const out: { name: string; prefix: string; status: string; username: string; no: string }[] = [];
     const seen = new Set<string>();
@@ -526,6 +526,9 @@ const PurchaserBillPage: React.FC = () => {
     const myPurchaserNo = myCompanyNo();
     (Array.isArray(list) ? list : []).forEach((s: any) => {
       if (!s) return;
+      // 与供应商列表页同一过滤口径：无合作状态的条目（商品导入自动创建的裸名称）不进入候选
+      const rawStatus = String(s.cooperationStatus || '').trim();
+      if (!['approved', 'pending', 'terminating', 'terminated'].includes(rawStatus)) return;
       const name = String(s.supplierName || '').trim();
       if (!name) return;
       const un = String(s.supplierUsername || '').trim();
@@ -533,7 +536,7 @@ const PurchaserBillPage: React.FC = () => {
       // 去重键用身份凭证而非公司名：同名两家公司的两条卡片必须各自成项，否则第二家永远选不到
       const dedupeKey = un || no || `n:${name}`;
       if (seen.has(dedupeKey)) return;
-      let status = String(s.cooperationStatus || 'pending');
+      let status = rawStatus;
       // 审批自愈：卡片仍为 pending，但存在已通过且未作废的合作申请 → 视为已合作（与供应商列表页判定一致）
       if (status === 'pending') {
         const ok = (Array.isArray(apps) ? apps : []).some((a: any) => a
@@ -548,18 +551,9 @@ const PurchaserBillPage: React.FC = () => {
       seenNames.add(name);
       out.push({ name, prefix: String(s.orderPrefix || resolvePrefix(name, s) || ''), status, username: un, no });
     });
-    // 历史账单兜底：换浏览器后供应商卡片可能尚未同步到位，账单里出现过的供应商必须仍可选
-    bills.forEach((b: any) => {
-      const name = String(b?.supplier || '').trim();
-      if (!name || seenNames.has(name)) return;
-      seenNames.add(name);
-      const un = String(b?.supplierUsername || '').trim();
-      const no = String(b?.supplierNo || '').trim();
-      out.push({ name, prefix: resolvePrefix(name, { supplierUsername: un, supplierNo: no, supplierName: name }), status: 'bill', username: un, no });
-    });
     out.sort((a, b) => (SUP_STATUS_ORDER[a.status] ?? 9) - (SUP_STATUS_ORDER[b.status] ?? 9));
     return out;
-  }, [supplierStorageKey, bills, username, createVisible, editVisible, supplierPickVisible]);
+  }, [supplierStorageKey, username, createVisible, editVisible, supplierPickVisible]);
 
   // 搜索栏供应商下拉选项（账单中出现过的 + 已合作供应商）
   const supplierSearchOptions = useMemo(() => {
