@@ -17,7 +17,7 @@ import {
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { getDataOwner } from '../utils/brandAuth';
-import { saveDataset } from '../utils/dataStore';
+import { saveDataset, readProductListSync, loadProductListLatest } from '../utils/dataStore';
 import { basicDataPages } from '../config/pageConfig';
 import { getCurrentUserDisplayName } from '../utils/billLog';
 import request from '../utils/request';
@@ -172,8 +172,19 @@ const ProductPrintPage: React.FC = () => {
 
   const [activeSub, setActiveSub] = useState('print-tag');
   const [products, setProducts] = useState<any[]>([]);
-  const reloadProducts = useCallback(() => { setProducts(loadJson(productKey, [])); }, [productKey]);
+  // 与账单明细添加商品同一加载逻辑：会话缓存/localStorage 同步直读首帧即显，
+  // 再按时间戳收敛 localStorage/IndexedDB 较新者（大表常只存 IDB，直读 localStorage 恒空→搜索/选择弹窗无数据）
+  const reloadProducts = useCallback(() => {
+    setProducts(readProductListSync(owner));
+    void loadProductListLatest(owner).then(list => { if (Array.isArray(list)) setProducts(list); });
+  }, [productKey, owner]);
   useEffect(() => { reloadProducts(); }, [reloadProducts]);
+  // 商品页对账/同步落地后重载，避免打印页停留在旧清单
+  useEffect(() => {
+    const onSync = () => reloadProducts();
+    window.addEventListener('sync-data-updated', onSync);
+    return () => window.removeEventListener('sync-data-updated', onSync);
+  }, [reloadProducts]);
 
   // ============ 子页A 状态 ============
   const [fType, setFType] = useState('all');

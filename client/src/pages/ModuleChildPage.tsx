@@ -118,7 +118,7 @@ import { buildSupplierReturnRow, buildPurchaserReturnBill, writeReturnStockFlows
 import { appendStockLog, updateProductStock } from '../utils/stockUtils';
 import { loadTenantUsers } from '../utils/tenantUsers';
 import { appendBillLogEntry, readBillLog, billLogColor, resolveOperatorName, diffBillRecords, SUPPLIER_BILL_FIELD_MAP, getCurrentUserDisplayName } from '../utils/billLog';
-import { pullAllDatasets, flushDatasetUploadAsync, ensureDatasetFromServer, appendRowsToRemoteKey, declareShrink, isNeverShrinkKey, fetchServerDataset, serverAvailable } from '../utils/serverSync';
+import { pullAllDatasets, flushDatasetUploadAsync, ensureDatasetFromServer, appendRowsToRemoteKey, declareShrink, isNeverShrinkKey, fetchServerDataset, serverAvailable, shouldWarnOffline } from '../utils/serverSync';
 import { reconcileServerFirst, shouldSkipServerFirst } from '../utils/serverFirstDataset';
 import { removedIdSet, rowIdentities, rowPrimaryId } from '../utils/shrinkRegistry';
 import { PRESET_PRINT_TEMPLATES, seedPresetPrintTemplates } from '../config/presetPrintTemplates';
@@ -5524,7 +5524,7 @@ const ModuleChildPage: React.FC = () => {
       if (cancelled) return;
       try {
         if (!(await serverAvailable())) {
-          message.warning('无法连接服务器：当前展示本地缓存商品清单，网络恢复后刷新将自动回到服务端权威数据');
+          if (shouldWarnOffline()) message.warning('无法连接服务器：当前展示本地缓存商品清单，网络恢复后刷新将自动回到服务端权威数据');
           return;
         }
         const res = await reconcileProductListWithServer(getDataOwner());
@@ -5576,7 +5576,7 @@ const ModuleChildPage: React.FC = () => {
         if (cancelled) return;
         if (res.status === 'offline' && !offlineNoted) {
           offlineNoted = true;
-          message.warning('无法连接服务器：当前展示本地缓存数据，网络恢复后刷新将自动回到服务端权威数据');
+          if (shouldWarnOffline()) message.warning('无法连接服务器：当前展示本地缓存数据，网络恢复后刷新将自动回到服务端权威数据');
         }
         if (res.status === 'server') {
           if (k.startsWith('prodImgUrl_')) invalidateImageUrlMap(k.slice('prodImgUrl_'.length));
@@ -5601,7 +5601,7 @@ const ModuleChildPage: React.FC = () => {
         const res = await reconcileServerFirst(key);
         if (cancelled) return;
         if (res.status === 'offline') {
-          message.warning('无法连接服务器：当前展示本地缓存数据，网络恢复后刷新将自动回到服务端权威数据');
+          if (shouldWarnOffline()) message.warning('无法连接服务器：当前展示本地缓存数据，网络恢复后刷新将自动回到服务端权威数据');
           return;
         }
         if (res.status === 'server') {

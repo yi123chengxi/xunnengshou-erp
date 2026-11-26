@@ -1,7 +1,7 @@
 import React from 'react';
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { Skeleton, message } from 'antd';
-import { pullAllDatasets, pullPermDatasets, isPermSyncKey, isTodoNotifyKey } from './utils/serverSync';
+import { pullAllDatasets, pullPermDatasets, isPermSyncKey, isTodoNotifyKey, shouldWarnOffline } from './utils/serverSync';
 import { reconcileAllLocalDatasets } from './utils/serverFirstDataset';
 import { syncOwnerFromToken } from './utils/dataOwner';
 import { startNewVersionWatch } from './utils/newVersionWatch';
@@ -144,7 +144,7 @@ const SyncGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
         sweepStartedRef.current = true;
         setTimeout(() => {
           void reconcileAllLocalDatasets(() => {
-            message.warning('无法连接服务器：各页面当前展示本地缓存数据，网络恢复后将自动回到服务端权威数据');
+            if (shouldWarnOffline()) message.warning('无法连接服务器：各页面当前展示本地缓存数据，网络恢复后将自动回到服务端权威数据');
           }).then(n => {
             if (n > 0) { try { window.dispatchEvent(new Event('sync-data-updated')); } catch { /* ignore */ } }
           }).catch(() => { /* 对账失败保持本机副本 */ });

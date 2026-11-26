@@ -253,6 +253,17 @@ function canUploadKey(key: string): boolean {
 
 // ============ 服务器可用性探测（15s 缓存，超时 1.5s）============
 let serverState: { ok: boolean; at: number } = { ok: false, at: 0 };
+
+// ============ 离线告警全局去重 ============
+// 网络抖动时商品页/扫尾对账/弹窗取数等多处各自弹「无法连接服务器」，叠成告警墙；
+// 全局 10 分钟内至多提示一次（不分文案），保留信息量的同时消除告警轰炸
+let lastOfflineWarnAt = 0;
+export function shouldWarnOffline(): boolean {
+  const now = Date.now();
+  if (now - lastOfflineWarnAt < 10 * 60_000) return false;
+  lastOfflineWarnAt = now;
+  return true;
+}
 export async function serverAvailable(): Promise<boolean> {
   const now = Date.now();
   if (now - serverState.at < 15000) return serverState.ok;
@@ -714,10 +725,10 @@ export function noteServerVersion(key: string, ts: number): void {
   knownTs.set(key, Number(ts));
 }
 
-export async function fetchServerDataset(key: string): Promise<{ json: string; updatedAt: number } | null> {
+export async function fetchServerDataset(key: string, timeoutMs = 5000): Promise<{ json: string; updatedAt: number } | null> {
   if (!(await serverAvailable())) return null;
   try {
-    const res = await fetchWithTimeout(`${API_BASE}/sync/dataset?key=${encodeURIComponent(key)}`, { headers: authHeaders() });
+    const res = await fetchWithTimeout(`${API_BASE}/sync/dataset?key=${encodeURIComponent(key)}`, { headers: authHeaders() }, timeoutMs);
     if (res.status === 401) { handleSyncAuthRequired(); return null; }
     if (!res.ok) return null;
     const data = await res.json();

@@ -8,6 +8,7 @@
  * 本地缺失时经 fetchServerDataset 从服务端数据集按需拉取（服务端 GET /sync/dataset 不限 owner）。
  */
 import { fetchServerDataset } from './serverSync';
+import { readFreshDataset, saveDatasetAt } from './dataStore';
 import { uniqueUserByName, usernameFromNo } from './cooperationCred';
 
 export const supplierProductKey = (owner: string): string => `pageData_basic-data_product-list_${owner}`;
@@ -52,16 +53,29 @@ export const loadLocalSupplierProducts = (owner: string): any[] => {
 
 export const loadLocalSupplierFinished = (owner: string): any[] => filterFinishedProducts(loadLocalSupplierProducts(owner));
 
-/** 全量产品列表：本地优先，缺失时服务端兜底拉取（跨浏览器） */
+/** 全量产品列表：本地优先（localStorage → IndexedDB），缺失时服务端兜底拉取并落地 IDB（跨浏览器） */
 export const loadSupplierProducts = async (owner: string): Promise<any[]> => {
   if (!owner) return [];
   const local = loadLocalSupplierProducts(owner);
   if (local.length > 0) return local;
+  // 大表常装不进 localStorage（配额预算跳过/淘汰），跨端拉取落地也在 IDB：先快读本地主存
   try {
-    const rec = await fetchServerDataset(supplierProductKey(owner));
+    const fresh = await readFreshDataset(supplierProductKey(owner));
+    if (fresh) {
+      const parsed = JSON.parse(fresh);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    }
+  } catch { /* ignore */ }
+  try {
+    // 数万条商品的大数据集在弱网下常超默认 5s 超时（表现为弹窗加载失败），放宽到 30s；
+    // 拉成功后按服务端版本号落地 IDB，下次打开本地快读、离线也可用
+    const rec = await fetchServerDataset(supplierProductKey(owner), 30000);
     if (rec && rec.json) {
       const list = JSON.parse(rec.json);
-      if (Array.isArray(list)) return list;
+      if (Array.isArray(list)) {
+        saveDatasetAt(supplierProductKey(owner), rec.json, rec.updatedAt);
+        return list;
+      }
     }
   } catch { /* ignore */ }
   return [];

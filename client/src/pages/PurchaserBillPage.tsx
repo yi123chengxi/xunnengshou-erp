@@ -23,10 +23,10 @@ import ReturnRegisterModal from '../components/ReturnRegisterModal';
 import type { ReturnRegisterPayload } from '../components/ReturnRegisterModal';
 import { buildPurchaserReturnBill, writeReturnStockFlows, getOwnCompanyName } from '../utils/returnRegister';
 import { safeSetItem } from '../utils/storageQuota';
-import { saveDataset } from '../utils/dataStore';
+import { saveDataset, readProductListSync, loadProductListLatest } from '../utils/dataStore';
 import { reloadAfterPull, appendRowsToRemoteKey } from '../utils/serverSync';
 import { compressImageFile } from '../utils/imageCompress';
-import { loadSupplierFinishedProducts, loadLocalSupplierProducts, loadSupplierProducts, resolveSupplierOwnerOfEntry } from '../utils/supplierProducts';
+import { loadSupplierFinishedProducts, loadSupplierProducts, resolveSupplierOwnerOfEntry } from '../utils/supplierProducts';
 import { loadRoleRecords, loadRoleAll, upsertRecords, loadAllReconRecordsUnion } from '../utils/reconStore';
 import { resolveLatestCompanyName } from '../utils/nameSync';
 import { appMatchesSupplierEntry, purchaserNoOf, myCompanyNo, findUserByNoOrUniqueName, noFromUsername } from '../utils/cooperationCred';
@@ -687,15 +687,19 @@ const PurchaserBillPage: React.FC = () => {
       setOwnProducts(arr.filter((p: any) => p.productType === '成品'));
       setRawProducts(arr.filter((p: any) => p.productType === '原材料'));
     };
-    const local = loadLocalSupplierProducts(owner);
-    split(local);
-    if (local.length === 0) {
-      setOwnLoading(true);
-      loadSupplierProducts(owner)
-        .then(list => { if (!cancelled) split(list); })
-        .catch(() => { /* ignore */ })
-        .finally(() => { if (!cancelled) setOwnLoading(false); });
-    }
+    // 与账单明细添加商品弹窗同一加载逻辑：会话缓存/localStorage 同步直读首帧即显
+    const local = readProductListSync(owner);
+    if (local.length > 0) { split(local); return; }
+    // 大表可能不在 localStorage（配额预算只写 IndexedDB 主存）：按时间戳取新者；
+    // 仍空才服务端兜底拉取（loadSupplierProducts 内部会落地 IDB，下次打开本地快读）
+    setOwnLoading(true);
+    (async () => {
+      let list = await loadProductListLatest(owner);
+      if (!list || list.length === 0) list = await loadSupplierProducts(owner);
+      if (!cancelled) split(list || []);
+    })()
+      .catch(() => { /* ignore */ })
+      .finally(() => { if (!cancelled) setOwnLoading(false); });
     return () => { cancelled = true; };
   }, [addProductVisible, addProductTab]);
 
