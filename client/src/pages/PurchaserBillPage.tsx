@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import {
   Card, Table, Button, Space, Tag, message, Typography, Modal, Input, InputNumber, DatePicker,
   Row, Col, Image, Popover, Empty, Upload, Select, Descriptions, Checkbox, AutoComplete, Alert, Dropdown,
-  Radio, Tooltip, Popconfirm,
+  Radio, Tooltip, Popconfirm, Spin,
 } from 'antd';
 import {
   PlusOutlined, FileTextOutlined, PictureOutlined, DeleteOutlined, TeamOutlined, ReloadOutlined,
@@ -26,7 +26,7 @@ import { safeSetItem } from '../utils/storageQuota';
 import { saveDataset } from '../utils/dataStore';
 import { reloadAfterPull, appendRowsToRemoteKey } from '../utils/serverSync';
 import { compressImageFile } from '../utils/imageCompress';
-import { loadSupplierFinishedProducts, resolveSupplierOwnerOfEntry } from '../utils/supplierProducts';
+import { loadSupplierFinishedProducts, loadLocalSupplierProducts, loadSupplierProducts, resolveSupplierOwnerOfEntry } from '../utils/supplierProducts';
 import { loadRoleRecords, loadRoleAll, upsertRecords, loadAllReconRecordsUnion } from '../utils/reconStore';
 import { resolveLatestCompanyName } from '../utils/nameSync';
 import { appMatchesSupplierEntry, purchaserNoOf, myCompanyNo, findUserByNoOrUniqueName, noFromUsername } from '../utils/cooperationCred';
@@ -571,6 +571,7 @@ const PurchaserBillPage: React.FC = () => {
 
   // 加载供应商的成品产品列表（从供应商自己的账号读取；本地缺失时服务端兜底拉取，保证跨浏览器可见）
   const [supplierProducts, setSupplierProducts] = useState<any[]>([]);
+  const [spLoading, setSpLoading] = useState(false);
   useEffect(() => {
     let cancelled = false;
     const currentSupplier = addProductTarget === 'create' ? supplier : eSupplier;
@@ -580,9 +581,11 @@ const PurchaserBillPage: React.FC = () => {
     const cred = addProductTarget === 'create' ? supCred : eSupCred;
     const productOwner = cred.username || resolveSupplierOwnerOfEntry({ supplierName: currentSupplier });
     if (!productOwner) { setSupplierProducts([]); return; }
+    setSpLoading(true);
     loadSupplierFinishedProducts(productOwner)
       .then(list => { if (!cancelled) setSupplierProducts(list); })
-      .catch(() => { if (!cancelled) setSupplierProducts([]); });
+      .catch(() => { if (!cancelled) setSupplierProducts([]); })
+      .finally(() => { if (!cancelled) setSpLoading(false); });
     return () => { cancelled = true; };
   }, [addProductVisible, addProductTab, supplier, eSupplier, addProductTarget, supCred, eSupCred]);
 
@@ -676,23 +679,95 @@ const PurchaserBillPage: React.FC = () => {
     return result;
   }, [spDetailData, spdAppliedCode, spdAppliedStyleCode, spdAppliedBrand, spdAppliedPriceMin, spdAppliedPriceMax, spdAppliedStatus]);
 
-  // 加载自己的成品列表
-  const ownProducts = useMemo(() => {
-    try {
-      const owner = getDataOwner();
-      const allProducts = JSON.parse(localStorage.getItem(`pageData_basic-data_product-list_${owner}`) || '[]');
-      return allProducts.filter((p: any) => p.productType === '成品');
-    } catch { return []; }
+  // 加载自己的成品/原材料列表：本地同步直读首帧即显；本地为空时不等启动 pull，
+  // 直接经服务端数据集兜底拉取回填（修复弹窗打开先空白、过一会才出列表的加载滞后）
+  const [ownProducts, setOwnProducts] = useState<any[]>([]);
+  const [rawProducts, setRawProducts] = useState<any[]>([]);
+  const [ownLoading, setOwnLoading] = useState(false);
+  useEffect(() => {
+    if (!addProductVisible || addProductTab === 'supplier') return;
+    let cancelled = false;
+    const owner = getDataOwner();
+    const split = (list: any[]) => {
+      const arr = Array.isArray(list) ? list : [];
+      setOwnProducts(arr.filter((p: any) => p.productType === '成品'));
+      setRawProducts(arr.filter((p: any) => p.productType === '原材料'));
+    };
+    const local = loadLocalSupplierProducts(owner);
+    split(local);
+    if (local.length === 0) {
+      setOwnLoading(true);
+      loadSupplierProducts(owner)
+        .then(list => { if (!cancelled) split(list); })
+        .catch(() => { /* ignore */ })
+        .finally(() => { if (!cancelled) setOwnLoading(false); });
+    }
+    return () => { cancelled = true; };
   }, [addProductVisible, addProductTab]);
 
-  // 加载自己的原材料列表
-  const rawProducts = useMemo(() => {
-    try {
-      const owner = getDataOwner();
-      const allProducts = JSON.parse(localStorage.getItem(`pageData_basic-data_product-list_${owner}`) || '[]');
-      return allProducts.filter((p: any) => p.productType === '原材料');
-    } catch { return []; }
-  }, [addProductVisible, addProductTab]);
+  // 添加商品弹窗我的成品/原材料页签搜索（双态：输入不触发，回车/点查询才生效）
+  const [apInputCode, setApInputCode] = useState('');
+  const [apInputStyle, setApInputStyle] = useState('');
+  const [apInputShort, setApInputShort] = useState('');
+  const [apInputSupplier, setApInputSupplier] = useState('');
+  const [apAppliedCode, setApAppliedCode] = useState('');
+  const [apAppliedStyle, setApAppliedStyle] = useState('');
+  const [apAppliedShort, setApAppliedShort] = useState('');
+  const [apAppliedSupplier, setApAppliedSupplier] = useState('');
+  const [apPage, setApPage] = useState(1);
+  const [apPageSize, setApPageSize] = useState(10);
+  const handleApSearch = useCallback(() => {
+    setApAppliedCode(apInputCode); setApAppliedStyle(apInputStyle);
+    setApAppliedShort(apInputShort); setApAppliedSupplier(apInputSupplier);
+    setApPage(1);
+  }, [apInputCode, apInputStyle, apInputShort, apInputSupplier]);
+  const handleApReset = useCallback(() => {
+    setApInputCode(''); setApInputStyle(''); setApInputShort(''); setApInputSupplier('');
+    setApAppliedCode(''); setApAppliedStyle(''); setApAppliedShort(''); setApAppliedSupplier('');
+    setApPage(1);
+  }, []);
+  const ownFiltered = useMemo(() => {
+    let result = ownProducts;
+    if (apAppliedCode) { const kw = apAppliedCode.toLowerCase(); result = result.filter((r: any) => String(r.productCode || '').toLowerCase().includes(kw)); }
+    if (apAppliedStyle) { const kw = apAppliedStyle.toLowerCase(); result = result.filter((r: any) => String(r.styleCode || '').toLowerCase().includes(kw)); }
+    if (apAppliedShort) { const kw = apAppliedShort.toLowerCase(); result = result.filter((r: any) => `${r.shortName || ''}${r.name || ''}`.toLowerCase().includes(kw)); }
+    if (apAppliedSupplier) { const kw = apAppliedSupplier.toLowerCase(); result = result.filter((r: any) => String(r.supplierName || '').toLowerCase().includes(kw)); }
+    return result;
+  }, [ownProducts, apAppliedCode, apAppliedStyle, apAppliedShort, apAppliedSupplier]);
+  const rawFiltered = useMemo(() => {
+    let result = rawProducts;
+    if (apAppliedCode) { const kw = apAppliedCode.toLowerCase(); result = result.filter((r: any) => String(r.productCode || '').toLowerCase().includes(kw)); }
+    if (apAppliedStyle) { const kw = apAppliedStyle.toLowerCase(); result = result.filter((r: any) => String(r.styleCode || '').toLowerCase().includes(kw)); }
+    if (apAppliedShort) { const kw = apAppliedShort.toLowerCase(); result = result.filter((r: any) => `${r.shortName || ''}${r.name || ''}`.toLowerCase().includes(kw)); }
+    if (apAppliedSupplier) { const kw = apAppliedSupplier.toLowerCase(); result = result.filter((r: any) => String(r.supplierName || '').toLowerCase().includes(kw)); }
+    return result;
+  }, [rawProducts, apAppliedCode, apAppliedStyle, apAppliedShort, apAppliedSupplier]);
+
+  /** 我的成品/原材料页签搜索栏（商品编码/款式编码/商品简称/供应商 四字段，回车或点查询生效） */
+  const renderApSearchBar = () => (
+    <div style={{ background: '#fafafa', border: '1px solid #f0f0f0', borderRadius: 8, padding: '10px 14px', marginBottom: 10 }}>
+      <Row gutter={[10, 8]} align="middle">
+        <Col xs={12} sm={5}>
+          <Input placeholder="商品编码" value={apInputCode} onChange={e => setApInputCode(e.target.value)} onPressEnter={handleApSearch} allowClear size="small" />
+        </Col>
+        <Col xs={12} sm={5}>
+          <Input placeholder="款式编码" value={apInputStyle} onChange={e => setApInputStyle(e.target.value)} onPressEnter={handleApSearch} allowClear size="small" />
+        </Col>
+        <Col xs={12} sm={5}>
+          <Input placeholder="商品简称" value={apInputShort} onChange={e => setApInputShort(e.target.value)} onPressEnter={handleApSearch} allowClear size="small" />
+        </Col>
+        <Col xs={12} sm={5}>
+          <Input placeholder="供应商" value={apInputSupplier} onChange={e => setApInputSupplier(e.target.value)} onPressEnter={handleApSearch} allowClear size="small" />
+        </Col>
+        <Col xs={12} sm={4}>
+          <Space>
+            <Button type="primary" size="small" icon={<SearchOutlined />} onClick={handleApSearch}>查询</Button>
+            <Button size="small" icon={<ReloadOutlined />} onClick={handleApReset}>重置</Button>
+          </Space>
+        </Col>
+      </Row>
+    </div>
+  );
 
   // 商品基础信息单位索引：商品编码 → 单位（采购明细「单位」列按商品编码带出基础信息里的单位）
   const productUnitMap = useMemo(() => {
@@ -1633,7 +1708,7 @@ const PurchaserBillPage: React.FC = () => {
           </div>
           <Space style={{ marginTop: 8, flexWrap: 'wrap' }}>
             <Button size="small" icon={<PlusOutlined />} onClick={() => setItems(prev => [...prev, { styleCode: '', productCode: '', color: '', spec: '', quantity: 0, unitPrice: 0, amount: 0, productType: '' }])}>添加明细行</Button>
-            <Button size="small" icon={<ShopOutlined />} onClick={() => { setAddProductTarget('create'); setAddProductTab('own'); setAddProductVisible(true); }}>添加商品</Button>
+            <Button size="small" icon={<ShopOutlined />} onClick={() => { setAddProductTarget('create'); setAddProductTab('own'); handleApReset(); setAddProductVisible(true); }}>添加商品</Button>
             <Button size="small" icon={<SwapOutlined />} onClick={() => {
               const merged = mergeDuplicateItems(items.filter(hasData));
               if (merged.length < items.filter(hasData).length) {
@@ -1802,7 +1877,7 @@ const PurchaserBillPage: React.FC = () => {
           </div>
           <Space style={{ marginTop: 8, flexWrap: 'wrap' }}>
             <Button size="small" icon={<PlusOutlined />} onClick={() => setEItems(prev => [...prev, { styleCode: '', productCode: '', color: '', spec: '', quantity: 0, unitPrice: 0, amount: 0, productType: '' }])}>添加明细行</Button>
-            <Button size="small" icon={<ShopOutlined />} onClick={() => { setAddProductTarget('edit'); setAddProductTab('own'); setAddProductVisible(true); }}>添加商品</Button>
+            <Button size="small" icon={<ShopOutlined />} onClick={() => { setAddProductTarget('edit'); setAddProductTab('own'); handleApReset(); setAddProductVisible(true); }}>添加商品</Button>
             <Button size="small" icon={<SwapOutlined />} onClick={() => {
               const merged = mergeDuplicateItems(eItems.filter(hasData));
               if (merged.length < eItems.filter(hasData).length) {
@@ -2067,10 +2142,22 @@ const PurchaserBillPage: React.FC = () => {
 
         {/* 我的成品标签页 */}
         {addProductTab === 'own' && (() => {
+          if (ownLoading && ownProducts.length === 0) return (
+            <div style={{ padding: '40px 0', textAlign: 'center' }}>
+              <Spin /><div style={{ marginTop: 8, fontSize: 12, color: '#8c8c8c' }}>加载成品数据…</div>
+            </div>
+          );
           if (ownProducts.length === 0) return <Empty description='暂无成品数据' />;
           return (
-            <Table size="small" rowKey="key" pagination={{ pageSize: 8, showTotal: (t: number) => `共 ${t} 件商品` }}
-              dataSource={ownProducts}
+            <>
+              {renderApSearchBar()}
+              <Table size="small" rowKey="key" pagination={{
+                current: apPage, pageSize: apPageSize, total: ownFiltered.length,
+                showSizeChanger: true, pageSizeOptions: ['10', '20', '50', '100'],
+                showTotal: (t: number) => `共 ${t} 件商品`,
+                onChange: (p, s) => { setApPage(p); setApPageSize(s); },
+              }}
+                dataSource={ownFiltered}
               onRow={(r: any) => ({
                 style: { cursor: 'pointer' },
                 onClick: (e: any) => {
@@ -2098,15 +2185,28 @@ const PurchaserBillPage: React.FC = () => {
                 { title: '成本价', dataIndex: 'costPrice', key: 'costPrice', width: 80, render: (v: number) => <Text style={{ color: '#f5222d' }}>¥{Number(v || 0).toFixed(2)}</Text> },
                 { title: '供应商', dataIndex: 'supplierName', key: 'supplier', width: 100, render: (v: string) => v || '-' },
               ] as any} />
+            </>
           );
         })()}
 
         {/* 原材料标签页 */}
         {addProductTab === 'raw' && (() => {
+          if (ownLoading && rawProducts.length === 0) return (
+            <div style={{ padding: '40px 0', textAlign: 'center' }}>
+              <Spin /><div style={{ marginTop: 8, fontSize: 12, color: '#8c8c8c' }}>加载原材料数据…</div>
+            </div>
+          );
           if (rawProducts.length === 0) return <Empty description='暂无原材料数据' />;
           return (
-            <Table size="small" rowKey="key" pagination={{ pageSize: 8, showTotal: (t: number) => `共 ${t} 件商品` }}
-              dataSource={rawProducts}
+            <>
+              {renderApSearchBar()}
+              <Table size="small" rowKey="key" pagination={{
+                current: apPage, pageSize: apPageSize, total: rawFiltered.length,
+                showSizeChanger: true, pageSizeOptions: ['10', '20', '50', '100'],
+                showTotal: (t: number) => `共 ${t} 件商品`,
+                onChange: (p, s) => { setApPage(p); setApPageSize(s); },
+              }}
+                dataSource={rawFiltered}
               onRow={(r: any) => ({
                 style: { cursor: 'pointer' },
                 onClick: (e: any) => {
@@ -2134,6 +2234,7 @@ const PurchaserBillPage: React.FC = () => {
                 { title: '成本价', dataIndex: 'costPrice', key: 'costPrice', width: 80, render: (v: number) => <Text style={{ color: '#f5222d' }}>¥{Number(v || 0).toFixed(2)}</Text> },
                 { title: '供应商', dataIndex: 'supplierName', key: 'supplier', width: 100, render: (v: string) => v || '-' },
               ] as any} />
+            </>
           );
         })()}
 
@@ -2141,6 +2242,11 @@ const PurchaserBillPage: React.FC = () => {
         {addProductTab === 'supplier' && (() => {
           const cs = addProductTarget === 'create' ? supplier : eSupplier;
           if (!cs) return <Empty description='请先选择供应商' />;
+          if (spLoading && supplierProducts.length === 0) return (
+            <div style={{ padding: '40px 0', textAlign: 'center' }}>
+              <Spin /><div style={{ marginTop: 8, fontSize: 12, color: '#8c8c8c' }}>加载供应商货品…</div>
+            </div>
+          );
           if (supplierProducts.length === 0) return <Empty description='该供应商暂无成品数据' />;
           return (
             <>
