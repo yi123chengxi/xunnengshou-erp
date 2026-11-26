@@ -1915,8 +1915,15 @@ const ModuleChildPage: React.FC = () => {
   const [bankActiveTab, setBankActiveTab] = useState<'list' | 'flow'>('list');
   // 银行账户：U盾密码/取款密码 明文显示开关（默认隐藏，点击切换，键为 记录key:字段）
   const [pwdRevealed, setPwdRevealed] = useState<Record<string, boolean>>({});
-  // 银行账户导入：隐藏文件选择输入（Excel/CSV，账户名称或银行账号已存在或重复则提示并跳过）
+  // 银行账户导入：隐藏文件选择输入（Excel/CSV，银行账号重复时弹窗选择替换或更新）
   const bankImportInputRef = useRef<HTMLInputElement>(null);
+  // 银行账户导入：银行账号重复处理载荷（非 null 时弹出替换/更新选择弹窗）
+  const [bankImportDup, setBankImportDup] = useState<null | {
+    rows: { record: Record<string, any>; mapped: Record<string, any>; acct: string }[];
+    dupExisting: string[]; dupInFile: string[]; invalidRows: string[];
+    matchedHeaders: string[]; unmatchedHeaders: string[]; headerCount: number;
+    keyToTitle: Record<string, string>; titleToKey: Record<string, string>;
+  }>(null);
 
   // 银行账户对账功能
   const [reconcileModalVisible, setReconcileModalVisible] = useState(false);
@@ -11724,7 +11731,7 @@ const handleBatchAttrsConfirm = () => {
   const getEditableFields = (record: Record<string, any>) => {
     const fields: { label: string; key: string; value: any }[] = [];
     if (record.id) fields.push({ label: '编号', key: 'id', value: record.id });
-    if (record.name) fields.push({ label: '名称', key: 'name', value: record.name });
+    if (record.name) fields.push({ label: pageConfig?.title === '银行账户' ? '账户名称' : '名称', key: 'name', value: record.name });
     if (record.productName) fields.push({ label: '产品名称', key: 'productName', value: record.productName });
     if (record.customerName) fields.push({ label: '客户名称', key: 'customerName', value: record.customerName });
     if (record.materialName) fields.push({ label: '物料名称', key: 'materialName', value: record.materialName });
@@ -11765,9 +11772,21 @@ const handleBatchAttrsConfirm = () => {
     if (record.branchName) fields.push({ label: '支行名称', key: 'branchName', value: record.branchName });
     if (record.bankAccountNo) fields.push({ label: '银行账号', key: 'bankAccountNo', value: record.bankAccountNo });
     if (record.accountType) fields.push({ label: '账户类型', key: 'accountType', value: record.accountType });
-    if (record.balance !== undefined && record.balance !== '') fields.push({ label: '账户余额', key: 'balance', value: `¥${Number(record.balance).toLocaleString('zh-CN', { minimumFractionDigits: 2 })}` });
+    if (record.balance !== undefined && record.balance !== '') fields.push({ label: '账户余额', key: 'balance', value: <Text style={{ fontFamily: 'monospace', color: '#52c41a', fontWeight: 600 }}>{`¥${Number(record.balance).toLocaleString('zh-CN', { minimumFractionDigits: 2 })}`}</Text> });
     if (record.openDate) fields.push({ label: '开户日期', key: 'openDate', value: record.openDate });
     if (record.shortName) fields.push({ label: '账户简称', key: 'shortName', value: record.shortName });
+    // 银行账户：查看详情展示全部字段（U盾密码/取款密码明文可复制，开户许可证图片点击放大）
+    if (pageConfig?.title === '银行账户') {
+      if (record.uShieldPwd) fields.push({ label: 'U盾密码', key: 'uShieldPwd', value: <Text style={{ fontFamily: 'monospace' }} copyable={{ text: String(record.uShieldPwd) }}>{record.uShieldPwd}</Text> });
+      if (record.withdrawPwd) fields.push({ label: '取款密码', key: 'withdrawPwd', value: <Text style={{ fontFamily: 'monospace' }} copyable={{ text: String(record.withdrawPwd) }}>{record.withdrawPwd}</Text> });
+      if (record.openingPermit) fields.push({ label: '开户许可证', key: 'openingPermit', value: (
+        <img src={record.openingPermit} alt="开户许可证" style={{ maxWidth: 220, maxHeight: 160, objectFit: 'contain', borderRadius: 4, border: '1px solid #eee', cursor: 'zoom-in' }}
+          onClick={() => setPreviewImgSrc(record.openingPermit)} />
+      ) });
+      if (record.creator) fields.push({ label: '创建人', key: 'creator', value: record.creator });
+      if (record.createdAt) fields.push({ label: '创建时间', key: 'createdAt', value: record.createdAt });
+      if (record.updatedAt) fields.push({ label: '修改时间', key: 'updatedAt', value: record.updatedAt });
+    }
     return fields;
   };
 
@@ -12897,6 +12916,14 @@ const handleBatchAttrsConfirm = () => {
             onClick={(e) => { e.stopPropagation(); setPreviewImgSrc(v); }} />
         ) : <span style={{ color: '#bbb' }}>—</span>;
       }
+      // 银行账户：账户余额绿色显示
+      if (pageConfig?.title === '银行账户' && col.dataIndex === 'balance') {
+        baseCol.render = (val: number) => (
+          <Text style={{ fontFamily: 'monospace', color: '#52c41a', fontWeight: 600 }}>
+            ¥{val?.toLocaleString?.('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || '0.00'}
+          </Text>
+        );
+      }
       // 加工订单：图片列从 IndexedDB 按商品编码加载半成品图片（覆写 switch 中的 image 默认 render）
       if (pageConfig?.title === '加工订单' && col.key === 'image') {
         baseCol.render = (_: any, record: any) => <PrPoImgCell productCode={record.productCode} owner={getDataOwner()} />;
@@ -13023,13 +13050,72 @@ const handleBatchAttrsConfirm = () => {
     if (pageConfig?.title !== '订单管理' && pageConfig?.title !== '生产订单' && pageConfig?.title !== '打单拣货') {
       // 添加操作列
       const actionsCustomWidth = colWidths['actions'];
-      const actionsWidth = actionsCustomWidth || (hasBomFeature ? 320 : 200);
+      const actionsWidth = actionsCustomWidth || (pageConfig?.title === '银行账户' ? 150 : hasBomFeature ? 320 : 200);
       const actionsCol: any = {
       title: '操作',
       key: 'actions',
       width: actionsWidth,
       fixed: 'right' as const,
-      render: (_: any, record: Record<string, any>) => (
+      render: (_: any, record: Record<string, any>) => {
+        // 银行账户：默认仅显示「编辑」「复制」两个按键，其余操作（查看/对账/删除）收进右侧三点菜单
+        if (pageConfig?.title === '银行账户') {
+          const bankDelDisabled = isViewOnly || (Number(record.balance) || 0) !== 0;
+          return (
+            <Space size="small" wrap={false}>
+              <Tooltip title="编辑">
+                <Button type="link" size="small" icon={<EditOutlined />} onClick={() => handleEdit(record)}
+                  style={{ color: '#faad14' }} disabled={isViewOnly}>编辑</Button>
+              </Tooltip>
+              <Tooltip title="复制账户名称、开户银行、支行名称、银行账号">
+                <Button type="link" size="small" icon={<CopyOutlined />}
+                  onClick={() => {
+                    const lines = [
+                      `账户名称：${record.name || '—'}`,
+                      `开户银行：${record.bankName || '—'}`,
+                      `支行名称：${record.branchName || '—'}`,
+                      `银行账号：${record.bankAccountNo || '—'}`,
+                    ];
+                    copyText(lines.join('\n')).then(ok => (ok
+                      ? message.success('账户信息已复制到剪贴板')
+                      : message.error('复制失败，请手动复制')));
+                  }}
+                  style={{ color: '#13c2c2' }}>复制</Button>
+              </Tooltip>
+              <Dropdown trigger={['click']} placement="bottomRight" menu={{
+                items: [
+                  { key: 'view', icon: <EyeOutlined />, label: '查看' },
+                  { key: 'reconcile', icon: <AuditOutlined />, label: '对账' },
+                  { type: 'divider' as const },
+                  {
+                    key: 'delete', icon: <DeleteOutlined />, danger: true, disabled: bankDelDisabled,
+                    label: (!isViewOnly && (Number(record.balance) || 0) !== 0)
+                      ? <Tooltip title="账户余额不为0，无法删除"><span>删除</span></Tooltip>
+                      : '删除',
+                  },
+                ],
+                onClick: ({ key }) => {
+                  if (key === 'view') handleView(record);
+                  else if (key === 'reconcile') { setReconcileTarget(record); setReconcileMonth(null); setReconcileModalVisible(true); }
+                  else if (key === 'delete') {
+                    Modal.confirm({
+                      title: '确认删除',
+                      content: '删除后不可恢复，确定要删除吗？',
+                      okText: '确定',
+                      cancelText: '取消',
+                      okType: 'danger',
+                      onOk: () => handleDelete(record),
+                    });
+                  }
+                },
+              }}>
+                <Tooltip title="更多操作（查看/对账/删除）">
+                  <Button type="link" size="small" icon={<MoreOutlined />} />
+                </Tooltip>
+              </Dropdown>
+            </Space>
+          );
+        }
+        return (
         <Space size="small" wrap>
           {/* 订单管理：审核订单（已审核的不显示审核按键） */}
           {pageConfig?.title === '订单管理' && record.orderStatus !== '待付款' && !record.auditStatus && (
@@ -13116,38 +13202,7 @@ const handleBatchAttrsConfirm = () => {
               </Button>
             </Tooltip>
           )}
-          {/* 银行账户：复制账户信息 */}
-          {pageConfig?.title === '银行账户' && (
-            <Tooltip title="复制账户名称、开户银行、支行名称、银行账号">
-              <Button
-                type="link"
-                size="small"
-                icon={<CopyOutlined />}
-                onClick={() => {
-                  const lines = [
-                    `账户名称：${record.name || '—'}`,
-                    `开户银行：${record.bankName || '—'}`,
-                    `支行名称：${record.branchName || '—'}`,
-                    `银行账号：${record.bankAccountNo || '—'}`,
-                  ];
-                  copyText(lines.join('\n')).then(ok => (ok
-                    ? message.success('账户信息已复制到剪贴板')
-                    : message.error('复制失败，请手动复制')));
-                }}
-                style={{ color: '#13c2c2' }}
-              >
-                复制
-              </Button>
-            </Tooltip>
-          )}
-          {/* 银行账户：对账 */}
-          {pageConfig?.title === '银行账户' && bankActiveTab !== 'flow' && (
-            <Tooltip title="对该账户进行月度对账">
-              <Button type="link" size="small" icon={<AuditOutlined />}
-                onClick={() => { setReconcileTarget(record); setReconcileMonth(null); setReconcileModalVisible(true); }}
-                style={{ color: '#722ed1', fontWeight: 500 }}>对账</Button>
-            </Tooltip>
-          )}
+          {/* 银行账户：复制/对账已收进操作列「编辑+复制+三点菜单」专属分支，此处不再渲染 */}
           {/* 订单管理：不显示“查看”和“删除”，改为显示“取消”按钮 */}
           {pageConfig?.title === '订单管理' && record.auditStatus !== '已取消' && (record.orderStatus === '已付款' || record.orderStatus === '待付款') && (
             <Popconfirm
@@ -13506,7 +13561,8 @@ const handleBatchAttrsConfirm = () => {
             </Tooltip>
           )}
         </Space>
-      ),
+        );
+      },
     };
     // 操作列增加拖拽调整宽度手柄
       if (isProductList) {
@@ -13700,7 +13756,60 @@ const handleBatchAttrsConfirm = () => {
   // 默认显示列数
   const defaultVisibleCount = effectivePageConfig?.columns.filter(c => c.defaultVisible !== false).length || 0;
 
-  // ============ 银行账户导入（Excel/CSV；展示表头自动匹配情况；账户名称允许重复；银行账号重复仅提醒数量不拦截） ============
+  // ============ 银行账户导入（Excel/CSV；展示表头自动匹配情况；账户名称允许重复；银行账号重复弹窗选择替换或更新） ============
+  // 导入应用：add=全部新增；replace=文件行整行覆盖已有账户（未提供字段清空，保留明细流水与创建信息）；update=仅合并文件非空字段
+  const applyBankImportRows = useCallback((rows: { record: Record<string, any>; mapped: Record<string, any>; acct: string }[], mode: 'add' | 'replace' | 'update') => {
+    const normAcct = (v: any) => String(v ?? '').replace(/\s/g, '');
+    const byAcct = new Map<string, Record<string, any>>();
+    dataSource.forEach(r => { const a = normAcct(r.bankAccountNo); if (a && !byAcct.has(a)) byAcct.set(a, r); });
+    const added: Record<string, any>[] = [];
+    const replacements = new Map<string, Record<string, any>>();
+    let dupApplied = 0;
+    const today = new Date().toISOString().slice(0, 10);
+    rows.forEach(({ record, mapped, acct }) => {
+      const existing = acct ? byAcct.get(acct) : undefined;
+      if (existing && mode !== 'add') {
+        let next: Record<string, any>;
+        if (mode === 'replace') {
+          const blank: Record<string, any> = {};
+          effectivePageConfig?.columns.forEach(c => { blank[c.dataIndex] = c.dataIndex === 'balance' ? 0 : ''; });
+          next = { ...blank, ...mapped, key: existing.key, transactions: existing.transactions || [], creator: existing.creator, createdAt: existing.createdAt, updatedAt: today };
+        } else {
+          const nonEmpty: Record<string, any> = {};
+          Object.entries(mapped).forEach(([k, v]) => { if (v !== '' && v !== undefined && v !== null) nonEmpty[k] = v; });
+          next = { ...existing, ...nonEmpty, updatedAt: today };
+        }
+        replacements.set(existing.key, next);
+        byAcct.set(acct, next);
+        dupApplied += 1;
+      } else {
+        added.push(record);
+        if (acct) byAcct.set(acct, record);
+      }
+    });
+    setDataSource([...added, ...dataSource.map(r => replacements.get(r.key) || r)]);
+    return { addedCount: added.length, dupApplied };
+  }, [dataSource, effectivePageConfig]);
+
+  // 银行账户导入：重复弹窗选择替换/更新后应用并展示结果
+  const confirmBankImportDup = (mode: 'replace' | 'update') => {
+    const p = bankImportDup;
+    if (!p) return;
+    const { addedCount, dupApplied } = applyBankImportRows(p.rows, mode);
+    setBankImportDup(null);
+    Modal.info({
+      title: '银行账户导入结果',
+      okText: '知道了',
+      content: (
+        <div style={{ fontSize: 13, lineHeight: 2 }}>
+          <div style={{ color: '#52c41a', fontWeight: 600 }}>导入完成：新增 {addedCount} 条，{mode === 'replace' ? '替换' : '更新'} {dupApplied} 条已有账户</div>
+          <div style={{ color: '#8c8c8c', fontSize: 12 }}>{mode === 'replace' ? '替换：文件内容整行覆盖已有账户（未提供的字段已清空，账户明细流水保留）' : '更新：仅合并文件中有值的字段，空字段保留原值（账户明细流水保留）'}</div>
+          {p.invalidRows.length > 0 && <div style={{ color: '#faad14', fontSize: 12 }}>跳过 {p.invalidRows.length} 条无效行（账户名称与银行账号均为空：{p.invalidRows.join('、')}）</div>}
+        </div>
+      ),
+    });
+  };
+
   const handleBankImportFile = useCallback((file: File) => {
     const reader = new FileReader();
     reader.onload = (e) => {
@@ -13725,7 +13834,7 @@ const handleBatchAttrsConfirm = () => {
         const normAcct = (v: any) => String(v ?? '').replace(/\s/g, '');
         const existingAccts = new Set(dataSource.map((r: any) => normAcct(r.bankAccountNo)).filter(Boolean));
         const seenAccts = new Set<string>();
-        const accepted: Record<string, any>[] = [];
+        const rows: { record: Record<string, any>; mapped: Record<string, any>; acct: string }[] = [];
         const invalidRows: string[] = [];
         const dupExisting: string[] = [];
         const dupInFile: string[] = [];
@@ -13739,7 +13848,7 @@ const handleBatchAttrsConfirm = () => {
           const name = String(mapped.name || '').trim();
           const acct = normAcct(mapped.bankAccountNo);
           if (!name && !acct) { invalidRows.push(`第${lineNo}行`); return; }
-          // 银行账号重复仅计数提醒不拦截（一个公司可开多个账户，账户名称重复属正常，不再按名称去重）
+          // 银行账号重复计数（账户名称重复属正常，不再按名称去重）；存在重复时弹窗选择替换或更新
           if (acct) {
             if (existingAccts.has(acct)) dupExisting.push(`第${lineNo}行（${acct}）`);
             else if (seenAccts.has(acct)) dupInFile.push(`第${lineNo}行（${acct}）`);
@@ -13750,17 +13859,25 @@ const handleBatchAttrsConfirm = () => {
           else if (mapped.openDate instanceof Date) mapped.openDate = dayjs(mapped.openDate).format('YYYY-MM-DD');
           if (mapped.balance !== undefined && mapped.balance !== '') mapped.balance = Number(mapped.balance) || 0;
           const now = new Date();
-          accepted.push({
-            key: `ba-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
-            transactions: [],
-            creator: getCurrentUserDisplayName(),
-            createdAt: now.toISOString().slice(0, 10),
-            updatedAt: now.toISOString().slice(0, 10),
-            ...mapped,
+          rows.push({
+            record: {
+              key: `ba-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
+              transactions: [],
+              creator: getCurrentUserDisplayName(),
+              createdAt: now.toISOString().slice(0, 10),
+              updatedAt: now.toISOString().slice(0, 10),
+              ...mapped,
+            },
+            mapped,
+            acct,
           });
         });
-        if (accepted.length) setDataSource(prev => [...accepted, ...prev]);
-        const dupTotal = dupExisting.length + dupInFile.length;
+        // 银行账号重复：弹窗选择替换（整行覆盖）或更新（合并非空字段），也可取消导入
+        if (dupExisting.length + dupInFile.length > 0) {
+          setBankImportDup({ rows, dupExisting, dupInFile, invalidRows, matchedHeaders, unmatchedHeaders, headerCount: headerSet.size, keyToTitle, titleToKey });
+          return;
+        }
+        const { addedCount } = applyBankImportRows(rows, 'add');
         Modal.info({
           title: '银行账户导入结果',
           width: 620,
@@ -13768,8 +13885,8 @@ const handleBatchAttrsConfirm = () => {
           content: (
             <div style={{ fontSize: 12, lineHeight: 1.9, maxHeight: 420, overflow: 'auto' }}>
               <div style={{ fontSize: 13 }}>
-                {accepted.length
-                  ? <span style={{ color: '#52c41a', fontWeight: 600 }}>成功导入 {accepted.length} 条银行账户</span>
+                {addedCount
+                  ? <span style={{ color: '#52c41a', fontWeight: 600 }}>成功导入 {addedCount} 条银行账户</span>
                   : <span style={{ color: '#ff4d4f', fontWeight: 600 }}>未导入任何数据</span>}
                 {invalidRows.length > 0 && <span style={{ color: '#faad14' }}>；跳过 {invalidRows.length} 条无效行（账户名称与银行账号均为空：{invalidRows.join('、')}）</span>}
               </div>
@@ -13784,21 +13901,13 @@ const handleBatchAttrsConfirm = () => {
               {unmatchedHeaders.length > 0 && (
                 <div style={{ color: '#8c8c8c', marginTop: 4 }}>未匹配列（已忽略）：{unmatchedHeaders.join('、')}</div>
               )}
-              {dupTotal > 0 && (
-                <>
-                  <Divider style={{ margin: '8px 0' }} />
-                  <div style={{ fontWeight: 600, color: '#faad14' }}>银行账号重复提醒：共 {dupTotal} 条（仅提醒，已照常导入）</div>
-                  {dupExisting.length > 0 && <div style={{ marginTop: 4 }}>与已有账户重复 {dupExisting.length} 条：{dupExisting.join('；')}</div>}
-                  {dupInFile.length > 0 && <div style={{ marginTop: 4 }}>文件内重复 {dupInFile.length} 条：{dupInFile.join('；')}</div>}
-                </>
-              )}
             </div>
           ),
         });
       } catch { message.error('文件解析失败，请上传 Excel 或 CSV 文件'); }
     };
     reader.readAsArrayBuffer(file);
-  }, [dataSource, effectivePageConfig]);
+  }, [dataSource, effectivePageConfig, applyBankImportRows]);
 
   // 操作按键组：显示字段/导出/新增/批量操作/驳回（生产订单移至搜索栏下方独立行左对齐显示）
   const renderPoActionButtons = () => (
@@ -15399,7 +15508,7 @@ const handleBatchAttrsConfirm = () => {
                   <Tooltip title="导出为CSV文件">
                     <Button icon={<DownloadOutlined />} onClick={handleExport}>导出</Button>
                   </Tooltip>
-                  <Tooltip title="从Excel/CSV文件导入银行账户（账户名称或银行账号已存在或重复时提示并跳过）">
+                  <Tooltip title="从Excel/CSV文件导入银行账户（银行账号重复时可选择替换或更新）">
                     <Button icon={<UploadOutlined />} onClick={() => bankImportInputRef.current?.click()}>导入</Button>
                   </Tooltip>
                   <Tooltip title="新增一条记录">
@@ -15756,7 +15865,7 @@ const handleBatchAttrsConfirm = () => {
               if (i === 1) {
                 cells.push(<Table.Summary.Cell key={i} index={i}><Text strong>账户余额合计</Text></Table.Summary.Cell>);
               } else if (balIdx >= 0 && i === balIdx + 1) {
-                cells.push(<Table.Summary.Cell key={i} index={i}><Text strong style={{ color: PRIMARY }}>¥{total.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Text></Table.Summary.Cell>);
+                cells.push(<Table.Summary.Cell key={i} index={i}><Text strong style={{ color: '#52c41a' }}>¥{total.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Text></Table.Summary.Cell>);
               } else {
                 cells.push(<Table.Summary.Cell key={i} index={i} />);
               }
@@ -16050,6 +16159,45 @@ const handleBatchAttrsConfirm = () => {
         })()}
         </>)}
       </Drawer>
+
+      {/* 银行账户导入：银行账号重复处理选择（替换/更新/取消导入） */}
+      <Modal
+        centered
+        title={<span style={{ color: '#faad14' }}><UploadOutlined style={{ marginRight: 8 }} />银行账号重复，请选择处理方式</span>}
+        open={!!bankImportDup}
+        width={620}
+        onCancel={() => setBankImportDup(null)}
+        footer={[
+          <Button key="cancel" onClick={() => setBankImportDup(null)}>取消导入</Button>,
+          <Button key="update" onClick={() => confirmBankImportDup('update')}>更新</Button>,
+          <Button key="replace" type="primary" danger onClick={() => confirmBankImportDup('replace')}>替换</Button>,
+        ]}
+      >
+        {bankImportDup && (
+          <div style={{ fontSize: 12, lineHeight: 1.9, maxHeight: 420, overflow: 'auto' }}>
+            <div style={{ fontWeight: 600, color: '#faad14' }}>检测到银行账号重复 {bankImportDup.dupExisting.length + bankImportDup.dupInFile.length} 条：</div>
+            {bankImportDup.dupExisting.length > 0 && <div style={{ marginTop: 4 }}>与已有账户重复 {bankImportDup.dupExisting.length} 条：{bankImportDup.dupExisting.join('；')}</div>}
+            {bankImportDup.dupInFile.length > 0 && <div style={{ marginTop: 4 }}>文件内重复 {bankImportDup.dupInFile.length} 条：{bankImportDup.dupInFile.join('；')}</div>}
+            <Divider style={{ margin: '8px 0' }} />
+            <div><Text strong style={{ color: '#ff4d4f' }}>替换</Text>：用文件内容整行覆盖已有账户，文件中未提供的字段将被清空（账户明细流水与创建信息保留）。</div>
+            <div><Text strong style={{ color: PRIMARY }}>更新</Text>：仅更新文件中有值的字段，空字段保留原值（账户明细流水保留）。</div>
+            <div style={{ color: '#8c8c8c' }}>文件内同一账号的多行按行序依次应用；其余不重复的行照常新增。</div>
+            {bankImportDup.invalidRows.length > 0 && (
+              <div style={{ color: '#faad14', marginTop: 4 }}>跳过 {bankImportDup.invalidRows.length} 条无效行（账户名称与银行账号均为空：{bankImportDup.invalidRows.join('、')}）</div>
+            )}
+            <Divider style={{ margin: '8px 0' }} />
+            <div style={{ fontWeight: 600 }}>表头自动匹配（{bankImportDup.matchedHeaders.length}/{bankImportDup.headerCount} 列）</div>
+            <div style={{ marginTop: 4 }}>
+              {bankImportDup.matchedHeaders.map(h => (
+                <Tag key={h} color="green" style={{ marginBottom: 4 }}>{h} → {bankImportDup.keyToTitle[bankImportDup.titleToKey[h]] || h}</Tag>
+              ))}
+            </div>
+            {bankImportDup.unmatchedHeaders.length > 0 && (
+              <div style={{ color: '#8c8c8c', marginTop: 4 }}>未匹配列（已忽略）：{bankImportDup.unmatchedHeaders.join('、')}</div>
+            )}
+          </div>
+        )}
+      </Modal>
 
       {/* 编辑模态框 */}
       <Modal
