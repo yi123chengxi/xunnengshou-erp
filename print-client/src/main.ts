@@ -94,8 +94,9 @@ let ws: WebSocket | null = null;
 let jwtToken = '';
 let serverUrl = '';
 
-// 内置阿里云生产服务器地址：登录页不再询问服务器地址，由后端统一持有
-const DEFAULT_SERVER_URL = 'http://120.27.143.175';
+// 内置生产服务器地址：登录页不再询问服务器地址，由后端统一持有
+// 用域名 + HTTPS（而非旧 ECS 公网 IP + 明文 HTTP）：IP 变动即全量失效，且明文通道会被浏览器/路由拦截
+const DEFAULT_SERVER_URL = 'https://www.xns114.com';
 let username = '';
 let reconnectTimer: NodeJS.Timeout | null = null;
 let reconnectDelay = 1000;
@@ -497,33 +498,21 @@ async function handlePrintJob(msg: {
     checkCancelled();
     if (cancelled) { printWin.close(); throw new Error('任务已取消'); }
 
-    // 等待 DOM 就绪：did-finish-load 可能在 loadURL 期间已触发，必须先判 isLoading 再挂监听，
-    // 否则等待一个永不再次到来的事件→任务必挂满 60s 超时（旧包故障教训）
-    await Promise.race([
-      new Promise<void>((resolve) => {
-        const wc = printWin.webContents;
-        if (!wc.isLoading()) { resolve(); return; }
-        wc.once('dom-ready', () => resolve());
-        wc.once('did-finish-load', () => resolve());
-      }),
-      new Promise<void>((_, reject) => setTimeout(() => reject(new Error('页面加载超时（60s），请检查网络或服务端是否可达')), loadTimeout)),
-    ]);
-    console.log(`[print] 任务 ${msg.id} DOM 就绪`);
-    
-    checkCancelled();
-    if (cancelled) { printWin.close(); throw new Error('任务已取消'); }
-    
-    // 图片等子资源最多再等 10s：超时放弃等待直接打印，
-    // 避免单张不可达图片把 load 事件拖到超时（标签内容不依赖图片时仍可正常出纸）
+    // 走到这里说明文档本身已加载完成（loadURL/loadFile 的 promise 已 resolve，即 did-finish-load 已发生），
+    // 因此这里只需等图片等子资源：最多 10s，超时放弃等待直接出纸（标签内容不依赖图片时仍可正常打印）。
+    // 旧写法在此另设一道 60s 硬失败（报“页面加载超时，请检查网络或服务端是否可达”），而 isLoading() 会被
+    // 单张不可达图片长期撑成 true → 任务必挂满 60s 判失败，且紧随其后的 10s 兜底永远执行不到（实机复现）。
     await Promise.race([
       new Promise<void>((resolve) => {
         const wc = printWin.webContents;
         if (!wc.isLoading()) { resolve(); return; }
         wc.once('did-finish-load', () => resolve());
         wc.once('did-stop-loading', () => resolve());
+        wc.once('dom-ready', () => resolve());
       }),
       new Promise<void>((resolve) => setTimeout(resolve, 10_000)),
     ]);
+    console.log(`[print] 任务 ${msg.id} DOM 就绪（子资源等待封顶 10s，不判失败）`);
 
     // 打印前校验打印机名：网页保存的选择可能是历史缓存（打印机已移除/换机），
     // Electron 对不存在的 deviceName 既不回调也不报错→任务永久挂起；失配时回退本机默认打印机
