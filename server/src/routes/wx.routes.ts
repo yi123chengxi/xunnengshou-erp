@@ -1325,6 +1325,9 @@ router.get('/market', verifyJWT, async (req: Request, res: Response) => {
     const q = String(req.query.q || '').trim().toLowerCase();
     const companies = await companyMap();
     const coOf = (r: any) => r.publisherCompany || companies[pubOf(r)] || pubOf(r) || '';
+    // 卡片「联系」可见性与详情接口 canContact 同口径：由服务端按主体身份键（ownerOf）判定，
+    // 客户端只认下发标志——子账号 username 与发布记录里的 owner 可能不同名，前端自比会误判
+    const me = await ownerOf(((req as any).user as JWTPayload)?.username || '');
     if (type === 'mold') {
       const rows = await readRows('market_mold_listings');
       // 模具搜索口径与 Web MoldMarketTab 同：标题/模具编号/名称/规格
@@ -1334,6 +1337,7 @@ router.get('/market', verifyJWT, async (req: Request, res: Response) => {
       const list = hit.slice(0, 50).map((r: any) => ({
         id: r.key || r.id, title: r.title || r.name || r.moldName || '模具租售',
         price: moldPriceOf(r), publisherCompany: coOf(r), publisherUsername: pubOf(r),
+        canContact: !!pubOf(r) && pubOf(r) !== me,
         publishTime: r.publishTime || r.createTime || r.createdAt || '', status: r.status || '',
         image: firstImage(r),
         mode: moldModeOf(r), moldCode: r.moldCode || '', spec: r.spec || '',
@@ -1353,6 +1357,7 @@ router.get('/market', verifyJWT, async (req: Request, res: Response) => {
       id: r.id || r.key, styleCode: r.styleCode || '', shortName: r.shortName || '',
       quantity: Number(r.quantity) || 0, targetPrice: Number(r.targetPrice) || 0,
       publisherCompany: coOf(r), publisherUsername: pubOf(r),
+      canContact: !!pubOf(r) && pubOf(r) !== me,
       publishTime: r.publishTime || '', status: r.status || '',
       quoteCount: Array.isArray(r.quotes) ? r.quotes.length : 0,
       image: firstImage(r),

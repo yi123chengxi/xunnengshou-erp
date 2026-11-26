@@ -15,6 +15,14 @@ async function run(sql: string, params: any[] = []): Promise<number> {
   return (r as any).affectedRows ?? 0;
 }
 
+/** LIMIT 不接受占位符绑定：mysql2 把所有 JS number 按 DOUBLE 发送，MySQL 要求 LIMIT 实参为整数，
+ *  否则报 ER_WRONG_ARGUMENTS(1210) 「Incorrect arguments to mysqld_stmt_execute」。
+ *  因此 LIMIT 一律取整并夹在 [1, max] 后内联进 SQL，杜绝外部值原样拼接。 */
+function intLimit(v: any, max: number): number {
+  const n = Math.floor(Number(v));
+  return Number.isFinite(n) && n >= 1 ? Math.min(n, max) : 1;
+}
+
 export const mysqlDriver: StoreDriver = {
   // ---- 数据集 ----
   async getDataset(key) {
@@ -145,8 +153,8 @@ export const mysqlDriver: StoreDriver = {
   },
   async certsDueCheck(cutoff, limit) {
     return q(
-      `SELECT * FROM enterprise_cert WHERE status = 'certified' AND (last_check_at = '' OR last_check_at <= ?) ORDER BY last_check_at ASC LIMIT ?`,
-      [cutoff, limit]
+      `SELECT * FROM enterprise_cert WHERE status = 'certified' AND (last_check_at = '' OR last_check_at <= ?) ORDER BY last_check_at ASC LIMIT ${intLimit(limit, 500)}`,
+      [cutoff]
     );
   },
   async certFacePass(certifyId, username) {
@@ -168,7 +176,7 @@ export const mysqlDriver: StoreDriver = {
     );
   },
   async chatHistory(convId, before, limit) {
-    return q('SELECT * FROM chat_messages WHERE conv_id = ? AND created_at < ? ORDER BY created_at DESC LIMIT ?', [convId, before, limit]);
+    return q(`SELECT * FROM chat_messages WHERE conv_id = ? AND created_at < ? ORDER BY created_at DESC LIMIT ${intLimit(limit, 200)}`, [convId, before]);
   },
   async chatUnreadCount(username) {
     const rows = await q('SELECT COUNT(*) AS cnt FROM chat_messages WHERE to_user = ? AND read_at = 0', [username]);
@@ -177,6 +185,8 @@ export const mysqlDriver: StoreDriver = {
   async chatMarkRead(ts, convId, username) {
     await run('UPDATE chat_messages SET read_at = ? WHERE conv_id = ? AND to_user = ? AND read_at = 0', [ts, convId, username]);
   },
+  // 每个会话取最后一条：用「不存在更新的一条」代替 GROUP BY，避免 MySQL 8 默认 ONLY_FULL_GROUP_BY 对非聚合列报 1055；
+  // 同毫秒并列时按 id 兜底，保证每会话恰好一行（与 SQLite 驱动语义一致）
   async chatConversations(username) {
     return q(
       `SELECT
@@ -187,13 +197,14 @@ export const mysqlDriver: StoreDriver = {
          m.conv_subject,
          m.created_at AS last_time
        FROM chat_messages m
-       INNER JOIN (
-         SELECT conv_id, MAX(created_at) AS max_ts FROM chat_messages WHERE from_user = ? OR to_user = ? GROUP BY conv_id
-       ) latest ON m.conv_id = latest.conv_id AND m.created_at = latest.max_ts
-       WHERE m.from_user = ? OR m.to_user = ?
-       GROUP BY m.conv_id
+       WHERE (m.from_user = ? OR m.to_user = ?)
+         AND NOT EXISTS (
+           SELECT 1 FROM chat_messages n
+           WHERE n.conv_id = m.conv_id
+             AND (n.created_at > m.created_at OR (n.created_at = m.created_at AND n.id > m.id))
+         )
        ORDER BY m.created_at DESC`,
-      [username, username, username, username, username]
+      [username, username, username]
     );
   },
   async chatConvUnread(convId, username) {

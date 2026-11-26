@@ -394,11 +394,23 @@ async function authFetch(url: string, opts?: RequestInit): Promise<Response> {
   });
 }
 
+/** 聊天接口失败一律降级成空数据，不留痕迹会把 5xx 故障伪装成「没有会话/没有消息」（本次 MySQL 方言报错隐形多日即此因）；
+ *  仅在非 2xx 时读一次响应体打告警，不改变任何返回值与 UI */
+async function warnChatFail(scope: string, res: Response): Promise<void> {
+  if (res.ok) return;
+  let detail = '';
+  try {
+    const text = await res.text();
+    try { const j = JSON.parse(text); detail = String(j.error || j.message || ''); } catch { detail = text.slice(0, 120); }
+  } catch { /* 响应体不可读时只报状态码 */ }
+  console.warn(`[chat] ${scope} 接口异常 status=${res.status}${detail ? ` · ${detail}` : ''}`);
+}
+
 /** HTTP: 获取会话列表（子账号合并主账号会话；主账号加载分流池成员会话） */
 export async function fetchConversations(): Promise<Conversation[]> {
   try {
     const res = await authFetch(`${API_BASE()}/chat/conversations`);
-    if (!res.ok) return [];
+    if (!res.ok) { await warnChatFail('conversations', res); return []; }
     const mine: Conversation[] = await res.json();
     const isSub = localStorage.getItem('isSubAccount') === 'true';
     if (isSub) {
@@ -454,7 +466,8 @@ export async function fetchConversations(): Promise<Conversation[]> {
     }
     mine.sort((a, b) => b.lastTime - a.lastTime);
     return mine;
-  } catch {
+  } catch (e: any) {
+    console.warn('[chat] conversations 请求失败:', e?.message || e);
     return [];
   }
 }
@@ -466,9 +479,10 @@ export async function fetchHistory(convId: string, before?: number, limit = 50):
     if (before) params.set('before', String(before));
     params.set('limit', String(limit));
     const res = await authFetch(`${API_BASE()}/chat/messages/${convId}?${params}`);
-    if (!res.ok) return [];
+    if (!res.ok) { await warnChatFail('history', res); return []; }
     return await res.json();
-  } catch {
+  } catch (e: any) {
+    console.warn('[chat] history 请求失败:', e?.message || e);
     return [];
   }
 }
@@ -477,7 +491,7 @@ export async function fetchHistory(convId: string, before?: number, limit = 50):
 export async function fetchUnreadCount(): Promise<number> {
   try {
     const res = await authFetch(`${API_BASE()}/chat/unread-count`);
-    if (!res.ok) return 0;
+    if (!res.ok) { await warnChatFail('unread-count', res); return 0; }
     const data = await res.json();
     let count = data.count || 0;
     const isSub = localStorage.getItem('isSubAccount') === 'true';

@@ -70,11 +70,13 @@ const detailRows = (d: MarketDetail): [string, string][] => {
 }
 
 // 详情底部弹层（与仓库统计记录详情同写法：遮罩高于 TabBar，面板靠底可滚）
-// 面板两侧留 12px 边且不再叠 width:100%（left/right 与 width 过约束在 weapp 下会撑出屏宽导致右侧内容被裁），
-// 宽度由 left/right 内缩唯一确定，保证详情完整可见
+// 面板与项目内其它正常弹层同一形态：position:fixed 直接以视口为基准，宽度只由 left/right 内缩唯一确定。
+// 曾用 position:absolute 把遮罩当包含块，weapp 下会撑出屏宽、右侧内容被面板 overflow:hidden 静默裁切
 const SHEET_MASK = { position: 'fixed', left: 0, right: 0, top: 0, bottom: 0, background: 'rgba(0,0,0,0.45)', zIndex: 300 } as const
-const SHEET_PANEL = { position: 'absolute', left: 12, right: 12, bottom: 12, background: '#fff', borderRadius: 16, paddingTop: 14, paddingBottom: 'calc(14px + env(safe-area-inset-bottom))', maxHeight: '82vh', boxSizing: 'border-box', overflow: 'hidden' } as const
-const SHEET_TITLE = { flex: 1, fontSize: 18, fontWeight: 600, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' } as const
+const SHEET_PANEL = { position: 'fixed', left: 12, right: 12, bottom: 12, zIndex: 301, background: '#fff', borderRadius: 16, paddingTop: 14, paddingBottom: 'calc(14px + env(safe-area-inset-bottom))', maxHeight: '82vh', boxSizing: 'border-box', overflow: 'hidden', display: 'flex', flexDirection: 'column' } as const
+// flex 子项必须 minWidth:0，否则不换行的长标题会把自己撑到超宽并把右侧「关闭」挤出面板
+const SHEET_TITLE = { flex: 1, minWidth: 0, fontSize: 18, fontWeight: 600, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' } as const
+const SHEET_CLOSE = { flexShrink: 0, fontSize: 15, color: '#8a94a6', paddingLeft: 12 } as const
 const ROW_LABEL = { fontSize: 15, color: '#8a94a6', flexShrink: 0, marginRight: 12 } as const
 // weapp flex 子项默认 min-width:auto，长值会撑开行超出屏宽，必须 minWidth:0 才能换行自适应
 const ROW_VALUE = { flex: 1, minWidth: 0, fontSize: 17, textAlign: 'right', wordBreak: 'break-all' } as const
@@ -94,7 +96,9 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
   const [imgFail, setImgFail] = useState<Record<string, { url: string; msg: string; code: string }>>({})
   // 已探测过的地址，避免同一 URL 重复发探测请求
   const probedRef = useRef<Set<string>>(new Set())
-  // base64 回退渲染缓存：id -> data URL
+  // base64 回退渲染缓存：图片地址 -> data URL
+  // 键必须是归一后的地址而不是商品号——详情弹层只拿得到地址，两边键不一致时
+  // 卡片会先占掉 b64ingRef 的去重集，令详情的回退请求永远发不出去（表现为详情图永久空白）
   const [imgData, setImgData] = useState<Record<string, string>>({})
   const b64ingRef = useRef<Set<string>>(new Set())
   const [loaded, setLoaded] = useState(false)
@@ -139,9 +143,9 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
    * base64 回退渲染：微信真机 <image> 对「无扩展名、仅靠 Content-Type」的 URL 可能拒绝渲染
    * （本站 /api/images/file/<dir>/<id> 正是这种形态，而带 .jpg 又会被面板 vhost 劫持成 404，是死锁）。
    * 既然 wx.request 通道已证明同一地址返回 200，就用它拉 arraybuffer 转 data URL 回填——
-   * data: 不依赖扩展名、不依赖任何合法域名白名单，微信必然渲染。仅在 onError 后触发。
+   * data: 不依赖扩展名、不依赖任何合法域名白名单，微信必然渲染。onError 触发 + 详情打开时预热。
    */
-  const fallbackToBase64 = (url: string, id: string) => {
+  const fallbackToBase64 = (url: string) => {
     if (!url || /^data:/i.test(url) || b64ingRef.current.has(url)) return
     b64ingRef.current.add(url)
     Taro.request({ url, method: 'GET', responseType: 'arraybuffer', timeout: 20000, header: { Accept: 'image/*' } })
@@ -150,10 +154,24 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
         const h: any = res.header || {}
         const ctype = String(h['content-type'] || h['Content-Type'] || 'image/jpeg').split(';')[0]
         const b64 = (Taro as any).arrayBufferToBase64 ? (Taro as any).arrayBufferToBase64(res.data) : ''
-        if (b64) setImgData(v => ({ ...v, [id]: `data:${ctype};base64,${b64}` }))
+        // 缓存键就是地址本身：卡片与详情读同一键，卡片转好的 base64 详情直接复用
+        if (b64) setImgData(v => ({ ...v, [url]: `data:${ctype};base64,${b64}` }))
       })
-      .catch(() => { /* 外链不在 request 白名单时保持占位与诊断 */ })
+      .catch(() => {
+        // 被拦/超时必须摘出去重集，否则该地址被永久拉黑，后续再触发也永不重试
+        b64ingRef.current.delete(url)
+      })
   }
+
+  // 详情弹层主图与缩略图主动预热：真机 <image> 对同一失败地址不保证二次触发 onError
+  // （卡片通常已让该地址先失败过一次），只挂 onError 会让详情图停在空白，
+  // 故 detail 变化时直接走已验证可达的 request 通道转 base64 回填同一份缓存
+  useEffect(() => {
+    const d = detail
+    if (!d) return
+    const raw: string[] = Array.isArray(d.images) && d.images.length ? d.images : ((d as any).image ? [(d as any).image] : [])
+    raw.map((u: string) => fullImageUrl(u)).filter(Boolean).slice(0, 6).forEach((u: string) => fallbackToBase64(u))
+  }, [detail])
 
   // 诊断文案：只输出定性结论，绝不印完整地址（历史版本把 URL 印在窄卡片上会折成满屏乱码）
   const failTextOf = (f?: { url: string; msg: string; code: string }): string => {
@@ -255,12 +273,16 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
       .finally(() => setQSaving(false))
   }
 
-  const openContact = () => {
-    const pub = String(detail?.publisherUsername || '')
+  // 站内会话入口：卡片与详情弹层共用，与 Web 市场卡片「联系」同一行为（直接打开与该发布方的会话）
+  const goChat = (pub: string, company: string, subject: string) => {
     if (!pub) { Taro.showToast({ title: '未获取到供应商标账号', icon: 'none' }); return }
-    const name = encodeURIComponent(String(detail?.publisherCompany || pub))
-    const subject = encodeURIComponent(String(detail?.shortName || detail?.title || ''))
-    Taro.navigateTo({ url: `/pages/chat/index?to=${encodeURIComponent(pub)}&name=${name}&subject=${subject}` })
+    const name = encodeURIComponent(company || pub)
+    const subj = encodeURIComponent(subject || '')
+    Taro.navigateTo({ url: `/pages/chat/index?to=${encodeURIComponent(pub)}&name=${name}&subject=${subj}` })
+  }
+
+  const openContact = () => {
+    goChat(String(detail?.publisherUsername || ''), String(detail?.publisherCompany || ''), String(detail?.shortName || detail?.title || ''))
   }
 
   const shown = refUrl && Object.keys(scores).length
@@ -324,21 +346,21 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
               <View style={{ position: 'relative', width: '100%', paddingTop: '100%' }}>
                 {(() => {
                   const id = String(r.id)
+                  const url = String(r.image || '')
                   const COVER: any = { position: 'absolute', top: 0, left: 0, width: '100%', height: '100%' }
                   // 回退成功：直接用 base64 渲染，不再走网络通道
-                  if (imgData[id]) return <Image src={imgData[id]} mode="aspectFill" style={COVER} />
+                  if (imgData[url]) return <Image src={imgData[url]} mode="aspectFill" style={COVER} />
                   if (r.image && !imgFail[id]) {
                     return (
                       <Image
                         src={r.image} mode="aspectFill" style={COVER}
                         onError={e => {
-                          const url = String(r.image || '')
                           setImgFail(v => ({
                             ...v,
                             [id]: { url, msg: String((e as any)?.detail?.errMsg || ''), code: v[id]?.code || '' },
                           }))
                           probeImage(url, id)
-                          fallbackToBase64(url, id)
+                          fallbackToBase64(url)
                         }}
                       />
                     )
@@ -414,6 +436,19 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
                   )}
                   {type === 'semi' ? <Text className="muted">{r.quoteCount || 0} 报价</Text> : null}
                 </View>
+                {/* 卡片级「联系」：与 Web 市场卡片底部操作栏同口径，仅非本人发布时出现（标志由服务端 canContact 下发）；
+                    必须 stopPropagation，否则会被卡片根的 openDetail 先抢走 */}
+                {r.canContact ? (
+                  <View
+                    style={{ marginTop: 10, paddingTop: 8, borderTop: '1px solid #f0f2f5', textAlign: 'center', fontSize: 15, color: '#1677ff' }}
+                    onClick={e => {
+                      e.stopPropagation()
+                      goChat(String(r.publisherUsername || ''), String(r.publisherCompany || ''), String(r.shortName || r.title || ''))
+                    }}
+                  >
+                    联系
+                  </View>
+                ) : null}
               </View>
             </View>
           </View>
@@ -431,14 +466,15 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
         return (
           <View style={SHEET_MASK} onClick={() => setDetail(null)}>
             <View style={SHEET_PANEL} onClick={e => e.stopPropagation()}>
-              <View style={{ display: 'flex', alignItems: 'center', padding: '0 20px 12px', borderBottom: '1px solid #f0f2f5' }}>
+              <View style={{ flexShrink: 0, display: 'flex', alignItems: 'center', padding: '0 20px 12px', borderBottom: '1px solid #f0f2f5', boxSizing: 'border-box' }}>
                 <Text style={SHEET_TITLE}>
                   {detail.type === 'mold' ? '模具详情'
                     : detail.type === 'finished' ? `成品详情 - ${detail.id || ''}` : `发包详情 - ${detail.id || ''}`}
                 </Text>
-                <Text style={{ fontSize: 15, color: '#8a94a6', paddingLeft: 12 }} onClick={() => setDetail(null)}>关闭</Text>
+                <Text style={SHEET_CLOSE} onClick={() => setDetail(null)}>关闭</Text>
               </View>
-              <ScrollView scrollY style={{ maxHeight: '58vh', padding: '12px 20px 0' }}>
+              {/* 滚动区宽度锁死为面板内容宽并禁横向溢出，避免长内容把它撑宽后右侧被裁 */}
+              <ScrollView scrollY style={{ flex: 1, minHeight: 0, width: '100%', boxSizing: 'border-box', overflowX: 'hidden', maxHeight: '58vh', padding: '12px 20px 0' }}>
                 {imgs.length ? (
                   <View>
                     {/* 主图正方形显示（与成品卡 450×450 正方形口径一致） */}
@@ -446,7 +482,7 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
                       <Image
                         src={imgData[imgs[0]] || imgs[0]} mode="aspectFill"
                         style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%' }}
-                        onError={() => fallbackToBase64(imgs[0], imgs[0])}
+                        onError={() => fallbackToBase64(imgs[0])}
                         onClick={() => Taro.previewImage({ urls: imgs, current: imgs[0] })}
                       />
                     </View>
@@ -456,7 +492,7 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
                           <Image
                             key={i} src={imgData[u] || u} mode="aspectFill"
                             style={{ width: 52, height: 52, borderRadius: 6, margin: '0 8px 8px 0', background: '#f5f6f8' }}
-                            onError={() => fallbackToBase64(u, u)}
+                            onError={() => fallbackToBase64(u)}
                             onClick={() => Taro.previewImage({ urls: imgs, current: u })}
                           />
                         ))}
@@ -478,30 +514,32 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
                   <View style={{ marginTop: 8 }}>
                     <Text style={{ fontSize: 15, color: '#8a94a6' }}>规格明细与数量</Text>
                     {specs.map((s, i) => (
-                      <View key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', fontSize: 15 }}>
-                        <Text style={{ flex: 1 }}>{s.spec}</Text>
-                        <Text style={{ color: '#1677ff' }}>× {s.qty}</Text>
+                      <View key={i} style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', padding: '6px 0', fontSize: 15 }}>
+                        <Text style={{ flex: 1, minWidth: 0, wordBreak: 'break-all' }}>{s.spec}</Text>
+                        <Text style={{ flexShrink: 0, marginLeft: 8, color: '#1677ff' }}>× {s.qty}</Text>
                       </View>
                     ))}
                   </View>
                 )}
                 {skus.length > 0 && (
                   <View style={{ marginTop: 10, border: '1px solid #e6e9ee', borderRadius: 8, overflow: 'hidden' }}>
-                    <View style={{ display: 'flex', background: '#fafbfc', padding: '6px 10px', fontSize: 13, color: '#8a94a6' }}>
-                      <Text style={{ flex: 2 }}>颜色/SKU</Text>
-                      <Text style={{ flex: 1.4 }}>规格</Text>
-                      <Text style={{ flex: 1, textAlign: 'right' }}>供货价</Text>
-                      <Text style={{ flex: 1, textAlign: 'right' }}>库存</Text>
+                    {/* 每列都要 minWidth:0 + 断字：weapp flex 子项默认 min-width:auto，
+                        长款号/金额不肯收缩会把整行撑出面板宽度，右侧列被静默遮挡 */}
+                    <View style={{ display: 'flex', background: '#fafbfc', padding: '6px 10px', fontSize: 13, color: '#8a94a6', boxSizing: 'border-box' }}>
+                      <Text style={{ flex: 2.2, minWidth: 0 }}>颜色/SKU</Text>
+                      <Text style={{ flex: 1.3, minWidth: 0, marginLeft: 6 }}>规格</Text>
+                      <Text style={{ flex: 1.2, minWidth: 0, marginLeft: 6, textAlign: 'right' }}>供货价</Text>
+                      <Text style={{ flex: 0.9, minWidth: 0, marginLeft: 6, textAlign: 'right' }}>库存</Text>
                     </View>
                     {skus.map((v, i) => (
-                      <View key={i} style={{ display: 'flex', padding: '6px 10px', fontSize: 15, borderTop: '1px solid #f0f2f5' }}>
-                        <View style={{ flex: 2 }}>
-                          <Text style={{ fontSize: 15 }}>{v.color || '—'}</Text>
-                          <Text style={{ display: 'block', fontSize: 13, color: '#8a94a6' }}>{v.productCode || ''}</Text>
+                      <View key={i} style={{ display: 'flex', alignItems: 'flex-start', padding: '6px 10px', fontSize: 14, borderTop: '1px solid #f0f2f5', boxSizing: 'border-box' }}>
+                        <View style={{ flex: 2.2, minWidth: 0 }}>
+                          <Text style={{ fontSize: 14, wordBreak: 'break-all' }}>{v.color || '—'}</Text>
+                          <Text style={{ display: 'block', fontSize: 12, color: '#8a94a6', wordBreak: 'break-all' }}>{v.productCode || ''}</Text>
                         </View>
-                        <Text style={{ flex: 1.4 }}>{v.spec || '—'}</Text>
-                        <Text style={{ flex: 1, textAlign: 'right', color: '#f5222d' }}>{money(v.unitPrice)}</Text>
-                        <Text style={{ flex: 1, textAlign: 'right' }}>{detail.canViewInventory === false ? '***' : (v.stock || 0)}</Text>
+                        <Text style={{ flex: 1.3, minWidth: 0, marginLeft: 6, wordBreak: 'break-all' }}>{v.spec || '—'}</Text>
+                        <Text style={{ flex: 1.2, minWidth: 0, marginLeft: 6, textAlign: 'right', color: '#f5222d', wordBreak: 'break-all' }}>{money(v.unitPrice)}</Text>
+                        <Text style={{ flex: 0.9, minWidth: 0, marginLeft: 6, textAlign: 'right' }}>{detail.canViewInventory === false ? '***' : (v.stock || 0)}</Text>
                       </View>
                     ))}
                   </View>
@@ -525,7 +563,7 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
               </ScrollView>
               {/* 报价入口：仅发包市场且非本人发布；展开后内联表单提交 */}
               {detail.type === 'semi' && !detail.isMine ? (
-                <View style={{ padding: '12px 20px 0' }}>
+                <View style={{ flexShrink: 0, padding: '12px 20px 0' }}>
                   {!quoteOpen ? (
                     <View style={{ ...CONTACT_BTN, background: '#fa8c16' }} onClick={() => setQuoteOpen(true)}>我要报价</View>
                   ) : (
@@ -559,7 +597,7 @@ const MarketView = ({ fixedType, tick = 0 }: { fixedType?: MarketType; tick?: nu
                 </View>
               ) : null}
               {detail.canContact ? (
-                <View style={{ padding: '12px 20px 0' }}>
+                <View style={{ flexShrink: 0, padding: '12px 20px 0' }}>
                   <View style={CONTACT_BTN} onClick={openContact}>联系</View>
                 </View>
               ) : null}
