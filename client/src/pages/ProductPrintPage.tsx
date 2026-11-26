@@ -148,6 +148,15 @@ const buildBarcodeSvg = (code: string, heightMm: number = 15): string => {
     return '';
   }
 };
+// 款式编码兜底：存量数据 styleCode 常为空，按「款式-颜色-规格」拼接串剥掉汉字颜色尾段取前缀
+// （与 ScheduleBoard/小程序 stylePrefixOf 同源正则，保证同款商品聚合口径一致）
+const styleOfProduct = (p: any): string => {
+  const sc = String(p?.styleCode || '').trim();
+  if (sc) return sc;
+  const m = String(p?.productCode || '').match(/^[^-]+(?:-[^-]+)*?(?=\s*-\s*[\u4e00-\u9fff])/);
+  if (m && m[0]) return m[0].trim();
+  return String(p?.productCode || '').trim();
+};
 // 生成真实可扫描的二维码 data URL
 const buildQrcodeDataUrl = async (text: string, sizePx: number = 200): Promise<string> => {
   try {
@@ -198,6 +207,7 @@ const ProductPrintPage: React.FC = () => {
   const [scanDirect, setScanDirect] = useState(false);
   const [selCode, setSelCode] = useState('');
   const [selColor, setSelColor] = useState(''); const [selSpec, setSelSpec] = useState('');
+  const [selStyle, setSelStyle] = useState('');
   const [printKind, setPrintKind] = useState<TplType>('tag');
   const [multiInfo, setMultiInfo] = useState(false);
   const [tplIds, setTplIds] = useState<Record<string, string>>({ tag: 'default', barcode: 'default', wash: 'default', carton: 'default' });
@@ -308,9 +318,12 @@ const ProductPrintPage: React.FC = () => {
 
   const selProduct = useMemo(() => products.find((p: any) => p.productCode === selCode) || null, [products, selCode]);
 
-  // 颜色/规格两级候选（货号选择栏两行级联）
-  const colorOptions = useMemo(() => Array.from(new Set(filteredProducts.map((p: any) => String(p.color || '').trim()).filter(Boolean))) as string[], [filteredProducts]);
-  const specOptions = useMemo(() => Array.from(new Set(filteredProducts.filter((p: any) => (p.color || '') === selColor).map((p: any) => String(p.spec || '').trim()))) as string[], [filteredProducts, selColor]);
+  // 款式/颜色/规格三级候选（货号选择栏逐级级联：默认只展示款式编码，点选后才展开下一级）
+  const styleOptions = useMemo(() => Array.from(new Set(filteredProducts.map((p: any) => styleOfProduct(p)).filter(Boolean))) as string[], [filteredProducts]);
+  const activeStyle = styleOptions.includes(selStyle) ? selStyle : '';
+  const colorOptions = useMemo(() => Array.from(new Set(filteredProducts.filter((p: any) => styleOfProduct(p) === activeStyle).map((p: any) => String(p.color || '').trim()).filter(Boolean))) as string[], [filteredProducts, activeStyle]);
+  const activeColor = colorOptions.includes(selColor) ? selColor : '';
+  const specOptions = useMemo(() => Array.from(new Set(filteredProducts.filter((p: any) => styleOfProduct(p) === activeStyle && (p.color || '') === activeColor).map((p: any) => String(p.spec || '').trim()))) as string[], [filteredProducts, activeStyle, activeColor]);
 
   // 单/多件订单商品数：未发货销售订单聚合
   const orderStats = useMemo(() => {
@@ -855,7 +868,7 @@ const ProductPrintPage: React.FC = () => {
               <Input size="small" style={{ width: 130 }} placeholder="供应商名称" value={fSup} onChange={e => setFSup(e.target.value)} onPressEnter={doSearch} />
               <Input size="small" style={{ width: 130 }} placeholder="供应商商品编码" value={fSupCode} onChange={e => setFSupCode(e.target.value)} onPressEnter={doSearch} />
               <Button size="small" type="primary" icon={<SearchOutlined />} onClick={() => { doSearch(); message.info(`已查询，命中 ${filteredProducts.length} 个商品`); }}>搜索</Button>
-              <Button size="small" onClick={() => { setFType('all'); setFStyle(''); setFName(''); setFBrand(''); setFStatus(''); setFSup(''); setFSupCode(''); setFCodeMerge(''); setFAux(''); setFSupCode2(''); setSelColor(''); setSelSpec(''); setApplied(null); }}>清空</Button>
+              <Button size="small" onClick={() => { setFType('all'); setFStyle(''); setFName(''); setFBrand(''); setFStatus(''); setFSup(''); setFSupCode(''); setFCodeMerge(''); setFAux(''); setFSupCode2(''); setSelStyle(''); setSelColor(''); setSelSpec(''); setApplied(null); }}>清空</Button>
             </div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
               <Select size="small" style={{ width: 130 }} value={fCodeType} onChange={setFCodeType} options={[{ value: 'productCode', label: '商品编码' }, { value: 'barcode', label: '条形码' }]} />
@@ -865,31 +878,51 @@ const ProductPrintPage: React.FC = () => {
               <Checkbox checked={scanDirect} onChange={e => setScanDirect(e.target.checked)}>扫码直接打印</Checkbox>
               <Button size="small" type="link" icon={<SettingOutlined />} onClick={() => navigate('/settings/print-template?type=tag')}>吊牌条码打印设置</Button>
             </div>
-            {/* 货号搜索：颜色/规格两行级联选择 */}
+            {/* 货号搜索：款式编码→颜色→规格 三级逐级选择（默认只平铺款式编码，避免颜色/规格整墙平铺） */}
             <div style={{ background: '#fafafa', border: '1px solid #e3e8ee', padding: '12px 16px', marginBottom: 12 }}>
               <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
                 <Text type="secondary" style={{ fontSize: 13, whiteSpace: 'nowrap', lineHeight: '28px', minWidth: 36 }}>货号</Text>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
-                    {colorOptions.length === 0 && <Text type="secondary" style={{ fontSize: 12 }}>（请先搜索，第一行选择颜色）</Text>}
-                    {colorOptions.map(c => (
-                      <Tag key={c} color={selColor === c ? 'blue' : undefined} style={{ cursor: 'pointer', margin: 0, fontSize: 13, padding: '3px 10px' }}
-                        onClick={() => { setSelColor(c); setSelSpec(''); }}>{c}</Tag>
-                    ))}
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginBottom: 6 }}>
+                    <Text type="secondary" style={{ fontSize: 12, whiteSpace: 'nowrap', lineHeight: '26px', minWidth: 56 }}>款式编码</Text>
+                    <div style={{ flex: 1, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      {styleOptions.length === 0 && <Text type="secondary" style={{ fontSize: 12 }}>（请先搜索，选择款式编码）</Text>}
+                      {styleOptions.map(st => (
+                        <Tag key={st} color={selStyle === st ? 'blue' : undefined} style={{ cursor: 'pointer', margin: 0, fontSize: 13, padding: '3px 10px' }}
+                          onClick={() => { setSelStyle(st); setSelColor(''); setSelSpec(''); }}>{st}</Tag>
+                      ))}
+                    </div>
                   </div>
+                  {activeStyle && (
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginBottom: 6 }}>
+                      <Text type="secondary" style={{ fontSize: 12, whiteSpace: 'nowrap', lineHeight: '26px', minWidth: 56 }}>颜色</Text>
+                      <div style={{ flex: 1, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        {colorOptions.length === 0 && <Text type="secondary" style={{ fontSize: 12 }}>该款式无颜色可选</Text>}
+                        {colorOptions.map(c => (
+                          <Tag key={c} color={selColor === c ? 'blue' : undefined} style={{ cursor: 'pointer', margin: 0, fontSize: 13, padding: '3px 10px' }}
+                            onClick={() => { setSelColor(c); setSelSpec(''); }}>{c}</Tag>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-                    {selColor && specOptions.length === 0 && <Text type="secondary" style={{ fontSize: 12 }}>该颜色无规格可选</Text>}
-                    {specOptions.map(s => (
-                      <Tag key={s || 'default'} color={selSpec === s ? 'green' : undefined} style={{ cursor: 'pointer', margin: 0, fontSize: 13, padding: '3px 10px' }}
-                        onClick={() => {
-                          setSelSpec(s);
-                          const p = filteredProducts.find((x: any) => (x.color || '') === selColor && (x.spec || '') === s);
-                          if (p) {
-                            setSelCode(p.productCode);
-                            if (scanDirect) setTimeout(() => doPrintRow('tag', 1), 100);
-                          }
-                        }}>{s || '默认规格'}</Tag>
-                    ))}
+                    {activeColor && (
+                      <>
+                        <Text type="secondary" style={{ fontSize: 12, whiteSpace: 'nowrap', lineHeight: '26px', minWidth: 56 }}>规格</Text>
+                        {specOptions.length === 0 && <Text type="secondary" style={{ fontSize: 12 }}>该颜色无规格可选</Text>}
+                        {specOptions.map(s => (
+                          <Tag key={s || 'default'} color={selSpec === s ? 'green' : undefined} style={{ cursor: 'pointer', margin: 0, fontSize: 13, padding: '3px 10px' }}
+                            onClick={() => {
+                              setSelSpec(s);
+                              const p = filteredProducts.find((x: any) => styleOfProduct(x) === activeStyle && (x.color || '') === activeColor && (x.spec || '') === s);
+                              if (p) {
+                                setSelCode(p.productCode);
+                                if (scanDirect) setTimeout(() => doPrintRow('tag', 1), 100);
+                              }
+                            }}>{s || '默认规格'}</Tag>
+                        ))}
+                      </>
+                    )}
                     {selCode && <Text type="secondary" style={{ fontSize: 13, marginLeft: 10 }}>已选：{selCode}</Text>}
                   </div>
                 </div>
