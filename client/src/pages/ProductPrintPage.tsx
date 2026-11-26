@@ -213,12 +213,17 @@ const ProductPrintPage: React.FC = () => {
   const [tplIds, setTplIds] = useState<Record<string, string>>({ tag: 'default', barcode: 'default', wash: 'default', carton: 'default' });
   const [printer, setPrinter] = useState('默认使用模板设置的打印机');
   const [printerList, setPrinterList] = useState<{ name: string; isDefault: boolean }[]>([]);
+  // 打印客户端真实在线态：printers-public 命中=客户端在线（可静默打印）；
+  // 落到 local-printers 兜底=客户端必离线（printerList 被兜底填非空，不能再用作在线判据，
+  // 否则静默路径必被服务端 503 拒绝、或误走 srcdoc iframe 残留页眉页脚）
+  const [printClientOnline, setPrintClientOnline] = useState(false);
   // 拉取本机已安装打印机（打印客户端在线时经服务端汇总；免鉴权接口按租户名查询）
   const reloadPrinters = useCallback(() => {
     const uname = localStorage.getItem('username') || '';
     const candidates = Array.from(new Set([getDataOwner(), uname].filter(Boolean))) as string[];
     // 兜底：打印客户端未在线时取服务端所在电脑的已安装打印机（浏览器同机即本机打印机）
     const fetchLocalPrinters = () => {
+      setPrintClientOnline(false);
       request.get('/print/local-printers').then((res: any) => {
         const list = res?.data?.data?.printers;
         setPrinterList(Array.isArray(list) ? list : []);
@@ -228,7 +233,7 @@ const ProductPrintPage: React.FC = () => {
       if (i >= candidates.length) { fetchLocalPrinters(); return; }
       request.get('/print/printers-public', { params: { owner: candidates[i] } }).then((res: any) => {
         const list = res?.data?.data?.printers;
-        if (Array.isArray(list) && list.length) setPrinterList(list);
+        if (Array.isArray(list) && list.length) { setPrinterList(list); setPrintClientOnline(true); }
         else tryFetch(i + 1);
       }).catch(() => tryFetch(i + 1));
     };
@@ -278,7 +283,7 @@ const ProductPrintPage: React.FC = () => {
   }, [printKind, scanDirect, multiInfo, printer, tplIds, settingsKey]);
 
   // 打印机下拉选项（吊牌打印与自定义打印子页共用）
-  const printerOptions = [{ value: '默认使用模板设置的打印机', label: '默认使用模板设置的打印机' }, ...printerList.map((pl: any) => ({ value: pl.name, label: pl.name + (pl.isDefault ? '（系统默认）' : '') + (pl.clientName ? `（@${pl.clientName}）` : '') })), ...(printerList.length ? [] : [{ value: '__print_client_offline__', label: `（打印客户端未在线：请在接打印机的电脑启动讯能手打印客户端，并登录 ${window.location.origin}）`, disabled: true }])];
+  const printerOptions = [{ value: '默认使用模板设置的打印机', label: '默认使用模板设置的打印机' }, ...printerList.map((pl: any) => ({ value: pl.name, label: pl.name + (pl.isDefault ? '（系统默认）' : '') + (pl.clientName ? `（@${pl.clientName}）` : '') })), ...(printClientOnline ? [] : [{ value: '__print_client_offline__', label: `（打印客户端未在线：请在接打印机的电脑启动讯能手打印客户端，并登录 ${window.location.origin}；未在线时打印自动改走浏览器零页边距渲染）`, disabled: true }])];
 
   // 保存的打印机选择可能是历史缓存（打印机已移除/换机）：在线名单非空且不含当前选择时自动重置，
   // 避免向打印客户端发送无效打印机名（Electron 对失配 deviceName 静默挂起不出纸）
@@ -524,36 +529,33 @@ const ProductPrintPage: React.FC = () => {
     setPreviewVisible(true);
   }, [buildPages, resolveTplId]);
 
-  // 预览弹窗“打印”：默认优先走打印客户端静默打印（无浏览器默认页眉页脚）；
-  // 导入打印子页（browserOnly）或客户端未在线时回退浏览器打印并提示
+  // 浏览器渲染打印回退：同源顶层窗口 + @page 零边距（页眉页脚无边距空间可画即自动消失）；
+  // srcdoc iframe 的 @page 规则在部分 Chrome 版本打印时被忽略会残留日期/网址/页码，故回退一律走顶层窗口
+  const browserPrintFallback = useCallback((html: string, offline: boolean) => {
+    const win = window.open('', '_blank');
+    if (win) {
+      win.document.open();
+      win.document.write(html);
+      win.document.close();
+      const doPrint = () => { try { win.focus(); win.print(); } catch { message.error('打印失败'); } };
+      if (win.document.readyState === 'complete') doPrint();
+      else win.onload = doPrint;
+      message.info(offline
+        ? '打印客户端未在线，已按浏览器零页边距渲染打印（页眉页脚自动隐藏）；如仍显示请在打印弹窗“更多设置”中取消勾选“页眉和页脚”'
+        : '已按浏览器渲染打印（零页边距自动隐藏页眉页脚）；如仍显示请在打印弹窗“更多设置”中取消勾选“页眉和页脚”');
+      return;
+    }
+    message.warning('弹窗被浏览器拦截，已改用页内预览打印');
+    try { iframeRef.current?.contentWindow?.focus(); iframeRef.current?.contentWindow?.print(); } catch { message.error('打印失败'); }
+    message.info('如纸张出现日期/网址/页码等页眉页脚，请在打印弹窗“更多设置”中取消勾选“页眉和页脚”');
+  }, []);
+
+  // 预览弹窗“打印”：优先走打印客户端静默打印（无浏览器默认页眉页脚）；
+  // 导入打印子页（browserOnly）或客户端未在线时回退浏览器零页边距渲染
   const printFromPreview = async () => {
     const job = previewJobRef.current;
     if (!job) { message.error('没有可打印的内容'); return; }
-    if (previewBrowserOnly || printerList.length === 0) {
-      if (previewBrowserOnly) {
-        // 浏览器渲染打印：打开同源独立窗口写入纯打印文档（@page 零边距在顶层文档必定生效，
-        // 页眉页脚无边距空间可画即自动消失）；srcdoc iframe 的 @page 规则在部分 Chrome 版本打印时被忽略
-        const win = window.open('', '_blank');
-        if (win) {
-          win.document.open();
-          win.document.write(job.html);
-          win.document.close();
-          const doPrint = () => { try { win.focus(); win.print(); } catch { message.error('打印失败'); } };
-          if (win.document.readyState === 'complete') doPrint();
-          else win.onload = doPrint;
-          message.info('已按浏览器渲染打印（零页边距自动隐藏页眉页脚）；如仍显示请在打印弹窗“更多设置”中取消勾选“页眉和页脚”');
-          return;
-        }
-        message.warning('弹窗被浏览器拦截，已改用页内预览打印');
-      }
-      try { iframeRef.current?.contentWindow?.focus(); iframeRef.current?.contentWindow?.print(); } catch { message.error('打印失败'); }
-      if (previewBrowserOnly) {
-        message.info('已按浏览器渲染打印：如纸张出现日期/网址/页码等页眉页脚，请在打印弹窗“更多设置”中取消勾选“页眉和页脚”');
-      } else {
-        message.warning('打印客户端未在线，已改用浏览器打印：如纸张出现日期/网址/页码等页眉页脚，请在打印弹窗“更多设置”中取消勾选“页眉和页脚”');
-      }
-      return;
-    }
+    if (previewBrowserOnly || !printClientOnline) { browserPrintFallback(job.html, !previewBrowserOnly); return; }
     try {
       const renderRes = await request.post('/print/render', { html: job.html });
       const printUrl = renderRes?.data?.data?.url;
@@ -564,11 +566,20 @@ const ProductPrintPage: React.FC = () => {
       const jobRes = await request.post('/print/job', { type: 'url', content: printUrl, printerName, copies: 1, username });
       if (jobRes?.data?.code === 0) {
         message.success('打印任务已提交（静默打印，无页眉页脚）');
+      } else if (String(jobRes?.data?.message || '').includes('打印客户端')) {
+        // 在线态陈旧（清单拉取后客户端掉线）：二次回退浏览器零页边距渲染
+        setPrintClientOnline(false);
+        browserPrintFallback(job.html, true);
       } else {
         message.error(jobRes?.data?.message || '打印任务提交失败');
       }
     } catch (err: any) {
-      message.error(err?.response?.data?.message || err?.message || '打印失败');
+      if (err?.response?.status === 503 || String(err?.response?.data?.message || '').includes('打印客户端')) {
+        setPrintClientOnline(false);
+        browserPrintFallback(job.html, true);
+      } else {
+        message.error(err?.response?.data?.message || err?.message || '打印失败');
+      }
     }
   };
 
@@ -582,6 +593,8 @@ const ProductPrintPage: React.FC = () => {
       // 1. 生成打印 HTML
       const pages = await buildPages(type, selProduct, copies);
       const html = `<html><head><meta charset="utf-8"><style>@page{size:${pw}mm ${ph}mm;margin:0;}body{margin:0;background:#fff;font-family:'Microsoft YaHei',sans-serif;}.pg{position:relative;z-index:0;width:${pw}mm;height:${ph}mm;page-break-after:always;overflow:hidden;box-sizing:border-box;background:#fff;margin:0;}.pg:last-child{page-break-after:auto;}</style></head><body>${pages}</body></html>`;
+      // 客户端离线：静默路径必被 503 拒绝，直接回退浏览器零页边距渲染（点击事件内同步 window.open 避免弹窗拦截）
+      if (!printClientOnline) { browserPrintFallback(html, true); return; }
       // 2. 上传 HTML 到服务端，获取可访问 URL
       const renderRes = await request.post('/print/render', { html });
       const printUrl = renderRes?.data?.data?.url;
@@ -786,11 +799,11 @@ const ProductPrintPage: React.FC = () => {
   const doCustomPrint = async (previewOnly: boolean) => {
     const draft = customDraftRef.current ? customDraftRef.current() : null;
     if (!draft || !Array.isArray(draft.elements) || draft.elements.length === 0) { message.warning('请先在模板编辑器中添加打印元素'); return; }
-    const p = products.find((x: any) => x.productCode === customProduct);
-    if (!p) { message.warning('请先选择要打印的商品'); return; }
+    // 商品信息非必填：未选择时按空商品打印（模板字段渲染为空值），纯文本/装饰类模板可脱离商品直接出纸
+    const p: any = products.find((x: any) => x.productCode === customProduct) || {};
     const tplData = { ...draft, templateName: draft.templateName || '自定义模板' };
     if (previewOnly) {
-      openPreview(customType, [{ product: p, qty: customQty }], `自定义打印预览 - ${p.productCode} [${tplData.templateName}]`, undefined, tplData);
+      openPreview(customType, [{ product: p, qty: customQty }], `自定义打印预览 - ${p.productCode || '未选择商品'} [${tplData.templateName}]`, undefined, tplData);
       return;
     }
     setPrintLoading(true);
@@ -799,6 +812,8 @@ const ProductPrintPage: React.FC = () => {
       const pw = Number(tplData.paperWidth) || TPL_PAPER[customType].w;
       const ph = Number(tplData.paperHeight) || TPL_PAPER[customType].h;
       const html = `<html><head><meta charset="utf-8"><style>@page{size:${pw}mm ${ph}mm;margin:0;}body{margin:0;background:#fff;font-family:'Microsoft YaHei',sans-serif;}.pg{position:relative;z-index:0;width:${pw}mm;height:${ph}mm;page-break-after:always;overflow:hidden;box-sizing:border-box;background:#fff;margin:0;}.pg:last-child{page-break-after:auto;}</style></head><body>${pages}</body></html>`;
+      // 客户端离线：静默路径必被 503 拒绝，直接回退浏览器零页边距渲染（点击事件内同步 window.open 避免弹窗拦截）
+      if (!printClientOnline) { browserPrintFallback(html, true); return; }
       const renderRes = await request.post('/print/render', { html });
       const printUrl = renderRes?.data?.data?.url;
       if (!printUrl) { message.error('打印内容生成失败'); return; }
@@ -979,7 +994,7 @@ const ProductPrintPage: React.FC = () => {
                 <Select size="large" style={{ width: 220, height: 48 }} value={tplIds.tag} onChange={v => setTplIds(prev => ({ ...prev, tag: v }))} options={tplOptions('tag')} />
                 <Select size="large" style={{ width: 280, height: 48 }} value={printer} onChange={setPrinter}
                   onDropdownVisibleChange={open => { if (open) reloadPrinters(); }}
-                  options={[{ value: '默认使用模板设置的打印机', label: '默认使用模板设置的打印机' }, ...printerList.map((pl: any) => ({ value: pl.name, label: pl.name + (pl.isDefault ? '（系统默认）' : '') + (pl.clientName ? `（@${pl.clientName}）` : '') })), ...(printerList.length ? [] : [{ value: '__print_client_offline__', label: `（打印客户端未在线：请在接打印机的电脑启动讯能手打印客户端，并登录 ${window.location.origin}）`, disabled: true }])]} />
+                  options={[{ value: '默认使用模板设置的打印机', label: '默认使用模板设置的打印机' }, ...printerList.map((pl: any) => ({ value: pl.name, label: pl.name + (pl.isDefault ? '（系统默认）' : '') + (pl.clientName ? `（@${pl.clientName}）` : '') })), ...(printClientOnline ? [] : [{ value: '__print_client_offline__', label: `（打印客户端未在线：请在接打印机的电脑启动讯能手打印客户端，并登录 ${window.location.origin}；未在线时打印自动改走浏览器零页边距渲染）`, disabled: true }])]} />
                 <Text style={{ fontSize: 15 }}>打印数量:</Text>
                 <InputNumber size="large" min={1} style={{ height: 48, width: 90 }} value={qty1} onChange={n => setQty1(Number(n) || 1)} />
                 <Button size="large" type="primary" icon={<PrinterOutlined />} style={{ height: 48, fontSize: 16, padding: '0 28px' }} disabled={!selProduct || printLoading} loading={printLoading} onClick={() => doPrintRow('tag', qty1)}>打印吊牌</Button>
@@ -1088,15 +1103,15 @@ const ProductPrintPage: React.FC = () => {
               onSave={() => setCustomTplVersion(v => v + 1)} registerDraft={g => { customDraftRef.current = g; }} />
             {/* 打印栏：商品 + 打印机 + 数量 + 预览/直接打印 */}
             <div style={{ position: 'sticky', bottom: 0, zIndex: 5, background: '#fff', borderTop: '1px solid #e3e8ee', padding: '8px 4px', display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 8 }}>
-              <Select showSearch size="small" style={{ width: 280 }} placeholder="选择商品（编码/名称搜索）" value={customProduct || undefined}
-                onChange={v => setCustomProduct(v)} filterOption={(inp, opt: any) => String(opt?.label || '').toLowerCase().includes(inp.toLowerCase())}
+              <Select showSearch allowClear size="small" style={{ width: 280 }} placeholder="选择商品（可选，编码/名称搜索）" value={customProduct || undefined}
+                onChange={v => setCustomProduct(v || '')} filterOption={(inp, opt: any) => String(opt?.label || '').toLowerCase().includes(inp.toLowerCase())}
                 options={products.map((p: any) => ({ value: p.productCode, label: `${p.productCode} ${p.shortName || p.name || ''}` }))} />
               <Select size="small" style={{ width: 220 }} value={printer} onChange={setPrinter} onDropdownVisibleChange={open => { if (open) reloadPrinters(); }} options={printerOptions} />
               <Text style={{ fontSize: 12 }}>数量:</Text>
               <InputNumber size="small" min={1} style={{ width: 70 }} value={customQty} onChange={n => setCustomQty(Number(n) || 1)} />
               <Button size="small" icon={<EyeOutlined />} onClick={() => doCustomPrint(true)}>打印预览</Button>
               <Button size="small" type="primary" icon={<PrinterOutlined />} loading={printLoading} onClick={() => doCustomPrint(false)}>直接打印</Button>
-              <Text type="secondary" style={{ fontSize: 12 }}>直接打印使用编辑器当前内容（无需先保存）；保存模板按键在编辑器工具栏</Text>
+              <Text type="secondary" style={{ fontSize: 12 }}>直接打印使用编辑器当前内容（无需先保存）；商品非必填，未选择时按空字段打印；保存模板按键在编辑器工具栏</Text>
             </div>
           </>
         )}
