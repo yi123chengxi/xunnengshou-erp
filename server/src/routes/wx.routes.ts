@@ -208,8 +208,11 @@ function newQrState(purpose: 'login' | 'bind'): string {
   if (qrStates.size > 300) for (const [k, v] of qrStates) if (v.exp < Date.now()) qrStates.delete(k);
   return state;
 }
+/** 授权 URL 必须带 login_type=jssdk&self_redirect=true，参数口径取自微信官方 wxLogin.js（其 self_redirect 缺省即 "false"）：
+ *  不带时 qrconnect 页会把回跳做到「顶层窗口」，直接 iframe 内嵌的站点会被回跳页整页替换，
+ *  弹窗与轮询随之销毁，表现为扫码确认后停在「已检测到微信」而绑定不生效。 */
 function webQrUrl(state: string): string {
-  return `https://open.weixin.qq.com/connect/qrconnect?appid=${encodeURIComponent(WX_WEB_APPID)}&redirect_uri=${encodeURIComponent(WX_WEB_CALLBACK)}&response_type=code&scope=snsapi_login&state=${state}#wechat_redirect`;
+  return `https://open.weixin.qq.com/connect/qrconnect?appid=${encodeURIComponent(WX_WEB_APPID)}&redirect_uri=${encodeURIComponent(WX_WEB_CALLBACK)}&response_type=code&scope=snsapi_login&state=${state}&login_type=jssdk&self_redirect=true&ts=${Date.now()}#wechat_redirect`;
 }
 function webConfigured(): boolean { return !!WX_WEB_APPID && !!WX_WEB_SECRET; }
 async function webCode2Token(code: string): Promise<{ openid?: string; unionid?: string; errcode?: number; errmsg?: string }> {
@@ -462,8 +465,10 @@ router.get('/web/qr', async (req: Request, res: Response) => {
 router.get('/web/qr/callback', async (req: Request, res: Response) => {
   const state = String(req.query.state || '');
   const code = String(req.query.code || '');
+  // 回跳页有两种落点：iframe 内（self_redirect 生效，靠 postMessage 通知父窗口）或被直接打开成整页，
+  // 故字号与留白按 300x400 小窗排版，两种落点都能看清
   const html = (msg: string) => {
-    res.type('html').send(`<html><head><meta charset="utf-8"/></head><body style="font-family:sans-serif;text-align:center;padding-top:40px;color:#555">${msg}<script>try{window.parent&&window.parent.postMessage({type:'wx-qr-done',state:${JSON.stringify(state)}},'*')}catch(e){}</script></body></html>`);
+    res.type('html').send(`<html><head><meta charset="utf-8"/></head><body style="font-family:sans-serif;text-align:center;padding-top:24px;font-size:13px;color:#555;word-break:break-all">${msg}<script>try{window.parent&&window.parent.postMessage({type:'wx-qr-done',state:${JSON.stringify(state)}},'*')}catch(e){}</script></body></html>`);
   };
   const entry = qrStates.get(state);
   if (!entry || entry.exp < Date.now()) { html('二维码已过期，请刷新页面重新扫码'); return; }

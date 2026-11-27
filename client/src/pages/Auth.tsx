@@ -555,6 +555,12 @@ const Auth: React.FC = () => {
               <Text type="secondary" style={{ fontSize: 12 }}>请使用微信扫一扫并确认授权</Text>
               <Button type="link" size="small" icon={<SyncOutlined />} onClick={wxStartQr}>刷新二维码</Button>
             </div>
+            {/* 兜底：扫码 state 存服务端，授权页在新标签打开同样能被本页轮询到，
+                避免回跳把登录页整页替换掉导致「扫了没反应」 */}
+            <div style={{ marginTop: 2 }}>
+              <Text type="secondary" style={{ fontSize: 12 }}>扫码后本页没反应？</Text>
+              <Button type="link" size="small" onClick={() => window.open(wxQr.url, '_blank')}>在新标签打开授权页</Button>
+            </div>
           </>
         ) : (
           <div style={{ padding: '60px 0' }}>

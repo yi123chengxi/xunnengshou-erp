@@ -194,6 +194,12 @@ const WxBindModal = ({ open, onClose, onChanged }: {
           <Text type="secondary" style={{ fontSize: 12 }}>请使用微信扫一扫并确认授权</Text>
           <Button type="link" size="small" icon={<ReloadOutlined />} onClick={startQr}>刷新二维码</Button>
         </div>
+        {/* 兜底：state 存服务端，授权页在哪个标签打开都不影响本页轮询，
+            个别环境仍把回跳做到顶层时，用新标签打开即可继续完成绑定 */}
+        <div style={{ marginTop: 2 }}>
+          <Text type="secondary" style={{ fontSize: 12 }}>扫码后本页没反应？</Text>
+          <Button type="link" size="small" onClick={() => window.open(qr.url, '_blank')}>在新标签打开授权页</Button>
+        </div>
       </div>
     );
   };
