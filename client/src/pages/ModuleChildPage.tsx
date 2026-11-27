@@ -1305,14 +1305,15 @@ const ModuleChildPage: React.FC = () => {
   const [detailHiddenFields, setDetailHiddenFields] = useState<Set<string>>(new Set());
   const [detailBomHiddenSections, setDetailBomHiddenSections] = useState<Set<string>>(new Set());
   // 物料明细名称显示字段配置（有序数组，包含启用的字段key）
+  // 键与产品列表档案字段同名：款式编码=styleCode（旧绑 productCode 在档案里即商品编码，致配置看似无效恒显编码）
   const BOM_NAME_FIELD_OPTIONS = [
     { key: 'shortName', label: '商品简称' },
-    { key: 'productCode', label: '款式编码' },
+    { key: 'styleCode', label: '款式编码' },
     { key: 'code', label: '商品编码' },
     { key: 'color', label: '颜色' },
     { key: 'spec', label: '规格' },
   ];
-  const [detailBomNameFields, setDetailBomNameFields] = useState<string[]>(['shortName', 'productCode', 'code']);
+  const [detailBomNameFields, setDetailBomNameFields] = useState<string[]>(['shortName', 'styleCode', 'code']);
   // BOM编辑弹窗字段配置（与新款研发相同）
   const BOM_FIELD_OPTIONS = [
     { key: 'styleCode', label: '款式编码', defaultVisible: true },
@@ -10509,9 +10510,11 @@ const ModuleChildPage: React.FC = () => {
           }
         } catch {}
       }
+      // 商品编码别名：快照项仅有 code，档案侧对应 productCode
+      if (field === 'code' && productRecord?.productCode) return String(productRecord.productCode);
       return productRecord?.[field] ? String(productRecord[field]) : '';
     };
-    // 优先级回退：返回第一个非空字段值（默认 shortName → productCode → code）
+    // 优先级回退：返回第一个非空字段值（默认 shortName → styleCode → code）
     for (const key of detailBomNameFields) {
       const val = getProductField(key);
       if (val) return val;
@@ -10536,6 +10539,8 @@ const ModuleChildPage: React.FC = () => {
           }
         } catch {}
       }
+      // 商品编码别名：快照项仅有 code，档案侧对应 productCode
+      if (field === 'code' && productRecord?.productCode) return String(productRecord.productCode);
       return productRecord?.[field] ? String(productRecord[field]) : '';
     };
     for (const key of detailBomNameFields) {
