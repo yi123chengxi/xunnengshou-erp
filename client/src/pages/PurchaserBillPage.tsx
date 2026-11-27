@@ -2061,7 +2061,8 @@ const PurchaserBillPage: React.FC = () => {
 
       {/* 添加商品弹窗（默认自己的成品，可切换供应商货品） */}
       <Modal title={<span style={{ color: PRIMARY }}><ShopOutlined style={{ marginRight: 8 }} />添加商品</span>}
-        open={addProductVisible} onCancel={() => { setAddProductVisible(false); setAddCheckedKeys(new Set()); setAddQtyMap({}); handleSpReset(); }} footer={null} width={960} destroyOnClose>
+        open={addProductVisible} onCancel={() => { setAddProductVisible(false); setAddCheckedKeys(new Set()); setAddQtyMap({}); handleSpReset(); }} footer={null} width={960} destroyOnClose
+        centered styles={{ body: { maxHeight: 'calc(100vh - 220px)', overflowY: 'auto', paddingRight: 8 } }}>
         {/* 标签切换：我的成品 / 供应商货品 / 数量模版 */}
         <div style={{ display: 'flex', gap: 4, marginBottom: 12, borderBottom: '1px solid #f0f0f0', paddingBottom: 8, flexWrap: 'wrap', alignItems: 'center' }}>
           <Button type={addProductTab === 'own' ? 'primary' : 'default'} ghost={addProductTab === 'own'} onClick={() => { setAddProductTab('own'); setAddCheckedKeys(new Set()); setAddQtyMap({}); }}>
