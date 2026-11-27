@@ -3393,7 +3393,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
             { title: '工序编号', dataIndex: 'processCode', render: (v: any, r: any) => v || r.id || r.code || '—' },
             { title: '价格', dataIndex: 'price', width: 100, render: (v: any) => `¥${(Number(v) || 0).toFixed(2)}` },
           ] : [
-            { title: '商品简称', dataIndex: 'shortName', render: (v: any, r: any) => v || r.name || '—' },
+            { title: '商品简称', dataIndex: 'shortName', render: (v: any) => v || '' },
             { title: '款式编码', dataIndex: 'styleCode', width: 100, render: (v: string) => v || '—' },
             { title: '商品编码', dataIndex: 'productCode', width: 120 },
             { title: '颜色', dataIndex: 'color', width: 80, render: (v: string) => v || '—' },
@@ -3516,7 +3516,7 @@ const PlanDesignPage: React.FC<PlanDesignPageProps> = ({ pageConfig, moduleKey }
               tableLayout="fixed"
               scroll={{ y: 200, x: 940 }}
               columns={[
-                { title: '商品简称', dataIndex: 'shortName', render: (v: string, r: any) => v || r.name || '—' },
+                { title: '商品简称', dataIndex: 'shortName', render: (v: string) => v || '' },
                 { title: '商品编码', dataIndex: 'code', width: 110, render: (v: string, r: any) => v || r.productCode || '—' },
                 { title: '供应商', dataIndex: 'supplierName', width: 100, render: (v: string, r: any) => v || r.supplier || '—' },
                 { title: '类型', dataIndex: 'type', width: 70, align: 'center' as const, render: (t: string) => <Tag color={t === 'semi' ? 'blue' : t === 'raw' ? 'green' : 'orange'}>{t === 'semi' ? '半成品' : t === 'raw' ? '原材料' : '工序'}</Tag> },
