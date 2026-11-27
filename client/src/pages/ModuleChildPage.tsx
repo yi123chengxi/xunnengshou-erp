@@ -1339,8 +1339,12 @@ const ModuleChildPage: React.FC = () => {
   const BOM_SELECT_FIELD_OPTIONS = [
     { key: 'shortName', label: '商品简称', defaultVisible: true },
     { key: 'productCode', label: '商品编码', defaultVisible: true },
+    { key: 'styleCode', label: '款式编码', defaultVisible: true },
+    { key: 'color', label: '颜色', defaultVisible: true },
+    { key: 'spec', label: '规格', defaultVisible: true },
     { key: 'productType', label: '产品种类', defaultVisible: true },
     { key: 'supplier', label: '供应商', defaultVisible: true },
+    { key: 'price', label: '单价', defaultVisible: true },
     { key: 'level', label: '层级', defaultVisible: true },
     { key: 'unit', label: '单位', defaultVisible: true },
     { key: 'suggestedPrice', label: '基础售价', defaultVisible: true },
@@ -10650,10 +10654,17 @@ const ModuleChildPage: React.FC = () => {
   // BOM选择弹窗表格列配置（半成品/原材料共用）：原「名称」列改为显示「商品简称」，并支持「字段」按键控制显隐与顺序
   const bomSelectColumns = () => {
     const allCols: Record<string, any> = {
-      shortName: { title: '商品简称', dataIndex: 'shortName', width: 140, render: (v: any, r: any) => v || r.name || r.productName || '—' },
+      // 商品简称无信息时显示为空（不再回退 name/“新记录”等占位值）
+      shortName: { title: '商品简称', dataIndex: 'shortName', width: 140, render: (v: any) => v || '' },
       productCode: { title: '商品编码', dataIndex: 'productCode', width: 140, render: (v: any, r: any) => v || r.id || '—' },
+      styleCode: { title: '款式编码', dataIndex: 'styleCode', width: 100, render: (v: any) => v || '—' },
+      color: { title: '颜色', dataIndex: 'color', width: 80, render: (v: any) => v || '—' },
+      spec: { title: '规格', dataIndex: 'spec', width: 80, render: (v: any) => v || '—' },
       productType: { title: '产品种类', dataIndex: 'productType', width: 90, render: (v: any) => v ? <Tag>{v}</Tag> : '—' },
-      supplier: { title: '供应商', dataIndex: 'supplier', width: 100, render: (v: any) => v || '—' },
+      // 供应商取商品档案 supplierName（与原材料列表同源；选择弹窗数据本就来自产品列表）
+      supplier: { title: '供应商', dataIndex: 'supplierName', width: 100, render: (v: any, r: any) => v || r.supplier || '—' },
+      // 单价：成本价优先，回退基础价/基础售价
+      price: { title: '单价', dataIndex: 'costPrice', width: 90, align: 'right' as const, render: (v: any, r: any) => { const p = Number(v || r.basePrice || r.suggestedPrice || 0); return p ? `¥${p.toFixed(2)}` : '—'; } },
       level: { title: '层级', dataIndex: 'level', width: 60, align: 'center' as const, render: (v: any) => v ? <Tag color="blue">{v}</Tag> : '—' },
       unit: { title: '单位', dataIndex: 'unit', width: 60, align: 'center' as const, render: (v: any) => v || '—' },
       suggestedPrice: { title: '基础售价', dataIndex: 'suggestedPrice', width: 100, align: 'right' as const, render: (v: any) => v ? `¥${Number(v).toFixed(2)}` : '—' },
